@@ -48,6 +48,7 @@ def extrair_nome_funcionario(texto):
 
 def separar_pdf_por_cpf(pdf_bytes):
     resultado = {}
+    textos_completos = {}
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         textos_por_pagina = []
         for page in pdf.pages:
@@ -58,24 +59,27 @@ def separar_pdf_por_cpf(pdf_bytes):
     for i, texto in enumerate(textos_por_pagina):
         cpf = extrair_cpf(texto)
         nome = extrair_nome_funcionario(texto)
-        cpfs_por_pagina.append({'cpf': cpf, 'nome': nome, 'pagina_idx': i})
+        cpfs_por_pagina.append({'cpf': cpf, 'nome': nome, 'pagina_idx': i, 'texto': texto})
     grupos = {}
     for item in cpfs_por_pagina:
         cpf = item['cpf']
         if cpf is None:
             cpf = 'sem_cpf'
         if cpf not in grupos:
-            grupos[cpf] = {'nome': item['nome'], 'paginas': []}
+            grupos[cpf] = {'nome': item['nome'], 'paginas': [], 'textos': []}
         grupos[cpf]['paginas'].append(item['pagina_idx'])
+        grupos[cpf]['textos'].append(item['texto'])
     for cpf, dados in grupos.items():
         writer = PdfWriter()
         for idx in dados['paginas']:
             writer.add_page(reader.pages[idx])
         buf = io.BytesIO()
         writer.write(buf)
+        texto_completo = '\n---PAGINA---\n'.join(dados['textos'])
         resultado[cpf] = {
             'nome': dados['nome'],
-            'pdf_bytes': buf.getvalue()
+            'pdf_bytes': buf.getvalue(),
+            'texto_extraido': texto_completo
         }
     return resultado
 
@@ -128,36 +132,12 @@ def tentar_extrair_pdf(valor):
 def health():
     return jsonify({'status': 'ok', 'servico': 'magnata-holerite-splitter'})
 
-@app.route('/analisar', methods=['POST'])
-def analisar():
-    try:
-        pdf_bytes = None
-        content_type = request.content_type or ''
-        if 'application/json' in content_type:
-            data = request.get_json(force=True, silent=True) or {}
-            if 'pdf_base64' in data:
-                pdf_bytes = tentar_extrair_pdf(data['pdf_base64'])
-        if not pdf_bytes or len(pdf_bytes) < 100:
-            return jsonify({'erro': 'PDF nao recebido'}), 400
-        paginas = []
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            for i, page in enumerate(pdf.pages):
-                texto = page.extract_text() or ''
-                paginas.append({'pagina': i + 1, 'texto': texto[:500]})
-        return jsonify({'paginas': paginas})
-    except Exception as e:
-        return jsonify({'erro': str(e)}), 500
-
 @app.route('/separar', methods=['POST'])
 def separar():
     try:
         pdf_bytes = None
         content_type = request.content_type or ''
-        debug_info = {
-            'content_type': content_type,
-            'tamanho_body': len(request.data),
-            'campos_form': list(request.files.keys()),
-        }
+
         if 'multipart/form-data' in content_type and 'pdf' in request.files:
             pdf_bytes = request.files['pdf'].read()
         elif 'multipart/form-data' in content_type and request.files:
@@ -167,23 +147,27 @@ def separar():
         elif 'application/json' in content_type:
             data = request.get_json(force=True, silent=True) or {}
             if 'pdf_base64' in data:
-                valor = data['pdf_base64']
-                pdf_bytes = tentar_extrair_pdf(valor)
-                debug_info['pdf_base64_tamanho'] = len(str(valor))
-                debug_info['pdf_base64_primeiros'] = str(valor)[:100]
+                pdf_bytes = tentar_extrair_pdf(data['pdf_base64'])
         elif request.data and len(request.data) > 100:
             pdf_bytes = request.data
+
         if not pdf_bytes or len(pdf_bytes) < 100:
-            return jsonify({'erro': 'PDF nao recebido ou invalido.', 'debug': debug_info}), 400
-        is_pdf = pdf_bytes[:4] == b'%PDF'
-        debug_info['comeca_com_pdf'] = is_pdf
-        debug_info['primeiros_bytes'] = pdf_bytes[:8].hex()
-        debug_info['tamanho_recebido'] = len(pdf_bytes)
-        if not is_pdf:
-            return jsonify({'erro': 'Dados recebidos nao sao um PDF valido.', 'debug': debug_info}), 400
+            return jsonify({'erro': 'PDF nao recebido ou invalido.'}), 400
+
+        if pdf_bytes[:4] != b'%PDF':
+            return jsonify({'erro': 'Dados recebidos nao sao um PDF valido.', 'primeiros_bytes': pdf_bytes[:8].hex()}), 400
+
         resultado = separar_pdf_por_cpf(pdf_bytes)
+
         if not resultado:
             return jsonify({'erro': 'Nenhum holerite encontrado no PDF'}), 422
+
+        # Texto geral da primeira pagina para preview
+        texto_geral = ''
+        for cpf, dados in resultado.items():
+            texto_geral += dados['texto_extraido']
+            break
+
         funcionarios = []
         for cpf, dados in resultado.items():
             pdf_b64 = base64.b64encode(dados['pdf_bytes']).decode('utf-8')
@@ -193,9 +177,16 @@ def separar():
                 'nome': dados['nome'],
                 'nome_arquivo': nome_arquivo,
                 'pdf_base64': pdf_b64,
-                'tamanho_bytes': len(dados['pdf_bytes'])
+                'tamanho_bytes': len(dados['pdf_bytes']),
+                'texto_extraido_preview': dados['texto_extraido'][:4000]
             })
-        return jsonify({'total_funcionarios': len(funcionarios), 'funcionarios': funcionarios})
+
+        return jsonify({
+            'total_funcionarios': len(funcionarios),
+            'texto_extraido_preview': texto_geral[:4000],
+            'funcionarios': funcionarios
+        })
+
     except Exception as e:
         return jsonify({'erro': f'Erro ao processar PDF: {str(e)}'}), 500
 
@@ -216,7 +207,11 @@ def separar_zip():
                 nome_arquivo = f"holerite_{cpf.replace('.', '').replace('-', '')}_{dados['nome'].replace(' ', '_')[:30]}.pdf"
                 zf.writestr(nome_arquivo, dados['pdf_bytes'])
         zip_b64 = base64.b64encode(zip_buf.getvalue()).decode('utf-8')
-        return jsonify({'total_funcionarios': len(resultado), 'zip_base64': zip_b64, 'tamanho_zip_bytes': len(zip_buf.getvalue())})
+        return jsonify({
+            'total_funcionarios': len(resultado),
+            'zip_base64': zip_b64,
+            'tamanho_zip_bytes': len(zip_buf.getvalue())
+        })
     except Exception as e:
         return jsonify({'erro': f'Erro ao processar PDF: {str(e)}'}), 500
 
