@@ -128,30 +128,25 @@ def tentar_extrair_pdf(valor):
 def health():
     return jsonify({'status': 'ok', 'servico': 'magnata-holerite-splitter'})
 
-@app.route('/debug', methods=['POST'])
-def debug():
-    content_type = request.content_type or ''
-    info = {
-        'content_type': content_type,
-        'tamanho_body': len(request.data),
-        'primeiros_bytes_hex': request.data[:20].hex() if request.data else '',
-        'primeiros_bytes_ascii': repr(request.data[:20]) if request.data else '',
-        'campos_form': list(request.files.keys()),
-        'campos_json': {},
-    }
-    if 'application/json' in content_type:
-        try:
+@app.route('/analisar', methods=['POST'])
+def analisar():
+    try:
+        pdf_bytes = None
+        content_type = request.content_type or ''
+        if 'application/json' in content_type:
             data = request.get_json(force=True, silent=True) or {}
-            for k, v in data.items():
-                if isinstance(v, str):
-                    info['campos_json'][k] = {
-                        'tamanho': len(v),
-                        'primeiros_chars': v[:50],
-                        'primeiros_bytes_hex': v[:20].encode('latin-1', errors='replace').hex()
-                    }
-        except:
-            pass
-    return jsonify(info)
+            if 'pdf_base64' in data:
+                pdf_bytes = tentar_extrair_pdf(data['pdf_base64'])
+        if not pdf_bytes or len(pdf_bytes) < 100:
+            return jsonify({'erro': 'PDF nao recebido'}), 400
+        paginas = []
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for i, page in enumerate(pdf.pages):
+                texto = page.extract_text() or ''
+                paginas.append({'pagina': i + 1, 'texto': texto[:500]})
+        return jsonify({'paginas': paginas})
+    except Exception as e:
+        return jsonify({'erro': str(e)}), 500
 
 @app.route('/separar', methods=['POST'])
 def separar():
