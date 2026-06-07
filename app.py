@@ -100,7 +100,7 @@ def separar():
             if 'pdf_base64' in data:
                 pdf_bytes = base64.b64decode(data['pdf_base64'])
 
-        # 3. Bytes brutos (application/octet-stream ou qualquer outro)
+        # 3. Bytes brutos
         elif request.data and len(request.data) > 100:
             pdf_bytes = request.data
 
@@ -112,7 +112,7 @@ def separar():
 
         if not pdf_bytes or len(pdf_bytes) < 100:
             return jsonify({
-                'erro': 'PDF nao recebido. Tente via campo "pdf" (multipart), "pdf_base64" (JSON) ou bytes diretos.',
+                'erro': 'PDF nao recebido.',
                 'content_type_recebido': content_type,
                 'tamanho_body': len(request.data) if request.data else 0,
                 'campos_form': list(request.files.keys()) if request.files else []
