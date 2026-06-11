@@ -243,7 +243,7 @@ def buscar_mes_contabilidade_atual():
             'maxRecords': 1,
             'fields[]': ['Mês - Contabilidade'],
         },
-        timeout=10,
+        timeout=30,
     )
     if r.ok:
         records = r.json().get('records', [])
@@ -253,26 +253,46 @@ def buscar_mes_contabilidade_atual():
 
 
 def buscar_funcionario_por_cpf(cpf: str):
-    """Retorna (record_id, nome_completo) ou (None, None)."""
+    """Retorna (record_id, nome_completo) ou (None, None).
+    Tenta 3 variantes de filtro: formatado, numérico string, numérico inteiro.
+    O campo CPF no Airtable pode estar como texto ou como número.
+    """
     headers = {'Authorization': f'Bearer {AIRTABLE_API_KEY}'}
     cpf_num = re.sub(r'\D', '', cpf)
-    for valor in [cpf, cpf_num]:
+
+    # Variantes de filtro — tenta formatado, string numérica e inteiro puro
+    formulas = [
+        f'{{CPF}}="{cpf}"',       # "326.052.678-14"
+        f'{{CPF}}="{cpf_num}"',   # "32605267814"
+        f'{{CPF}}={cpf_num}',     # 32605267814  (campo numérico, sem aspas)
+    ]
+
+    for formula in formulas:
         _at_throttle()
-        r = requests.get(
-            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}',
-            headers=headers,
-            params={
-                'filterByFormula': f'{{CPF}}="{valor}"',
-                'maxRecords': 1,
-                'fields[]': ['Nome Completo', 'CPF'],
-            },
-            timeout=10,
-        )
-        if r.ok:
-            records = r.json().get('records', [])
-            if records:
-                nome = records[0].get('fields', {}).get('Nome Completo', '')
-                return records[0]['id'], nome
+        try:
+            r = requests.get(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}',
+                headers=headers,
+                params={
+                    'filterByFormula': formula,
+                    'maxRecords': 1,
+                    'fields[]': ['Nome Completo', 'CPF'],
+                },
+                timeout=30,
+            )
+            if r.ok:
+                records = r.json().get('records', [])
+                if records:
+                    nome = records[0].get('fields', {}).get('Nome Completo', '')
+                    logger.info(f'[AT] Funcionário encontrado com fórmula: {formula}')
+                    return records[0]['id'], nome
+        except requests.exceptions.Timeout:
+            logger.warning(f'[AT] Timeout na busca de CPF {cpf} (fórmula: {formula})')
+            continue
+        except Exception as exc:
+            logger.warning(f'[AT] Erro na busca de CPF {cpf}: {exc}')
+            continue
+
     return None, None
 
 
@@ -321,7 +341,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.0',
+        'versao': '2.1',
         'ram_mb': _mem_mb(),
     })
 
