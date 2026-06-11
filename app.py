@@ -17,7 +17,6 @@ import requests
 from calendar import monthrange
 from datetime import datetime
 from flask import Flask, request, jsonify
-from flask_cors import CORS
 import pdfplumber
 from pypdf import PdfReader, PdfWriter
 
@@ -43,7 +42,14 @@ def _mem_mb():
 
 
 app = Flask(__name__)
-CORS(app)   # permite requisições de qualquer origem (inclusive file://)
+
+@app.after_request
+def _add_cors(response):
+    """CORS nativo — sem flask-cors. Suporta file:// e qualquer origem de teste."""
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+    return response
 
 # ── Airtable ──────────────────────────────────────────────────────────────────
 AIRTABLE_API_KEY = os.environ.get('AIRTABLE_API_KEY', '')
@@ -388,8 +394,11 @@ def separar_zip():
         return jsonify({'erro': str(exc), 'etapa': 'separar_zip'}), 500
 
 
-@app.route('/processar-holerites', methods=['POST'])
+@app.route('/processar-holerites', methods=['POST', 'OPTIONS'])
 def processar_holerites():
+    # Preflight CORS
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
     """
     Fluxo completo — memória eficiente:
       1. Recebe o PDF
