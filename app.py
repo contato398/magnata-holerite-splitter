@@ -18,6 +18,7 @@ from calendar import monthrange
 from datetime import datetime
 from flask import Flask, request, jsonify
 import pdfplumber
+import uuid as _uuid
 from pypdf import PdfReader, PdfWriter
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -42,6 +43,7 @@ def _mem_mb():
 
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB máx upload
 
 @app.after_request
 def _add_cors(response):
@@ -131,7 +133,7 @@ def extrair_nome_funcionario(texto: str):
     return 'Desconhecido'
 
 
-def construir_mapa_cpf(pdf_bytes: bytes) -> tuple[dict, int]:
+def construir_mapa_cpf(caminho_pdf: str) -> tuple[dict, int]:
     """
     Pass 1 — LEVE.
     Percorre o PDF uma página por vez, extrai apenas CPF + nome + índice.
@@ -141,7 +143,7 @@ def construir_mapa_cpf(pdf_bytes: bytes) -> tuple[dict, int]:
     mapa: dict = {}
     logger.info(f'[P1] Iniciando varredura | RAM: {_mem_mb()} MB')
 
-    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+    with pdfplumber.open(caminho_pdf) as pdf:
         total = len(pdf.pages)
         logger.info(f'[P1] Total de páginas: {total}')
 
@@ -178,12 +180,12 @@ def construir_mapa_cpf(pdf_bytes: bytes) -> tuple[dict, int]:
     return mapa, total
 
 
-def extrair_pdf_colaborador(pdf_bytes: bytes, indices: list[int]) -> bytes:
+def extrair_pdf_colaborador(caminho_pdf: str, indices: list[int]) -> bytes:
     """
     Extrai somente as páginas do colaborador usando pypdf (muito mais leve).
     Retorna bytes do PDF individual e libera todos os objetos temporários.
     """
-    reader = PdfReader(io.BytesIO(pdf_bytes))
+    reader = PdfReader(caminho_pdf)
     writer = PdfWriter()
     for idx in indices:
         writer.add_page(reader.pages[idx])
@@ -194,23 +196,29 @@ def extrair_pdf_colaborador(pdf_bytes: bytes, indices: list[int]) -> bytes:
     return resultado
 
 
-def extrair_pdf_do_request() -> bytes | None:
-    """Extrai bytes do PDF do request (multipart, json base64, ou raw)."""
+def extrair_pdf_do_request() -> str | None:
+    """Salva PDF em /tmp (streaming — sem carregar em RAM). Retorna caminho do arquivo."""
     ct = request.content_type or ''
     if 'multipart/form-data' in ct:
-        if 'pdf' in request.files:
-            return request.files['pdf'].read()
-        if request.files:
-            return next(iter(request.files.values())).read()
+        arq = request.files.get('pdf') or (
+            next(iter(request.files.values()), None) if request.files else None
+        )
+        if arq:
+            caminho = f'/tmp/holerite_{_uuid.uuid4().hex}.pdf'
+            arq.save(caminho)
+            tamanho = os.path.getsize(caminho)
+            logger.info(f'[PDF] Salvo em disco: {caminho} | {tamanho // 1024} KB')
+            return caminho
     elif 'application/json' in ct:
         data = request.get_json(force=True, silent=True) or {}
         if 'pdf_base64' in data:
             try:
-                return base64.b64decode(data['pdf_base64'])
+                caminho = f'/tmp/holerite_{_uuid.uuid4().hex}.pdf'
+                with open(caminho, 'wb') as f:
+                    f.write(base64.b64decode(data['pdf_base64']))
+                return caminho
             except Exception:
                 pass
-    elif request.data and len(request.data) > 100:
-        return request.data
     return None
 
 
@@ -322,20 +330,22 @@ def health():
 def separar():
     """Divide o PDF e retorna JSON com base64 por funcionário (sem salvar no Airtable)."""
     try:
-        pdf_bytes = extrair_pdf_do_request()
-        if not pdf_bytes or len(pdf_bytes) < 100:
+        caminho_pdf = extrair_pdf_do_request()
+        if not caminho_pdf or not os.path.exists(caminho_pdf) or os.path.getsize(caminho_pdf) < 100:
             return jsonify({'erro': 'PDF não recebido ou inválido.'}), 400
-        if pdf_bytes[:4] != b'%PDF':
-            return jsonify({'erro': 'Dados não são PDF válido.',
-                            'primeiros_bytes': pdf_bytes[:8].hex()}), 400
+        with open(caminho_pdf, 'rb') as _f:
+            _header = _f.read(4)
+        if _header != b'%PDF':
+            os.unlink(caminho_pdf)
+            return jsonify({'erro': 'Dados não são PDF válido.'}), 400
 
-        mapa, _ = construir_mapa_cpf(pdf_bytes)
+        mapa, _ = construir_mapa_cpf(caminho_pdf)
         if not mapa:
             return jsonify({'erro': 'Nenhum holerite encontrado'}), 422
 
         funcionarios = []
         for cpf, dados in mapa.items():
-            pdf_ind = extrair_pdf_colaborador(pdf_bytes, dados['paginas'])
+            pdf_ind = extrair_pdf_colaborador(caminho_pdf, dados['paginas'])
             pdf_b64 = base64.b64encode(pdf_ind).decode('utf-8')
             nome_arq = (
                 f"holerite_{cpf.replace('.','').replace('-','')}"
@@ -362,19 +372,15 @@ def separar():
 def separar_zip():
     """Divide o PDF e retorna um ZIP com os holerites individuais."""
     try:
-        pdf_bytes = None
-        if 'pdf' in request.files:
-            pdf_bytes = request.files['pdf'].read()
-        elif request.is_json and 'pdf_base64' in request.json:
-            pdf_bytes = base64.b64decode(request.json['pdf_base64'])
-        else:
+        caminho_pdf = extrair_pdf_do_request()
+        if not caminho_pdf or not os.path.exists(caminho_pdf) or os.path.getsize(caminho_pdf) < 100:
             return jsonify({'erro': 'Envie o PDF via "pdf" (multipart) ou "pdf_base64" (JSON)'}), 400
 
-        mapa, _ = construir_mapa_cpf(pdf_bytes)
+        mapa, _ = construir_mapa_cpf(caminho_pdf)
         zip_buf = io.BytesIO()
         with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
             for cpf, dados in mapa.items():
-                pdf_ind = extrair_pdf_colaborador(pdf_bytes, dados['paginas'])
+                pdf_ind = extrair_pdf_colaborador(caminho_pdf, dados['paginas'])
                 nome_arq = (
                     f"holerite_{cpf.replace('.','').replace('-','')}"
                     f"_{dados['nome'].replace(' ','_')[:30]}.pdf"
@@ -392,6 +398,9 @@ def separar_zip():
     except Exception as exc:
         logger.exception('Erro em /separar/zip')
         return jsonify({'erro': str(exc), 'etapa': 'separar_zip'}), 500
+    finally:
+        if 'caminho_pdf' in dir() and caminho_pdf and os.path.exists(caminho_pdf):
+            os.unlink(caminho_pdf)
 
 
 @app.route('/processar-holerites', methods=['POST', 'OPTIONS'])
@@ -425,14 +434,19 @@ def processar_holerites():
 
         # 1. Receber PDF
         etapa = 'receber_pdf'
-        pdf_bytes = extrair_pdf_do_request()
-        if not pdf_bytes or len(pdf_bytes) < 100:
+        caminho_pdf = None
+        caminho_pdf = extrair_pdf_do_request()
+        if not caminho_pdf or not os.path.exists(caminho_pdf) or os.path.getsize(caminho_pdf) < 100:
             return jsonify({'status': 'erro', 'erro': 'PDF não recebido.', 'etapa': etapa}), 400
-        if pdf_bytes[:4] != b'%PDF':
+        with open(caminho_pdf, 'rb') as _f:
+            _header = _f.read(4)
+        if _header != b'%PDF':
+            os.unlink(caminho_pdf)
+            caminho_pdf = None
             return jsonify({'status': 'erro', 'erro': 'Dados não são PDF válido.', 'etapa': etapa}), 400
 
-        pdf_kb = len(pdf_bytes) // 1024
-        logger.info(f'[INICIO] PDF recebido: {pdf_kb} KB | RAM: {_mem_mb()} MB')
+        pdf_kb = os.path.getsize(caminho_pdf) // 1024
+        logger.info(f'[INICIO] PDF salvo em disco: {pdf_kb} KB | RAM: {_mem_mb()} MB')
 
         # 2. Parâmetros de mês
         etapa = 'parametros_mes'
@@ -471,7 +485,7 @@ def processar_holerites():
 
         # 3. Pass 1: mapa CPF → páginas (leve)
         etapa = 'pass1_mapear_cpf'
-        mapa, total_paginas = construir_mapa_cpf(pdf_bytes)
+        mapa, total_paginas = construir_mapa_cpf(caminho_pdf)
 
         if not mapa:
             return jsonify({
@@ -524,7 +538,7 @@ def processar_holerites():
             try:
                 # Extrair PDF individual (somente as páginas do colaborador)
                 etapa  = f'extrair_pdf:{cpf}'
-                pdf_ind = extrair_pdf_colaborador(pdf_bytes, paginas)
+                pdf_ind = extrair_pdf_colaborador(caminho_pdf, paginas)
                 logger.info(f'{tag} PDF: {len(pdf_ind)//1024} KB | RAM: {_mem_mb()} MB')
 
                 # Criar registro no Airtable
@@ -564,8 +578,9 @@ def processar_holerites():
                     del pdf_ind
                 gc.collect()
 
-        # Liberar PDF original
-        del pdf_bytes
+        # Liberar PDF temporário do disco
+        if caminho_pdf and os.path.exists(caminho_pdf):
+            os.unlink(caminho_pdf)
         gc.collect()
 
         logger.info(
