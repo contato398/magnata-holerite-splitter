@@ -1,5 +1,5 @@
 """
-magnata-holerite-splitter — app.py v2
+magnata-holerite-splitter — app.py v2 — deploy trigger
 Arquitetura de memória eficiente: 2 passes
   Pass 1: varredura leve (pdfplumber, 1 página por vez) → só guarda CPF + índice
   Pass 2: por colaborador → extrai PDF (pypdf) → Airtable → libera memória → gc
