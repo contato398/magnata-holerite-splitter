@@ -327,8 +327,7 @@ def anexar_pdf_holerite(record_id, pdf_bytes, filename):
         url,
         headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
         files={'file': (filename, io.BytesIO(pdf_bytes), 'application/pdf')},
-        data={'filename': filename, 'contentType': 'application/pdf'},
-        timeout=30,
+        timeout=60,
     )
     r.raise_for_status()
     return r.json()
@@ -341,7 +340,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.2',
+        'versao': '2.3',
         'ram_mb': _mem_mb(),
     })
 
