@@ -320,8 +320,8 @@ def criar_registro_holerite(nome, func_id, folha_mensal, data_str, mes_cont_id):
 def anexar_pdf_holerite(record_id, pdf_bytes, filename):
     _at_throttle()
     url = (
-        f'https://content.airtable.com/v0/{BASE_ID}/{TABLE_HOL}'
-        f'/{record_id}/uploadAttachment/{F_HOL_PDF}'
+        f'https://content.airtable.com/v0/{BASE_ID}'
+        f'/{record_id}/{F_HOL_PDF}/uploadAttachment'
     )
     r = requests.post(
         url,
@@ -341,7 +341,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.1',
+        'versao': '2.2',
         'ram_mb': _mem_mb(),
     })
 
