@@ -17,6 +17,7 @@ import requests
 from calendar import monthrange
 from datetime import datetime
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import pdfplumber
 from pypdf import PdfReader, PdfWriter
 
@@ -42,6 +43,7 @@ def _mem_mb():
 
 
 app = Flask(__name__)
+CORS(app)   # permite requisições de qualquer origem (inclusive file://)
 
 # ── Airtable ──────────────────────────────────────────────────────────────────
 AIRTABLE_API_KEY = os.environ.get('AIRTABLE_API_KEY', '')
