@@ -1,8 +1,10 @@
 """
-magnata-holerite-splitter — app.py v2 — deploy trigger
-Arquitetura de memória eficiente: 2 passes
-  Pass 1: varredura leve (pdfplumber, 1 página por vez) → só guarda CPF + índice
-  Pass 2: por colaborador → extrai PDF (pypdf) → Airtable → libera memória → gc
+magnata-holerite-splitter — app.py v2.5
+Novidades vs v2.4:
+  - Extração de valores financeiros do PDF (Total Vencimentos, Total Descontos,
+    Valor Líquido, INSS) durante o Pass 1
+  - Esses valores são salvos no Airtable ao criar o registro
+  - Novo endpoint /corrigir-valores: atualiza holerites já criados sem valores
 """
 
 import os
@@ -31,7 +33,6 @@ logger = logging.getLogger(__name__)
 
 
 def _mem_mb():
-    """RSS em MB via /proc/self/status (Linux). Retorna -1 se indisponível."""
     try:
         with open('/proc/self/status') as f:
             for line in f:
@@ -47,7 +48,6 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB máx upload
 
 @app.after_request
 def _add_cors(response):
-    """CORS nativo — sem flask-cors. Suporta file:// e qualquer origem de teste."""
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
@@ -60,29 +60,32 @@ TABLE_FUNC  = 'tblNd8G66kjwos3eP'   # Funcionários
 TABLE_HOL   = 'tblVaUgZeFfa5zRcH'   # Holerites
 TABLE_CONT  = 'tblWITpkSbPg4SBAR'   # Contabilidade Mensal
 
-F_HOL_NOME     = 'fldS42HdVbLhDRVOY'
-F_HOL_STATUS   = 'fld0hQpNpQTVmDSeZ'
-F_HOL_FUNC     = 'fldTXMjeHfgyDas9f'
-F_HOL_DATA     = 'fld8hTVUDyDf5jfPE'
-F_HOL_FOLHA    = 'fldqQZwNnMf8BGfyP'
-F_HOL_PDF      = 'fldGXsgmuADtZIgtx'
-F_HOL_MES_CONT = 'fldUYB4uxkmBf7vDe'
+F_HOL_NOME      = 'fldS42HdVbLhDRVOY'
+F_HOL_STATUS    = 'fld0hQpNpQTVmDSeZ'
+F_HOL_FUNC      = 'fldTXMjeHfgyDas9f'
+F_HOL_DATA      = 'fld8hTVUDyDf5jfPE'
+F_HOL_FOLHA     = 'fldqQZwNnMf8BGfyP'
+F_HOL_PDF       = 'fldGXsgmuADtZIgtx'
+F_HOL_MES_CONT  = 'fldUYB4uxkmBf7vDe'
+F_HOL_VENCIM    = 'fldOal5gy1aqF5RPT'   # Total Vencimentos
+F_HOL_DESCONTOS = 'fldRiNiS9Rqfjo5Hg'   # Total Descontos
+F_HOL_LIQUIDO   = 'fldnOzg7FcXxes2dm'   # Valor Líquido
+F_HOL_INSS      = 'fldvDY9x8dC0FCLrd'   # Descontos INSS
 
 MESES_PT = [
     'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
     'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
 ]
 
-# ── Rate limiter Airtable: máx 5 req/s por base ───────────────────────────────
+# ── Rate limiter Airtable ─────────────────────────────────────────────────────
 _last_at_call = 0.0
 
 
 def _at_throttle():
-    """Garante no máximo ~4,5 chamadas/s à API do Airtable."""
     global _last_at_call
     now = time.monotonic()
     gap = now - _last_at_call
-    if gap < 0.23:          # 1/4.5 ≈ 0,22 s
+    if gap < 0.23:
         time.sleep(0.23 - gap)
     _last_at_call = time.monotonic()
 
@@ -133,12 +136,93 @@ def extrair_nome_funcionario(texto: str):
     return 'Desconhecido'
 
 
+def parse_br_float(s: str):
+    """Converte string no formato brasileiro '1.234,56' para float."""
+    try:
+        return float(s.replace('.', '').replace(',', '.'))
+    except Exception:
+        return None
+
+
+def extrair_valores_holerite(texto: str) -> dict:
+    """
+    Extrai valores financeiros do texto de um holerite.
+
+    Formato esperado no PDF:
+      ...
+      998 INSS M2  7,94  181,79
+      Total de Vencimentos  Total de Descontos
+      181,79
+
+      Valor Líquido  2.108,34
+      ...
+
+    Retorna dict com chaves (todas opcionais):
+      total_descontos, valor_liquido, total_vencimentos, inss
+    """
+    if not texto:
+        return {}
+
+    resultado = {}
+
+    # 1. Valor Líquido — "Valor Líquido 2.108,34" (pode ser 0,00 para afastados INSS)
+    m = re.search(
+        r'Valor\s+L[íi]quido\s+([\d.]+,\d{2})',
+        texto, re.IGNORECASE
+    )
+    if m:
+        v = parse_br_float(m.group(1))
+        if v is not None:
+            resultado['valor_liquido'] = v
+
+    # 2. Total Descontos — primeiro número após a linha dupla de totais
+    #    "Total de Vencimentos  Total de Descontos\n182,55"
+    m = re.search(
+        r'Total\s+de\s+Vencimentos\s+Total\s+de\s+Descontos\s*\n\s*([\d.]+,\d{2})',
+        texto, re.IGNORECASE
+    )
+    if m:
+        v = parse_br_float(m.group(1))
+        if v is not None:
+            resultado['total_descontos'] = v
+    else:
+        # fallback: procura "Total de Descontos" seguido do valor na mesma ou próxima linha
+        m = re.search(
+            r'Total\s+de\s+Descontos\s+([\d.]+,\d{2})',
+            texto, re.IGNORECASE
+        )
+        if m:
+            v = parse_br_float(m.group(1))
+            if v is not None:
+                resultado['total_descontos'] = v
+
+    # 3. Total Vencimentos = Total Descontos + Valor Líquido
+    if 'total_descontos' in resultado and 'valor_liquido' in resultado:
+        resultado['total_vencimentos'] = round(
+            resultado['total_descontos'] + resultado['valor_liquido'], 2
+        )
+
+    # 4. INSS — linha com código INSS (geralmente 998 INSS M2 <ref> <valor>)
+    #    pega o ÚLTIMO número monetário da linha que contém "INSS"
+    for linha in texto.split('\n'):
+        if re.search(r'\bINSS\b', linha, re.IGNORECASE):
+            # só considera linhas de item (começam com dígito = código)
+            if re.match(r'^\d', linha.strip()):
+                numeros = re.findall(r'[\d.]+,\d{2}', linha)
+                if numeros:
+                    v = parse_br_float(numeros[-1])
+                    if v is not None and v > 0:
+                        resultado['inss'] = v
+                    break
+
+    return resultado
+
+
 def construir_mapa_cpf(caminho_pdf: str) -> tuple[dict, int]:
     """
     Pass 1 — LEVE.
-    Percorre o PDF uma página por vez, extrai apenas CPF + nome + índice.
-    Nunca acumula textos nem objetos de página em memória.
-    Retorna: ({cpf: {'nome': str, 'paginas': [int]}}, total_paginas)
+    Extrai CPF, nome, índice de página E valores financeiros por colaborador.
+    Retorna: ({cpf: {'nome': str, 'paginas': [int], 'valores': dict}}, total_paginas)
     """
     mapa: dict = {}
     logger.info(f'[P1] Iniciando varredura | RAM: {_mem_mb()} MB')
@@ -153,24 +237,31 @@ def construir_mapa_cpf(caminho_pdf: str) -> tuple[dict, int]:
                 texto = page.extract_text() or ''
                 cpf   = extrair_cpf(texto)
                 nome  = extrair_nome_funcionario(texto)
-
-                # Descartar texto imediatamente — não guardar em lista
-                del texto
+                vals  = extrair_valores_holerite(texto)
 
                 if not cpf:
                     cpf = f'sem_cpf_{i}'
 
                 if cpf not in mapa:
-                    mapa[cpf] = {'nome': nome, 'paginas': []}
+                    mapa[cpf] = {'nome': nome, 'paginas': [], 'valores': {}}
                 mapa[cpf]['paginas'].append(i)
 
-                logger.info(f'[P1] Pág {i+1:03d}/{total}: CPF={cpf} | Nome={nome}')
+                # Atualiza valores: só substitui se o novo for não-nulo (aceita zero)
+                for k, v in vals.items():
+                    if v is not None and k not in mapa[cpf]['valores']:
+                        mapa[cpf]['valores'][k] = v
+
+                del texto
+                logger.info(
+                    f'[P1] Pág {i+1:03d}/{total}: CPF={cpf} | Nome={nome} | Vals={vals}'
+                )
 
             except Exception as exc:
                 logger.warning(f'[P1] Pág {i+1}/{total}: erro → {exc}')
-                mapa[f'sem_cpf_{i}'] = {'nome': 'Erro extração', 'paginas': [i]}
+                mapa[f'sem_cpf_{i}'] = {
+                    'nome': 'Erro extração', 'paginas': [i], 'valores': {}
+                }
 
-            # GC a cada 15 páginas
             if (i + 1) % 15 == 0:
                 gc.collect()
                 logger.info(f'[P1] GC executado | RAM: {_mem_mb()} MB')
@@ -180,11 +271,7 @@ def construir_mapa_cpf(caminho_pdf: str) -> tuple[dict, int]:
     return mapa, total
 
 
-def extrair_pdf_colaborador(caminho_pdf: str, indices: list[int]) -> bytes:
-    """
-    Extrai somente as páginas do colaborador usando pypdf (muito mais leve).
-    Retorna bytes do PDF individual e libera todos os objetos temporários.
-    """
+def extrair_pdf_colaborador(caminho_pdf: str, indices: list) -> bytes:
     reader = PdfReader(caminho_pdf)
     writer = PdfWriter()
     for idx in indices:
@@ -196,8 +283,7 @@ def extrair_pdf_colaborador(caminho_pdf: str, indices: list[int]) -> bytes:
     return resultado
 
 
-def extrair_pdf_do_request() -> str | None:
-    """Salva PDF em /tmp (streaming — sem carregar em RAM). Retorna caminho do arquivo."""
+def extrair_pdf_do_request() -> str:
     ct = request.content_type or ''
     if 'multipart/form-data' in ct:
         arq = request.files.get('pdf') or (
@@ -253,20 +339,13 @@ def buscar_mes_contabilidade_atual():
 
 
 def buscar_funcionario_por_cpf(cpf: str):
-    """Retorna (record_id, nome_completo) ou (None, None).
-    Tenta 3 variantes de filtro: formatado, numérico string, numérico inteiro.
-    O campo CPF no Airtable pode estar como texto ou como número.
-    """
     headers = {'Authorization': f'Bearer {AIRTABLE_API_KEY}'}
     cpf_num = re.sub(r'\D', '', cpf)
-
-    # Variantes de filtro — tenta formatado, string numérica e inteiro puro
     formulas = [
-        f'{{CPF}}="{cpf}"',       # "326.052.678-14"
-        f'{{CPF}}="{cpf_num}"',   # "32605267814"
-        f'{{CPF}}={cpf_num}',     # 32605267814  (campo numérico, sem aspas)
+        f'{{CPF}}="{cpf}"',
+        f'{{CPF}}="{cpf_num}"',
+        f'{{CPF}}={cpf_num}',
     ]
-
     for formula in formulas:
         _at_throttle()
         try:
@@ -287,34 +366,69 @@ def buscar_funcionario_por_cpf(cpf: str):
                     logger.info(f'[AT] Funcionário encontrado com fórmula: {formula}')
                     return records[0]['id'], nome
         except requests.exceptions.Timeout:
-            logger.warning(f'[AT] Timeout na busca de CPF {cpf} (fórmula: {formula})')
+            logger.warning(f'[AT] Timeout CPF {cpf} (fórmula: {formula})')
             continue
         except Exception as exc:
-            logger.warning(f'[AT] Erro na busca de CPF {cpf}: {exc}')
+            logger.warning(f'[AT] Erro CPF {cpf}: {exc}')
             continue
-
     return None, None
 
 
-def criar_registro_holerite(nome, func_id, folha_mensal, data_str, mes_cont_id):
+def criar_registro_holerite(nome, func_id, folha_mensal, data_str, mes_cont_id, valores=None):
+    """Cria registro de holerite no Airtable, incluindo valores financeiros se disponíveis."""
+    campos = {
+        F_HOL_NOME:     f'{nome} - {folha_mensal}',
+        F_HOL_STATUS:   'Concluído',
+        F_HOL_FUNC:     [func_id],
+        F_HOL_DATA:     data_str,
+        F_HOL_FOLHA:    folha_mensal,
+        F_HOL_MES_CONT: [mes_cont_id],
+    }
+    if valores:
+        if valores.get('total_vencimentos') is not None:
+            campos[F_HOL_VENCIM]    = valores['total_vencimentos']
+        if valores.get('total_descontos') is not None:
+            campos[F_HOL_DESCONTOS] = valores['total_descontos']
+        if valores.get('valor_liquido') is not None:
+            campos[F_HOL_LIQUIDO]   = valores['valor_liquido']
+        if valores.get('inss') is not None:
+            campos[F_HOL_INSS]      = valores['inss']
+
     _at_throttle()
     r = requests.post(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_HOL}',
         headers=_at_headers(),
-        json={
-            'fields': {
-                F_HOL_NOME:     f'{nome} - {folha_mensal}',
-                F_HOL_STATUS:   'Concluído',
-                F_HOL_FUNC:     [func_id],
-                F_HOL_DATA:     data_str,
-                F_HOL_FOLHA:    folha_mensal,
-                F_HOL_MES_CONT: [mes_cont_id],
-            }
-        },
+        json={'fields': campos},
         timeout=15,
     )
     r.raise_for_status()
     return r.json()['id']
+
+
+def atualizar_valores_holerite(record_id: str, valores: dict):
+    """Atualiza apenas os campos financeiros de um holerite existente."""
+    campos = {}
+    if valores.get('total_vencimentos') is not None:
+        campos[F_HOL_VENCIM]    = valores['total_vencimentos']
+    if valores.get('total_descontos') is not None:
+        campos[F_HOL_DESCONTOS] = valores['total_descontos']
+    if valores.get('valor_liquido') is not None:
+        campos[F_HOL_LIQUIDO]   = valores['valor_liquido']
+    if valores.get('inss') is not None:
+        campos[F_HOL_INSS]      = valores['inss']
+
+    if not campos:
+        return None
+
+    _at_throttle()
+    r = requests.patch(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_HOL}/{record_id}',
+        headers=_at_headers(),
+        json={'fields': campos},
+        timeout=15,
+    )
+    r.raise_for_status()
+    return r.json()
 
 
 def anexar_pdf_holerite(record_id, pdf_bytes, filename):
@@ -349,14 +463,13 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.4',
+        'versao': '2.5',
         'ram_mb': _mem_mb(),
     })
 
 
 @app.route('/separar', methods=['POST'])
 def separar():
-    """Divide o PDF e retorna JSON com base64 por funcionário (sem salvar no Airtable)."""
     try:
         caminho_pdf = extrair_pdf_do_request()
         if not caminho_pdf or not os.path.exists(caminho_pdf) or os.path.getsize(caminho_pdf) < 100:
@@ -383,6 +496,7 @@ def separar():
                 'cpf': cpf, 'nome': dados['nome'],
                 'nome_arquivo': nome_arq, 'pdf_base64': pdf_b64,
                 'tamanho_bytes': len(pdf_ind),
+                'valores': dados.get('valores', {}),
             })
             del pdf_ind, pdf_b64
             gc.collect()
@@ -398,7 +512,6 @@ def separar():
 
 @app.route('/separar/zip', methods=['POST'])
 def separar_zip():
-    """Divide o PDF e retorna um ZIP com os holerites individuais."""
     try:
         caminho_pdf = extrair_pdf_do_request()
         if not caminho_pdf or not os.path.exists(caminho_pdf) or os.path.getsize(caminho_pdf) < 100:
@@ -433,25 +546,10 @@ def separar_zip():
 
 @app.route('/processar-holerites', methods=['POST', 'OPTIONS'])
 def processar_holerites():
-    # Preflight CORS
     if request.method == 'OPTIONS':
         return jsonify({}), 200
-    """
-    Fluxo completo — memória eficiente:
-      1. Recebe o PDF
-      2. Pass 1: varredura leve página por página → mapa CPF→páginas
-      3. Pass 2: por colaborador → extrai PDF → cria registro Airtable
-                 → anexa PDF → libera memória → gc → próximo
 
-    Parâmetros (form-data ou query string):
-      pdf            — arquivo PDF (multipart)         [obrigatório]
-      folha_mensal   — ex. "Maio 2026"                 [opcional, auto-detecta]
-      mes_cont_id    — ID da Contabilidade Mensal       [opcional, auto-busca]
-
-    Retorna sempre JSON, inclusive em caso de erro.
-    """
     etapa = 'init'
-
     try:
         if not AIRTABLE_API_KEY:
             return jsonify({
@@ -460,7 +558,6 @@ def processar_holerites():
                 'etapa': etapa,
             }), 500
 
-        # 1. Receber PDF
         etapa = 'receber_pdf'
         caminho_pdf = None
         caminho_pdf = extrair_pdf_do_request()
@@ -476,7 +573,6 @@ def processar_holerites():
         pdf_kb = os.path.getsize(caminho_pdf) // 1024
         logger.info(f'[INICIO] PDF salvo em disco: {pdf_kb} KB | RAM: {_mem_mb()} MB')
 
-        # 2. Parâmetros de mês
         etapa = 'parametros_mes'
         folha_mensal = (
             request.form.get('folha_mensal')
@@ -499,7 +595,7 @@ def processar_holerites():
             if not mes_cont_id:
                 return jsonify({
                     'status': 'erro',
-                    'erro': f'Contabilidade Mensal do mês atual não encontrada ({nome_mes_cont}). '
+                    'erro': f'Contabilidade Mensal "{nome_mes_cont}" não encontrada. '
                             'Passe mes_cont_id manualmente.',
                     'etapa': etapa,
                 }), 500
@@ -511,7 +607,6 @@ def processar_holerites():
             f'[CONFIG] folha_mensal={folha_mensal} | data={data_holerite} | mes_cont_id={mes_cont_id}'
         )
 
-        # 3. Pass 1: mapa CPF → páginas (leve)
         etapa = 'pass1_mapear_cpf'
         mapa, total_paginas = construir_mapa_cpf(caminho_pdf)
 
@@ -522,61 +617,53 @@ def processar_holerites():
 
         total_colab = len(mapa)
         logger.info(
-            f'[P2] Iniciando criação no Airtable | '
-            f'{total_colab} colaboradores | {total_paginas} páginas | RAM: {_mem_mb()} MB'
+            f'[P2] Iniciando criação | {total_colab} colaboradores | '
+            f'{total_paginas} páginas | RAM: {_mem_mb()} MB'
         )
 
         criados: list = []
         erros:   list = []
         contador = 0
 
-        # 4. Pass 2: um colaborador por vez
         for cpf, dados in mapa.items():
             contador += 1
-            nome_pdf  = dados['nome']
-            paginas   = dados['paginas']
-            tag       = f'[P2 {contador:02d}/{total_colab}]'
+            nome_pdf = dados['nome']
+            paginas  = dados['paginas']
+            valores  = dados.get('valores', {})
+            tag      = f'[P2 {contador:02d}/{total_colab}]'
 
-            # Colaborador sem CPF identificado
             if cpf.startswith('sem_cpf'):
                 logger.warning(f'{tag} CPF não extraído | págs: {paginas}')
-                erros.append({
-                    'cpf': 'N/A', 'nome': nome_pdf,
-                    'motivo': 'CPF não extraído da página',
-                    'paginas': paginas,
-                })
+                erros.append({'cpf': 'N/A', 'nome': nome_pdf,
+                              'motivo': 'CPF não extraído', 'paginas': paginas})
                 continue
 
-            # Buscar funcionário no Airtable
             etapa = f'buscar_funcionario:{cpf}'
             func_id, nome_at = buscar_funcionario_por_cpf(cpf)
             if not func_id:
                 logger.warning(f'{tag} Funcionário não encontrado | CPF: {cpf}')
-                erros.append({
-                    'cpf': cpf, 'nome': nome_pdf,
-                    'motivo': 'Funcionário não encontrado no Airtable',
-                })
+                erros.append({'cpf': cpf, 'nome': nome_pdf,
+                              'motivo': 'Funcionário não encontrado no Airtable'})
                 continue
 
             nome_final = nome_at or nome_pdf
             filename   = f'Holerite {folha_mensal} - {nome_final}.pdf'
-            logger.info(f'{tag} {nome_final} (CPF: {cpf}) | págs: {paginas}')
+            logger.info(
+                f'{tag} {nome_final} (CPF: {cpf}) | págs: {paginas} | vals: {valores}'
+            )
 
             pdf_ind = None
             try:
-                # Extrair PDF individual (somente as páginas do colaborador)
-                etapa  = f'extrair_pdf:{cpf}'
+                etapa   = f'extrair_pdf:{cpf}'
                 pdf_ind = extrair_pdf_colaborador(caminho_pdf, paginas)
                 logger.info(f'{tag} PDF: {len(pdf_ind)//1024} KB | RAM: {_mem_mb()} MB')
 
-                # Criar registro no Airtable
                 etapa     = f'criar_registro:{cpf}'
                 record_id = criar_registro_holerite(
-                    nome_final, func_id, folha_mensal, data_holerite, mes_cont_id
+                    nome_final, func_id, folha_mensal, data_holerite, mes_cont_id, valores
                 )
-                logger.info(f'{tag} Registro criado: {record_id}')
+                logger.info(f'{tag} Registro criado: {record_id} | valores: {valores}')
 
-                # Anexar PDF ao registro
                 etapa = f'anexar_pdf:{cpf}'
                 anexar_pdf_holerite(record_id, pdf_ind, filename)
                 logger.info(f'{tag} PDF anexado ✓')
@@ -584,29 +671,23 @@ def processar_holerites():
                 criados.append({
                     'cpf': cpf, 'nome': nome_final,
                     'record_id': record_id, 'arquivo': filename,
-                    'paginas': paginas,
+                    'paginas': paginas, 'valores': valores,
                 })
 
             except requests.HTTPError as exc:
                 motivo = f'HTTP {exc.response.status_code}: {exc.response.text[:300]}'
                 logger.error(f'{tag} ERRO Airtable: {motivo}')
-                erros.append({
-                    'cpf': cpf, 'nome': nome_final,
-                    'motivo': motivo, 'etapa': etapa,
-                })
+                erros.append({'cpf': cpf, 'nome': nome_final,
+                              'motivo': motivo, 'etapa': etapa})
             except Exception as exc:
                 logger.exception(f'{tag} ERRO inesperado: {exc}')
-                erros.append({
-                    'cpf': cpf, 'nome': nome_final,
-                    'motivo': str(exc), 'etapa': etapa,
-                })
+                erros.append({'cpf': cpf, 'nome': nome_final,
+                              'motivo': str(exc), 'etapa': etapa})
             finally:
-                # Liberar memória do PDF individual, seja sucesso ou erro
                 if pdf_ind is not None:
                     del pdf_ind
                 gc.collect()
 
-        # Liberar PDF temporário do disco
         if caminho_pdf and os.path.exists(caminho_pdf):
             os.unlink(caminho_pdf)
         gc.collect()
@@ -635,6 +716,210 @@ def processar_holerites():
             'erro': str(exc),
             'etapa': etapa,
         }), 500
+
+
+@app.route('/corrigir-valores', methods=['POST', 'OPTIONS'])
+def corrigir_valores():
+    """
+    Atualiza valores financeiros de holerites já criados mas sem valores
+    (ou com valores zerados), SEM criar registros novos — apenas PATCH.
+
+    Fluxo:
+      1. Busca holerites para folha_mensal + mes_contabilidade especificados,
+         que estejam sem Total Vencimentos (BLANK ou 0)
+      2. Para cada registro, baixa o PDF já anexado no Airtable
+      3. Extrai valores financeiros via pdfplumber
+      4. Atualiza (PATCH) apenas os campos financeiros do registro existente
+
+    Parâmetros JSON:
+      folha_mensal       — ex. "Maio 2026"   [obrigatório]
+      mes_contabilidade  — ex. "Junho 2026"  [opcional, recomendado]
+      dry_run            — true: apenas simula, NÃO grava nada no Airtable
+      limit              — int: processa no máximo N registros (teste controlado)
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    data = request.get_json(force=True, silent=True) or {}
+
+    def _param(nome):
+        return data.get(nome) if data.get(nome) is not None else request.args.get(nome)
+
+    folha_mensal = _param('folha_mensal')
+    mes_contabilidade = _param('mes_contabilidade')
+    if not folha_mensal:
+        return jsonify({'status': 'erro', 'erro': 'folha_mensal é obrigatório'}), 400
+
+    dry_run_raw = _param('dry_run')
+    dry_run = str(dry_run_raw).strip().lower() in ('1', 'true', 'yes', 'sim')
+
+    limit = None
+    limit_raw = _param('limit')
+    if limit_raw is not None:
+        try:
+            limit = int(limit_raw)
+            if limit <= 0:
+                limit = None
+        except (TypeError, ValueError):
+            limit = None
+
+    logger.info(
+        f'[CORR] Iniciando correção | folha_mensal={folha_mensal} | '
+        f'mes_contabilidade={mes_contabilidade or "(qualquer)"} | '
+        f'dry_run={dry_run} | limit={limit if limit is not None else "(sem limite)"}'
+    )
+
+    # 1. Buscar holerites da folha/mês sem Total Vencimentos (BLANK ou 0)
+    condicoes = [
+        f'{{Folha Mensal}}="{folha_mensal}"',
+        'OR({Total Vencimentos}=BLANK(), {Total Vencimentos}=0)',
+    ]
+    if mes_contabilidade:
+        condicoes.append(f'FIND("{mes_contabilidade}", ARRAYJOIN({{Mês Contabilidade}}))')
+    formula = 'AND(' + ', '.join(condicoes) + ')'
+
+    todos: list = []
+    offset = None
+    pagina = 0
+    while True:
+        pagina += 1
+        _at_throttle()
+        params = {
+            'filterByFormula': formula,
+            'fields[]': [
+                'Holerite', 'PDF HOLERITE', 'Folha Mensal',
+                'Mês Contabilidade', 'Total Vencimentos',
+            ],
+            'pageSize': 100,
+        }
+        if offset:
+            params['offset'] = offset
+        r = requests.get(
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_HOL}',
+            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            params=params,
+            timeout=30,
+        )
+        if not r.ok:
+            return jsonify({
+                'status': 'erro',
+                'erro': f'Airtable list error: {r.status_code} {r.text[:300]}'
+            }), 500
+
+        body = r.json()
+        todos.extend(body.get('records', []))
+        offset = body.get('offset')
+        logger.info(f'[CORR] Página {pagina}: {len(body.get("records", []))} registros')
+        if not offset:
+            break
+
+    logger.info(f'[CORR] Total sem valores: {len(todos)}')
+    if not todos:
+        return jsonify({
+            'status': 'concluido',
+            'folha_mensal': folha_mensal,
+            'mes_contabilidade': mes_contabilidade,
+            'dry_run': dry_run,
+            'total_sem_valores': 0,
+            'atualizados': 0,
+            'erros': 0,
+            'detalhe': [],
+        })
+
+    total_encontrados = len(todos)
+    if limit is not None:
+        todos = todos[:limit]
+        logger.info(f'[CORR] limit={limit} aplicado | processando {len(todos)} de {total_encontrados}')
+
+    atualizados = 0
+    erros_list: list = []
+    processados: list = []
+
+    for rec in todos:
+        record_id = rec['id']
+        nome_hol  = rec.get('fields', {}).get('Holerite', record_id)
+        attachments = rec.get('fields', {}).get('PDF HOLERITE', [])
+
+        if not attachments:
+            logger.warning(f'[CORR] {nome_hol}: sem PDF anexado')
+            erros_list.append({'record_id': record_id, 'nome': nome_hol,
+                               'motivo': 'sem PDF anexado'})
+            continue
+
+        pdf_url = attachments[0].get('url')
+        if not pdf_url:
+            erros_list.append({'record_id': record_id, 'nome': nome_hol,
+                               'motivo': 'URL do PDF não disponível'})
+            continue
+
+        # Baixar o PDF do Airtable CDN
+        tmp_path = None
+        try:
+            resp = requests.get(pdf_url, timeout=30)
+            resp.raise_for_status()
+            tmp_path = f'/tmp/corr_{_uuid.uuid4().hex}.pdf'
+            with open(tmp_path, 'wb') as f:
+                f.write(resp.content)
+
+            # Extrair texto e valores
+            texto_completo = ''
+            with pdfplumber.open(tmp_path) as pdf_doc:
+                for pg in pdf_doc.pages:
+                    texto_completo += (pg.extract_text() or '') + '\n'
+
+            valores = extrair_valores_holerite(texto_completo)
+            logger.info(f'[CORR] {nome_hol}: valores extraídos = {valores}')
+
+            if not valores:
+                erros_list.append({'record_id': record_id, 'nome': nome_hol,
+                                   'motivo': 'valores não encontrados no PDF'})
+                continue
+
+            if dry_run:
+                logger.info(f'[CORR] {nome_hol}: [DRY RUN] não gravado | valores = {valores}')
+                processados.append({'record_id': record_id, 'nome': nome_hol,
+                                     'valores': valores, 'gravado': False})
+            else:
+                # Atualizar no Airtable
+                atualizar_valores_holerite(record_id, valores)
+                logger.info(f'[CORR] {nome_hol}: atualizado ✓ | valores = {valores}')
+                processados.append({'record_id': record_id, 'nome': nome_hol,
+                                     'valores': valores, 'gravado': True})
+
+            atualizados += 1
+
+        except requests.HTTPError as exc:
+            motivo = f'HTTP {exc.response.status_code} ao baixar PDF'
+            logger.error(f'[CORR] {nome_hol}: {motivo}')
+            erros_list.append({'record_id': record_id, 'nome': nome_hol, 'motivo': motivo})
+        except Exception as exc:
+            logger.exception(f'[CORR] {nome_hol}: erro inesperado')
+            erros_list.append({'record_id': record_id, 'nome': nome_hol, 'motivo': str(exc)})
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            gc.collect()
+
+    logger.info(
+        f'[CORR] Concluído | dry_run={dry_run} | total_encontrados={total_encontrados} | '
+        f'processados={len(todos)} | atualizados={atualizados} | erros={len(erros_list)}'
+    )
+    return jsonify({
+        'status': 'concluido',
+        'folha_mensal': folha_mensal,
+        'mes_contabilidade': mes_contabilidade,
+        'dry_run': dry_run,
+        'limit': limit,
+        'total_sem_valores': total_encontrados,
+        'total_processados': len(todos),
+        'atualizados': atualizados,
+        'erros': len(erros_list),
+        'detalhe_erros': erros_list,
+        'detalhe_processados': processados,
+    })
 
 
 if __name__ == '__main__':
