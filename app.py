@@ -664,12 +664,36 @@ def _buscar_holerite_existente(func_id: str, folha_mensal: str):
     return None
 
 
+def _verificar_anexo_holerite(holerite_fields: dict, nome_arquivo: str, pdf_hash: str) -> str:
+    """
+    Verifica se o holerite já tem um anexo com o mesmo nome de arquivo.
+
+    Retorna:
+      'identico'   — já existe anexo com mesmo nome e mesmo hash (não duplicar)
+      'conflito'   — já existe anexo com mesmo nome mas conteúdo diferente
+                      (substituição precisa de autorização — não anexa)
+      'novo'       — não há anexo com esse nome (pode anexar normalmente)
+    """
+    attachments = holerite_fields.get(F_HOL_PDF) or []
+    for att in attachments:
+        if att.get('filename') != nome_arquivo:
+            continue
+        try:
+            existente_bytes = requests.get(att['url'], timeout=60).content
+            existente_hash = hashlib.sha256(existente_bytes).hexdigest()
+        except Exception as exc:
+            logger.warning(f'[FILA] Falha ao baixar anexo existente para comparar hash: {exc}')
+            return 'conflito'
+        return 'identico' if existente_hash == pdf_hash else 'conflito'
+    return 'novo'
+
+
 def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
     """
     Handler de Holerite para /processar-fila.
 
-    ctx: {proc_id, arquivo_id, pdf_bytes, nome_arquivo, texto, folha_mensal,
-          mes_cont_id, data_holerite}
+    ctx: {proc_id, arquivo_id, pdf_bytes, pdf_hash, nome_arquivo, texto,
+          folha_mensal, mes_cont_id, data_holerite}
 
     Retorno padronizado:
       {"acao": str, "status_final": "Concluído"|"Erro",
@@ -730,11 +754,30 @@ def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
             'pendencia': None,
         }
 
+    pendencia = None
+
     if existente:
         holerite_id = existente['id']
         atualizar_valores_holerite(holerite_id, valores)
-        anexar_pdf_holerite(holerite_id, ctx['pdf_bytes'], ctx['nome_arquivo'])
-        acao = 'holerite_atualizado'
+
+        status_anexo = _verificar_anexo_holerite(
+            existente.get('fields', {}), ctx['nome_arquivo'], ctx['pdf_hash'],
+        )
+        if status_anexo == 'novo':
+            anexar_pdf_holerite(holerite_id, ctx['pdf_bytes'], ctx['nome_arquivo'])
+            acao = 'holerite_atualizado'
+        elif status_anexo == 'identico':
+            acao = 'holerite_atualizado_anexo_ja_existia'
+        else:  # 'conflito'
+            acao = 'holerite_atualizado_anexo_nao_substituido'
+            pendencia = {
+                'tipo': 'Substituição de anexo precisa de autorização',
+                'observacao': (
+                    f'Holerite {holerite_id}: já existe anexo "{ctx["nome_arquivo"]}" com '
+                    f'conteúdo diferente do PDF processado. Anexo NÃO foi substituído — '
+                    f'requer autorização manual.'
+                ),
+            }
     else:
         holerite_id = criar_registro_holerite(
             nome, func_id, folha_mensal, ctx['data_holerite'], mes_cont_id, valores=valores,
@@ -753,7 +796,7 @@ def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
             'folha_mensal': folha_mensal,
             'valores': valores,
         },
-        'pendencia': None,
+        'pendencia': pendencia,
     }
 
 
@@ -1595,6 +1638,7 @@ def processar_fila():
                 'proc_id': proc_id,
                 'arquivo_id': arquivo_id,
                 'pdf_bytes': pdf_bytes,
+                'pdf_hash': hashlib.sha256(pdf_bytes).hexdigest(),
                 'nome_arquivo': nome_arquivo,
                 'texto': texto,
                 'folha_mensal': folha_mensal,
