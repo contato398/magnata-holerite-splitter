@@ -739,11 +739,28 @@ def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
     v = valores.get('total_vencimentos')
     d = valores.get('total_descontos')
     liq = valores.get('valor_liquido')
-    valores_inconsistentes = (
-        v is not None and d is not None and liq is not None and (
-            (liq > 0 and v == d) or (v < liq)
-        )
-    )
+    TOLERANCIA_CENTAVOS = 0.02
+    valores_inconsistentes = False
+    motivo_inconsistencia = None
+
+    if v is not None and d is not None and liq is not None:
+        if liq > 0 and v == d:
+            valores_inconsistentes = True
+            motivo_inconsistencia = (
+                f'Total Vencimentos ({v}) igual a Total Descontos ({d}) com Valor Líquido ({liq}) > 0.'
+            )
+        elif v < liq:
+            valores_inconsistentes = True
+            motivo_inconsistencia = (
+                f'Total Vencimentos ({v}) menor que Valor Líquido ({liq}).'
+            )
+        elif abs((v - d) - liq) > TOLERANCIA_CENTAVOS:
+            valores_inconsistentes = True
+            motivo_inconsistencia = (
+                f'Total Vencimentos ({v}) - Total Descontos ({d}) = {v - d}, '
+                f'diferente de Valor Líquido ({liq}) além da tolerância de R$ {TOLERANCIA_CENTAVOS}.'
+            )
+
     if valores_inconsistentes:
         return {
             'acao': 'valores_inconsistentes',
@@ -758,8 +775,8 @@ def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
             'pendencia': {
                 'tipo': 'Valores inconsistentes',
                 'observacao': (
-                    f'Total Vencimentos={v} | Total Descontos={d} | Valor Líquido={liq} — '
-                    f'combinação inconsistente. Holerite NÃO atualizado, requer revisão manual.'
+                    f'{motivo_inconsistencia} '
+                    f'Holerite NÃO atualizado, requer revisão manual.'
                 ),
             },
         }
@@ -874,7 +891,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.7',
+        'versao': '2.8',
         'ram_mb': _mem_mb(),
     })
 
