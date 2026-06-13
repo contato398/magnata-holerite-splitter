@@ -658,7 +658,8 @@ def _buscar_holerite_existente(func_id: str, folha_mensal: str):
     r.raise_for_status()
     for rec in r.json().get('records', []):
         links = rec.get('fields', {}).get(F_HOL_FUNC) or []
-        if any(l['id'] == func_id for l in links):
+        link_ids = [l['id'] if isinstance(l, dict) else l for l in links]
+        if func_id in link_ids:
             return rec
     return None
 
@@ -1552,7 +1553,8 @@ def processar_fila():
                 logger.error(f'[FILA] {proc_id}: {item["erro"]}')
                 continue
 
-            arquivo_id = arquivos_link[0]['id']
+            primeiro_link = arquivos_link[0]
+            arquivo_id = primeiro_link['id'] if isinstance(primeiro_link, dict) else primeiro_link
             item['arquivo_id'] = arquivo_id
 
             _at_throttle()
