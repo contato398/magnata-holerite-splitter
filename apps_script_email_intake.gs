@@ -34,7 +34,10 @@ var DRY_RUN = true;
 // ───────────────────────────────────────────────────────────────────────────
 
 function runSetup() {
-  var apiKey = '02477d2f7d4e98a8384e576d8ee12f38a115944b3edf3180';
+  // Cole aqui a sua chave EMAIL_WEBHOOK_KEY (a mesma configurada no Render).
+  // NÃO deixe a chave salva neste arquivo depois de rodar runSetup() uma vez —
+  // ela fica armazenada de forma segura no PropertiesService.
+  var apiKey = 'COLE_AQUI_A_CHAVE_EMAIL_WEBHOOK_KEY';
   PropertiesService.getScriptProperties().setProperty('EMAIL_WEBHOOK_KEY', apiKey);
   Logger.log('API key salva com sucesso.');
 }
