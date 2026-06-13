@@ -739,7 +739,25 @@ def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
     existente = _buscar_holerite_existente(func_id, folha_mensal)
 
     if dry_run:
-        acao = 'atualizaria_holerite_existente' if existente else 'criaria_holerite'
+        pdf_ja_existia = False
+        pdf_duplicado_evitado = False
+        status_anexo = None
+
+        if existente:
+            status_anexo = _verificar_anexo_holerite(
+                existente.get('fields', {}), ctx['nome_arquivo'], ctx['pdf_hash'],
+            )
+            if status_anexo == 'identico':
+                pdf_ja_existia = True
+                pdf_duplicado_evitado = True
+                acao = 'atualizaria_holerite_existente_sem_duplicar_pdf'
+            elif status_anexo == 'conflito':
+                acao = 'atualizaria_holerite_existente_anexo_precisaria_autorizacao'
+            else:  # 'novo'
+                acao = 'atualizaria_holerite_existente_e_anexaria_pdf'
+        else:
+            acao = 'criaria_holerite'
+
         return {
             'acao': acao,
             'status_final': 'Concluído',
@@ -750,6 +768,10 @@ def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
                 'folha_mensal': folha_mensal,
                 'valores': valores,
                 'holerite_existente_id': existente['id'] if existente else None,
+                'pdf_anexado': False,
+                'pdf_ja_existia': pdf_ja_existia,
+                'pdf_duplicado_evitado': pdf_duplicado_evitado,
+                'status_anexo': status_anexo,
             },
             'pendencia': None,
         }
