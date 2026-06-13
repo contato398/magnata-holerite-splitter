@@ -1,10 +1,11 @@
 """
-magnata-holerite-splitter — app.py v2.5
-Novidades vs v2.4:
-  - Extração de valores financeiros do PDF (Total Vencimentos, Total Descontos,
-    Valor Líquido, INSS) durante o Pass 1
-  - Esses valores são salvos no Airtable ao criar o registro
-  - Novo endpoint /corrigir-valores: atualiza holerites já criados sem valores
+magnata-holerite-splitter — app.py v2.6
+Novidades vs v2.5:
+  - Novo endpoint /email/webhook (Fase 2 - Caixa de Entrada):
+    recebe e-mails/anexos via Google Apps Script, registra em
+    Emails Savian / Arquivos / Processar Arquivos, classifica o tipo de
+    documento e cria pendências quando necessário. Suporta dry_run e
+    é protegido por X-API-KEY.
 """
 
 import os
@@ -14,6 +15,7 @@ import gc
 import time
 import zipfile
 import base64
+import hashlib
 import logging
 import requests
 from calendar import monthrange
@@ -71,6 +73,69 @@ F_HOL_VENCIM    = 'fldOal5gy1aqF5RPT'   # Total Vencimentos
 F_HOL_DESCONTOS = 'fldRiNiS9Rqfjo5Hg'   # Total Descontos
 F_HOL_LIQUIDO   = 'fldnOzg7FcXxes2dm'   # Valor Líquido
 F_HOL_INSS      = 'fldvDY9x8dC0FCLrd'   # Descontos INSS
+
+# ── Tabelas/Campos Fase 2 — Caixa de Entrada ─────────────────────────────────
+TABLE_EMAILS     = 'tblljRRrraXSipJd1'   # Emails Savian
+TABLE_ARQUIVOS   = 'tblRsvhz8oOcUqhkv'   # Arquivos
+TABLE_PROCESSAR  = 'tblXaLXvGJMyFOayc'   # Processar Arquivos
+TABLE_PENDENCIAS = 'tblRkJBL6Wwf4fxVC'   # Pendências/Revisar
+
+# Emails Savian
+F_EMAIL_NAME     = 'fldwKHHiVVEKySwx4'
+F_EMAIL_STATUS   = 'fld44SrJN9Va8avMX'
+F_EMAIL_ASSUNTO  = 'fld66diI0hksJE5PS'
+F_EMAIL_CONTEUDO = 'fldzi2kWBoT2kfEhL'
+F_EMAIL_MSGID    = 'fldCCdUEMF3hlTngA'
+
+# Arquivos
+F_ARQ_NOME     = 'fldjVGYri7DZDJuee'   # Arquivo (campo primário)
+F_ARQ_STATUS   = 'fld9yxb30SlLJxqoM'
+F_ARQ_DATA     = 'fldKcfvu5Anec54xa'
+F_ARQ_ATTACH   = 'fldm6S1xnp8S6sKFE'
+F_ARQ_EMAILS   = 'fld2yYAHWe0smV5Bb'
+F_ARQ_NOME_ARQ = 'fldsOySQRfZ8rPGDw'   # Nome do Arquivo
+F_ARQ_HASH     = 'fldOB09YlKDEqKSFO'  # Hash do Anexo
+
+# Processar Arquivos
+F_PROC_NAME      = 'fldmrG1ZTHHU4QYQK'
+F_PROC_STATUS    = 'fldvN9T5MiuKZGDi0'
+F_PROC_DATA      = 'flddNzmqp1Im1D02m'
+F_PROC_ARQUIVOS2 = 'fldLWSmK81i8jbtCG'
+F_PROC_TIPO_DOC  = 'fldvkOVlwCMywGTES'
+
+# Pendências/Revisar
+F_PEND_NOME   = 'fldovcs6bySCshoXI'
+F_PEND_STATUS = 'fldf1an8HCV2DxEwk'
+F_PEND_TIPO   = 'fldyZgyB5F5fv6kUX'
+F_PEND_ORIGEM = 'fldUk3hr2mCkfu1Wb'
+F_PEND_OBS    = 'fld2bqGLlotCVRBn5'
+F_PEND_DATA   = 'fldRolmP0rSbJevUZ'
+
+EMAIL_WEBHOOK_KEY = os.environ.get('EMAIL_WEBHOOK_KEY', '')
+
+# Regras de classificação de documento (Fase 2)
+# Lista de (tipo_documento, [regex de palavras-chave]) — primeira que casar vence
+TIPO_DOC_REGRAS = [
+    ('Holerite', [r'Recibo\s+de\s+Pagamento', r'Total\s+de\s+Vencimentos', r'Valor\s+L[íi]quido']),
+    ('Folha de Ponto', [r'Folha\s+de\s+Ponto', r'Espelho\s+de\s+Ponto']),
+    ('Contrato de Experiência', [r'Contrato\s+de\s+Experi[êe]ncia']),
+    ('Contrato de Trabalho', [r'Contrato\s+de\s+Trabalho', r'\bCTPS\b']),
+    ('Férias', [r'Aviso\s+de\s+F[ée]rias', r'Recibo\s+de\s+F[ée]rias', r'Per[íi]odo\s+de\s+Gozo']),
+    ('FGTS', [r'FGTS\s+Digital', r'Guia\s+do\s+FGTS', r'\bGFD\b']),
+    ('Guia', [r'Guia\s+de\s+Recolhimento', r'\bGPS\b', r'\bDARF\b']),
+    ('Boleto', [r'\d{5}\.\d{5}\s+\d{5}\.\d{6}\s+\d{5}\.\d{6}\s+\d\s+\d{14}', r'Linha\s+Digit[áa]vel']),
+    ('Nota Fiscal', [r'NFS-?e', r'Nota\s+Fiscal\s+de\s+Servi[çc]o', r'DANFE']),
+]
+
+
+def classificar_documento(texto: str):
+    """Retorna (tipo_documento, confianca) com base em palavras-chave no texto extraído."""
+    for tipo, padroes in TIPO_DOC_REGRAS:
+        hits = sum(1 for p in padroes if re.search(p, texto, re.IGNORECASE))
+        if hits > 0:
+            return tipo, hits
+    return 'Outro', 0
+
 
 MESES_PT = [
     'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
@@ -456,6 +521,59 @@ def anexar_pdf_holerite(record_id, pdf_bytes, filename):
     return r.json()
 
 
+# ── Helpers genéricos Airtable (Fase 2) ──────────────────────────────────────
+
+def _criar_registro(table_id: str, fields: dict) -> str:
+    _at_throttle()
+    r = requests.post(
+        f'https://api.airtable.com/v0/{BASE_ID}/{table_id}',
+        headers=_at_headers(),
+        json={'fields': fields, 'typecast': True},
+        timeout=30,
+    )
+    if not r.ok:
+        logger.error(f'[AT] create {table_id} HTTP {r.status_code}: {r.text[:500]}')
+    r.raise_for_status()
+    return r.json()['id']
+
+
+def _buscar_por_campo(table_id: str, campo_nome: str, valor: str):
+    """Busca o 1º registro onde {campo_nome} = valor. Retorna o registro ou None."""
+    _at_throttle()
+    valor_escapado = valor.replace('"', '\\"')
+    formula = f'{{{campo_nome}}}="{valor_escapado}"'
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{table_id}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={'filterByFormula': formula, 'maxRecords': 1},
+        timeout=30,
+    )
+    r.raise_for_status()
+    records = r.json().get('records', [])
+    return records[0] if records else None
+
+
+def _anexar_attachment(table_id: str, record_id: str, field_id: str,
+                        conteudo_bytes: bytes, filename: str,
+                        content_type: str = 'application/pdf'):
+    _at_throttle()
+    url = f'https://content.airtable.com/v0/{BASE_ID}/{record_id}/{field_id}/uploadAttachment'
+    r = requests.post(
+        url,
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}', 'Content-Type': 'application/json'},
+        json={
+            'contentType': content_type,
+            'filename': filename,
+            'file': base64.b64encode(conteudo_bytes).decode('utf-8'),
+        },
+        timeout=60,
+    )
+    if not r.ok:
+        logger.error(f'[AT] attach {table_id}/{record_id} HTTP {r.status_code}: {r.text[:500]}')
+    r.raise_for_status()
+    return r.json()
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.route('/health', methods=['GET'])
@@ -463,7 +581,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.5',
+        'versao': '2.6',
         'ram_mb': _mem_mb(),
     })
 
@@ -920,6 +1038,188 @@ def corrigir_valores():
         'detalhe_erros': erros_list,
         'detalhe_processados': processados,
     })
+
+
+@app.route('/email/webhook', methods=['POST', 'OPTIONS'])
+def email_webhook():
+    """
+    Fase 2 — Caixa de Entrada.
+
+    Recebe e-mail + anexos (JSON) vindos do Google Apps Script, registra em
+    Emails Savian / Arquivos / Processar Arquivos, classifica o tipo de
+    documento e cria pendências quando necessário.
+
+    Protegido por header X-API-KEY (variável de ambiente EMAIL_WEBHOOK_KEY).
+
+    Payload esperado (JSON):
+      {
+        "message_id": "<...@mail.gmail.com>",   [obrigatório]
+        "assunto": "...",
+        "remetente": "...",
+        "corpo": "...",
+        "anexos": [{"nome_arquivo": "x.pdf", "conteudo_base64": "..."}],
+        "dry_run": true
+      }
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    data = request.get_json(force=True, silent=True) or {}
+
+    message_id = data.get('message_id')
+    if not message_id:
+        return jsonify({'status': 'erro', 'erro': 'message_id é obrigatório'}), 400
+
+    assunto   = data.get('assunto', '') or ''
+    remetente = data.get('remetente', '') or ''
+    corpo     = data.get('corpo', '') or ''
+    anexos    = data.get('anexos', []) or []
+    dry_run   = str(data.get('dry_run', False)).strip().lower() in ('1', 'true', 'yes', 'sim')
+
+    logger.info(
+        f'[EMAIL] message_id={message_id} | assunto={assunto!r} | '
+        f'remetente={remetente!r} | anexos={len(anexos)} | dry_run={dry_run}'
+    )
+
+    resultado = {
+        'status': 'ok',
+        'dry_run': dry_run,
+        'message_id': message_id,
+        'anexos_processados': [],
+    }
+
+    # 1. Checar Message-ID duplicado — se já existe, não processa nada
+    existente = _buscar_por_campo(TABLE_EMAILS, 'MESSAGE ID', message_id)
+    if existente:
+        resultado['email_savian'] = {
+            'acao': 'duplicado_message_id', 'record_id': existente['id'], 'gravado': False,
+        }
+        logger.info(f'[EMAIL] Message-ID já existe em Emails Savian: {existente["id"]} → ignorando')
+        return jsonify(resultado)
+
+    email_savian_id = None
+    if dry_run:
+        resultado['email_savian'] = {'acao': 'criaria_novo', 'gravado': False}
+    else:
+        email_savian_id = _criar_registro(TABLE_EMAILS, {
+            F_EMAIL_NAME:     f'{assunto or "(sem assunto)"} — {message_id[:40]}',
+            F_EMAIL_STATUS:   'Recebido',
+            F_EMAIL_ASSUNTO:  assunto,
+            F_EMAIL_CONTEUDO: corpo,
+            F_EMAIL_MSGID:    message_id,
+        })
+        resultado['email_savian'] = {'acao': 'criado', 'gravado': True, 'record_id': email_savian_id}
+        logger.info(f'[EMAIL] Emails Savian criado: {email_savian_id}')
+
+    # 2. Processar cada anexo
+    for anexo in anexos:
+        nome_arquivo = anexo.get('nome_arquivo', 'arquivo.pdf')
+        b64 = anexo.get('conteudo_base64', '')
+        item = {'nome_arquivo': nome_arquivo}
+
+        try:
+            conteudo = base64.b64decode(b64)
+        except Exception as exc:
+            item['erro'] = f'base64 inválido: {exc}'
+            resultado['anexos_processados'].append(item)
+            continue
+
+        hash_anexo = hashlib.sha256(conteudo).hexdigest()
+        item['hash'] = hash_anexo
+        item['tamanho_bytes'] = len(conteudo)
+
+        # Checar duplicidade pelo hash do anexo
+        dup = _buscar_por_campo(TABLE_ARQUIVOS, 'Hash do Anexo', hash_anexo)
+        if dup:
+            item['duplicado'] = True
+            item['arquivo_record_id'] = dup['id']
+            resultado['anexos_processados'].append(item)
+            logger.info(f'[EMAIL] Anexo {nome_arquivo} duplicado (hash já existe): {dup["id"]}')
+            continue
+        item['duplicado'] = False
+
+        # Extrair texto (só PDFs) e classificar
+        texto = ''
+        if nome_arquivo.lower().endswith('.pdf'):
+            tmp_path = f'/tmp/email_{_uuid.uuid4().hex}.pdf'
+            try:
+                with open(tmp_path, 'wb') as f:
+                    f.write(conteudo)
+                with pdfplumber.open(tmp_path) as pdf_doc:
+                    for pg in pdf_doc.pages:
+                        texto += (pg.extract_text() or '') + '\n'
+            except Exception as exc:
+                item['erro_extracao'] = str(exc)
+            finally:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+
+        if not texto.strip():
+            tipo_doc, confianca = 'Não Identificado', 0
+            tipo_problema = 'PDF ilegível'
+        else:
+            tipo_doc, confianca = classificar_documento(texto)
+            tipo_problema = 'Documento não reconhecido' if tipo_doc == 'Outro' else None
+
+        item['tipo_documento'] = tipo_doc
+        item['confianca'] = confianca
+        item['trecho_texto'] = texto[:500]
+        item['pendencia'] = tipo_problema
+
+        if dry_run:
+            item['acao'] = 'criaria_arquivo_e_processar' + (f'_e_pendencia({tipo_problema})' if tipo_problema else '')
+            resultado['anexos_processados'].append(item)
+            continue
+
+        # Criar registro em Arquivos + anexar PDF
+        arquivo_fields = {
+            F_ARQ_NOME:     nome_arquivo,
+            F_ARQ_NOME_ARQ: nome_arquivo,
+            F_ARQ_HASH:     hash_anexo,
+            F_ARQ_STATUS:   'Recebido',
+            F_ARQ_DATA:     datetime.now().isoformat(),
+        }
+        if email_savian_id:
+            arquivo_fields[F_ARQ_EMAILS] = [email_savian_id]
+        arquivo_id = _criar_registro(TABLE_ARQUIVOS, arquivo_fields)
+        _anexar_attachment(TABLE_ARQUIVOS, arquivo_id, F_ARQ_ATTACH, conteudo, nome_arquivo)
+        item['arquivo_record_id'] = arquivo_id
+        logger.info(f'[EMAIL] Arquivo criado: {arquivo_id} ({nome_arquivo})')
+
+        # Criar registro em Processar Arquivos
+        processar_id = _criar_registro(TABLE_PROCESSAR, {
+            F_PROC_NAME:      nome_arquivo,
+            F_PROC_STATUS:    'Pendente',
+            F_PROC_TIPO_DOC:  tipo_doc,
+            F_PROC_DATA:      datetime.now().isoformat(),
+            F_PROC_ARQUIVOS2: [arquivo_id],
+        })
+        item['processar_record_id'] = processar_id
+        logger.info(f'[EMAIL] Processar Arquivos criado: {processar_id} | tipo={tipo_doc}')
+
+        # Criar pendência, se necessário
+        if tipo_problema:
+            pendencia_id = _criar_registro(TABLE_PENDENCIAS, {
+                F_PEND_NOME:   f'{tipo_problema}: {nome_arquivo}',
+                F_PEND_STATUS: 'Pendente',
+                F_PEND_TIPO:   tipo_problema,
+                F_PEND_ORIGEM: [arquivo_id],
+                F_PEND_OBS:    texto[:500] if texto.strip() else '(sem texto extraído do PDF)',
+                F_PEND_DATA:   datetime.now().isoformat(),
+            })
+            item['pendencia_record_id'] = pendencia_id
+            logger.info(f'[EMAIL] Pendência criada: {pendencia_id} ({tipo_problema})')
+
+        resultado['anexos_processados'].append(item)
+
+    return jsonify(resultado)
 
 
 if __name__ == '__main__':
