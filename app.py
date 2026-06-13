@@ -735,6 +735,35 @@ def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
     # 2. Extrair valores financeiros do holerite
     valores = extrair_valores_holerite(texto)
 
+    # 2b. Trava de segurança — valores financeiros inconsistentes
+    v = valores.get('total_vencimentos')
+    d = valores.get('total_descontos')
+    liq = valores.get('valor_liquido')
+    valores_inconsistentes = (
+        v is not None and d is not None and liq is not None and (
+            (liq > 0 and v == d) or (v < liq)
+        )
+    )
+    if valores_inconsistentes:
+        return {
+            'acao': 'valores_inconsistentes',
+            'status_final': 'Erro',
+            'detalhes': {
+                'funcionario_id': func_id,
+                'funcionario_nome': nome,
+                'cpf_extraido': cpf,
+                'folha_mensal': folha_mensal,
+                'valores': valores,
+            },
+            'pendencia': {
+                'tipo': 'Valores inconsistentes',
+                'observacao': (
+                    f'Total Vencimentos={v} | Total Descontos={d} | Valor Líquido={liq} — '
+                    f'combinação inconsistente. Holerite NÃO atualizado, requer revisão manual.'
+                ),
+            },
+        }
+
     # 3. Evitar duplicidade — checar se já existe holerite deste funcionário nesta folha
     existente = _buscar_holerite_existente(func_id, folha_mensal)
 
