@@ -574,6 +574,204 @@ def _anexar_attachment(table_id: str, record_id: str, field_id: str,
     return r.json()
 
 
+# ── Helpers Fase 4 — /processar-fila ─────────────────────────────────────────
+
+def _atualizar_status_processar(record_id: str, status: str):
+    _at_throttle()
+    r = requests.patch(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}/{record_id}',
+        headers=_at_headers(),
+        json={'fields': {F_PROC_STATUS: status}, 'typecast': True},
+        timeout=15,
+    )
+    if not r.ok:
+        logger.error(f'[AT] update status {record_id} HTTP {r.status_code}: {r.text[:500]}')
+    r.raise_for_status()
+    return r.json()
+
+
+def _criar_pendencia(arquivo_id: str, tipo_problema: str, observacao: str):
+    return _criar_registro(TABLE_PENDENCIAS, {
+        F_PEND_NOME:   f'{tipo_problema}: {arquivo_id}',
+        F_PEND_STATUS: 'Pendente',
+        F_PEND_TIPO:   tipo_problema,
+        F_PEND_ORIGEM: [arquivo_id],
+        F_PEND_OBS:    observacao[:500] if observacao else '',
+        F_PEND_DATA:   datetime.now().isoformat(),
+    })
+
+
+def _buscar_funcionario_por_nome(nome: str):
+    """Fallback de busca por Nome Completo (case-insensitive) quando não há CPF."""
+    _at_throttle()
+    nome_escapado = nome.replace('"', '\\"')
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={
+            'filterByFormula': f'LOWER({{Nome Completo}})=LOWER("{nome_escapado}")',
+            'maxRecords': 1,
+            'fields[]': ['Nome Completo'],
+        },
+        timeout=30,
+    )
+    if r.ok:
+        records = r.json().get('records', [])
+        if records:
+            return records[0]['id'], records[0].get('fields', {}).get('Nome Completo', '')
+    return None, None
+
+
+def _buscar_contabilidade_mensal_por_nome(nome: str):
+    _at_throttle()
+    nome_escapado = nome.replace('"', '\\"')
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_CONT}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={
+            'filterByFormula': f'{{Mês - Contabilidade}}="{nome_escapado}"',
+            'maxRecords': 1,
+            'fields[]': ['Mês - Contabilidade'],
+        },
+        timeout=30,
+    )
+    if r.ok:
+        records = r.json().get('records', [])
+        if records:
+            return records[0]['id']
+    return None
+
+
+def _buscar_holerite_existente(func_id: str, folha_mensal: str):
+    """Procura holerite já criado para este funcionário nesta folha mensal."""
+    _at_throttle()
+    folha_escapada = folha_mensal.replace('"', '\\"')
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_HOL}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={
+            'filterByFormula': f'{{Folha Mensal}}="{folha_escapada}"',
+            'returnFieldsByFieldId': 'true',
+        },
+        timeout=30,
+    )
+    r.raise_for_status()
+    for rec in r.json().get('records', []):
+        links = rec.get('fields', {}).get(F_HOL_FUNC) or []
+        if any(l['id'] == func_id for l in links):
+            return rec
+    return None
+
+
+def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
+    """
+    Handler de Holerite para /processar-fila.
+
+    ctx: {proc_id, arquivo_id, pdf_bytes, nome_arquivo, texto, folha_mensal,
+          mes_cont_id, data_holerite}
+
+    Retorno padronizado:
+      {"acao": str, "status_final": "Concluído"|"Erro",
+       "detalhes": dict, "pendencia": {"tipo":..., "observacao":...} | None}
+    """
+    texto = ctx['texto']
+    folha_mensal = ctx['folha_mensal']
+    mes_cont_id = ctx['mes_cont_id']
+
+    # 1. Localizar funcionário por CPF, com fallback por nome extraído do PDF
+    cpf = extrair_cpf(texto)
+    func_id, nome = (None, None)
+    if cpf:
+        func_id, nome = buscar_funcionario_por_cpf(cpf)
+
+    nome_pdf = extrair_nome_funcionario(texto)
+    if not func_id and nome_pdf:
+        func_id, nome = _buscar_funcionario_por_nome(nome_pdf)
+
+    if not func_id:
+        return {
+            'acao': 'funcionario_nao_encontrado',
+            'status_final': 'Erro',
+            'detalhes': {
+                'cpf_extraido': cpf,
+                'nome_extraido': nome_pdf,
+                'folha_mensal': folha_mensal,
+            },
+            'pendencia': {
+                'tipo': 'Funcionário não encontrado',
+                'observacao': (
+                    f'CPF extraído: {cpf or "(nenhum)"} | '
+                    f'Nome extraído: {nome_pdf or "(nenhum)"} | '
+                    f'Folha: {folha_mensal}'
+                ),
+            },
+        }
+
+    # 2. Extrair valores financeiros do holerite
+    valores = extrair_valores_holerite(texto)
+
+    # 3. Evitar duplicidade — checar se já existe holerite deste funcionário nesta folha
+    existente = _buscar_holerite_existente(func_id, folha_mensal)
+
+    if dry_run:
+        acao = 'atualizaria_holerite_existente' if existente else 'criaria_holerite'
+        return {
+            'acao': acao,
+            'status_final': 'Concluído',
+            'detalhes': {
+                'funcionario_id': func_id,
+                'funcionario_nome': nome,
+                'cpf_extraido': cpf,
+                'folha_mensal': folha_mensal,
+                'valores': valores,
+                'holerite_existente_id': existente['id'] if existente else None,
+            },
+            'pendencia': None,
+        }
+
+    if existente:
+        holerite_id = existente['id']
+        atualizar_valores_holerite(holerite_id, valores)
+        anexar_pdf_holerite(holerite_id, ctx['pdf_bytes'], ctx['nome_arquivo'])
+        acao = 'holerite_atualizado'
+    else:
+        holerite_id = criar_registro_holerite(
+            nome, func_id, folha_mensal, ctx['data_holerite'], mes_cont_id, valores=valores,
+        )
+        anexar_pdf_holerite(holerite_id, ctx['pdf_bytes'], ctx['nome_arquivo'])
+        acao = 'holerite_criado'
+
+    return {
+        'acao': acao,
+        'status_final': 'Concluído',
+        'detalhes': {
+            'holerite_id': holerite_id,
+            'funcionario_id': func_id,
+            'funcionario_nome': nome,
+            'cpf_extraido': cpf,
+            'folha_mensal': folha_mensal,
+            'valores': valores,
+        },
+        'pendencia': None,
+    }
+
+
+# Registro de handlers por tipo de documento (Fase 4).
+# None = ainda não implementado — /processar-fila retorna erro 400 para esses tipos.
+PROCESSADORES_DOCUMENTO = {
+    'Holerite': _processar_holerite,
+    'Folha de Ponto': None,
+    'Contrato de Experiência': None,
+    'Contrato de Trabalho': None,
+    'Férias': None,
+    'FGTS': None,
+    'Guia': None,
+    'Boleto': None,
+    'Nota Fiscal': None,
+    'Outro': None,
+}
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.route('/health', methods=['GET'])
@@ -581,7 +779,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.6',
+        'versao': '2.7',
         'ram_mb': _mem_mb(),
     })
 
@@ -1218,6 +1416,216 @@ def email_webhook():
             logger.info(f'[EMAIL] Pendência criada: {pendencia_id} ({tipo_problema})')
 
         resultado['anexos_processados'].append(item)
+
+    return jsonify(resultado)
+
+
+@app.route('/processar-fila', methods=['POST', 'OPTIONS'])
+def processar_fila():
+    """
+    Fase 4 — Processador genérico da fila "Processar Arquivos".
+
+    Estrutura preparada para todos os tipos de TIPO_DOC_REGRAS + 'Outro', mas
+    nesta implementação apenas 'Holerite' tem handler (demais retornam 400).
+
+    Body JSON:
+      {
+        "tipo_documento": "Holerite",   [obrigatório]
+        "dry_run": true,
+        "limit": 1,
+        "record_id": "rec...",          [opcional — processa só este registro]
+        "folha_mensal": "Fevereiro 2026",  [opcional — senão usa mês anterior]
+        "mes_cont_id": "rec..."         [opcional]
+      }
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    data = request.get_json(force=True, silent=True) or {}
+
+    tipo_documento = data.get('tipo_documento')
+    if not tipo_documento:
+        return jsonify({'status': 'erro', 'erro': 'tipo_documento é obrigatório'}), 400
+
+    if tipo_documento not in PROCESSADORES_DOCUMENTO:
+        return jsonify({
+            'status': 'erro',
+            'erro': f'tipo_documento desconhecido: {tipo_documento}',
+            'tipos_validos': list(PROCESSADORES_DOCUMENTO.keys()),
+        }), 400
+
+    handler = PROCESSADORES_DOCUMENTO[tipo_documento]
+    if handler is None:
+        return jsonify({
+            'status': 'erro',
+            'erro': f'Processamento de "{tipo_documento}" ainda não implementado',
+        }), 400
+
+    dry_run = str(data.get('dry_run', False)).strip().lower() in ('1', 'true', 'yes', 'sim')
+    limit = data.get('limit', 1)
+    try:
+        limit = max(1, int(limit))
+    except (TypeError, ValueError):
+        limit = 1
+    record_id = data.get('record_id')
+
+    # Resolver folha_mensal / mes_cont_id / data_holerite
+    folha_mensal = data.get('folha_mensal')
+    mes_cont_id = data.get('mes_cont_id')
+    if not folha_mensal:
+        nome_mes, ano, mes_num = mes_anterior_info()
+        folha_mensal = f'{nome_mes} {ano}'
+        data_holerite = f'{ano}-{mes_num:02d}-01'
+    else:
+        data_holerite = datetime.now().strftime('%Y-%m-%d')
+
+    if not mes_cont_id:
+        mes_cont_id = _buscar_contabilidade_mensal_por_nome(folha_mensal)
+        if not mes_cont_id:
+            mes_cont_id, _ = buscar_mes_contabilidade_atual()
+
+    logger.info(
+        f'[FILA] tipo_documento={tipo_documento} | dry_run={dry_run} | limit={limit} | '
+        f'record_id={record_id} | folha_mensal={folha_mensal!r} | mes_cont_id={mes_cont_id}'
+    )
+
+    # Montar filtro
+    if record_id:
+        formula = f'RECORD_ID()="{record_id}"'
+    else:
+        formula = (
+            f'AND('
+            f'OR({{Status}}="Processando", {{Status}}="Pendente"), '
+            f'{{Tipo de Documento}}="{tipo_documento}"'
+            f')'
+        )
+
+    _at_throttle()
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={
+            'filterByFormula': formula,
+            'maxRecords': limit,
+            'sort[0][field]': 'Data Processo',
+            'sort[0][direction]': 'asc',
+            'returnFieldsByFieldId': 'true',
+        },
+        timeout=30,
+    )
+    r.raise_for_status()
+    registros = r.json().get('records', [])
+
+    resultado = {
+        'status': 'ok',
+        'dry_run': dry_run,
+        'tipo_documento': tipo_documento,
+        'folha_mensal': folha_mensal,
+        'mes_cont_id': mes_cont_id,
+        'registros_encontrados': len(registros),
+        'processados': [],
+    }
+
+    for rec in registros:
+        proc_id = rec['id']
+        fields = rec.get('fields', {})
+        item = {'processar_id': proc_id}
+
+        tmp_path = None
+        try:
+            # Localizar Arquivo vinculado
+            arquivos_link = fields.get(F_PROC_ARQUIVOS2) or []
+            if not arquivos_link:
+                item['erro'] = 'Nenhum Arquivo vinculado em "Arquivos 2"'
+                if not dry_run:
+                    _atualizar_status_processar(proc_id, 'Erro')
+                    _criar_pendencia(proc_id, 'Arquivo não vinculado', item['erro'])
+                item['status_final'] = 'Erro'
+                resultado['processados'].append(item)
+                logger.error(f'[FILA] {proc_id}: {item["erro"]}')
+                continue
+
+            arquivo_id = arquivos_link[0]['id']
+            item['arquivo_id'] = arquivo_id
+
+            _at_throttle()
+            r_arq = requests.get(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ARQUIVOS}/{arquivo_id}',
+                headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                params={'returnFieldsByFieldId': 'true'},
+                timeout=30,
+            )
+            r_arq.raise_for_status()
+            arquivo_fields = r_arq.json().get('fields', {})
+
+            attachments = arquivo_fields.get(F_ARQ_ATTACH) or []
+            if not attachments:
+                item['erro'] = 'Arquivo sem anexo PDF'
+                if not dry_run:
+                    _atualizar_status_processar(proc_id, 'Erro')
+                    _criar_pendencia(arquivo_id, 'Arquivo sem anexo', item['erro'])
+                item['status_final'] = 'Erro'
+                resultado['processados'].append(item)
+                logger.error(f'[FILA] {proc_id}: {item["erro"]}')
+                continue
+
+            nome_arquivo = attachments[0].get('filename', 'arquivo.pdf')
+            pdf_url = attachments[0]['url']
+            pdf_bytes = requests.get(pdf_url, timeout=60).content
+
+            # Extrair texto do PDF
+            tmp_path = f'/tmp/fila_{_uuid.uuid4().hex}.pdf'
+            with open(tmp_path, 'wb') as f:
+                f.write(pdf_bytes)
+            texto = ''
+            with pdfplumber.open(tmp_path) as pdf_doc:
+                for pg in pdf_doc.pages:
+                    texto += (pg.extract_text() or '') + '\n'
+
+            ctx = {
+                'proc_id': proc_id,
+                'arquivo_id': arquivo_id,
+                'pdf_bytes': pdf_bytes,
+                'nome_arquivo': nome_arquivo,
+                'texto': texto,
+                'folha_mensal': folha_mensal,
+                'mes_cont_id': mes_cont_id,
+                'data_holerite': data_holerite,
+            }
+
+            resultado_handler = handler(ctx, dry_run)
+            item['acao'] = resultado_handler['acao']
+            item['status_final'] = resultado_handler['status_final']
+            item['detalhes'] = resultado_handler['detalhes']
+
+            if not dry_run:
+                _atualizar_status_processar(proc_id, resultado_handler['status_final'])
+                pendencia = resultado_handler.get('pendencia')
+                if pendencia:
+                    pend_id = _criar_pendencia(arquivo_id, pendencia['tipo'], pendencia['observacao'])
+                    item['pendencia_id'] = pend_id
+
+            logger.info(f'[FILA] {proc_id}: acao={item["acao"]} status_final={item["status_final"]}')
+
+        except Exception as exc:
+            logger.exception(f'[FILA] Erro ao processar {proc_id}')
+            item['erro'] = str(exc)
+            item['status_final'] = 'Erro'
+            if not dry_run:
+                _atualizar_status_processar(proc_id, 'Erro')
+                _criar_pendencia(proc_id, 'Erro de processamento', str(exc))
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+        resultado['processados'].append(item)
 
     return jsonify(resultado)
 
