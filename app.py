@@ -17,12 +17,14 @@ import time
 import zipfile
 import base64
 import hashlib
+import secrets
+import unicodedata
 import logging
 import requests
 from collections import Counter
 from calendar import monthrange
 from datetime import datetime
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect
 import pdfplumber
 import uuid as _uuid
 from pypdf import PdfReader, PdfWriter
@@ -95,6 +97,21 @@ TABLE_PENDENCIAS = 'tblRkJBL6Wwf4fxVC'   # Pendências/Revisar
 TABLE_LOCAIS    = 'tblZy1WfzmGIeR8ZP'   # Locais
 TABLE_CLIENTES  = 'tbl0znyuCEzoCHtCV'   # Clientes
 TABLE_ENVIOS    = 'tblAu4wgdfTgLOoa4'   # Envios de Documentos
+
+# Envios de Documentos — Fila de Envios / Recibo Digital de Leitura (Fase 3)
+F_ENVIO_STATUS   = 'fldWm7mHYMwQpkQAr'   # Status (Preparando/Enviado/Concluído/Lido)
+F_ENVIO_TIPO     = 'fld9PU6FeHnIk4XK5'   # Tipo (Relatório Mensal/Envio Manual)
+F_ENVIO_CANAL    = 'fldVDCqA4oMzbZQRj'   # Canal (E-mail/WhatsApp)
+F_ENVIO_DEST     = 'fldtQz5PhGwC8kxLC'   # Destinatário (texto livre: WhatsApp ou e-mail)
+F_ENVIO_EMAIL    = 'flddvh7fZoWSnHXPW'   # Email
+F_ENVIO_HOLERITES = 'fldpAcVyoVqDscvYr'  # Holerites (link)
+F_ENVIO_CLIENTE  = 'flddPGn6vHiJw7vba'   # Cliente (link)
+F_ENVIO_FUNC     = 'fldcm9bAj13phGQqS'   # Funcionário(s) Vinculado(s) (link)
+F_ENVIO_HASH     = 'fldiu4OgOQolil57a'   # Hash Recibo
+F_ENVIO_LIDO_EM  = 'fldwPmloi2rFZOL2a'   # Recibo Lido em
+F_ENVIO_ARQUIVOS = 'fldiO4G7OO1FAjn5o'   # Arquivos (anexos genéricos — usado p/ Cartão Ponto)
+
+TIPO_ENVIO_PONTO = 'Cartão Ponto Mensal'   # Tipo de envio espelhado p/ Folha de Ponto/Cartão Ponto
 
 # Emails Savian
 F_EMAIL_NAME     = 'fldwKHHiVVEKySwx4'
@@ -992,24 +1009,43 @@ def _criar_pendencia(arquivo_id: str, tipo_problema: str, observacao: str):
     })
 
 
+# Sufixos societários/comuns que não ajudam na identificação de uma pessoa ou
+# empresa e que variam entre o PDF e o cadastro (ex.: "MAGNATA SERVIÇOS LTDA"
+# vs "MAGNATA SERVIÇOS LTDA ME").
+_SUFIXOS_NOME_RE = re.compile(
+    r'\b(LTDA|ME|EPP|EIRELI|S\s*/?\s*A|SA)\b\.?'
+)
+
+
+def _normalizar_nome_busca(texto: str) -> str:
+    """Normaliza nomes para comparação "fuzzy": maiúsculas, sem acentos,
+    sem pontuação, espaços colapsados e sem sufixos societários comuns
+    (LTDA, ME, EPP, EIRELI, S/A) — necessário pois o nome extraído do PDF
+    raramente é idêntico, byte a byte, ao cadastrado no Airtable."""
+    if not texto:
+        return ''
+    sem_acentos = unicodedata.normalize('NFKD', texto)
+    sem_acentos = ''.join(c for c in sem_acentos if not unicodedata.combining(c))
+    upper = sem_acentos.upper()
+    upper = re.sub(r'[^\w\s]', ' ', upper)
+    upper = _SUFIXOS_NOME_RE.sub(' ', upper)
+    return re.sub(r'\s+', ' ', upper).strip()
+
+
 def _buscar_funcionario_por_nome(nome: str):
-    """Fallback de busca por Nome Completo (case-insensitive) quando não há CPF."""
-    _at_throttle()
-    nome_escapado = nome.replace('"', '\\"')
-    r = requests.get(
-        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
-        params={
-            'filterByFormula': f'LOWER({{Nome Completo}})=LOWER("{nome_escapado}")',
-            'maxRecords': 1,
-            'fields[]': ['Nome Completo'],
-        },
-        timeout=30,
-    )
-    if r.ok:
-        records = r.json().get('records', [])
-        if records:
-            return records[0]['id'], records[0].get('fields', {}).get('Nome Completo', '')
+    """Fallback de busca por Nome Completo quando não há CPF.
+
+    Faz comparação fuzzy (ver _normalizar_nome_busca): ignora maiúsculas/
+    minúsculas, acentos, pontuação, espaços extras e sufixos societários.
+    """
+    nome_normalizado = _normalizar_nome_busca(nome)
+    if not nome_normalizado:
+        return None, None
+
+    for rec in _at_listar_todos(TABLE_FUNC, ['Nome Completo']):
+        nome_cadastrado = rec['fields'].get('Nome Completo', '')
+        if _normalizar_nome_busca(nome_cadastrado) == nome_normalizado:
+            return rec['id'], nome_cadastrado
     return None, None
 
 
@@ -1920,7 +1956,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.22',
+        'versao': '2.23',
         'ram_mb': _mem_mb(),
     })
 
@@ -2822,15 +2858,9 @@ def _at_listar_todos(table_id, field_names=None, filter_formula=None):
     return registros
 
 
-def _diagnostico_holerites(folha_mensal=None, limit=None):
-    """
-    Diagnóstico read-only: classifica cada Holerite existente em
-    'pronto_whatsapp_colaborador', 'pronto_pacote_cliente', 'pronto_ambos'
-    ou 'pendente', conforme a diretriz de Distribuição Mensal de Documentos.
-
-    Nenhuma escrita é feita — apenas leitura em Holerites, Funcionários,
-    Locais e Clientes.
-    """
+def _carregar_contexto_distribuicao():
+    """Carrega as tabelas de apoio (Clientes, Locais, Funcionários) usadas
+    para classificar Holerites na Distribuição Mensal de Documentos."""
     clientes = {
         rec['id']: {
             'nome': rec['fields'].get('Nome', ''),
@@ -2852,9 +2882,176 @@ def _diagnostico_holerites(folha_mensal=None, limit=None):
             'nome': rec['fields'].get('Nome Completo', ''),
             'whatsapp': rec['fields'].get('WhatsApp'),
             'locais_ids': rec['fields'].get('Locais de trabalho', []),
+            'pdf_folha_ponto': rec['fields'].get('PDF Folha Ponto', []),
+            'resumo_ponto': rec['fields'].get('Resumo Cartão Ponto (extraído)', ''),
         }
-        for rec in _at_listar_todos(TABLE_FUNC, ['Nome Completo', 'WhatsApp', 'Locais de trabalho'])
+        for rec in _at_listar_todos(TABLE_FUNC, [
+            'Nome Completo', 'WhatsApp', 'Locais de trabalho',
+            'PDF Folha Ponto', 'Resumo Cartão Ponto (extraído)',
+        ])
     }
+    return clientes, locais, funcionarios
+
+
+def _classificar_holerite_distribuicao(rec, clientes, locais, funcionarios):
+    """Classifica 1 registro de Holerites para a Distribuição Mensal de
+    Documentos. Retorna um dict com func/cliente identificados, motivos de
+    pendência e a 'situacao' final ('pronto_whatsapp_colaborador',
+    'pronto_pacote_cliente', 'pronto_ambos' ou 'pendente')."""
+    f = rec['fields']
+    func_ids = f.get('Funcionário', []) or []
+    func = funcionarios.get(func_ids[0]) if func_ids else None
+
+    whatsapp = func.get('whatsapp') if func else None
+    arquivo_ok = bool(f.get('PDF HOLERITE'))
+    folha_ok = bool(f.get('Folha Mensal'))
+
+    cliente_ids = set()
+    if func:
+        for local_id in func.get('locais_ids', []) or []:
+            local = locais.get(local_id)
+            if local:
+                cliente_ids.update(local.get('cliente_ids', []) or [])
+
+    cliente_id = next(iter(cliente_ids)) if cliente_ids else None
+    cliente_email = None
+    cliente_nome = None
+    if cliente_id:
+        primeiro = clientes.get(cliente_id)
+        if primeiro:
+            cliente_nome = primeiro.get('nome')
+            cliente_email = primeiro.get('email')
+
+    motivos = []
+    if not func_ids:
+        motivos.append('funcionario_nao_identificado')
+    if not whatsapp:
+        motivos.append('whatsapp_ausente')
+    if not arquivo_ok:
+        motivos.append('arquivo_holerite_ausente')
+    if not folha_ok:
+        motivos.append('folha_mensal_ausente')
+    if not cliente_ids:
+        motivos.append('cliente_local_nao_identificado')
+    elif not cliente_email:
+        motivos.append('email_cliente_ausente')
+
+    ok_whatsapp = bool(func_ids and whatsapp and arquivo_ok and folha_ok)
+    ok_cliente = bool(cliente_ids and cliente_email and arquivo_ok and folha_ok)
+
+    if ok_whatsapp and ok_cliente:
+        situacao = 'pronto_ambos'
+    elif ok_whatsapp:
+        situacao = 'pronto_whatsapp_colaborador'
+    elif ok_cliente:
+        situacao = 'pronto_pacote_cliente'
+    else:
+        situacao = 'pendente'
+
+    return {
+        'func_ids': func_ids,
+        'func': func,
+        'whatsapp': whatsapp,
+        'arquivo_ok': arquivo_ok,
+        'folha_ok': folha_ok,
+        'cliente_id': cliente_id,
+        'cliente_nome': cliente_nome,
+        'cliente_email': cliente_email,
+        'motivos': motivos,
+        'ok_whatsapp': ok_whatsapp,
+        'ok_cliente': ok_cliente,
+        'situacao': situacao,
+    }
+
+
+def _classificar_folha_ponto_distribuicao(dados_func, clientes, locais):
+    """Classifica 1 Funcionário quanto ao envio do Cartão Ponto/Folha de Ponto
+    mensal — espelha _classificar_holerite_distribuicao, mas a partir do
+    prontuário em Funcionários (não há 1 registro por mês como em Holerites).
+    Retorna dict com pdf_anexo (último anexo de "PDF Folha Ponto"), whatsapp,
+    cliente identificado, motivos de pendência e 'situacao'."""
+    anexos = dados_func.get('pdf_folha_ponto') or []
+    pdf_anexo = anexos[-1] if anexos else None
+    whatsapp = dados_func.get('whatsapp')
+
+    cliente_ids = set()
+    for local_id in dados_func.get('locais_ids', []) or []:
+        local = locais.get(local_id)
+        if local:
+            cliente_ids.update(local.get('cliente_ids', []) or [])
+
+    cliente_id = next(iter(cliente_ids)) if cliente_ids else None
+    cliente_email = None
+    cliente_nome = None
+    if cliente_id:
+        cliente = clientes.get(cliente_id)
+        if cliente:
+            cliente_nome = cliente.get('nome')
+            cliente_email = cliente.get('email')
+
+    motivos = []
+    if not pdf_anexo:
+        motivos.append('pdf_folha_ponto_ausente')
+    if not whatsapp:
+        motivos.append('whatsapp_ausente')
+    if not cliente_ids:
+        motivos.append('cliente_local_nao_identificado')
+    elif not cliente_email:
+        motivos.append('email_cliente_ausente')
+
+    ok_whatsapp = bool(whatsapp and pdf_anexo)
+    ok_cliente = bool(cliente_email and pdf_anexo)
+
+    if ok_whatsapp and ok_cliente:
+        situacao = 'pronto_ambos'
+    elif ok_whatsapp:
+        situacao = 'pronto_whatsapp_colaborador'
+    elif ok_cliente:
+        situacao = 'pronto_pacote_cliente'
+    else:
+        situacao = 'pendente'
+
+    return {
+        'pdf_anexo': pdf_anexo,
+        'whatsapp': whatsapp,
+        'cliente_id': cliente_id,
+        'cliente_nome': cliente_nome,
+        'cliente_email': cliente_email,
+        'motivos': motivos,
+        'ok_whatsapp': ok_whatsapp,
+        'ok_cliente': ok_cliente,
+        'situacao': situacao,
+    }
+
+
+def _carregar_envios_pendentes(tipo):
+    """Retorna (func_ids_pendentes, cliente_ids_pendentes): conjuntos de
+    Funcionários/Clientes que já possuem um envio do `tipo` informado com
+    Status em ('Preparando', 'Enviado') — usado para não duplicar a fila em
+    execuções repetidas no mesmo ciclo."""
+    func_ids_pendentes = set()
+    cliente_ids_pendentes = set()
+    campos = ['Tipo', 'Status', 'Canal', 'Funcionário(s) Vinculado(s)', 'Cliente']
+    for rec in _at_listar_todos(TABLE_ENVIOS, campos):
+        f = rec['fields']
+        if f.get('Tipo') != tipo or f.get('Status') not in ('Preparando', 'Enviado'):
+            continue
+        func_ids_pendentes.update(f.get('Funcionário(s) Vinculado(s)', []) or [])
+        if f.get('Canal') == 'E-mail':
+            cliente_ids_pendentes.update(f.get('Cliente', []) or [])
+    return func_ids_pendentes, cliente_ids_pendentes
+
+
+def _diagnostico_holerites(folha_mensal=None, limit=None):
+    """
+    Diagnóstico read-only: classifica cada Holerite existente em
+    'pronto_whatsapp_colaborador', 'pronto_pacote_cliente', 'pronto_ambos'
+    ou 'pendente', conforme a diretriz de Distribuição Mensal de Documentos.
+
+    Nenhuma escrita é feita — apenas leitura em Holerites, Funcionários,
+    Locais e Clientes.
+    """
+    clientes, locais, funcionarios = _carregar_contexto_distribuicao()
 
     filtro = f'{{Folha Mensal}}="{folha_mensal}"' if folha_mensal else None
     holerite_fields = [
@@ -2879,59 +3076,10 @@ def _diagnostico_holerites(folha_mensal=None, limit=None):
 
     for rec in holerites:
         f = rec['fields']
-        func_ids = f.get('Funcionário', []) or []
-        func = funcionarios.get(func_ids[0]) if func_ids else None
-
-        whatsapp = func.get('whatsapp') if func else None
-        arquivo_ok = bool(f.get('PDF HOLERITE'))
-        folha_ok = bool(f.get('Folha Mensal'))
-
-        cliente_ids = set()
-        if func:
-            for local_id in func.get('locais_ids', []) or []:
-                local = locais.get(local_id)
-                if local:
-                    cliente_ids.update(local.get('cliente_ids', []) or [])
-
-        cliente_email = None
-        cliente_nome = None
-        if cliente_ids:
-            primeiro = clientes.get(next(iter(cliente_ids)))
-            if primeiro:
-                cliente_nome = primeiro.get('nome')
-                cliente_email = primeiro.get('email')
-
-        motivos = []
-        if not func_ids:
-            motivos.append('funcionario_nao_identificado')
-        if not whatsapp:
-            motivos.append('whatsapp_ausente')
-        if not arquivo_ok:
-            motivos.append('arquivo_holerite_ausente')
-        if not folha_ok:
-            motivos.append('folha_mensal_ausente')
-        if not cliente_ids:
-            motivos.append('cliente_local_nao_identificado')
-        elif not cliente_email:
-            motivos.append('email_cliente_ausente')
-
-        ok_whatsapp = (
-            func_ids and whatsapp and arquivo_ok and folha_ok
-        )
-        ok_cliente = (
-            cliente_ids and cliente_email and arquivo_ok and folha_ok
-        )
-
-        if ok_whatsapp and ok_cliente:
-            situacao = 'pronto_ambos'
-        elif ok_whatsapp:
-            situacao = 'pronto_whatsapp_colaborador'
-        elif ok_cliente:
-            situacao = 'pronto_pacote_cliente'
-        else:
-            situacao = 'pendente'
-            motivos_pendencia.update(motivos)
-
+        c = _classificar_holerite_distribuicao(rec, clientes, locais, funcionarios)
+        situacao = c['situacao']
+        if situacao == 'pendente':
+            motivos_pendencia.update(c['motivos'])
         contagem[situacao] += 1
 
         envios = f.get('Envios de Documentos', []) or []
@@ -2943,13 +3091,13 @@ def _diagnostico_holerites(folha_mensal=None, limit=None):
         exemplo = {
             'record_id': rec['id'],
             'holerite': f.get('Holerite'),
-            'funcionario': func.get('nome') if func else None,
-            'whatsapp': whatsapp,
-            'cliente': cliente_nome,
-            'email_cliente': cliente_email,
+            'funcionario': c['func'].get('nome') if c['func'] else None,
+            'whatsapp': c['whatsapp'],
+            'cliente': c['cliente_nome'],
+            'email_cliente': c['cliente_email'],
             'folha_mensal': f.get('Folha Mensal'),
             'situacao': situacao,
-            'motivos': motivos or None,
+            'motivos': c['motivos'] or None,
         }
         if situacao == 'pendente':
             if len(exemplos_pendentes) < 5:
@@ -3040,6 +3188,394 @@ def diagnostico_holerites():
 
     resultado = _diagnostico_holerites(folha_mensal=folha_mensal, limit=limit)
     return jsonify(resultado)
+
+
+# ── Fila de Envios + Recibo Digital de Leitura (Fase 3) ──────────────────────
+
+def _gerar_hash_recibo() -> str:
+    """Token único (URL-safe) para o link de Recibo Digital de Leitura."""
+    return secrets.token_urlsafe(24)
+
+
+def _criar_envio_documento(campos: dict):
+    """Cria um registro em Envios de Documentos com um Hash Recibo único.
+    Retorna (envio_id, hash_recibo)."""
+    campos = dict(campos)
+    hash_recibo = _gerar_hash_recibo()
+    campos[F_ENVIO_HASH] = hash_recibo
+    campos.setdefault(F_ENVIO_STATUS, 'Preparando')
+    envio_id = _criar_registro(TABLE_ENVIOS, campos)
+    return envio_id, hash_recibo
+
+
+def _gerar_fila_envios(folha_mensal=None, limit=None, dry_run=True):
+    """
+    Fase 3 — Fila de Envios (Distribuição Mensal de Documentos).
+
+    Para cada Holerite "pronto" (ver _classificar_holerite_distribuicao) que
+    ainda não possui nenhum registro vinculado em "Envios de Documentos",
+    cria:
+      - 1 envio Canal="WhatsApp" para o colaborador (Destinatário=WhatsApp)
+      - 1 envio Canal="E-mail" para o cliente (Destinatário=Email do Cliente)
+
+    Cada envio criado recebe um "Hash Recibo" único. A mensagem enviada pela
+    automação externa (WhatsApp/E-mail) deve incluir o link /recibo/<hash> —
+    ao ser clicado, o link marca o envio como "Lido" (Recibo Digital de
+    Leitura) e redireciona para o PDF do Holerite.
+
+    dry_run=True (padrão): não cria nada no Airtable, apenas retorna o que
+    seria criado.
+    """
+    clientes, locais, funcionarios = _carregar_contexto_distribuicao()
+
+    filtro = f'{{Folha Mensal}}="{folha_mensal}"' if folha_mensal else None
+    holerite_fields = ['Holerite', 'Funcionário', 'Folha Mensal', 'PDF HOLERITE', 'Envios de Documentos']
+    holerites = _at_listar_todos(TABLE_HOL, holerite_fields, filtro)
+    if limit:
+        holerites = holerites[:limit]
+
+    envios = []
+    ignorados = []
+
+    for rec in holerites:
+        f = rec['fields']
+        if f.get('Envios de Documentos'):
+            ignorados.append({
+                'record_id': rec['id'], 'holerite': f.get('Holerite'),
+                'motivo': 'ja_possui_envio_vinculado',
+            })
+            continue
+
+        c = _classificar_holerite_distribuicao(rec, clientes, locais, funcionarios)
+
+        candidatos = []
+        if c['ok_whatsapp']:
+            candidatos.append({
+                'canal': 'WhatsApp', 'destinatario': c['whatsapp'],
+                'funcionario_ids': c['func_ids'], 'cliente_ids': [],
+            })
+        if c['ok_cliente']:
+            candidatos.append({
+                'canal': 'E-mail', 'destinatario': c['cliente_email'],
+                'funcionario_ids': c['func_ids'], 'cliente_ids': [c['cliente_id']],
+            })
+
+        if not candidatos:
+            ignorados.append({
+                'record_id': rec['id'], 'holerite': f.get('Holerite'),
+                'motivo': 'nao_pronto', 'motivos': c['motivos'],
+            })
+            continue
+
+        for candidato in candidatos:
+            item = {
+                'holerite': f.get('Holerite'),
+                'holerite_id': rec['id'],
+                'canal': candidato['canal'],
+                'destinatario': candidato['destinatario'],
+                'funcionario': c['func'].get('nome') if c['func'] else None,
+                'cliente': c['cliente_nome'],
+            }
+
+            if dry_run:
+                item['acao'] = 'criaria_envio'
+                envios.append(item)
+                continue
+
+            campos = {
+                F_ENVIO_TIPO: 'Relatório Mensal',
+                F_ENVIO_CANAL: candidato['canal'],
+                F_ENVIO_DEST: candidato['destinatario'],
+                F_ENVIO_HOLERITES: [rec['id']],
+            }
+            if candidato['funcionario_ids']:
+                campos[F_ENVIO_FUNC] = candidato['funcionario_ids']
+            if candidato['cliente_ids']:
+                campos[F_ENVIO_CLIENTE] = candidato['cliente_ids']
+            if candidato['canal'] == 'E-mail':
+                campos[F_ENVIO_EMAIL] = candidato['destinatario']
+
+            try:
+                envio_id, hash_recibo = _criar_envio_documento(campos)
+                item['acao'] = 'envio_criado'
+                item['envio_id'] = envio_id
+                item['hash_recibo'] = hash_recibo
+                item['link_recibo'] = f'/recibo/{hash_recibo}'
+            except AirtableError as exc:
+                logger.error(f'[FILA-ENVIOS] falha ao criar envio para holerite {rec["id"]}: {exc}')
+                item['acao'] = 'falhou'
+                item['erro'] = str(exc)
+
+            envios.append(item)
+
+    return {
+        'total_holerites_analisados': len(holerites),
+        'envios': envios,
+        'holerites_ignorados': ignorados,
+        'dry_run': dry_run,
+    }
+
+
+def _gerar_fila_envios_folha_ponto(limit=None, dry_run=True):
+    """
+    Fase 3 — Fila de Envios de Folha de Ponto/Cartão Ponto, espelhada a
+    _gerar_fila_envios. Como a Folha de Ponto não gera 1 registro por mês
+    (ao contrário de Holerites), a origem dos dados é o prontuário em
+    Funcionários ("PDF Folha Ponto" + "Resumo Cartão Ponto (extraído)"):
+
+      - 1 envio Canal="WhatsApp" por Colaborador, com o Cartão Ponto
+        individual (último anexo de "PDF Folha Ponto").
+      - 1 envio Canal="E-mail" por Cliente, em lote, com os Cartões Ponto de
+        todos os colaboradores prontos daquele cliente.
+
+    Cada envio recebe um "Hash Recibo" único e o(s) PDF(s) são anexados
+    diretamente no campo "Arquivos" do envio (sem link para uma tabela de
+    Folha de Ponto mensal, que não existe).
+
+    Funcionários/Clientes que já possuem um envio "Cartão Ponto Mensal"
+    pendente (Status="Preparando"/"Enviado") são ignorados, para não
+    duplicar a fila em execuções repetidas. dry_run=True (padrão): não cria
+    nada no Airtable, apenas simula.
+    """
+    clientes, locais, funcionarios = _carregar_contexto_distribuicao()
+    func_pendentes, cliente_pendentes = _carregar_envios_pendentes(TIPO_ENVIO_PONTO)
+
+    func_ids = list(funcionarios.keys())
+    if limit:
+        func_ids = func_ids[:limit]
+
+    envios = []
+    ignorados = []
+    lotes_cliente = {}
+
+    for func_id in func_ids:
+        dados = funcionarios[func_id]
+
+        if func_id in func_pendentes:
+            ignorados.append({
+                'funcionario_id': func_id, 'funcionario': dados.get('nome'),
+                'motivo': 'ja_possui_envio_ponto_pendente',
+            })
+            continue
+
+        c = _classificar_folha_ponto_distribuicao(dados, clientes, locais)
+
+        if not c['pdf_anexo']:
+            ignorados.append({
+                'funcionario_id': func_id, 'funcionario': dados.get('nome'),
+                'motivo': 'pdf_folha_ponto_ausente',
+            })
+            continue
+
+        if c['ok_whatsapp']:
+            item = {
+                'funcionario': dados.get('nome'), 'funcionario_id': func_id,
+                'canal': 'WhatsApp', 'destinatario': c['whatsapp'],
+                'arquivo': c['pdf_anexo'].get('filename'),
+            }
+            if dry_run:
+                item['acao'] = 'criaria_envio'
+            else:
+                campos = {
+                    F_ENVIO_TIPO: TIPO_ENVIO_PONTO,
+                    F_ENVIO_CANAL: 'WhatsApp',
+                    F_ENVIO_DEST: c['whatsapp'],
+                    F_ENVIO_FUNC: [func_id],
+                    F_ENVIO_ARQUIVOS: [{'url': c['pdf_anexo']['url']}],
+                }
+                try:
+                    envio_id, hash_recibo = _criar_envio_documento(campos)
+                    item['acao'] = 'envio_criado'
+                    item['envio_id'] = envio_id
+                    item['hash_recibo'] = hash_recibo
+                    item['link_recibo'] = f'/recibo/{hash_recibo}'
+                except AirtableError as exc:
+                    logger.error(f'[FILA-ENVIOS-PONTO] falha ao criar envio WhatsApp para {func_id}: {exc}')
+                    item['acao'] = 'falhou'
+                    item['erro'] = str(exc)
+            envios.append(item)
+
+        if c['ok_cliente']:
+            lote = lotes_cliente.setdefault(c['cliente_id'], {
+                'cliente_nome': c['cliente_nome'], 'cliente_email': c['cliente_email'],
+                'func_ids': [], 'funcionarios': [], 'anexos': [],
+            })
+            lote['func_ids'].append(func_id)
+            lote['funcionarios'].append(dados.get('nome'))
+            lote['anexos'].append(c['pdf_anexo'])
+
+        if not c['ok_whatsapp'] and not c['ok_cliente']:
+            ignorados.append({
+                'funcionario_id': func_id, 'funcionario': dados.get('nome'),
+                'motivo': 'nao_pronto', 'motivos': c['motivos'],
+            })
+
+    for cliente_id, lote in lotes_cliente.items():
+        if cliente_id in cliente_pendentes:
+            ignorados.append({
+                'cliente_id': cliente_id, 'cliente': lote['cliente_nome'],
+                'motivo': 'ja_possui_envio_ponto_pendente',
+            })
+            continue
+
+        item = {
+            'cliente': lote['cliente_nome'], 'cliente_id': cliente_id,
+            'canal': 'E-mail', 'destinatario': lote['cliente_email'],
+            'funcionarios': lote['funcionarios'],
+        }
+        if dry_run:
+            item['acao'] = 'criaria_envio'
+        else:
+            campos = {
+                F_ENVIO_TIPO: TIPO_ENVIO_PONTO,
+                F_ENVIO_CANAL: 'E-mail',
+                F_ENVIO_DEST: lote['cliente_email'],
+                F_ENVIO_EMAIL: lote['cliente_email'],
+                F_ENVIO_CLIENTE: [cliente_id],
+                F_ENVIO_FUNC: lote['func_ids'],
+                F_ENVIO_ARQUIVOS: [{'url': a['url']} for a in lote['anexos']],
+            }
+            try:
+                envio_id, hash_recibo = _criar_envio_documento(campos)
+                item['acao'] = 'envio_criado'
+                item['envio_id'] = envio_id
+                item['hash_recibo'] = hash_recibo
+                item['link_recibo'] = f'/recibo/{hash_recibo}'
+            except AirtableError as exc:
+                logger.error(f'[FILA-ENVIOS-PONTO] falha ao criar envio E-mail para cliente {cliente_id}: {exc}')
+                item['acao'] = 'falhou'
+                item['erro'] = str(exc)
+        envios.append(item)
+
+    return {
+        'total_funcionarios_analisados': len(func_ids),
+        'envios': envios,
+        'ignorados': ignorados,
+        'dry_run': dry_run,
+    }
+
+
+@app.route('/gerar-fila-envios', methods=['POST', 'OPTIONS'])
+def gerar_fila_envios():
+    """
+    Fase 3 — Fila de Envios (Distribuição Mensal de Documentos).
+
+    Body JSON opcional:
+      - folha_mensal: filtra Holerites por "Folha Mensal" (ex.: "Maio 2026")
+      - limit: limita a quantidade de Holerites analisados
+      - dry_run: true (padrão) não grava nada, apenas simula
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    body = request.get_json(silent=True) or {}
+    folha_mensal = body.get('folha_mensal')
+    limit = body.get('limit')
+    try:
+        limit = int(limit) if limit else None
+    except (ValueError, TypeError):
+        limit = None
+    dry_run = body.get('dry_run', True)
+
+    resultado = _gerar_fila_envios(folha_mensal=folha_mensal, limit=limit, dry_run=dry_run)
+    return jsonify(resultado)
+
+
+@app.route('/gerar-fila-envios-ponto', methods=['POST', 'OPTIONS'])
+def gerar_fila_envios_ponto():
+    """
+    Fase 3 — Fila de Envios de Folha de Ponto/Cartão Ponto (espelha
+    /gerar-fila-envios).
+
+    Body JSON opcional:
+      - limit: limita a quantidade de Funcionários analisados
+      - dry_run: true (padrão) não grava nada, apenas simula
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    body = request.get_json(silent=True) or {}
+    limit = body.get('limit')
+    try:
+        limit = int(limit) if limit else None
+    except (ValueError, TypeError):
+        limit = None
+    dry_run = body.get('dry_run', True)
+
+    resultado = _gerar_fila_envios_folha_ponto(limit=limit, dry_run=dry_run)
+    return jsonify(resultado)
+
+
+@app.route('/recibo/<hash_recibo>', methods=['GET'])
+def recibo_leitura(hash_recibo):
+    """
+    Recibo Digital de Leitura: marca o envio (Envios de Documentos) com a
+    data/hora do clique em "Recibo Lido em" (Status="Lido") e redireciona
+    para o PDF do Holerite associado. Endpoint público — o hash funciona
+    como token de acesso ao documento.
+    """
+    if not AIRTABLE_API_KEY:
+        return 'Serviço indisponível.', 503
+
+    registro = _buscar_por_campo(TABLE_ENVIOS, 'Hash Recibo', hash_recibo)
+    if not registro:
+        return 'Link inválido ou expirado.', 404
+
+    fields = registro.get('fields', {})
+
+    if not fields.get('Recibo Lido em'):
+        try:
+            _at_throttle()
+            r = requests.patch(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ENVIOS}/{registro["id"]}',
+                headers=_at_headers(),
+                json={
+                    'fields': {
+                        F_ENVIO_LIDO_EM: datetime.now().isoformat(),
+                        F_ENVIO_STATUS: 'Lido',
+                    },
+                    'typecast': True,
+                },
+                timeout=15,
+            )
+            _raise_for_airtable(r, f'marcar recibo lido {registro["id"]}')
+        except AirtableError as exc:
+            logger.warning(f'[RECIBO] falha ao marcar leitura do envio {registro["id"]}: {exc}')
+
+    holerite_ids = fields.get('Holerites') or []
+    if holerite_ids:
+        _at_throttle()
+        r = requests.get(
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_HOL}/{holerite_ids[0]}',
+            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            timeout=30,
+        )
+        if r.ok:
+            anexos = r.json().get('fields', {}).get('PDF HOLERITE') or []
+            if anexos:
+                return redirect(anexos[0]['url'])
+
+    # Envios de Folha de Ponto/Cartão Ponto (Fase 3): PDF(s) anexados
+    # diretamente no envio, sem registro vinculado em outra tabela.
+    anexos_diretos = fields.get('Arquivos') or []
+    if anexos_diretos:
+        return redirect(anexos_diretos[0]['url'])
+
+    return 'Documento não encontrado.', 404
 
 
 if __name__ == '__main__':
