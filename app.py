@@ -1129,7 +1129,7 @@ def _montar_campos_pre_cadastro(dados: dict) -> dict:
     Monta os campos (nome legível -> valor) do pré-cadastro em Funcionários.
 
     Inclui apenas campos mapeados e de escrita simples (Nome Completo, CPF,
-    Status="Pré-cadastro", Cargo, Data de Admissão). "Locais de trabalho" é um
+    Status="Ativo", Cargo, Data de Admissão). "Locais de trabalho" é um
     vínculo para a tabela Locais e "Origem do cadastro/Contrato de origem" não
     tem campo equivalente em Funcionários — nenhum dos dois é incluído aqui
     (ver 'observacoes' no retorno do handler).
@@ -1137,7 +1137,7 @@ def _montar_campos_pre_cadastro(dados: dict) -> dict:
     campos = {
         'Nome Completo': dados['nome_funcionario'],
         'CPF': dados['cpf'],
-        'Status': 'Pré-cadastro',
+        'Status': 'Ativo',
     }
     if dados.get('cargo_funcao'):
         campos['Cargo'] = dados['cargo_funcao']
@@ -1349,7 +1349,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.15',
+        'versao': '2.16',
         'ram_mb': _mem_mb(),
     })
 
