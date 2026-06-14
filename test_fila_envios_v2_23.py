@@ -346,6 +346,71 @@ def test_recibo_ja_lido_nao_repete_patch(mock_buscar, mock_patch, mock_get):
     print('OK: /recibo/<hash> já lido anteriormente -> não repete o PATCH, apenas redireciona')
 
 
+# ── _normalizar_telefone_br / /normalizar-whatsapp ────────────────────────────
+
+def test_normalizar_telefone_adiciona_55():
+    assert app._normalizar_telefone_br('11999998888') == '5511999998888'
+    assert app._normalizar_telefone_br('(11) 99999-8888') == '5511999998888'
+    assert app._normalizar_telefone_br('1199998888') == '551199998888'
+    print('OK: normalização adiciona DDI 55 a números sem DDI')
+
+
+def test_normalizar_telefone_ja_normalizado_retorna_none():
+    assert app._normalizar_telefone_br('5511999998888') == None
+    assert app._normalizar_telefone_br('+55 11 99999-8888') == None
+    print('OK: número já normalizado retorna None (sem alteração)')
+
+
+def test_normalizar_telefone_vazio_ou_invalido_retorna_none():
+    assert app._normalizar_telefone_br('') == None
+    assert app._normalizar_telefone_br(None) == None
+    assert app._normalizar_telefone_br('123') == None
+    print('OK: número vazio/inválido retorna None')
+
+
+FUNCIONARIOS_WHATS = [
+    {'id': 'recFUNC1', 'fields': {'Nome Completo': 'Fulano de Tal', 'WhatsApp': '11999998888'}},
+    {'id': 'recFUNC2', 'fields': {'Nome Completo': 'Beltrano', 'WhatsApp': '5521988887777'}},
+    {'id': 'recFUNC3', 'fields': {'Nome Completo': 'Ciclano', 'WhatsApp': None}},
+]
+
+
+@patch('app._at_listar_todos')
+def test_normalizar_whatsapp_dry_run(mock_listar):
+    mock_listar.return_value = FUNCIONARIOS_WHATS
+
+    resultado = app._normalizar_whatsapp_funcionarios(dry_run=True)
+
+    assert resultado['total_funcionarios_atualizados'] == 1
+    item = resultado['atualizados'][0]
+    assert item['funcionario_id'] == 'recFUNC1'
+    assert item['whatsapp_antes'] == '11999998888'
+    assert item['whatsapp_depois'] == '5511999998888'
+    assert item['acao'] == 'atualizaria'
+
+    motivos = {i['funcionario_id']: i['motivo'] for i in resultado['ignorados']}
+    assert motivos['recFUNC2'] == 'ja_normalizado_ou_invalido'
+    assert motivos['recFUNC3'] == 'whatsapp_ausente'
+    print('OK: /normalizar-whatsapp dry_run identifica apenas o número não normalizado')
+
+
+@patch('app._at_throttle', lambda: None)
+@patch('app.requests.patch')
+@patch('app._at_listar_todos')
+def test_normalizar_whatsapp_cria_patch_real(mock_listar, mock_patch):
+    mock_listar.return_value = FUNCIONARIOS_WHATS
+    mock_patch.return_value = _resposta(200, {'id': 'recFUNC1', 'fields': {}})
+
+    resultado = app._normalizar_whatsapp_funcionarios(dry_run=False)
+
+    assert resultado['total_funcionarios_atualizados'] == 1
+    assert resultado['atualizados'][0]['acao'] == 'atualizado'
+    mock_patch.assert_called_once()
+    args, kwargs = mock_patch.call_args
+    assert kwargs['json']['fields']['WhatsApp'] == '5511999998888'
+    print('OK: /normalizar-whatsapp grava o número normalizado via PATCH')
+
+
 if __name__ == '__main__':
     test_normalizar_nome_ignora_caixa_acentos_espacos()
     test_normalizar_nome_remove_sufixos_societarios()
@@ -365,4 +430,9 @@ if __name__ == '__main__':
     test_recibo_hash_invalido()
     test_recibo_redireciona_anexo_direto_cartao_ponto()
     test_recibo_ja_lido_nao_repete_patch()
+    test_normalizar_telefone_adiciona_55()
+    test_normalizar_telefone_ja_normalizado_retorna_none()
+    test_normalizar_telefone_vazio_ou_invalido_retorna_none()
+    test_normalizar_whatsapp_dry_run()
+    test_normalizar_whatsapp_cria_patch_real()
     print('\nTodos os testes (Fase 3 - Fila de Envios) passaram.')

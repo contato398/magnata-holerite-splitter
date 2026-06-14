@@ -1017,6 +1017,26 @@ _SUFIXOS_NOME_RE = re.compile(
 )
 
 
+def _normalizar_telefone_br(numero: str):
+    """Normaliza um número de telefone brasileiro para o formato esperado
+    pelo WhatsApp/Evolution API: DDI 55 + DDD + número, somente dígitos
+    (ex.: "5511999998888"). Retorna None se `numero` já estiver correto,
+    estiver vazio ou não for possível normalizar com confiança."""
+    if not numero:
+        return None
+    digitos = re.sub(r'\D', '', str(numero))
+    if not digitos:
+        return None
+    # Remove "0" de discagem interurbana (ex.: "0 11 99999-8888")
+    if digitos.startswith('0') and len(digitos) in (12, 13):
+        digitos = digitos[1:]
+    if digitos.startswith('55') and len(digitos) in (12, 13):
+        return None  # já normalizado
+    if len(digitos) in (10, 11):
+        return '55' + digitos
+    return None
+
+
 def _normalizar_nome_busca(texto: str) -> str:
     """Normaliza nomes para comparação "fuzzy": maiúsculas, sem acentos,
     sem pontuação, espaços colapsados e sem sufixos societários comuns
@@ -1956,7 +1976,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.23',
+        'versao': '2.24',
         'ram_mb': _mem_mb(),
     })
 
@@ -3517,6 +3537,92 @@ def gerar_fila_envios_ponto():
     dry_run = body.get('dry_run', True)
 
     resultado = _gerar_fila_envios_folha_ponto(limit=limit, dry_run=dry_run)
+    return jsonify(resultado)
+
+
+def _normalizar_whatsapp_funcionarios(limit=None, dry_run=True):
+    """Varre Funcionários e normaliza o campo "WhatsApp" para o formato
+    DDI 55 + DDD + número (somente dígitos), exigido pela Evolution API.
+    Registros já normalizados ou sem WhatsApp são ignorados."""
+    atualizados = []
+    ignorados = []
+
+    for rec in _at_listar_todos(TABLE_FUNC, ['Nome Completo', 'WhatsApp']):
+        if limit is not None and len(atualizados) >= limit:
+            break
+
+        f = rec['fields']
+        numero_original = f.get('WhatsApp')
+        numero_normalizado = _normalizar_telefone_br(numero_original)
+
+        if not numero_normalizado:
+            ignorados.append({
+                'funcionario_id': rec['id'],
+                'nome': f.get('Nome Completo', ''),
+                'whatsapp_atual': numero_original,
+                'motivo': 'whatsapp_ausente' if not numero_original else 'ja_normalizado_ou_invalido',
+            })
+            continue
+
+        item = {
+            'funcionario_id': rec['id'],
+            'nome': f.get('Nome Completo', ''),
+            'whatsapp_antes': numero_original,
+            'whatsapp_depois': numero_normalizado,
+        }
+
+        if dry_run:
+            item['acao'] = 'atualizaria'
+        else:
+            _at_throttle()
+            r = requests.patch(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{rec["id"]}',
+                headers=_at_headers(),
+                json={'fields': {'WhatsApp': numero_normalizado}, 'typecast': True},
+                timeout=15,
+            )
+            _raise_for_airtable(r, f'normalizar WhatsApp {rec["id"]}')
+            item['acao'] = 'atualizado'
+
+        atualizados.append(item)
+
+    return {
+        'total_funcionarios_atualizados': len(atualizados),
+        'atualizados': atualizados,
+        'ignorados': ignorados,
+        'dry_run': dry_run,
+    }
+
+
+@app.route('/normalizar-whatsapp', methods=['POST', 'OPTIONS'])
+def normalizar_whatsapp():
+    """
+    Normaliza o campo "WhatsApp" de Funcionários para o formato DDI 55 +
+    DDD + número (somente dígitos), necessário para a Evolution API.
+
+    Body JSON opcional:
+      - limit: limita a quantidade de registros atualizados
+      - dry_run: true (padrão) não grava nada, apenas simula
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    body = request.get_json(silent=True) or {}
+    limit = body.get('limit')
+    try:
+        limit = int(limit) if limit else None
+    except (ValueError, TypeError):
+        limit = None
+    dry_run = body.get('dry_run', True)
+
+    resultado = _normalizar_whatsapp_funcionarios(limit=limit, dry_run=dry_run)
     return jsonify(resultado)
 
 
