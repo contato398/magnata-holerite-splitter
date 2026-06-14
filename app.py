@@ -1103,19 +1103,51 @@ CAMPOS_PARA_CONFIANCA = [
 # ── Padrão genérico de decisão (reaproveitável para outros documentos) ──────
 #
 # Toda decisão automática de um handler de documento se encaixa em uma destas
-# 4 categorias:
+# 5 categorias (ver função decidir_acao_documento):
 #   - executar_automaticamente          -> ação principal sem revisão humana
 #   - executar_com_status_intermediario -> registro/ação em estado de transição
+#   - funcionario_ou_registro_ja_existente
+#                                        -> já existe registro equivalente, nada a fazer
 #   - enviar_para_revisao               -> Pendência, humano decide
 #   - ignorar_documento                 -> documento não aplicável a este fluxo
 #
+# Automação é a regra; revisão manual é a exceção (erros, divergências,
+# duplicidades, baixa confiança ou dados essenciais faltantes).
+#
 # Para contratos (Fase 5C) esse padrão se traduz em 'decisao_5c':
-#   executar_automaticamente          -> cadastrar_ativo_automaticamente
-#   executar_com_status_intermediario -> criar_pre_cadastro_seguro
-#   enviar_para_revisao               -> enviar_para_revisao
-#   (caso particular "nenhuma ação necessária")
-#                                      -> funcionario_ja_existente
-#   ignorar_documento                 -> não usado nesta fase (reservado)
+#   executar_automaticamente              -> cadastrar_ativo_automaticamente
+#   executar_com_status_intermediario     -> criar_pre_cadastro_seguro
+#   funcionario_ou_registro_ja_existente  -> funcionario_ja_existente
+#   enviar_para_revisao                   -> enviar_para_revisao
+#   ignorar_documento                     -> não usado nesta fase (reservado)
+#
+# ── Tipos de documento futuros (apenas previstos, SEM processamento real) ───
+#
+# Os tipos abaixo já existem como possíveis 'Tipo de Documento' em Processar
+# Arquivos, mas continuam mapeados para None em PROCESSADORES_DOCUMENTO (ver
+# registro de handlers mais abaixo) — /processar-fila retorna 400 "ainda não
+# implementado" para eles, sem qualquer leitura/escrita adicional. Quando
+# forem implementados, cada um receberá um handler próprio que também deverá
+# produzir uma das 5 categorias genéricas acima, por exemplo:
+#   - Folha de Ponto        -> tipicamente executar_automaticamente (registrar
+#                              ponto) ou enviar_para_revisao (inconsistências
+#                              de horário/falta).
+#   - Certidões             -> executar_automaticamente (arquivar/atualizar
+#                              validade) ou enviar_para_revisao (certidão
+#                              vencida/divergente).
+#   - Extrato da Folha      -> executar_com_status_intermediario (conciliação
+#                              pendente de confirmação) ou enviar_para_revisao.
+#   - FGTS Digital          -> executar_automaticamente (registrar guia/valor)
+#                              ou enviar_para_revisao (divergência de valores).
+#   - Guias/Boletos         -> executar_automaticamente (registrar pagamento)
+#                              ou enviar_para_revisao (vencimento/valor
+#                              inconsistente).
+#   - Notas Fiscais         -> executar_automaticamente (registrar nota) ou
+#                              enviar_para_revisao (dados fiscais incompletos).
+#   - Outros docs por e-mail -> ignorar_documento (não aplicável) ou
+#                              enviar_para_revisao (encaminhar para triagem).
+# Nenhum desses handlers é implementado nesta etapa; nenhuma extração real,
+# leitura adicional ou escrita é feita para esses tipos.
 
 # Fase 5C — pré-cadastro/cadastro automático seguro em Funcionários
 CONFIANCA_MINIMA_PRE_CADASTRO = 0.70   # abaixo disso -> enviar_para_revisao
@@ -1163,6 +1195,52 @@ def _data_br_para_iso(data_br):
         return datetime.strptime(data_br, '%d/%m/%Y').strftime('%Y-%m-%d')
     except ValueError:
         return None
+
+
+def decidir_acao_documento(*, erros_bloqueantes, avisos_qualidade, confianca,
+                            confianca_minima, confianca_ativo,
+                            registro_existente, divergencia):
+    """
+    Decisão genérica reaproveitável (ver comentário acima de
+    CONFIANCA_MINIMA_PRE_CADASTRO) — produz uma das 5 categorias:
+      - 'enviar_para_revisao'
+      - 'funcionario_ou_registro_ja_existente'
+      - 'executar_automaticamente'
+      - 'executar_com_status_intermediario'
+      ('ignorar_documento' não é produzido aqui — reservado para handlers
+      futuros que precisem descartar um documento sem ação nenhuma).
+
+    erros_bloqueantes: lista de motivos que, se não vazia, força revisão
+        (dados essenciais inválidos/ausentes, local não identificado etc.).
+    avisos_qualidade: lista de avisos da extração — também força revisão.
+    registro_existente: True se já existe um registro equivalente (ex.: CPF
+        já cadastrado em Funcionários).
+    divergencia: motivo de divergência com o registro existente, ou None.
+    """
+    if erros_bloqueantes:
+        return 'enviar_para_revisao', '; '.join(erros_bloqueantes)
+    if avisos_qualidade:
+        return 'enviar_para_revisao', 'Avisos de qualidade na extração: ' + '; '.join(avisos_qualidade)
+    if confianca < confianca_minima:
+        return 'enviar_para_revisao', (
+            f'Confiança da extração ({confianca}) abaixo do mínimo '
+            f'({confianca_minima}) para automação.'
+        )
+    if registro_existente:
+        if divergencia:
+            return 'enviar_para_revisao', divergencia
+        return 'funcionario_ou_registro_ja_existente', (
+            'Registro equivalente já existe e dados compatíveis — nenhuma ação necessária.'
+        )
+    if confianca >= confianca_ativo:
+        return 'executar_automaticamente', (
+            f'Dados essenciais válidos, sem avisos de qualidade e '
+            f'confiança {confianca} >= {confianca_ativo} — apto para execução automática.'
+        )
+    return 'executar_com_status_intermediario', (
+        f'Dados essenciais válidos, mas confiança {confianca} entre '
+        f'{confianca_minima} e {confianca_ativo} — execução em estado intermediário de segurança.'
+    )
 
 
 def _montar_campos_pre_cadastro(dados: dict, status: str) -> dict:
@@ -1256,55 +1334,35 @@ def _processar_contrato_stub(ctx, dry_run):
 
     nome_suspeito = _nome_suspeito(dados['nome_funcionario'])
 
+    erros_bloqueantes = []
     if campos_faltantes:
-        decisao_5c = 'enviar_para_revisao'
-        motivo_decisao = (
-            f'Campos obrigatórios faltando: {", ".join(campos_faltantes)}.'
-        )
-    elif not validacao['cpf_valido']:
-        decisao_5c = 'enviar_para_revisao'
-        motivo_decisao = 'CPF inválido (dígitos verificadores não conferem).'
-    elif nome_suspeito:
-        decisao_5c = 'enviar_para_revisao'
-        motivo_decisao = f'Nome do funcionário ausente ou suspeito: "{dados["nome_funcionario"]}".'
-    elif avisos_qualidade:
-        decisao_5c = 'enviar_para_revisao'
-        motivo_decisao = 'Avisos de qualidade na extração: ' + '; '.join(avisos_qualidade)
-    elif dados['tipo_local'] == 'desconhecido':
-        decisao_5c = 'enviar_para_revisao'
-        motivo_decisao = 'Local de trabalho não identificado (tipo_local="desconhecido").'
-    elif confianca < CONFIANCA_MINIMA_PRE_CADASTRO:
-        decisao_5c = 'enviar_para_revisao'
-        motivo_decisao = (
-            f'Confiança da extração ({confianca}) abaixo do mínimo '
-            f'({CONFIANCA_MINIMA_PRE_CADASTRO}) para automação.'
-        )
-    elif funcionario_existe:
-        if divergencia:
-            decisao_5c = 'enviar_para_revisao'
-            motivo_decisao = divergencia
-        else:
-            decisao_5c = 'funcionario_ja_existente'
-            motivo_decisao = (
-                'CPF já cadastrado em Funcionários e dados compatíveis — '
-                'nenhuma ação necessária.'
-            )
-    elif confianca >= CONFIANCA_ATIVO_AUTOMATICO:
-        decisao_5c = 'cadastrar_ativo_automaticamente'
-        motivo_decisao = (
-            'CPF novo e válido, nome e admissão presentes, sem avisos de '
-            'qualidade, local identificado (inclusive "Magnata / Sede") e '
-            f'confiança {confianca} >= {CONFIANCA_ATIVO_AUTOMATICO} — apto '
-            'para cadastro ativo automático.'
-        )
-    else:
-        decisao_5c = 'criar_pre_cadastro_seguro'
-        motivo_decisao = (
-            'Dados essenciais válidos e CPF novo, mas confiança '
-            f'{confianca} entre {CONFIANCA_MINIMA_PRE_CADASTRO} e '
-            f'{CONFIANCA_ATIVO_AUTOMATICO} — criado como pré-cadastro '
-            '(estado intermediário de segurança).'
-        )
+        erros_bloqueantes.append(f'Campos obrigatórios faltando: {", ".join(campos_faltantes)}.')
+    if not validacao['cpf_valido']:
+        erros_bloqueantes.append('CPF inválido (dígitos verificadores não conferem).')
+    if nome_suspeito:
+        erros_bloqueantes.append(f'Nome do funcionário ausente ou suspeito: "{dados["nome_funcionario"]}".')
+    if dados['tipo_local'] == 'desconhecido':
+        erros_bloqueantes.append('Local de trabalho não identificado (tipo_local="desconhecido").')
+
+    categoria_generica, motivo_decisao = decidir_acao_documento(
+        erros_bloqueantes=erros_bloqueantes,
+        avisos_qualidade=avisos_qualidade,
+        confianca=confianca,
+        confianca_minima=CONFIANCA_MINIMA_PRE_CADASTRO,
+        confianca_ativo=CONFIANCA_ATIVO_AUTOMATICO,
+        registro_existente=funcionario_existe,
+        divergencia=divergencia,
+    )
+
+    # Mapeamento da categoria genérica para o vocabulário específico de
+    # contratos (Fase 5C) — ver comentário acima de CONFIANCA_MINIMA_PRE_CADASTRO.
+    _MAPA_CATEGORIA_PARA_DECISAO_5C = {
+        'executar_automaticamente': 'cadastrar_ativo_automaticamente',
+        'executar_com_status_intermediario': 'criar_pre_cadastro_seguro',
+        'funcionario_ou_registro_ja_existente': 'funcionario_ja_existente',
+        'enviar_para_revisao': 'enviar_para_revisao',
+    }
+    decisao_5c = _MAPA_CATEGORIA_PARA_DECISAO_5C[categoria_generica]
 
     origem_contrato = (
         f'Contrato: {ctx["tipo_documento"]}, arquivo "{ctx["nome_arquivo"]}" '
@@ -1335,7 +1393,20 @@ def _processar_contrato_stub(ctx, dry_run):
             'observacoes': observacoes,
         }
         if not dry_run:
-            pre_cadastro_id = _criar_pre_cadastro_funcionario(campos_pre_cadastro)
+            # Regra de segurança: rechecar CPF em Funcionários imediatamente
+            # antes de criar, para nunca gerar duplicidade (ex.: requisição
+            # duplicada criou o registro entre a decisão e a gravação).
+            func_id_recheck, _ = buscar_funcionario_por_cpf(dados['cpf'])
+            if func_id_recheck:
+                decisao_5c = 'funcionario_ja_existente'
+                motivo_decisao = (
+                    f'CPF já existe em Funcionários (ID={func_id_recheck}), '
+                    'detectado na rechecagem imediatamente antes da criação — '
+                    'criação abortada para evitar duplicidade.'
+                )
+                pre_cadastro_simulado = None
+            else:
+                pre_cadastro_id = _criar_pre_cadastro_funcionario(campos_pre_cadastro)
 
     elif decisao_5c == 'enviar_para_revisao':
         partes_obs = [motivo_decisao]
@@ -1377,6 +1448,16 @@ def _processar_contrato_stub(ctx, dry_run):
             'Status="Pré-cadastro"; enviar_para_revisao cria Pendência. '
             'Funcionário existente nunca é sobrescrito.'
         ),
+        'log_operacional': {
+            'disponivel': False,
+            'motivo': (
+                'Tabela "Processar Arquivos" não possui campo de texto/observação '
+                'para registrar decisão, ID do funcionário criado/encontrado ou erro '
+                '(campos atuais: Name, Status, Tipo, Arquivos, Data Processo, '
+                'PROCESSO IDA, Arquivos 2, Tipo de Documento). Nenhum campo novo foi '
+                'criado; esta informação é retornada apenas neste JSON.'
+            ),
+        },
     }
 
     pendencia_retorno = pendencia_simulada if decisao_5c == 'enviar_para_revisao' else None
@@ -1390,7 +1471,11 @@ def _processar_contrato_stub(ctx, dry_run):
 
 
 # Registro de handlers por tipo de documento (Fase 4).
-# None = ainda não implementado — /processar-fila retorna erro 400 para esses tipos.
+# None = ainda não implementado — /processar-fila retorna erro 400 para esses
+# tipos, sem nenhuma extração, leitura adicional ou escrita (ver comentário
+# "Tipos de documento futuros" acima de CONFIANCA_MINIMA_PRE_CADASTRO para o
+# mapeamento previsto de cada um às 5 categorias genéricas, quando forem
+# implementados).
 PROCESSADORES_DOCUMENTO = {
     'Holerite': _processar_holerite,
     'Folha de Ponto': None,
@@ -1404,6 +1489,11 @@ PROCESSADORES_DOCUMENTO = {
     'Outro': None,
 }
 
+# Tipos de documento para os quais o vocabulário de decisão 'decisao_5c'
+# (Fase 5C) se aplica e que, portanto, exigem as restrições extras de
+# dry_run=false abaixo (record_id específico + limit=1).
+TIPOS_CONTRATO_5C = ('Contrato de Experiência', 'Contrato de Trabalho')
+
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
@@ -1412,7 +1502,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.17',
+        'versao': '2.18',
         'ram_mb': _mem_mb(),
     })
 
@@ -2108,6 +2198,21 @@ def processar_fila():
     except (TypeError, ValueError):
         limit = 1
     record_id = data.get('record_id')
+
+    # Regras de segurança 8 e 9 (Fase 5C): para Contrato de Experiência e
+    # Contrato de Trabalho, dry_run=false só é aceito com um record_id
+    # específico e limit=1 — nunca processando a fila geral. Não afeta
+    # Holerite nem outros tipos.
+    if tipo_documento in TIPOS_CONTRATO_5C and not dry_run:
+        if not record_id or limit != 1:
+            return jsonify({
+                'status': 'erro',
+                'erro': (
+                    f'Para "{tipo_documento}" com dry_run=false é obrigatório '
+                    'informar "record_id" de um registro específico e "limit"=1 '
+                    '(processamento da fila geral não é permitido nesta fase).'
+                ),
+            }), 400
 
     # Resolver folha_mensal / mes_cont_id / data_holerite
     folha_mensal = data.get('folha_mensal')
