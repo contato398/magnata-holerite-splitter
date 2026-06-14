@@ -82,6 +82,7 @@ F_FUNC_CARGO     = 'fldK1lJS1L4tbZVmZ'
 F_FUNC_CPF       = 'fld0Y3bXdArkSIJxo'
 F_FUNC_NOME      = 'fld2fSiomk9AOLGDb'   # Nome Completo
 F_FUNC_ADMISSAO  = 'fld5L1djmJugvLe8c'   # Data de Admissão
+F_FUNC_PDF_FOLHA = 'fldgBhXpEFmy20yxd'   # PDF Folha Ponto (prontuário)
 
 # ── Tabelas/Campos Fase 2 — Caixa de Entrada ─────────────────────────────────
 TABLE_EMAILS     = 'tblljRRrraXSipJd1'   # Emails Savian
@@ -938,9 +939,10 @@ def _buscar_holerite_existente(func_id: str, folha_mensal: str):
     return None
 
 
-def _verificar_anexo_holerite(holerite_fields: dict, nome_arquivo: str, pdf_hash: str) -> str:
+def _verificar_anexo_em_lista(attachments: list, nome_arquivo: str, pdf_hash: str) -> str:
     """
-    Verifica se o holerite já tem um anexo com o mesmo nome de arquivo.
+    Verifica se já existe, numa lista de anexos (multipleAttachments), um
+    arquivo com o mesmo nome.
 
     Retorna:
       'identico'   — já existe anexo com mesmo nome e mesmo hash (não duplicar)
@@ -948,7 +950,6 @@ def _verificar_anexo_holerite(holerite_fields: dict, nome_arquivo: str, pdf_hash
                       (substituição precisa de autorização — não anexa)
       'novo'       — não há anexo com esse nome (pode anexar normalmente)
     """
-    attachments = holerite_fields.get(F_HOL_PDF) or []
     for att in attachments:
         if att.get('filename') != nome_arquivo:
             continue
@@ -960,6 +961,12 @@ def _verificar_anexo_holerite(holerite_fields: dict, nome_arquivo: str, pdf_hash
             return 'conflito'
         return 'identico' if existente_hash == pdf_hash else 'conflito'
     return 'novo'
+
+
+def _verificar_anexo_holerite(holerite_fields: dict, nome_arquivo: str, pdf_hash: str) -> str:
+    """Verifica duplicidade de anexo no campo PDF Holerite (ver _verificar_anexo_em_lista)."""
+    attachments = holerite_fields.get(F_HOL_PDF) or []
+    return _verificar_anexo_em_lista(attachments, nome_arquivo, pdf_hash)
 
 
 def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
@@ -1583,6 +1590,121 @@ def _processar_contrato_stub(ctx, dry_run):
     }
 
 
+def _processar_folha_ponto(ctx: dict, dry_run: bool) -> dict:
+    """
+    Handler de Folha de Ponto para /processar-fila (Fase 1 — anexação ao
+    prontuário do funcionário).
+
+    Ainda NÃO extrai horários/batidas do PDF (formato não mapeado). O que
+    este handler faz é: identificar o funcionário pelo CPF (ou, na falta
+    dele, pelo nome) presente no PDF e anexar o arquivo ao campo
+    "PDF Folha Ponto" (prontuário, em Funcionários), evitando duplicar o
+    mesmo arquivo. Itens sem funcionário identificável vão para "Revisão
+    Manual" com Pendência, em vez de ficarem invisíveis.
+    """
+    texto = ctx['texto']
+
+    cpf = extrair_cpf(texto)
+    func_id, nome = (None, None)
+    if cpf:
+        func_id, nome = buscar_funcionario_por_cpf(cpf)
+
+    nome_pdf = extrair_nome_funcionario(texto)
+    if not func_id and nome_pdf and nome_pdf != 'Desconhecido':
+        func_id, nome = _buscar_funcionario_por_nome(nome_pdf)
+
+    if not func_id:
+        detalhes = {
+            'cpf_extraido': cpf,
+            'nome_extraido': nome_pdf,
+            'nome_arquivo': ctx['nome_arquivo'],
+        }
+        observacao = (
+            f'Folha de Ponto "{ctx["nome_arquivo"]}" não pôde ser vinculada a um '
+            f'funcionário. CPF extraído: {cpf or "(nenhum)"} | '
+            f'Nome extraído: {nome_pdf or "(nenhum)"} '
+            f'(Processar Arquivos: {ctx["proc_id"]}, Arquivo: {ctx["arquivo_id"]}).'
+        )
+        if dry_run:
+            return {
+                'acao': 'funcionario_nao_encontrado',
+                'status_final': 'Revisão Manual',
+                'detalhes': detalhes,
+                'pendencia': None,
+            }
+        return {
+            'acao': 'funcionario_nao_encontrado',
+            'status_final': 'Revisão Manual',
+            'detalhes': detalhes,
+            'pendencia': {
+                'tipo': 'Funcionário não encontrado (Folha de Ponto)',
+                'observacao': observacao,
+            },
+        }
+
+    # Verificar se este arquivo já está anexado ao prontuário (evitar duplicar)
+    _at_throttle()
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={'returnFieldsByFieldId': 'true'},
+        timeout=30,
+    )
+    r.raise_for_status()
+    func_fields = r.json().get('fields', {})
+    attachments = func_fields.get(F_FUNC_PDF_FOLHA) or []
+    status_anexo = _verificar_anexo_em_lista(attachments, ctx['nome_arquivo'], ctx['pdf_hash'])
+
+    detalhes = {
+        'funcionario_id': func_id,
+        'funcionario_nome': nome,
+        'cpf_extraido': cpf,
+        'status_anexo': status_anexo,
+    }
+
+    if dry_run:
+        acao = {
+            'novo':     'anexaria_folha_ponto_ao_prontuario',
+            'identico': 'folha_ponto_ja_anexada',
+            'conflito': 'folha_ponto_conflito_precisaria_autorizacao',
+        }[status_anexo]
+        return {'acao': acao, 'status_final': 'Concluído', 'detalhes': detalhes, 'pendencia': None}
+
+    if status_anexo == 'identico':
+        return {'acao': 'folha_ponto_ja_anexada', 'status_final': 'Concluído', 'detalhes': detalhes, 'pendencia': None}
+
+    if status_anexo == 'conflito':
+        return {
+            'acao': 'folha_ponto_conflito_anexo_nao_substituido',
+            'status_final': 'Revisão Manual',
+            'detalhes': detalhes,
+            'pendencia': {
+                'tipo': 'Conflito de anexo (Folha de Ponto)',
+                'observacao': (
+                    f'Já existe um anexo "{ctx["nome_arquivo"]}" no prontuário do funcionário '
+                    f'{nome} ({func_id}) com conteúdo diferente. Anexo NÃO foi substituído — '
+                    f'requer revisão manual.'
+                ),
+            },
+        }
+
+    # status_anexo == 'novo'
+    try:
+        _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_PDF_FOLHA, ctx['pdf_bytes'], ctx['nome_arquivo'])
+        return {'acao': 'folha_ponto_anexada_ao_prontuario', 'status_final': 'Concluído', 'detalhes': detalhes, 'pendencia': None}
+    except AirtableError as exc:
+        logger.error(f'[FILA] {ctx["proc_id"]}: erro ao anexar Folha de Ponto ao prontuário de {func_id}: {exc}')
+        return {
+            'acao': 'folha_ponto_falhou_anexo',
+            'status_final': 'Revisão Manual',
+            'detalhes': detalhes,
+            'pendencia': {
+                'tipo': 'Erro ao anexar Folha de Ponto',
+                'observacao': f'Funcionário {func_id} ({nome}): {exc}',
+            },
+        }
+
+
 def _processar_documento_sem_automacao(ctx: dict, dry_run: bool) -> dict:
     """
     Handler genérico (Fase 6 — sanitização) para tipos de documento sem
@@ -1640,7 +1762,7 @@ def _processar_documento_sem_automacao(ctx: dict, dry_run: bool) -> dict:
 # em Holerites).
 PROCESSADORES_DOCUMENTO = {
     'Holerite': _processar_holerite,
-    'Folha de Ponto': _processar_documento_sem_automacao,
+    'Folha de Ponto': _processar_folha_ponto,
     'Contrato de Experiência': _processar_contrato_stub,
     'Contrato de Trabalho': _processar_contrato_stub,
     'Férias': _processar_documento_sem_automacao,
@@ -1664,7 +1786,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.20',
+        'versao': '2.21',
         'ram_mb': _mem_mb(),
     })
 
