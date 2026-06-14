@@ -915,7 +915,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.9',
+        'versao': '2.10',
         'ram_mb': _mem_mb(),
     })
 
@@ -1726,7 +1726,7 @@ def processar_fila():
                 for pg in pdf_doc.pages:
                     texto += (pg.extract_text() or '') + '\n'
 
-            status_atual = (fields.get(F_PROC_STATUS) or {}).get('name', 'Processando')
+            status_atual = fields.get(F_PROC_STATUS, 'Processando')
 
             ctx = {
                 'proc_id': proc_id,
