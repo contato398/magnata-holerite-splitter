@@ -300,6 +300,7 @@ def _cpf_digitos_validos(cpf_num: str) -> bool:
 PADROES_LOCAL_INTERNO = [
     r'pr[óo]pria\s+empresa',
     r'sede\s+da\s+(?:empresa|contratante|magnata)',
+    r'(?:o\s+)?mesmo\s+da\s+empresa',
     r'mesmo\s+endere[çc]o\s+da\s+(?:empresa|contratante)',
     r'nas\s+depend[êe]ncias\s+da\s+(?:empresa|contratante)',
     r'na\s+sede\s+d[aeo]\s+(?:empresa|contratante|magnata)',
@@ -340,6 +341,11 @@ def _resolver_local_posto(texto: str):
     candidato = None
     if m:
         bruto = re.sub(r'\s+', ' ', m.group(1)).strip(' .,-')
+        # Remove prefixos de localização que não fazem parte do nome do posto
+        bruto = re.sub(
+            r'^(?:que\s+)?(?:situa-se|localiza-se|estabelecido\s+em|situado\s+em)\s*',
+            '', bruto, flags=re.IGNORECASE
+        ).strip(' .,-')
         candidato_valido = (
             len(bruto) >= 4
             and bruto.lower() not in FILLERS_LOCAL_DESCONHECIDO
@@ -409,11 +415,17 @@ def extrair_dados_contrato(texto: str):
     if m:
         resultado['cnpj_empresa'] = m.group()
 
-    # Nome do funcionário/empregado — padrões comuns em contratos
+    # Nome do funcionário/empregado — padrões comuns em contratos.
+    # Captura só letras/espaços (sem quebra de linha) e para antes de termos
+    # como "portador", "carteira de trabalho", "CTPS", "CPF", "RG", etc.
+    _stop_nome = (
+        r'(?:\n|,|\.|portador|portadora|carteira\s+de\s+trabalho|CTPS|'
+        r'CPF|RG|residente|doravante)'
+    )
     padroes_nome = [
-        r'(?:EMPREGAD[OA]|CONTRATAD[OA])\s*:?\s*\n?\s*([A-ZÀ-Ú][A-ZÀ-Ú\s]{4,60})',
-        r'Sr\.?\(?a?\)?\.?\s+([A-ZÀ-Ú][A-ZÀ-Ú\s]{4,60}),\s+(?:portador|inscrit[oa]|CPF)',
-        r'(?:nome|funcion[áa]rio)\s*:?\s*([A-ZÀ-Ú][A-ZÀ-Ú\s]{4,60})',
+        rf'(?:EMPREGAD[OA]|CONTRATAD[OA])\s*:?\s*\n?\s*([A-ZÀ-Ú][A-ZÀ-Ú ]{{3,59}}?)(?=\s*{_stop_nome}|$)',
+        rf'Sr\.?\(?a?\)?\.?\s+([A-ZÀ-Ú][A-ZÀ-Ú ]{{3,59}}?),\s+(?:portador|inscrit[oa]|CPF)',
+        rf'(?:nome|funcion[áa]rio)\s*:?\s*([A-ZÀ-Ú][A-ZÀ-Ú ]{{3,59}}?)(?=\s*{_stop_nome}|$)',
     ]
     for p in padroes_nome:
         m = re.search(p, texto, re.IGNORECASE)
@@ -1189,7 +1201,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.13',
+        'versao': '2.14',
         'ram_mb': _mem_mb(),
     })
 
