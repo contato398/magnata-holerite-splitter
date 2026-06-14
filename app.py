@@ -283,6 +283,110 @@ def extrair_valores_holerite(texto: str) -> dict:
     return resultado
 
 
+def _cpf_digitos_validos(cpf_num: str) -> bool:
+    """Valida CPF (11 dígitos) pelo algoritmo dos dígitos verificadores."""
+    if len(cpf_num) != 11 or cpf_num == cpf_num[0] * 11:
+        return False
+    for i in (9, 10):
+        soma = sum(int(cpf_num[n]) * (i + 1 - n) for n in range(i))
+        digito = (soma * 10 % 11) % 10
+        if digito != int(cpf_num[i]):
+            return False
+    return True
+
+
+def extrair_dados_contrato(texto: str) -> dict:
+    """
+    Extrai dados de um Contrato de Experiência / Contrato de Trabalho (Fase 5B).
+
+    Heurísticas por regex, tolerantes — qualquer campo não encontrado retorna None.
+    Não levanta exceção: na ausência de casamento, simplesmente omite o valor.
+
+    Retorna dict com chaves (todas opcionais):
+      nome_funcionario, cpf, data_admissao, cargo_funcao, local_posto,
+      salario, jornada_escala, cnpj_empresa
+    """
+    resultado = {
+        'nome_funcionario': None,
+        'cpf': None,
+        'data_admissao': None,
+        'cargo_funcao': None,
+        'local_posto': None,
+        'salario': None,
+        'jornada_escala': None,
+        'cnpj_empresa': None,
+    }
+    if not texto:
+        return resultado
+
+    # CPF — reaproveita o extrator já validado para holerites
+    resultado['cpf'] = extrair_cpf(texto)
+
+    # CNPJ da empresa contratante
+    m = re.search(r'\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}', texto)
+    if m:
+        resultado['cnpj_empresa'] = m.group()
+
+    # Nome do funcionário/empregado — padrões comuns em contratos
+    padroes_nome = [
+        r'(?:EMPREGAD[OA]|CONTRATAD[OA])\s*:?\s*\n?\s*([A-ZÀ-Ú][A-ZÀ-Ú\s]{4,60})',
+        r'Sr\.?\(?a?\)?\.?\s+([A-ZÀ-Ú][A-ZÀ-Ú\s]{4,60}),\s+(?:portador|inscrit[oa]|CPF)',
+        r'(?:nome|funcion[áa]rio)\s*:?\s*([A-ZÀ-Ú][A-ZÀ-Ú\s]{4,60})',
+    ]
+    for p in padroes_nome:
+        m = re.search(p, texto, re.IGNORECASE)
+        if m:
+            nome = m.group(1).strip()
+            if len(nome.split()) >= 2:
+                resultado['nome_funcionario'] = nome
+                break
+
+    # Data de admissão
+    padroes_data = [
+        r'(?:admiss[ãa]o|admitid[oa]|a partir de)\D{0,20}(\d{2}/\d{2}/\d{4})',
+        r'Admiss[ãa]o:\s*(\d{2}/\d{2}/\d{4})',
+    ]
+    for p in padroes_data:
+        m = re.search(p, texto, re.IGNORECASE)
+        if m:
+            resultado['data_admissao'] = m.group(1)
+            break
+
+    # Cargo/função
+    m = re.search(
+        r'fun[çc][ãa]o\s+(?:de|do cargo de)?\s*:?\s*([A-Za-zÀ-ú0-9\s/]{3,50}?)\s*[,\.\n]',
+        texto, re.IGNORECASE
+    )
+    if m:
+        resultado['cargo_funcao'] = m.group(1).strip()
+
+    # Local/posto de trabalho
+    m = re.search(
+        r'(?:local de trabalho|prestar[áa]?\s+(?:os\s+)?servi[çc]os?\s+(?:em|no|na))\s*:?\s*([A-Za-zÀ-ú0-9\s,./-]{3,80}?)\s*[,\.\n]',
+        texto, re.IGNORECASE
+    )
+    if m:
+        resultado['local_posto'] = m.group(1).strip()
+
+    # Salário
+    m = re.search(
+        r'(?:sal[áa]rio|remunera[çc][ãa]o)[^\d]{0,20}R?\$?\s*([\d.]+,\d{2})',
+        texto, re.IGNORECASE
+    )
+    if m:
+        resultado['salario'] = parse_br_float(m.group(1))
+
+    # Jornada/escala
+    m = re.search(
+        r'(?:jornada|escala)\D{0,30}((?:\d{1,2}\s*(?:horas|h)\b[^\n,.]{0,30})|(?:\d{1,2}\s*x\s*\d{1,2}))',
+        texto, re.IGNORECASE
+    )
+    if m:
+        resultado['jornada_escala'] = m.group(1).strip()
+
+    return resultado
+
+
 def construir_mapa_cpf(caminho_pdf: str) -> tuple[dict, int]:
     """
     Pass 1 — LEVE.
@@ -868,24 +972,74 @@ def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
     }
 
 
+CAMPOS_CONTRATO_OBRIGATORIOS = ['nome_funcionario', 'cpf', 'data_admissao']
+
+
 def _processar_contrato_stub(ctx, dry_run):
     """
-    Handler stub de Contrato de Experiência / Contrato de Trabalho (Fase 5A).
+    Handler de Contrato de Experiência / Contrato de Trabalho (Fase 5B).
 
-    Apenas reconhece o documento como contrato — não extrai dados, não consulta
-    ou altera Funcionários, não cria pré-cadastro e não cria pendência. O status
-    do registro em "Processar Arquivos" é mantido como está (status_atual),
-    para não avançar nem retroceder o fluxo.
+    Extrai dados do contrato e consulta (somente leitura) se o CPF já existe em
+    Funcionários, retornando tudo em 'detalhes'. Não grava nada no Airtable, não
+    altera Status, não cria Pendência nem pré-cadastro. O status do registro em
+    "Processar Arquivos" é mantido como está (status_atual).
     """
+    dados = extrair_dados_contrato(ctx['texto'])
+
+    cpf_num = re.sub(r'\D', '', dados['cpf'] or '')
+
+    validacao = {
+        'cpf_valido': bool(cpf_num) and _cpf_digitos_validos(cpf_num),
+        'nome_presente': bool(dados['nome_funcionario']),
+        'data_admissao_valida': bool(dados['data_admissao']),
+    }
+
+    campos_faltantes = [
+        campo for campo in CAMPOS_CONTRATO_OBRIGATORIOS if not dados.get(campo)
+    ]
+
+    total_campos = len(dados)
+    preenchidos = sum(1 for v in dados.values() if v is not None)
+    confianca = round(preenchidos / total_campos, 2) if total_campos else 0.0
+
+    funcionario_existe = None
+    if dados['cpf']:
+        func_id, _nome_existente = buscar_funcionario_por_cpf(dados['cpf'])
+        funcionario_existe = func_id is not None
+
+    if campos_faltantes:
+        proxima_acao = (
+            'Revisão manual necessária — faltam campos obrigatórios '
+            f'({", ".join(campos_faltantes)}) antes de considerar pré-cadastro (Fase 5C).'
+        )
+    elif funcionario_existe:
+        proxima_acao = (
+            'Funcionário já cadastrado em Funcionários (mesmo CPF) — '
+            'Fase 5C não criaria novo registro, apenas reportaria.'
+        )
+    else:
+        proxima_acao = (
+            'Candidato a pré-cadastro em Funcionários na Fase 5C '
+            '(ainda não implementada — nenhuma ação tomada agora).'
+        )
+
     return {
-        'acao': 'contrato_reconhecido_sem_processar',
+        'acao': 'contrato_extraido_sem_gravar',
         'status_final': ctx['status_atual'],
         'detalhes': {
             'tipo_documento': ctx['tipo_documento'],
+            'record_id': ctx['proc_id'],
+            'arquivo_id': ctx['arquivo_id'],
             'nome_arquivo': ctx['nome_arquivo'],
+            'dados_extraidos': dados,
+            'validacao': validacao,
+            'campos_faltantes': campos_faltantes,
+            'confianca': confianca,
+            'funcionario_existe_em_funcionarios': funcionario_existe,
+            'proxima_acao_sugerida': proxima_acao,
             'observacao': (
-                'Fase 5A — documento reconhecido como contrato, mas ainda não '
-                'processado (sem extração de dados, sem alteração em Funcionários).'
+                'Fase 5B — extração em dry_run/leitura. Nenhuma escrita em '
+                'Funcionários, Pendências, Arquivos ou Processar Arquivos.'
             ),
         },
         'pendencia': None,
@@ -915,7 +1069,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.10',
+        'versao': '2.11',
         'ram_mb': _mem_mb(),
     })
 
