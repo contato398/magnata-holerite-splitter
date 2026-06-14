@@ -11,6 +11,7 @@ Novidades vs v2.5:
 import os
 import re
 import io
+import json
 import gc
 import time
 import zipfile
@@ -173,6 +174,47 @@ def _at_headers():
         'Authorization': f'Bearer {AIRTABLE_API_KEY}',
         'Content-Type': 'application/json'
     }
+
+
+# ── Erros Airtable (Fase 6 — diagnóstico/sanitização) ────────────────────────
+
+class AirtableError(Exception):
+    """
+    Erro de gravação/leitura no Airtable que preserva o motivo exato
+    retornado pela API (status HTTP + corpo da resposta), em vez de deixar
+    apenas a mensagem genérica de requests.raise_for_status() ("422 Client
+    Error: Unprocessable Entity for url: ...").
+    """
+
+    def __init__(self, status_code: int, body_text: str, context: str = ''):
+        self.status_code = status_code
+        self.body_text = body_text or ''
+        self.context = context
+        try:
+            self.error_json = json.loads(body_text) if body_text else None
+        except ValueError:
+            self.error_json = None
+        super().__init__(self._mensagem())
+
+    def _mensagem(self) -> str:
+        detalhe = None
+        if isinstance(self.error_json, dict):
+            err = self.error_json.get('error')
+            if isinstance(err, dict):
+                detalhe = f"{err.get('type', '')}: {err.get('message', '')}".strip(': ')
+            elif isinstance(err, str):
+                detalhe = err
+        if not detalhe:
+            detalhe = self.body_text[:300]
+        prefixo = f'[{self.context}] ' if self.context else ''
+        return f'{prefixo}Airtable HTTP {self.status_code}: {detalhe}'
+
+
+def _raise_for_airtable(r, context: str = ''):
+    """Loga e levanta AirtableError com o erro exato retornado pela API, se a resposta não for 2xx."""
+    if not r.ok:
+        logger.error(f'[AT] {context} HTTP {r.status_code}: {r.text[:1000]}')
+        raise AirtableError(r.status_code, r.text, context)
 
 
 # ── Helpers PDF ───────────────────────────────────────────────────────────────
@@ -668,16 +710,27 @@ def buscar_funcionario_por_cpf(cpf: str):
     return None, None
 
 
-def criar_registro_holerite(nome, func_id, folha_mensal, data_str, mes_cont_id, valores=None):
-    """Cria registro de holerite no Airtable, incluindo valores financeiros se disponíveis."""
+def criar_registro_holerite(nome, func_id, folha_mensal, data_str, mes_cont_id, valores=None, status='Concluído'):
+    """Cria registro de holerite no Airtable, incluindo valores financeiros se disponíveis.
+
+    'status' permite criar o registro como 'Concluído' (fluxo normal) ou
+    'Revisão Manual' (sanitização — usado quando algum dado não pôde ser
+    gravado/extraído com confiança). 'typecast=True' permite ao Airtable
+    criar a opção "Revisão Manual" automaticamente no campo Status, se ainda
+    não existir como opção do singleSelect.
+    """
     campos = {
         F_HOL_NOME:     f'{nome} - {folha_mensal}',
-        F_HOL_STATUS:   'Concluído',
+        F_HOL_STATUS:   status,
         F_HOL_FUNC:     [func_id],
         F_HOL_DATA:     data_str,
         F_HOL_FOLHA:    folha_mensal,
-        F_HOL_MES_CONT: [mes_cont_id],
     }
+    # mes_cont_id pode vir None (mês de contabilidade não encontrado) — um
+    # link [None] é rejeitado pelo Airtable (422), então omitimos o campo
+    # nesse caso em vez de quebrar a criação do holerite.
+    if mes_cont_id:
+        campos[F_HOL_MES_CONT] = [mes_cont_id]
     if valores:
         if valores.get('total_vencimentos') is not None:
             campos[F_HOL_VENCIM]    = valores['total_vencimentos']
@@ -692,10 +745,10 @@ def criar_registro_holerite(nome, func_id, folha_mensal, data_str, mes_cont_id, 
     r = requests.post(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_HOL}',
         headers=_at_headers(),
-        json={'fields': campos},
+        json={'fields': campos, 'typecast': True},
         timeout=15,
     )
-    r.raise_for_status()
+    _raise_for_airtable(r, f'criar holerite ({nome})')
     return r.json()['id']
 
 
@@ -718,10 +771,10 @@ def atualizar_valores_holerite(record_id: str, valores: dict):
     r = requests.patch(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_HOL}/{record_id}',
         headers=_at_headers(),
-        json={'fields': campos},
+        json={'fields': campos, 'typecast': True},
         timeout=15,
     )
-    r.raise_for_status()
+    _raise_for_airtable(r, f'atualizar valores holerite {record_id}')
     return r.json()
 
 
@@ -744,9 +797,7 @@ def anexar_pdf_holerite(record_id, pdf_bytes, filename):
         },
         timeout=60,
     )
-    if not r.ok:
-        logger.error(f'[ATTACH] HTTP {r.status_code}: {r.text[:500]}')
-    r.raise_for_status()
+    _raise_for_airtable(r, f'anexar PDF holerite {record_id}')
     return r.json()
 
 
@@ -760,9 +811,7 @@ def _criar_registro(table_id: str, fields: dict) -> str:
         json={'fields': fields, 'typecast': True},
         timeout=30,
     )
-    if not r.ok:
-        logger.error(f'[AT] create {table_id} HTTP {r.status_code}: {r.text[:500]}')
-    r.raise_for_status()
+    _raise_for_airtable(r, f'create {table_id}')
     return r.json()['id']
 
 
@@ -797,9 +846,7 @@ def _anexar_attachment(table_id: str, record_id: str, field_id: str,
         },
         timeout=60,
     )
-    if not r.ok:
-        logger.error(f'[AT] attach {table_id}/{record_id} HTTP {r.status_code}: {r.text[:500]}')
-    r.raise_for_status()
+    _raise_for_airtable(r, f'attach {table_id}/{record_id}')
     return r.json()
 
 
@@ -813,9 +860,7 @@ def _atualizar_status_processar(record_id: str, status: str):
         json={'fields': {F_PROC_STATUS: status}, 'typecast': True},
         timeout=15,
     )
-    if not r.ok:
-        logger.error(f'[AT] update status {record_id} HTTP {r.status_code}: {r.text[:500]}')
-    r.raise_for_status()
+    _raise_for_airtable(r, f'update status {record_id}')
     return r.json()
 
 
@@ -1052,39 +1097,101 @@ def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
         }
 
     pendencia = None
+    status_final = 'Concluído'
+    avisos_sanitizacao = []
 
     if existente:
         holerite_id = existente['id']
-        atualizar_valores_holerite(holerite_id, valores)
+
+        try:
+            atualizar_valores_holerite(holerite_id, valores)
+        except AirtableError as exc:
+            logger.error(f'[FILA] {ctx["proc_id"]}: erro ao atualizar valores do holerite {holerite_id}: {exc}')
+            avisos_sanitizacao.append(f'Valores financeiros NÃO atualizados: {exc}')
+            status_final = 'Erro'
 
         status_anexo = _verificar_anexo_holerite(
             existente.get('fields', {}), ctx['nome_arquivo'], ctx['pdf_hash'],
         )
         if status_anexo == 'novo':
-            anexar_pdf_holerite(holerite_id, ctx['pdf_bytes'], ctx['nome_arquivo'])
-            acao = 'holerite_atualizado'
+            try:
+                anexar_pdf_holerite(holerite_id, ctx['pdf_bytes'], ctx['nome_arquivo'])
+                acao = 'holerite_atualizado' if not avisos_sanitizacao else 'holerite_atualizado_parcial'
+            except AirtableError as exc:
+                logger.error(f'[FILA] {ctx["proc_id"]}: erro ao anexar PDF no holerite {holerite_id}: {exc}')
+                avisos_sanitizacao.append(f'PDF NÃO anexado: {exc}')
+                acao = 'holerite_atualizado_parcial'
+                status_final = 'Erro'
         elif status_anexo == 'identico':
-            acao = 'holerite_atualizado_anexo_ja_existia'
+            acao = 'holerite_atualizado_anexo_ja_existia' if not avisos_sanitizacao else 'holerite_atualizado_parcial'
         else:  # 'conflito'
             acao = 'holerite_atualizado_anexo_nao_substituido'
+            avisos_sanitizacao.append(
+                f'Holerite {holerite_id}: já existe anexo "{ctx["nome_arquivo"]}" com '
+                f'conteúdo diferente do PDF processado. Anexo NÃO foi substituído — '
+                f'requer autorização manual.'
+            )
+
+        if avisos_sanitizacao:
             pendencia = {
-                'tipo': 'Substituição de anexo precisa de autorização',
-                'observacao': (
-                    f'Holerite {holerite_id}: já existe anexo "{ctx["nome_arquivo"]}" com '
-                    f'conteúdo diferente do PDF processado. Anexo NÃO foi substituído — '
-                    f'requer autorização manual.'
-                ),
+                'tipo': 'Holerite atualizado com pendências (revisão manual)',
+                'observacao': f'Holerite {holerite_id}: ' + ' | '.join(avisos_sanitizacao),
             }
     else:
-        holerite_id = criar_registro_holerite(
-            nome, func_id, folha_mensal, ctx['data_holerite'], mes_cont_id, valores=valores,
-        )
-        anexar_pdf_holerite(holerite_id, ctx['pdf_bytes'], ctx['nome_arquivo'])
-        acao = 'holerite_criado'
+        try:
+            holerite_id = criar_registro_holerite(
+                nome, func_id, folha_mensal, ctx['data_holerite'], mes_cont_id, valores=valores,
+            )
+            anexar_pdf_holerite(holerite_id, ctx['pdf_bytes'], ctx['nome_arquivo'])
+            acao = 'holerite_criado'
+        except AirtableError as exc:
+            # Sanitização: o payload completo (com valores financeiros) foi
+            # rejeitado pelo Airtable. Em vez de perder o documento, tenta
+            # novamente com um payload mínimo seguro (sem valores) e status
+            # "Revisão Manual", preservando o PDF e registrando o erro exato
+            # numa Pendência para correção manual posterior.
+            logger.error(f'[FILA] {ctx["proc_id"]}: Airtable rejeitou criação do holerite (payload completo): {exc}')
+            try:
+                holerite_id = criar_registro_holerite(
+                    nome, func_id, folha_mensal, ctx['data_holerite'], mes_cont_id,
+                    valores=None, status='Revisão Manual',
+                )
+                anexar_pdf_holerite(holerite_id, ctx['pdf_bytes'], ctx['nome_arquivo'])
+            except AirtableError as exc2:
+                logger.error(f'[FILA] {ctx["proc_id"]}: Airtable rejeitou também o payload mínimo: {exc2}')
+                return {
+                    'acao': 'holerite_falhou',
+                    'status_final': 'Erro',
+                    'detalhes': {
+                        'funcionario_id': func_id,
+                        'funcionario_nome': nome,
+                        'cpf_extraido': cpf,
+                        'folha_mensal': folha_mensal,
+                        'valores': valores,
+                    },
+                    'pendencia': {
+                        'tipo': 'Erro Airtable ao criar Holerite',
+                        'observacao': (
+                            f'Falha ao criar holerite para {nome} ({folha_mensal}) mesmo com '
+                            f'payload mínimo. Erro completo: {exc} | Erro do payload mínimo: {exc2}'
+                        ),
+                    },
+                }
+            acao = 'holerite_criado_revisao_manual'
+            status_final = 'Concluído'
+            pendencia = {
+                'tipo': 'Holerite criado em Revisão Manual',
+                'observacao': (
+                    f'Holerite {holerite_id} ({nome} - {folha_mensal}) criado com status '
+                    f'"Revisão Manual" — valores financeiros não foram gravados devido a '
+                    f'erro do Airtable: {exc}. PDF anexado normalmente; preencher os '
+                    f'valores manualmente.'
+                ),
+            }
 
     return {
         'acao': acao,
-        'status_final': 'Concluído',
+        'status_final': status_final,
         'detalhes': {
             'holerite_id': holerite_id,
             'funcionario_id': func_id,
@@ -1476,23 +1583,72 @@ def _processar_contrato_stub(ctx, dry_run):
     }
 
 
-# Registro de handlers por tipo de documento (Fase 4).
-# None = ainda não implementado — /processar-fila retorna erro 400 para esses
-# tipos, sem nenhuma extração, leitura adicional ou escrita (ver comentário
-# "Tipos de documento futuros" acima de CONFIANCA_MINIMA_PRE_CADASTRO para o
-# mapeamento previsto de cada um às 5 categorias genéricas, quando forem
-# implementados).
+def _processar_documento_sem_automacao(ctx: dict, dry_run: bool) -> dict:
+    """
+    Handler genérico (Fase 6 — sanitização) para tipos de documento sem
+    processamento automático implementado ainda (Folha de Ponto, Férias,
+    FGTS, Guia, Boleto, Nota Fiscal, Outro).
+
+    Antes desta mudança, esses tipos ficavam mapeados para None em
+    PROCESSADORES_DOCUMENTO e /processar-fila retornava 400 "ainda não
+    implementado" para a requisição inteira — os itens correspondentes
+    ficavam parados em "Pendente" em Processar Arquivos, sem nenhuma
+    Pendência/visibilidade (ex.: e-mails com FGTS Digital "desapareciam").
+
+    Agora cada item é marcado individualmente com status_final="Revisão
+    Manual" e uma Pendência é criada apontando o Arquivo/PDF original, para
+    que um humano trate o documento — em vez de o item ficar invisível
+    indefinidamente.
+    """
+    tipo = ctx['tipo_documento']
+    observacao = (
+        f'Processamento automático de "{tipo}" ainda não implementado. '
+        f'Arquivo "{ctx["nome_arquivo"]}" requer tratamento manual '
+        f'(Processar Arquivos: {ctx["proc_id"]}, Arquivo: {ctx["arquivo_id"]}).'
+    )
+    detalhes = {
+        'tipo_documento': tipo,
+        'arquivo_id': ctx['arquivo_id'],
+        'nome_arquivo': ctx['nome_arquivo'],
+        'motivo': observacao,
+    }
+
+    if dry_run:
+        return {
+            'acao': 'marcaria_para_revisao_manual',
+            'status_final': 'Revisão Manual',
+            'detalhes': detalhes,
+            'pendencia': None,
+        }
+
+    return {
+        'acao': 'marcado_para_revisao_manual',
+        'status_final': 'Revisão Manual',
+        'detalhes': detalhes,
+        'pendencia': {
+            'tipo': f'Sem automação: {tipo}',
+            'observacao': observacao,
+        },
+    }
+
+
+# Registro de handlers por tipo de documento (Fase 4 / Fase 6).
+# Tipos sem handler dedicado usam _processar_documento_sem_automacao, que
+# marca o item como "Revisão Manual" + Pendência em vez de deixá-lo invisível
+# (status_final="Revisão Manual" é criado automaticamente como nova opção do
+# singleSelect "Status" via typecast=True, tanto em Processar Arquivos quanto
+# em Holerites).
 PROCESSADORES_DOCUMENTO = {
     'Holerite': _processar_holerite,
-    'Folha de Ponto': None,
+    'Folha de Ponto': _processar_documento_sem_automacao,
     'Contrato de Experiência': _processar_contrato_stub,
     'Contrato de Trabalho': _processar_contrato_stub,
-    'Férias': None,
-    'FGTS': None,
-    'Guia': None,
-    'Boleto': None,
-    'Nota Fiscal': None,
-    'Outro': None,
+    'Férias': _processar_documento_sem_automacao,
+    'FGTS': _processar_documento_sem_automacao,
+    'Guia': _processar_documento_sem_automacao,
+    'Boleto': _processar_documento_sem_automacao,
+    'Nota Fiscal': _processar_documento_sem_automacao,
+    'Outro': _processar_documento_sem_automacao,
 }
 
 # Tipos de documento para os quais o vocabulário de decisão 'decisao_5c'
@@ -1508,7 +1664,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.19',
+        'versao': '2.20',
         'ram_mb': _mem_mb(),
     })
 
