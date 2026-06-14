@@ -318,46 +318,58 @@ def _resolver_local_posto(texto: str):
     """
     Determina local_posto / tipo_local / avisos para o posto de trabalho.
 
+    "Magnata / Sede" é um local VÁLIDO (comum para folguistas e colaboradores
+    sem posto fixo) — não é tratado como erro nem reduz confiança.
+
     Retorna (local_posto, tipo_local, avisos_qualidade):
-      - ("Magnata / Sede", "interno_empresa", [])              -> posto é a própria empresa
-      - ("Edifício Sky", "externo", [])                        -> posto externo identificado
-      - (None, "desconhecido", [aviso])                        -> trecho confuso/truncado
-      - (None, "desconhecido", [])                             -> nada encontrado no texto
+      - ("Magnata / Sede", "interno_empresa", [])      -> posto é a própria empresa/sede (válido)
+      - ("Edifício Sky", "externo", [])                -> posto externo identificado
+      - (None, "desconhecido", [aviso])                -> truncado, ambíguo, conflito ou indeterminado
+      - (None, "desconhecido", [])                     -> nada encontrado no texto
     """
     avisos = []
 
-    # 1. Verifica primeiro se o contrato indica explicitamente "própria empresa/sede"
-    for p in PADROES_LOCAL_INTERNO:
-        if re.search(p, texto, re.IGNORECASE):
-            return 'Magnata / Sede', 'interno_empresa', avisos
+    interno = any(re.search(p, texto, re.IGNORECASE) for p in PADROES_LOCAL_INTERNO)
 
-    # 2. Tenta extrair um candidato a posto externo
+    # Tenta extrair um candidato a posto externo
     m = re.search(
         r'(?:local de trabalho|prestar[áa]?\s+(?:os\s+)?servi[çc]os?\s+(?:em|no|na))\s*:?\s*'
         r'([A-Za-zÀ-ú0-9\s,./-]{2,80}?)\s*[,\.\n]',
         texto, re.IGNORECASE
     )
-    if not m:
-        return None, 'desconhecido', avisos
+    candidato = None
+    if m:
+        bruto = re.sub(r'\s+', ' ', m.group(1)).strip(' .,-')
+        candidato_valido = (
+            len(bruto) >= 4
+            and bruto.lower() not in FILLERS_LOCAL_DESCONHECIDO
+            and re.search(r'[A-Za-zÀ-ú]{3,}', bruto)
+            and not any(re.search(p, bruto, re.IGNORECASE) for p in PADROES_LOCAL_INTERNO)
+        )
+        if candidato_valido:
+            candidato = bruto
+        elif not interno:
+            # Trecho encontrado, mas truncado/genérico demais para ser um posto real
+            avisos.append(
+                f'Local de trabalho extraído de forma truncada/confusa: "{bruto}" — revisar manualmente.'
+            )
 
-    candidato = re.sub(r'\s+', ' ', m.group(1)).strip(' .,-')
-
-    # 3. Candidato pode, ele mesmo, indicar "própria empresa"
-    if any(re.search(p, candidato, re.IGNORECASE) for p in PADROES_LOCAL_INTERNO):
-        return 'Magnata / Sede', 'interno_empresa', avisos
-
-    # 4. Candidato genérico/truncado demais para ser um posto real
-    if (
-        len(candidato) < 4
-        or candidato.lower() in FILLERS_LOCAL_DESCONHECIDO
-        or not re.search(r'[A-Za-zÀ-ú]{3,}', candidato)
-    ):
+    if interno and candidato:
+        # Contrato menciona "própria empresa/sede" E um posto externo nomeado —
+        # o sistema não consegue determinar qual prevalece.
         avisos.append(
-            f'Local de trabalho extraído de forma truncada/confusa: "{candidato}" — revisar manualmente.'
+            f'Conflito entre indicação de posto externo ("{candidato}") e indicação de '
+            'sede/própria empresa no contrato — revisar manualmente.'
         )
         return None, 'desconhecido', avisos
 
-    return candidato, 'externo', avisos
+    if interno:
+        return 'Magnata / Sede', 'interno_empresa', avisos
+
+    if candidato:
+        return candidato, 'externo', avisos
+
+    return None, 'desconhecido', avisos
 
 
 def extrair_dados_contrato(texto: str):
@@ -422,9 +434,13 @@ def extrair_dados_contrato(texto: str):
             resultado['data_admissao'] = m.group(1)
             break
 
-    # Cargo/função — captura e limpa conectores/sufixos comuns
+    # Cargo/função — para na pontuação OU em conectores/sufixos que indicam
+    # que o texto deixou de falar do cargo (ex.: "..., doravante denominado...")
     m = re.search(
-        r'fun[çc][ãa]o\s+(?:de|do cargo de)?\s*:?\s*([A-Za-zÀ-ú0-9\s/\-]{3,60}?)\s*[,\.\n]',
+        r'fun[çc][ãa]o\s+(?:de|do cargo de)?\s*:?\s*([A-Za-zÀ-ú0-9\s/\-]{3,60}?)'
+        r'(?:\s*[,\.\n]'
+        r'|\s+(?:doravante|conforme|de acordo com|nos termos|na forma|'
+        r'e mais|contratad[oa]|jornada|sal[áa]rio|remunera[çc][ãa]o))',
         texto, re.IGNORECASE
     )
     if m:
@@ -441,20 +457,24 @@ def extrair_dados_contrato(texto: str):
     resultado['tipo_local'] = tipo_local
     avisos_qualidade.extend(avisos_local)
 
-    # Salário — aceita "1.234,56" (com centavos) ou valores inteiros sem centavos
+    # Salário — só aceita valor claramente associado a salário/remuneração/
+    # ordenado/vencimento/R$. Aceita "1.234,56" (com centavos) ou valores
+    # inteiros com 3+ dígitos (rejeita números isolados/incompatíveis como "8.2").
     m = re.search(
-        r'(?:sal[áa]rio|remunera[çc][ãa]o)[^\d]{0,30}R?\$?\s*([\d]{1,3}(?:\.\d{3})*,\d{2}|\d+(?:\.\d{3})*)',
+        r'(?:sal[áa]rio|remunera[çc][ãa]o|ordenado|vencimento)[^\d]{0,30}R?\$?\s*'
+        r'([\d]{1,3}(?:\.\d{3})*,\d{2}|\d{3,}(?:\.\d{3})*)',
         texto, re.IGNORECASE
     )
     if m:
         valor_str = m.group(1)
         if ',' in valor_str:
-            resultado['salario'] = parse_br_float(valor_str)
+            valor = parse_br_float(valor_str)
         else:
             try:
-                resultado['salario'] = float(valor_str.replace('.', ''))
+                valor = float(valor_str.replace('.', ''))
             except ValueError:
-                resultado['salario'] = None
+                valor = None
+        resultado['salario'] = valor if valor and valor >= 100 else None
 
     # Jornada/escala
     m = re.search(
@@ -1089,6 +1109,11 @@ def _processar_contrato_stub(ctx, dry_run):
     preenchidos = sum(1 for campo in CAMPOS_PARA_CONFIANCA if dados.get(campo) is not None)
     confianca = round(preenchidos / total_campos, 2) if total_campos else 0.0
 
+    # Cada aviso de qualidade (local truncado/ambíguo/conflitante) reduz a
+    # confiança — mas "Magnata / Sede" (interno_empresa) não gera aviso e,
+    # portanto, não penaliza.
+    confianca = round(max(0.0, confianca - 0.1 * len(avisos_qualidade)), 2)
+
     funcionario_existe = None
     if dados['cpf']:
         func_id, _nome_existente = buscar_funcionario_por_cpf(dados['cpf'])
@@ -1164,7 +1189,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.12',
+        'versao': '2.13',
         'ram_mb': _mem_mb(),
     })
 
