@@ -295,16 +295,84 @@ def _cpf_digitos_validos(cpf_num: str) -> bool:
     return True
 
 
-def extrair_dados_contrato(texto: str) -> dict:
+# Padrões que indicam que o posto de trabalho é a própria empresa/sede,
+# não um cliente/posto externo.
+PADROES_LOCAL_INTERNO = [
+    r'pr[óo]pria\s+empresa',
+    r'sede\s+da\s+(?:empresa|contratante|magnata)',
+    r'mesmo\s+endere[çc]o\s+da\s+(?:empresa|contratante)',
+    r'nas\s+depend[êe]ncias\s+da\s+(?:empresa|contratante)',
+    r'na\s+sede\s+d[aeo]\s+(?:empresa|contratante|magnata)',
+    r'instala[çc][õo]es\s+da\s+(?:empresa|contratante)',
+]
+
+# Trechos genéricos/sem sentido isolado — se forem o único conteúdo
+# extraído para o local, tratamos como "desconhecido" em vez de um posto real.
+FILLERS_LOCAL_DESCONHECIDO = {
+    'situa-se', 'o mesmo', 'a mesma', 'conforme', 'acima', 'abaixo',
+    'mencionado', 'descrito', 'indicado', 'especificado',
+}
+
+
+def _resolver_local_posto(texto: str):
+    """
+    Determina local_posto / tipo_local / avisos para o posto de trabalho.
+
+    Retorna (local_posto, tipo_local, avisos_qualidade):
+      - ("Magnata / Sede", "interno_empresa", [])              -> posto é a própria empresa
+      - ("Edifício Sky", "externo", [])                        -> posto externo identificado
+      - (None, "desconhecido", [aviso])                        -> trecho confuso/truncado
+      - (None, "desconhecido", [])                             -> nada encontrado no texto
+    """
+    avisos = []
+
+    # 1. Verifica primeiro se o contrato indica explicitamente "própria empresa/sede"
+    for p in PADROES_LOCAL_INTERNO:
+        if re.search(p, texto, re.IGNORECASE):
+            return 'Magnata / Sede', 'interno_empresa', avisos
+
+    # 2. Tenta extrair um candidato a posto externo
+    m = re.search(
+        r'(?:local de trabalho|prestar[áa]?\s+(?:os\s+)?servi[çc]os?\s+(?:em|no|na))\s*:?\s*'
+        r'([A-Za-zÀ-ú0-9\s,./-]{2,80}?)\s*[,\.\n]',
+        texto, re.IGNORECASE
+    )
+    if not m:
+        return None, 'desconhecido', avisos
+
+    candidato = re.sub(r'\s+', ' ', m.group(1)).strip(' .,-')
+
+    # 3. Candidato pode, ele mesmo, indicar "própria empresa"
+    if any(re.search(p, candidato, re.IGNORECASE) for p in PADROES_LOCAL_INTERNO):
+        return 'Magnata / Sede', 'interno_empresa', avisos
+
+    # 4. Candidato genérico/truncado demais para ser um posto real
+    if (
+        len(candidato) < 4
+        or candidato.lower() in FILLERS_LOCAL_DESCONHECIDO
+        or not re.search(r'[A-Za-zÀ-ú]{3,}', candidato)
+    ):
+        avisos.append(
+            f'Local de trabalho extraído de forma truncada/confusa: "{candidato}" — revisar manualmente.'
+        )
+        return None, 'desconhecido', avisos
+
+    return candidato, 'externo', avisos
+
+
+def extrair_dados_contrato(texto: str):
     """
     Extrai dados de um Contrato de Experiência / Contrato de Trabalho (Fase 5B).
 
     Heurísticas por regex, tolerantes — qualquer campo não encontrado retorna None.
     Não levanta exceção: na ausência de casamento, simplesmente omite o valor.
 
-    Retorna dict com chaves (todas opcionais):
-      nome_funcionario, cpf, data_admissao, cargo_funcao, local_posto,
-      salario, jornada_escala, cnpj_empresa
+    Retorna (dados, avisos_qualidade):
+      dados: dict com chaves (todas opcionais)
+        nome_funcionario, cpf, data_admissao, cargo_funcao, local_posto,
+        tipo_local, salario, jornada_escala, cnpj_empresa
+      avisos_qualidade: lista de strings com alertas sobre extrações
+        confusas/truncadas (não bloqueiam o resultado, apenas sinalizam).
     """
     resultado = {
         'nome_funcionario': None,
@@ -312,12 +380,14 @@ def extrair_dados_contrato(texto: str) -> dict:
         'data_admissao': None,
         'cargo_funcao': None,
         'local_posto': None,
+        'tipo_local': 'desconhecido',
         'salario': None,
         'jornada_escala': None,
         'cnpj_empresa': None,
     }
+    avisos_qualidade = []
     if not texto:
-        return resultado
+        return resultado, avisos_qualidade
 
     # CPF — reaproveita o extrator já validado para holerites
     resultado['cpf'] = extrair_cpf(texto)
@@ -352,29 +422,39 @@ def extrair_dados_contrato(texto: str) -> dict:
             resultado['data_admissao'] = m.group(1)
             break
 
-    # Cargo/função
+    # Cargo/função — captura e limpa conectores/sufixos comuns
     m = re.search(
-        r'fun[çc][ãa]o\s+(?:de|do cargo de)?\s*:?\s*([A-Za-zÀ-ú0-9\s/]{3,50}?)\s*[,\.\n]',
+        r'fun[çc][ãa]o\s+(?:de|do cargo de)?\s*:?\s*([A-Za-zÀ-ú0-9\s/\-]{3,60}?)\s*[,\.\n]',
         texto, re.IGNORECASE
     )
     if m:
-        resultado['cargo_funcao'] = m.group(1).strip()
+        cargo = re.sub(r'\s+', ' ', m.group(1)).strip(' .,-')
+        cargo = re.sub(
+            r'\s+(?:e|conforme|de acordo com|nos termos|na forma)\s*$',
+            '', cargo, flags=re.IGNORECASE
+        )
+        resultado['cargo_funcao'] = cargo or None
 
-    # Local/posto de trabalho
-    m = re.search(
-        r'(?:local de trabalho|prestar[áa]?\s+(?:os\s+)?servi[çc]os?\s+(?:em|no|na))\s*:?\s*([A-Za-zÀ-ú0-9\s,./-]{3,80}?)\s*[,\.\n]',
-        texto, re.IGNORECASE
-    )
-    if m:
-        resultado['local_posto'] = m.group(1).strip()
+    # Local/posto de trabalho — normaliza "própria empresa/sede" vs. posto externo
+    local_posto, tipo_local, avisos_local = _resolver_local_posto(texto)
+    resultado['local_posto'] = local_posto
+    resultado['tipo_local'] = tipo_local
+    avisos_qualidade.extend(avisos_local)
 
-    # Salário
+    # Salário — aceita "1.234,56" (com centavos) ou valores inteiros sem centavos
     m = re.search(
-        r'(?:sal[áa]rio|remunera[çc][ãa]o)[^\d]{0,20}R?\$?\s*([\d.]+,\d{2})',
+        r'(?:sal[áa]rio|remunera[çc][ãa]o)[^\d]{0,30}R?\$?\s*([\d]{1,3}(?:\.\d{3})*,\d{2}|\d+(?:\.\d{3})*)',
         texto, re.IGNORECASE
     )
     if m:
-        resultado['salario'] = parse_br_float(m.group(1))
+        valor_str = m.group(1)
+        if ',' in valor_str:
+            resultado['salario'] = parse_br_float(valor_str)
+        else:
+            try:
+                resultado['salario'] = float(valor_str.replace('.', ''))
+            except ValueError:
+                resultado['salario'] = None
 
     # Jornada/escala
     m = re.search(
@@ -384,7 +464,7 @@ def extrair_dados_contrato(texto: str) -> dict:
     if m:
         resultado['jornada_escala'] = m.group(1).strip()
 
-    return resultado
+    return resultado, avisos_qualidade
 
 
 def construir_mapa_cpf(caminho_pdf: str) -> tuple[dict, int]:
@@ -974,6 +1054,13 @@ def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
 
 CAMPOS_CONTRATO_OBRIGATORIOS = ['nome_funcionario', 'cpf', 'data_admissao']
 
+# 'tipo_local' é metadado de classificação (sempre preenchido, mesmo que
+# "desconhecido") e não entra no cálculo de confiança da extração.
+CAMPOS_PARA_CONFIANCA = [
+    'nome_funcionario', 'cpf', 'data_admissao', 'cargo_funcao',
+    'local_posto', 'salario', 'jornada_escala', 'cnpj_empresa',
+]
+
 
 def _processar_contrato_stub(ctx, dry_run):
     """
@@ -984,7 +1071,7 @@ def _processar_contrato_stub(ctx, dry_run):
     altera Status, não cria Pendência nem pré-cadastro. O status do registro em
     "Processar Arquivos" é mantido como está (status_atual).
     """
-    dados = extrair_dados_contrato(ctx['texto'])
+    dados, avisos_qualidade = extrair_dados_contrato(ctx['texto'])
 
     cpf_num = re.sub(r'\D', '', dados['cpf'] or '')
 
@@ -998,8 +1085,8 @@ def _processar_contrato_stub(ctx, dry_run):
         campo for campo in CAMPOS_CONTRATO_OBRIGATORIOS if not dados.get(campo)
     ]
 
-    total_campos = len(dados)
-    preenchidos = sum(1 for v in dados.values() if v is not None)
+    total_campos = len(CAMPOS_PARA_CONFIANCA)
+    preenchidos = sum(1 for campo in CAMPOS_PARA_CONFIANCA if dados.get(campo) is not None)
     confianca = round(preenchidos / total_campos, 2) if total_campos else 0.0
 
     funcionario_existe = None
@@ -1011,6 +1098,11 @@ def _processar_contrato_stub(ctx, dry_run):
         proxima_acao = (
             'Revisão manual necessária — faltam campos obrigatórios '
             f'({", ".join(campos_faltantes)}) antes de considerar pré-cadastro (Fase 5C).'
+        )
+    elif avisos_qualidade:
+        proxima_acao = (
+            'Revisão manual recomendada — extração apresentou alertas de qualidade '
+            '(ver avisos_qualidade) antes de considerar pré-cadastro (Fase 5C).'
         )
     elif funcionario_existe:
         proxima_acao = (
@@ -1032,6 +1124,9 @@ def _processar_contrato_stub(ctx, dry_run):
             'arquivo_id': ctx['arquivo_id'],
             'nome_arquivo': ctx['nome_arquivo'],
             'dados_extraidos': dados,
+            'local_posto': dados['local_posto'],
+            'tipo_local': dados['tipo_local'],
+            'avisos_qualidade': avisos_qualidade,
             'validacao': validacao,
             'campos_faltantes': campos_faltantes,
             'confianca': confianca,
@@ -1069,7 +1164,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.11',
+        'versao': '2.12',
         'ram_mb': _mem_mb(),
     })
 
