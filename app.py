@@ -868,13 +868,37 @@ def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
     }
 
 
+def _processar_contrato_stub(ctx, dry_run):
+    """
+    Handler stub de Contrato de Experiência / Contrato de Trabalho (Fase 5A).
+
+    Apenas reconhece o documento como contrato — não extrai dados, não consulta
+    ou altera Funcionários, não cria pré-cadastro e não cria pendência. O status
+    do registro em "Processar Arquivos" é mantido como está (status_atual),
+    para não avançar nem retroceder o fluxo.
+    """
+    return {
+        'acao': 'contrato_reconhecido_sem_processar',
+        'status_final': ctx['status_atual'],
+        'detalhes': {
+            'tipo_documento': ctx['tipo_documento'],
+            'nome_arquivo': ctx['nome_arquivo'],
+            'observacao': (
+                'Fase 5A — documento reconhecido como contrato, mas ainda não '
+                'processado (sem extração de dados, sem alteração em Funcionários).'
+            ),
+        },
+        'pendencia': None,
+    }
+
+
 # Registro de handlers por tipo de documento (Fase 4).
 # None = ainda não implementado — /processar-fila retorna erro 400 para esses tipos.
 PROCESSADORES_DOCUMENTO = {
     'Holerite': _processar_holerite,
     'Folha de Ponto': None,
-    'Contrato de Experiência': None,
-    'Contrato de Trabalho': None,
+    'Contrato de Experiência': _processar_contrato_stub,
+    'Contrato de Trabalho': _processar_contrato_stub,
     'Férias': None,
     'FGTS': None,
     'Guia': None,
@@ -891,7 +915,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.8',
+        'versao': '2.9',
         'ram_mb': _mem_mb(),
     })
 
@@ -1702,6 +1726,8 @@ def processar_fila():
                 for pg in pdf_doc.pages:
                     texto += (pg.extract_text() or '') + '\n'
 
+            status_atual = (fields.get(F_PROC_STATUS) or {}).get('name', 'Processando')
+
             ctx = {
                 'proc_id': proc_id,
                 'arquivo_id': arquivo_id,
@@ -1712,6 +1738,8 @@ def processar_fila():
                 'folha_mensal': folha_mensal,
                 'mes_cont_id': mes_cont_id,
                 'data_holerite': data_holerite,
+                'tipo_documento': tipo_documento,
+                'status_atual': status_atual,
             }
 
             resultado_handler = handler(ctx, dry_run)
