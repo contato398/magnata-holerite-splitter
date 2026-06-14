@@ -101,9 +101,52 @@ def test_anexo_identico_nao_duplica(mock_busca, mock_get):
     print('OK: anexo idêntico já existente -> não duplica')
 
 
+CTX_CARTAO_PONTO = dict(CTX_BASE, texto=(
+    'CPF: ADMISSÃO:\n326.052.678-14\n'
+    'Período: 28/04/2026 até 28/05/2026\n'
+    '28/04/26 - Ter - C2 FOLGA FOLGA FOLGA FOLGA FOLGA FOLGA\n'
+    '29/04/26 - Qua - C1 18:56 01:00 01:53 09:05\n'
+))
+
+
+@patch('app._at_throttle', lambda: None)
+@patch('app.requests.get')
+@patch('app.buscar_funcionario_por_cpf', return_value=('recFUNC1', 'Fulano de Tal'))
+def test_atualiza_resumo_cartao_ponto_quando_ha_dias(mock_busca, mock_get):
+    mock_get.return_value = _resposta(200, {'fields': {app.F_FUNC_PDF_FOLHA: []}})
+
+    with patch('app._anexar_attachment', return_value={'id': 'attXXXX'}):
+        with patch('app._atualizar_resumo_ponto_funcionario') as mock_resumo:
+            resultado = app._processar_folha_ponto(CTX_CARTAO_PONTO, dry_run=False)
+
+    assert resultado['detalhes']['cartao_ponto_dias_extraidos'] == 2
+    mock_resumo.assert_called_once()
+    func_id_chamado, texto_resumo = mock_resumo.call_args[0]
+    assert func_id_chamado == 'recFUNC1'
+    assert 'FOLGA' in texto_resumo
+    assert '18:56' in texto_resumo
+    print('OK: dias extraídos do Cartão Ponto -> resumo atualizado no prontuário')
+
+
+@patch('app._at_throttle', lambda: None)
+@patch('app.requests.get')
+@patch('app.buscar_funcionario_por_cpf', return_value=('recFUNC1', 'Fulano de Tal'))
+def test_dry_run_nao_atualiza_resumo(mock_busca, mock_get):
+    mock_get.return_value = _resposta(200, {'fields': {app.F_FUNC_PDF_FOLHA: []}})
+
+    with patch('app._atualizar_resumo_ponto_funcionario') as mock_resumo:
+        resultado = app._processar_folha_ponto(CTX_CARTAO_PONTO, dry_run=True)
+
+    assert resultado['detalhes']['cartao_ponto_dias_extraidos'] == 2
+    mock_resumo.assert_not_called()
+    print('OK: dry_run não grava resumo do Cartão Ponto (apenas simula)')
+
+
 if __name__ == '__main__':
     test_funcionario_nao_encontrado_dry_run()
     test_funcionario_nao_encontrado_real()
     test_anexa_folha_ponto_novo_arquivo()
     test_anexo_identico_nao_duplica()
+    test_atualiza_resumo_cartao_ponto_quando_ha_dias()
+    test_dry_run_nao_atualiza_resumo()
     print('\nTodos os testes passaram.')

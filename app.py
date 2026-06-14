@@ -83,6 +83,7 @@ F_FUNC_CPF       = 'fld0Y3bXdArkSIJxo'
 F_FUNC_NOME      = 'fld2fSiomk9AOLGDb'   # Nome Completo
 F_FUNC_ADMISSAO  = 'fld5L1djmJugvLe8c'   # Data de Admissão
 F_FUNC_PDF_FOLHA = 'fldgBhXpEFmy20yxd'   # PDF Folha Ponto (prontuário)
+F_FUNC_RESUMO_PONTO = 'fldI6soHhol2CdQpP'  # Resumo Cartão Ponto (extraído)
 
 # ── Tabelas/Campos Fase 2 — Caixa de Entrada ─────────────────────────────────
 TABLE_EMAILS     = 'tblljRRrraXSipJd1'   # Emails Savian
@@ -255,6 +256,89 @@ def extrair_nome_funcionario(texto: str):
                     if nome_partes:
                         return ' '.join(nome_partes)
     return 'Desconhecido'
+
+
+# Linha de dia do "Cartão Ponto" (Secullum Ponto Web), ex.:
+#   "29/04/26 - Qua - C1 18:56 01:00 01:53 09:05"
+#   "28/04/26 - Ter - C2 FOLGA FOLGA FOLGA FOLGA FOLGA FOLGA"
+_LINHA_CARTAO_PONTO_RE = re.compile(
+    r'^(\d{2}/\d{2}/\d{2})\s*-\s*([A-Za-zÀ-ú]{3})\s*-\s*(C\d)\s+(.*)$'
+)
+_HORA_RE = re.compile(r'\d{2}:\d{2}')
+_PERIODO_CARTAO_PONTO_RE = re.compile(
+    r'Per[íi]odo:\s*(\d{2}/\d{2}/\d{4})\s*at[ée]\s*(\d{2}/\d{2}/\d{4})'
+)
+
+
+def extrair_cartao_ponto(texto: str) -> dict:
+    """
+    Fase 2 — Folha de Ponto / "Cartão Ponto" (ainda NÃO usado em produção).
+
+    Extrai os dias de um relatório "Cartão Ponto" (formato Secullum Ponto
+    Web, identificado a partir de PDF real). Cada dia aparece numa linha como:
+      "29/04/26 - Qua - C1 18:56 01:00 01:53 09:05"
+      "28/04/26 - Ter - C2 FOLGA FOLGA FOLGA FOLGA FOLGA FOLGA"
+
+    Retorna:
+      {
+        'cpf': '123.456.789-00' | None,
+        'periodo_inicio': 'dd/mm/aaaa' | None,
+        'periodo_fim': 'dd/mm/aaaa' | None,
+        'dias': [
+          {'data': 'dd/mm/aaaa', 'dia_semana': 'Qua', 'ciclo': 'C1',
+           'folga': False,
+           'entrada_1': 'HH:MM'|None, 'saida_1': 'HH:MM'|None,
+           'entrada_2': 'HH:MM'|None, 'saida_2': 'HH:MM'|None,
+           'entrada_3': 'HH:MM'|None, 'saida_3': 'HH:MM'|None},
+          ...
+        ],
+      }
+
+    Esta função é independente do restante do pipeline — precisa ser
+    revisada com mais exemplos (ex.: linhas com (*) batida manual, ('¨')
+    abono parcial, ('^') pré-assinalado) antes de ser usada em
+    _processar_folha_ponto.
+    """
+    cpf = extrair_cpf(texto)
+
+    periodo_inicio = periodo_fim = None
+    m = _PERIODO_CARTAO_PONTO_RE.search(texto)
+    if m:
+        periodo_inicio, periodo_fim = m.group(1), m.group(2)
+
+    dias = []
+    for linha in texto.split('\n'):
+        linha = linha.strip()
+        m = _LINHA_CARTAO_PONTO_RE.match(linha)
+        if not m:
+            continue
+        data_2dig, dia_semana, ciclo, resto = m.groups()
+        dia, mes, ano2 = data_2dig.split('/')
+        data = f'{dia}/{mes}/20{ano2}'
+
+        folga = 'FOLGA' in resto.upper()
+        horarios = [] if folga else _HORA_RE.findall(resto)
+        horarios = (horarios + [None] * 6)[:6]
+
+        dias.append({
+            'data': data,
+            'dia_semana': dia_semana,
+            'ciclo': ciclo,
+            'folga': folga,
+            'entrada_1': horarios[0],
+            'saida_1':   horarios[1],
+            'entrada_2': horarios[2],
+            'saida_2':   horarios[3],
+            'entrada_3': horarios[4],
+            'saida_3':   horarios[5],
+        })
+
+    return {
+        'cpf': cpf,
+        'periodo_inicio': periodo_inicio,
+        'periodo_fim': periodo_fim,
+        'dias': dias,
+    }
 
 
 def parse_br_float(s: str):
@@ -848,6 +932,38 @@ def _anexar_attachment(table_id: str, record_id: str, field_id: str,
         timeout=60,
     )
     _raise_for_airtable(r, f'attach {table_id}/{record_id}')
+    return r.json()
+
+
+def _formatar_resumo_cartao_ponto(dados: dict) -> str:
+    """Formata o retorno de extrair_cartao_ponto em texto legível para o
+    campo "Resumo Cartão Ponto (extraído)" em Funcionários."""
+    linhas = []
+    if dados['periodo_inicio'] and dados['periodo_fim']:
+        linhas.append(f'Período: {dados["periodo_inicio"]} até {dados["periodo_fim"]}')
+    for dia in dados['dias']:
+        cabecalho = f'{dia["data"]} ({dia["dia_semana"]}, {dia["ciclo"]})'
+        if dia['folga']:
+            linhas.append(f'{cabecalho}: FOLGA')
+            continue
+        horarios = ' '.join(
+            h for h in (dia['entrada_1'], dia['saida_1'], dia['entrada_2'],
+                         dia['saida_2'], dia['entrada_3'], dia['saida_3'])
+            if h
+        )
+        linhas.append(f'{cabecalho}: {horarios}' if horarios else f'{cabecalho}: (sem batidas)')
+    return '\n'.join(linhas)
+
+
+def _atualizar_resumo_ponto_funcionario(func_id: str, resumo_texto: str):
+    _at_throttle()
+    r = requests.patch(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
+        headers=_at_headers(),
+        json={'fields': {F_FUNC_RESUMO_PONTO: resumo_texto}, 'typecast': True},
+        timeout=15,
+    )
+    _raise_for_airtable(r, f'atualizar resumo cartão ponto {func_id}')
     return r.json()
 
 
@@ -1662,6 +1778,24 @@ def _processar_folha_ponto(ctx: dict, dry_run: bool) -> dict:
         'status_anexo': status_anexo,
     }
 
+    # Fase 2 — extrai período/dias do Cartão Ponto e atualiza o resumo no
+    # prontuário do funcionário (best-effort, não afeta status_final).
+    dados_cartao = extrair_cartao_ponto(texto)
+    detalhes['cartao_ponto_periodo_inicio'] = dados_cartao['periodo_inicio']
+    detalhes['cartao_ponto_periodo_fim'] = dados_cartao['periodo_fim']
+    detalhes['cartao_ponto_dias_extraidos'] = len(dados_cartao['dias'])
+
+    if not dry_run and dados_cartao['dias']:
+        try:
+            _atualizar_resumo_ponto_funcionario(
+                func_id, _formatar_resumo_cartao_ponto(dados_cartao),
+            )
+        except AirtableError as exc:
+            logger.warning(
+                f'[FILA] {ctx["proc_id"]}: falha ao atualizar resumo do Cartão '
+                f'Ponto de {func_id}: {exc}'
+            )
+
     if dry_run:
         acao = {
             'novo':     'anexaria_folha_ponto_ao_prontuario',
@@ -1786,7 +1920,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.21',
+        'versao': '2.22',
         'ram_mb': _mem_mb(),
     })
 
