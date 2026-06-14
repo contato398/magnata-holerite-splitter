@@ -26,6 +26,15 @@ var RENDER_URL = 'https://magnata-holerite-splitter.onrender.com/email/webhook';
 var LABEL_ENTRADA    = 'Documentos-Magnata';
 var LABEL_PROCESSADO = 'Processado-Render';
 
+// Caixa oficial de recebimento dos documentos (conta Gmail onde este script roda).
+var CAIXA_OFICIAL = 'contato@magnataservicos.com.br';
+
+// Remetente que envia a maioria/totalidade dos documentos (holerites, FGTS, etc.).
+// Usado como rede de segurança na busca: além de pegar e-mails já marcados com
+// LABEL_ENTRADA (via filtro do Gmail), também busca diretamente e-mails deste
+// remetente, mesmo que o filtro de label ainda não tenha sido configurado/ajustado.
+var REMETENTE_DOCUMENTOS = 'dpessoal.contabilidade1@hotmail.com';
+
 // Modo de teste: true = não grava nada no Airtable, apenas retorna o que faria
 var DRY_RUN = true;
 
@@ -53,7 +62,11 @@ function processarEmails() {
     return;
   }
 
-  var query = 'label:' + LABEL_ENTRADA + ' -label:' + LABEL_PROCESSADO;
+  // Busca por label (fluxo normal, via filtro do Gmail) OU diretamente pelo
+  // remetente oficial de documentos — garante captura mesmo se o filtro de
+  // label ainda não estiver aplicando LABEL_ENTRADA corretamente.
+  var query = '(label:' + LABEL_ENTRADA + ' OR from:' + REMETENTE_DOCUMENTOS + ') ' +
+              '-label:' + LABEL_PROCESSADO;
   var threads = GmailApp.search(query);
   Logger.log('Threads encontradas: ' + threads.length);
 
