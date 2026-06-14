@@ -74,6 +74,13 @@ F_HOL_DESCONTOS = 'fldRiNiS9Rqfjo5Hg'   # Total Descontos
 F_HOL_LIQUIDO   = 'fldnOzg7FcXxes2dm'   # Valor Líquido
 F_HOL_INSS      = 'fldvDY9x8dC0FCLrd'   # Descontos INSS
 
+# Funcionários — campos usados no pré-cadastro (Fase 5C)
+F_FUNC_STATUS    = 'fld5T04dlg1Yt6Xj8'
+F_FUNC_CARGO     = 'fldK1lJS1L4tbZVmZ'
+F_FUNC_CPF       = 'fld0Y3bXdArkSIJxo'
+F_FUNC_NOME      = 'fld2fSiomk9AOLGDb'   # Nome Completo
+F_FUNC_ADMISSAO  = 'fld5L1djmJugvLe8c'   # Data de Admissão
+
 # ── Tabelas/Campos Fase 2 — Caixa de Entrada ─────────────────────────────────
 TABLE_EMAILS     = 'tblljRRrraXSipJd1'   # Emails Savian
 TABLE_ARQUIVOS   = 'tblRsvhz8oOcUqhkv'   # Arquivos
@@ -1093,15 +1100,75 @@ CAMPOS_PARA_CONFIANCA = [
     'local_posto', 'salario', 'jornada_escala', 'cnpj_empresa',
 ]
 
+# Fase 5C — pré-cadastro seguro em Funcionários
+CONFIANCA_MINIMA_PRE_CADASTRO = 0.7
+
+# Campos do pré-cadastro: nome legível -> field ID em Funcionários.
+# Somente campos de escrita simples e já existentes no schema (nenhum campo novo).
+CAMPOS_FUNC_PRE_CADASTRO = {
+    'Nome Completo':    F_FUNC_NOME,
+    'CPF':              F_FUNC_CPF,
+    'Status':           F_FUNC_STATUS,
+    'Cargo':            F_FUNC_CARGO,
+    'Data de Admissão': F_FUNC_ADMISSAO,
+}
+
+
+def _data_br_para_iso(data_br):
+    """Converte 'DD/MM/AAAA' para 'AAAA-MM-DD' (formato aceito pelo campo date). None se inválido."""
+    if not data_br:
+        return None
+    try:
+        return datetime.strptime(data_br, '%d/%m/%Y').strftime('%Y-%m-%d')
+    except ValueError:
+        return None
+
+
+def _montar_campos_pre_cadastro(dados: dict) -> dict:
+    """
+    Monta os campos (nome legível -> valor) do pré-cadastro em Funcionários.
+
+    Inclui apenas campos mapeados e de escrita simples (Nome Completo, CPF,
+    Status="Pré-cadastro", Cargo, Data de Admissão). "Locais de trabalho" é um
+    vínculo para a tabela Locais e "Origem do cadastro/Contrato de origem" não
+    tem campo equivalente em Funcionários — nenhum dos dois é incluído aqui
+    (ver 'observacoes' no retorno do handler).
+    """
+    campos = {
+        'Nome Completo': dados['nome_funcionario'],
+        'CPF': dados['cpf'],
+        'Status': 'Pré-cadastro',
+    }
+    if dados.get('cargo_funcao'):
+        campos['Cargo'] = dados['cargo_funcao']
+    data_iso = _data_br_para_iso(dados.get('data_admissao'))
+    if data_iso:
+        campos['Data de Admissão'] = data_iso
+    return campos
+
+
+def _criar_pre_cadastro_funcionario(campos_legiveis: dict) -> str:
+    """Cria registro em Funcionários (Status="Pré-cadastro") a partir dos campos mapeados."""
+    campos_at = {
+        CAMPOS_FUNC_PRE_CADASTRO[nome]: valor
+        for nome, valor in campos_legiveis.items()
+        if nome in CAMPOS_FUNC_PRE_CADASTRO
+    }
+    return _criar_registro(TABLE_FUNC, campos_at)
+
 
 def _processar_contrato_stub(ctx, dry_run):
     """
-    Handler de Contrato de Experiência / Contrato de Trabalho (Fase 5B).
+    Handler de Contrato de Experiência / Contrato de Trabalho (Fase 5B + 5C).
 
-    Extrai dados do contrato e consulta (somente leitura) se o CPF já existe em
-    Funcionários, retornando tudo em 'detalhes'. Não grava nada no Airtable, não
-    altera Status, não cria Pendência nem pré-cadastro. O status do registro em
-    "Processar Arquivos" é mantido como está (status_atual).
+    Fase 5B: extrai dados do contrato e consulta (somente leitura) se o CPF já
+    existe em Funcionários.
+
+    Fase 5C: decide entre criar pré-cadastro em Funcionários (Status="Pré-cadastro"),
+    apontar "funcionário já existe" ou enviar para revisão (Pendência). Em
+    dry_run=true apenas simula (nada gravado). Em dry_run=false executa a ação
+    decidida. Nunca altera Status/cargo/local/etc. de um funcionário já existente
+    — nesse caso apenas compara e reporta.
     """
     dados, avisos_qualidade = extrair_dados_contrato(ctx['texto'])
 
@@ -1127,54 +1194,135 @@ def _processar_contrato_stub(ctx, dry_run):
     confianca = round(max(0.0, confianca - 0.1 * len(avisos_qualidade)), 2)
 
     funcionario_existe = None
+    nome_existente = None
     if dados['cpf']:
-        func_id, _nome_existente = buscar_funcionario_por_cpf(dados['cpf'])
+        func_id, nome_existente = buscar_funcionario_por_cpf(dados['cpf'])
         funcionario_existe = func_id is not None
 
+    # ── Fase 5C — decisão de pré-cadastro / revisão ──────────────────────────
+    divergencia = None
+    if funcionario_existe and dados['nome_funcionario'] and nome_existente:
+        if dados['nome_funcionario'].strip().upper() != nome_existente.strip().upper():
+            divergencia = (
+                f'Nome do contrato ("{dados["nome_funcionario"]}") difere do '
+                f'cadastro existente em Funcionários ("{nome_existente}") para o mesmo CPF.'
+            )
+
     if campos_faltantes:
-        proxima_acao = (
-            'Revisão manual necessária — faltam campos obrigatórios '
-            f'({", ".join(campos_faltantes)}) antes de considerar pré-cadastro (Fase 5C).'
+        decisao_5c = 'enviar_para_revisao'
+        motivo_decisao = (
+            f'Campos obrigatórios faltando: {", ".join(campos_faltantes)}.'
         )
+    elif not validacao['cpf_valido']:
+        decisao_5c = 'enviar_para_revisao'
+        motivo_decisao = 'CPF inválido (dígitos verificadores não conferem).'
     elif avisos_qualidade:
-        proxima_acao = (
-            'Revisão manual recomendada — extração apresentou alertas de qualidade '
-            '(ver avisos_qualidade) antes de considerar pré-cadastro (Fase 5C).'
+        decisao_5c = 'enviar_para_revisao'
+        motivo_decisao = 'Avisos de qualidade na extração: ' + '; '.join(avisos_qualidade)
+    elif dados['tipo_local'] == 'desconhecido':
+        decisao_5c = 'enviar_para_revisao'
+        motivo_decisao = 'Local de trabalho não identificado (tipo_local="desconhecido").'
+    elif confianca < CONFIANCA_MINIMA_PRE_CADASTRO:
+        decisao_5c = 'enviar_para_revisao'
+        motivo_decisao = (
+            f'Confiança da extração ({confianca}) abaixo do mínimo '
+            f'({CONFIANCA_MINIMA_PRE_CADASTRO}) para automação.'
         )
     elif funcionario_existe:
-        proxima_acao = (
-            'Funcionário já cadastrado em Funcionários (mesmo CPF) — '
-            'Fase 5C não criaria novo registro, apenas reportaria.'
-        )
+        if divergencia:
+            decisao_5c = 'enviar_para_revisao'
+            motivo_decisao = divergencia
+        else:
+            decisao_5c = 'funcionario_ja_existe'
+            motivo_decisao = (
+                'CPF já cadastrado em Funcionários e dados compatíveis — '
+                'nenhuma ação necessária.'
+            )
     else:
-        proxima_acao = (
-            'Candidato a pré-cadastro em Funcionários na Fase 5C '
-            '(ainda não implementada — nenhuma ação tomada agora).'
+        decisao_5c = 'criar_pre_cadastro'
+        motivo_decisao = (
+            'CPF válido, nome e admissão presentes, sem avisos de qualidade, '
+            'local identificado (inclusive "Magnata / Sede") e confiança '
+            f'>= {CONFIANCA_MINIMA_PRE_CADASTRO} — apto para pré-cadastro automático.'
         )
+
+    origem_contrato = (
+        f'Contrato: {ctx["tipo_documento"]}, arquivo "{ctx["nome_arquivo"]}" '
+        f'(Processar Arquivos: {ctx["proc_id"]}, Arquivo: {ctx["arquivo_id"]}).'
+    )
+
+    pre_cadastro_simulado = None
+    pre_cadastro_id = None
+    pendencia_simulada = None
+
+    if decisao_5c == 'criar_pre_cadastro':
+        campos_pre_cadastro = _montar_campos_pre_cadastro(dados)
+        observacoes = []
+        if dados['local_posto']:
+            observacoes.append(
+                f'Local/Posto sugerido: "{dados["local_posto"]}" '
+                f'(tipo_local={dados["tipo_local"]}) — campo "Locais de trabalho" é um '
+                'vínculo para a tabela Locais e não é preenchido automaticamente; '
+                'requer associação manual.'
+            )
+        observacoes.append(
+            origem_contrato + ' Não há campo "Origem do cadastro"/"Contrato de origem" '
+            'mapeado em Funcionários — referência mantida apenas neste relatório.'
+        )
+        pre_cadastro_simulado = {
+            'campos': campos_pre_cadastro,
+            'observacoes': observacoes,
+        }
+        if not dry_run:
+            pre_cadastro_id = _criar_pre_cadastro_funcionario(campos_pre_cadastro)
+
+    elif decisao_5c == 'enviar_para_revisao':
+        partes_obs = [motivo_decisao]
+        if dados['local_posto']:
+            partes_obs.append(
+                f'Local/Posto identificado: "{dados["local_posto"]}" (tipo_local={dados["tipo_local"]}).'
+            )
+        partes_obs.append(origem_contrato)
+        pendencia_simulada = {
+            'tipo': 'Contrato — revisão Fase 5C',
+            'observacao': ' '.join(partes_obs),
+        }
+
+    proxima_acao = motivo_decisao
+
+    detalhes = {
+        'tipo_documento': ctx['tipo_documento'],
+        'record_id': ctx['proc_id'],
+        'arquivo_id': ctx['arquivo_id'],
+        'nome_arquivo': ctx['nome_arquivo'],
+        'dados_extraidos': dados,
+        'local_posto': dados['local_posto'],
+        'tipo_local': dados['tipo_local'],
+        'avisos_qualidade': avisos_qualidade,
+        'validacao': validacao,
+        'campos_faltantes': campos_faltantes,
+        'confianca': confianca,
+        'funcionario_existe_em_funcionarios': funcionario_existe,
+        'decisao_5c': decisao_5c,
+        'pre_cadastro_simulado': pre_cadastro_simulado,
+        'pre_cadastro_id': pre_cadastro_id,
+        'pendencia_simulada': pendencia_simulada,
+        'proxima_acao_sugerida': proxima_acao,
+        'observacao': (
+            'Fase 5B/5C. Em dry_run=true nada é gravado — "pre_cadastro_simulado" e '
+            '"pendencia_simulada" mostram o que seria feito. Em dry_run=false, '
+            'pré-cadastro (Status="Pré-cadastro") ou Pendência são criados conforme '
+            '"decisao_5c". Funcionário existente nunca é sobrescrito.'
+        ),
+    }
+
+    pendencia_retorno = pendencia_simulada if decisao_5c == 'enviar_para_revisao' else None
 
     return {
         'acao': 'contrato_extraido_sem_gravar',
         'status_final': ctx['status_atual'],
-        'detalhes': {
-            'tipo_documento': ctx['tipo_documento'],
-            'record_id': ctx['proc_id'],
-            'arquivo_id': ctx['arquivo_id'],
-            'nome_arquivo': ctx['nome_arquivo'],
-            'dados_extraidos': dados,
-            'local_posto': dados['local_posto'],
-            'tipo_local': dados['tipo_local'],
-            'avisos_qualidade': avisos_qualidade,
-            'validacao': validacao,
-            'campos_faltantes': campos_faltantes,
-            'confianca': confianca,
-            'funcionario_existe_em_funcionarios': funcionario_existe,
-            'proxima_acao_sugerida': proxima_acao,
-            'observacao': (
-                'Fase 5B — extração em dry_run/leitura. Nenhuma escrita em '
-                'Funcionários, Pendências, Arquivos ou Processar Arquivos.'
-            ),
-        },
-        'pendencia': None,
+        'detalhes': detalhes,
+        'pendencia': pendencia_retorno,
     }
 
 
@@ -1201,7 +1349,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.14',
+        'versao': '2.15',
         'ram_mb': _mem_mb(),
     })
 
