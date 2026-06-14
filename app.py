@@ -18,6 +18,7 @@ import base64
 import hashlib
 import logging
 import requests
+from collections import Counter
 from calendar import monthrange
 from datetime import datetime
 from flask import Flask, request, jsonify
@@ -86,6 +87,11 @@ TABLE_EMAILS     = 'tblljRRrraXSipJd1'   # Emails Savian
 TABLE_ARQUIVOS   = 'tblRsvhz8oOcUqhkv'   # Arquivos
 TABLE_PROCESSAR  = 'tblXaLXvGJMyFOayc'   # Processar Arquivos
 TABLE_PENDENCIAS = 'tblRkJBL6Wwf4fxVC'   # Pendências/Revisar
+
+# ── Tabelas — Diagnóstico de Distribuição (read-only) ────────────────────────
+TABLE_LOCAIS    = 'tblZy1WfzmGIeR8ZP'   # Locais
+TABLE_CLIENTES  = 'tbl0znyuCEzoCHtCV'   # Clientes
+TABLE_ENVIOS    = 'tblAu4wgdfTgLOoa4'   # Envios de Documentos
 
 # Emails Savian
 F_EMAIL_NAME     = 'fldwKHHiVVEKySwx4'
@@ -1502,7 +1508,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.18',
+        'versao': '2.19',
         'ram_mb': _mem_mb(),
     })
 
@@ -2371,6 +2377,256 @@ def processar_fila():
 
         resultado['processados'].append(item)
 
+    return jsonify(resultado)
+
+
+# ── Diagnóstico de Distribuição (read-only) ──────────────────────────────────
+
+def _at_listar_todos(table_id, field_names=None, filter_formula=None):
+    """Lista TODOS os registros de uma tabela (paginação via offset). Somente leitura."""
+    registros = []
+    params = {}
+    if field_names:
+        params['fields[]'] = field_names
+    if filter_formula:
+        params['filterByFormula'] = filter_formula
+    offset = None
+    while True:
+        if offset:
+            params['offset'] = offset
+        _at_throttle()
+        r = requests.get(
+            f'https://api.airtable.com/v0/{BASE_ID}/{table_id}',
+            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            params=params,
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()
+        registros.extend(data.get('records', []))
+        offset = data.get('offset')
+        if not offset:
+            break
+    return registros
+
+
+def _diagnostico_holerites(folha_mensal=None, limit=None):
+    """
+    Diagnóstico read-only: classifica cada Holerite existente em
+    'pronto_whatsapp_colaborador', 'pronto_pacote_cliente', 'pronto_ambos'
+    ou 'pendente', conforme a diretriz de Distribuição Mensal de Documentos.
+
+    Nenhuma escrita é feita — apenas leitura em Holerites, Funcionários,
+    Locais e Clientes.
+    """
+    clientes = {
+        rec['id']: {
+            'nome': rec['fields'].get('Nome', ''),
+            'email': rec['fields'].get('Email'),
+        }
+        for rec in _at_listar_todos(TABLE_CLIENTES, ['Nome', 'Email'])
+    }
+
+    locais = {
+        rec['id']: {
+            'nome': rec['fields'].get('Nome', ''),
+            'cliente_ids': rec['fields'].get('Cliente', []),
+        }
+        for rec in _at_listar_todos(TABLE_LOCAIS, ['Nome', 'Cliente'])
+    }
+
+    funcionarios = {
+        rec['id']: {
+            'nome': rec['fields'].get('Nome Completo', ''),
+            'whatsapp': rec['fields'].get('WhatsApp'),
+            'locais_ids': rec['fields'].get('Locais de trabalho', []),
+        }
+        for rec in _at_listar_todos(TABLE_FUNC, ['Nome Completo', 'WhatsApp', 'Locais de trabalho'])
+    }
+
+    filtro = f'{{Folha Mensal}}="{folha_mensal}"' if folha_mensal else None
+    holerite_fields = [
+        'Holerite', 'Status', 'Funcionário', 'Data', 'Folha Mensal',
+        'PDF HOLERITE', 'Envios de Documentos',
+    ]
+    holerites = _at_listar_todos(TABLE_HOL, holerite_fields, filtro)
+    if limit:
+        holerites = holerites[:limit]
+
+    contagem = {
+        'pronto_whatsapp_colaborador': 0,
+        'pronto_pacote_cliente': 0,
+        'pronto_ambos': 0,
+        'pendente': 0,
+    }
+    motivos_pendencia = Counter()
+    exemplos_prontos = []
+    exemplos_pendentes = []
+    com_envio_vinculado = 0
+    sem_envio_vinculado = 0
+
+    for rec in holerites:
+        f = rec['fields']
+        func_ids = f.get('Funcionário', []) or []
+        func = funcionarios.get(func_ids[0]) if func_ids else None
+
+        whatsapp = func.get('whatsapp') if func else None
+        arquivo_ok = bool(f.get('PDF HOLERITE'))
+        folha_ok = bool(f.get('Folha Mensal'))
+
+        cliente_ids = set()
+        if func:
+            for local_id in func.get('locais_ids', []) or []:
+                local = locais.get(local_id)
+                if local:
+                    cliente_ids.update(local.get('cliente_ids', []) or [])
+
+        cliente_email = None
+        cliente_nome = None
+        if cliente_ids:
+            primeiro = clientes.get(next(iter(cliente_ids)))
+            if primeiro:
+                cliente_nome = primeiro.get('nome')
+                cliente_email = primeiro.get('email')
+
+        motivos = []
+        if not func_ids:
+            motivos.append('funcionario_nao_identificado')
+        if not whatsapp:
+            motivos.append('whatsapp_ausente')
+        if not arquivo_ok:
+            motivos.append('arquivo_holerite_ausente')
+        if not folha_ok:
+            motivos.append('folha_mensal_ausente')
+        if not cliente_ids:
+            motivos.append('cliente_local_nao_identificado')
+        elif not cliente_email:
+            motivos.append('email_cliente_ausente')
+
+        ok_whatsapp = (
+            func_ids and whatsapp and arquivo_ok and folha_ok
+        )
+        ok_cliente = (
+            cliente_ids and cliente_email and arquivo_ok and folha_ok
+        )
+
+        if ok_whatsapp and ok_cliente:
+            situacao = 'pronto_ambos'
+        elif ok_whatsapp:
+            situacao = 'pronto_whatsapp_colaborador'
+        elif ok_cliente:
+            situacao = 'pronto_pacote_cliente'
+        else:
+            situacao = 'pendente'
+            motivos_pendencia.update(motivos)
+
+        contagem[situacao] += 1
+
+        envios = f.get('Envios de Documentos', []) or []
+        if envios:
+            com_envio_vinculado += 1
+        else:
+            sem_envio_vinculado += 1
+
+        exemplo = {
+            'record_id': rec['id'],
+            'holerite': f.get('Holerite'),
+            'funcionario': func.get('nome') if func else None,
+            'whatsapp': whatsapp,
+            'cliente': cliente_nome,
+            'email_cliente': cliente_email,
+            'folha_mensal': f.get('Folha Mensal'),
+            'situacao': situacao,
+            'motivos': motivos or None,
+        }
+        if situacao == 'pendente':
+            if len(exemplos_pendentes) < 5:
+                exemplos_pendentes.append(exemplo)
+        else:
+            if len(exemplos_prontos) < 5:
+                exemplos_prontos.append(exemplo)
+
+    return {
+        'total_holerites_analisados': len(holerites),
+        'contagem': contagem,
+        'principais_motivos_pendencia': motivos_pendencia.most_common(),
+        'exemplos_prontos': exemplos_prontos,
+        'exemplos_pendentes': exemplos_pendentes,
+        'campos_tabelas_usados': {
+            'Holerites': holerite_fields,
+            'Funcionários': ['Nome Completo', 'WhatsApp', 'Locais de trabalho'],
+            'Locais': ['Nome', 'Cliente'],
+            'Clientes': ['Nome', 'Email'],
+        },
+        'campos_faltando_para_destravar': [
+            'WhatsApp ausente em Funcionários' if motivos_pendencia.get('whatsapp_ausente') else None,
+            'Cliente/Local não identificado a partir de Funcionários->Locais de trabalho->Cliente'
+                if motivos_pendencia.get('cliente_local_nao_identificado') else None,
+            'Email ausente em Clientes' if motivos_pendencia.get('email_cliente_ausente') else None,
+            'Holerite sem Funcionário vinculado' if motivos_pendencia.get('funcionario_nao_identificado') else None,
+            'Holerite sem PDF anexado' if motivos_pendencia.get('arquivo_holerite_ausente') else None,
+            'Holerite sem Folha Mensal preenchida' if motivos_pendencia.get('folha_mensal_ausente') else None,
+        ],
+        'investigacao_tela_enviar_holerites': {
+            'tabela_provavel': (
+                f'Envios de Documentos ({TABLE_ENVIOS}) — possui campos Status, Tipo, '
+                'Canal, Enviar (checkbox), Holerites (link), Email, Destinatário, Erro, '
+                'ID da Mensagem, Tentativa, consistentes com uma fila de despacho.'
+            ),
+            'holerites_com_envio_vinculado': com_envio_vinculado,
+            'holerites_sem_envio_vinculado': sem_envio_vinculado,
+            'hipotese': (
+                'A tela "Enviar Holerites" provavelmente lista registros da tabela '
+                '"Envios de Documentos" (filtrados por Tipo/Status), não os Holerites '
+                'diretamente. Holerites já existentes que nunca tiveram um registro '
+                'correspondente criado em "Envios de Documentos" não apareceriam na '
+                'tela, mesmo estando prontos.'
+            ),
+            'limitacoes': (
+                'Esta API não tem acesso a automações, botões, views/filtros do '
+                'Airtable nem a configurações de Make/Apps Script/Gmail — a hipótese '
+                'acima é inferida apenas a partir do schema de dados (somente leitura). '
+                'Confirmação definitiva requer inspeção manual da view/automação na '
+                'interface do Airtable.'
+            ),
+        },
+        'observacao': (
+            'Diagnóstico 100% somente leitura. Nenhum WhatsApp ou e-mail foi enviado, '
+            'nenhum registro foi criado/alterado em Holerites, Funcionários, Clientes, '
+            'Locais, Envios de Documentos ou Pendências/Revisar.'
+        ),
+    }
+
+
+@app.route('/diagnostico-holerites', methods=['GET', 'OPTIONS'])
+def diagnostico_holerites():
+    """
+    Diagnóstico read-only dos Holerites existentes (Distribuição Mensal de
+    Documentos — menor próximo passo seguro). Não envia WhatsApp/e-mail, não
+    altera nada no Airtable.
+
+    Query params opcionais:
+      - folha_mensal: filtra Holerites por "Folha Mensal" (ex.: "Maio 2026")
+      - limit: limita a quantidade de Holerites analisados
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    folha_mensal = request.args.get('folha_mensal')
+    limit = request.args.get('limit')
+    try:
+        limit = int(limit) if limit else None
+    except ValueError:
+        limit = None
+
+    resultado = _diagnostico_holerites(folha_mensal=folha_mensal, limit=limit)
     return jsonify(resultado)
 
 
