@@ -1100,8 +1100,26 @@ CAMPOS_PARA_CONFIANCA = [
     'local_posto', 'salario', 'jornada_escala', 'cnpj_empresa',
 ]
 
-# Fase 5C — pré-cadastro seguro em Funcionários
-CONFIANCA_MINIMA_PRE_CADASTRO = 0.7
+# ── Padrão genérico de decisão (reaproveitável para outros documentos) ──────
+#
+# Toda decisão automática de um handler de documento se encaixa em uma destas
+# 4 categorias:
+#   - executar_automaticamente          -> ação principal sem revisão humana
+#   - executar_com_status_intermediario -> registro/ação em estado de transição
+#   - enviar_para_revisao               -> Pendência, humano decide
+#   - ignorar_documento                 -> documento não aplicável a este fluxo
+#
+# Para contratos (Fase 5C) esse padrão se traduz em 'decisao_5c':
+#   executar_automaticamente          -> cadastrar_ativo_automaticamente
+#   executar_com_status_intermediario -> criar_pre_cadastro_seguro
+#   enviar_para_revisao               -> enviar_para_revisao
+#   (caso particular "nenhuma ação necessária")
+#                                      -> funcionario_ja_existente
+#   ignorar_documento                 -> não usado nesta fase (reservado)
+
+# Fase 5C — pré-cadastro/cadastro automático seguro em Funcionários
+CONFIANCA_MINIMA_PRE_CADASTRO = 0.70   # abaixo disso -> enviar_para_revisao
+CONFIANCA_ATIVO_AUTOMATICO = 0.85      # acima/igual -> cadastrar_ativo_automaticamente
 
 # Campos do pré-cadastro: nome legível -> field ID em Funcionários.
 # Somente campos de escrita simples e já existentes no schema (nenhum campo novo).
@@ -1112,6 +1130,29 @@ CAMPOS_FUNC_PRE_CADASTRO = {
     'Cargo':            F_FUNC_CARGO,
     'Data de Admissão': F_FUNC_ADMISSAO,
 }
+
+# Termos cujo aparecimento no nome extraído indicam resíduo de texto do
+# contrato (regex capturou além do nome) — usados por _nome_suspeito().
+_TERMOS_NOME_SUSPEITO = (
+    'PORTADOR', 'PORTADORA', 'CARTEIRA', 'CTPS', 'RESIDENTE',
+    'DORAVANTE', 'CONTRATO', 'CONTRATAD', 'EMPREGAD', 'EMPRESA',
+)
+
+
+def _nome_suspeito(nome):
+    """
+    Heurística para 'nome suspeito': vazio, muito curto, contendo dígitos
+    ou termos residuais de contrato (sinal de captura incorreta pela regex).
+    """
+    if not nome:
+        return True
+    nome = nome.strip()
+    if len(nome) < 5:
+        return True
+    if re.search(r'\d', nome):
+        return True
+    nome_upper = nome.upper()
+    return any(termo in nome_upper for termo in _TERMOS_NOME_SUSPEITO)
 
 
 def _data_br_para_iso(data_br):
@@ -1124,20 +1165,23 @@ def _data_br_para_iso(data_br):
         return None
 
 
-def _montar_campos_pre_cadastro(dados: dict) -> dict:
+def _montar_campos_pre_cadastro(dados: dict, status: str) -> dict:
     """
-    Monta os campos (nome legível -> valor) do pré-cadastro em Funcionários.
+    Monta os campos (nome legível -> valor) do cadastro em Funcionários.
+
+    'status' é "Ativo" (cadastrar_ativo_automaticamente) ou "Pré-cadastro"
+    (criar_pre_cadastro_seguro), conforme decidido em _processar_contrato_stub.
 
     Inclui apenas campos mapeados e de escrita simples (Nome Completo, CPF,
-    Status="Ativo", Cargo, Data de Admissão). "Locais de trabalho" é um
-    vínculo para a tabela Locais e "Origem do cadastro/Contrato de origem" não
-    tem campo equivalente em Funcionários — nenhum dos dois é incluído aqui
+    Status, Cargo, Data de Admissão). "Locais de trabalho" é um vínculo para
+    a tabela Locais e "Origem do cadastro/Contrato de origem" não tem campo
+    equivalente em Funcionários — nenhum dos dois é incluído aqui
     (ver 'observacoes' no retorno do handler).
     """
     campos = {
         'Nome Completo': dados['nome_funcionario'],
         'CPF': dados['cpf'],
-        'Status': 'Ativo',
+        'Status': status,
     }
     if dados.get('cargo_funcao'):
         campos['Cargo'] = dados['cargo_funcao']
@@ -1148,7 +1192,7 @@ def _montar_campos_pre_cadastro(dados: dict) -> dict:
 
 
 def _criar_pre_cadastro_funcionario(campos_legiveis: dict) -> str:
-    """Cria registro em Funcionários (Status="Pré-cadastro") a partir dos campos mapeados."""
+    """Cria registro em Funcionários a partir dos campos mapeados (Status="Ativo" ou "Pré-cadastro")."""
     campos_at = {
         CAMPOS_FUNC_PRE_CADASTRO[nome]: valor
         for nome, valor in campos_legiveis.items()
@@ -1164,10 +1208,12 @@ def _processar_contrato_stub(ctx, dry_run):
     Fase 5B: extrai dados do contrato e consulta (somente leitura) se o CPF já
     existe em Funcionários.
 
-    Fase 5C: decide entre criar pré-cadastro em Funcionários (Status="Pré-cadastro"),
-    apontar "funcionário já existe" ou enviar para revisão (Pendência). Em
-    dry_run=true apenas simula (nada gravado). Em dry_run=false executa a ação
-    decidida. Nunca altera Status/cargo/local/etc. de um funcionário já existente
+    Fase 5C: decisao_5c (padrão genérico reaproveitável — ver comentário acima de
+    CONFIANCA_MINIMA_PRE_CADASTRO) ∈ {cadastrar_ativo_automaticamente,
+    criar_pre_cadastro_seguro, funcionario_ja_existente, enviar_para_revisao}.
+    Em dry_run=true apenas simula (nada gravado). Em dry_run=false executa a ação
+    decidida — cria em Funcionários com Status="Ativo" ou "Pré-cadastro", ou cria
+    Pendência. Nunca altera Status/cargo/local/etc. de um funcionário já existente
     — nesse caso apenas compara e reporta.
     """
     dados, avisos_qualidade = extrair_dados_contrato(ctx['texto'])
@@ -1208,6 +1254,8 @@ def _processar_contrato_stub(ctx, dry_run):
                 f'cadastro existente em Funcionários ("{nome_existente}") para o mesmo CPF.'
             )
 
+    nome_suspeito = _nome_suspeito(dados['nome_funcionario'])
+
     if campos_faltantes:
         decisao_5c = 'enviar_para_revisao'
         motivo_decisao = (
@@ -1216,6 +1264,9 @@ def _processar_contrato_stub(ctx, dry_run):
     elif not validacao['cpf_valido']:
         decisao_5c = 'enviar_para_revisao'
         motivo_decisao = 'CPF inválido (dígitos verificadores não conferem).'
+    elif nome_suspeito:
+        decisao_5c = 'enviar_para_revisao'
+        motivo_decisao = f'Nome do funcionário ausente ou suspeito: "{dados["nome_funcionario"]}".'
     elif avisos_qualidade:
         decisao_5c = 'enviar_para_revisao'
         motivo_decisao = 'Avisos de qualidade na extração: ' + '; '.join(avisos_qualidade)
@@ -1233,17 +1284,26 @@ def _processar_contrato_stub(ctx, dry_run):
             decisao_5c = 'enviar_para_revisao'
             motivo_decisao = divergencia
         else:
-            decisao_5c = 'funcionario_ja_existe'
+            decisao_5c = 'funcionario_ja_existente'
             motivo_decisao = (
                 'CPF já cadastrado em Funcionários e dados compatíveis — '
                 'nenhuma ação necessária.'
             )
-    else:
-        decisao_5c = 'criar_pre_cadastro'
+    elif confianca >= CONFIANCA_ATIVO_AUTOMATICO:
+        decisao_5c = 'cadastrar_ativo_automaticamente'
         motivo_decisao = (
-            'CPF válido, nome e admissão presentes, sem avisos de qualidade, '
-            'local identificado (inclusive "Magnata / Sede") e confiança '
-            f'>= {CONFIANCA_MINIMA_PRE_CADASTRO} — apto para pré-cadastro automático.'
+            'CPF novo e válido, nome e admissão presentes, sem avisos de '
+            'qualidade, local identificado (inclusive "Magnata / Sede") e '
+            f'confiança {confianca} >= {CONFIANCA_ATIVO_AUTOMATICO} — apto '
+            'para cadastro ativo automático.'
+        )
+    else:
+        decisao_5c = 'criar_pre_cadastro_seguro'
+        motivo_decisao = (
+            'Dados essenciais válidos e CPF novo, mas confiança '
+            f'{confianca} entre {CONFIANCA_MINIMA_PRE_CADASTRO} e '
+            f'{CONFIANCA_ATIVO_AUTOMATICO} — criado como pré-cadastro '
+            '(estado intermediário de segurança).'
         )
 
     origem_contrato = (
@@ -1255,8 +1315,9 @@ def _processar_contrato_stub(ctx, dry_run):
     pre_cadastro_id = None
     pendencia_simulada = None
 
-    if decisao_5c == 'criar_pre_cadastro':
-        campos_pre_cadastro = _montar_campos_pre_cadastro(dados)
+    if decisao_5c in ('cadastrar_ativo_automaticamente', 'criar_pre_cadastro_seguro'):
+        status_destino = 'Ativo' if decisao_5c == 'cadastrar_ativo_automaticamente' else 'Pré-cadastro'
+        campos_pre_cadastro = _montar_campos_pre_cadastro(dados, status_destino)
         observacoes = []
         if dados['local_posto']:
             observacoes.append(
@@ -1311,8 +1372,10 @@ def _processar_contrato_stub(ctx, dry_run):
         'observacao': (
             'Fase 5B/5C. Em dry_run=true nada é gravado — "pre_cadastro_simulado" e '
             '"pendencia_simulada" mostram o que seria feito. Em dry_run=false, '
-            'pré-cadastro (Status="Pré-cadastro") ou Pendência são criados conforme '
-            '"decisao_5c". Funcionário existente nunca é sobrescrito.'
+            'conforme "decisao_5c": cadastrar_ativo_automaticamente cria em '
+            'Funcionários com Status="Ativo"; criar_pre_cadastro_seguro cria com '
+            'Status="Pré-cadastro"; enviar_para_revisao cria Pendência. '
+            'Funcionário existente nunca é sobrescrito.'
         ),
     }
 
@@ -1349,7 +1412,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.16',
+        'versao': '2.17',
         'ram_mb': _mem_mb(),
     })
 
