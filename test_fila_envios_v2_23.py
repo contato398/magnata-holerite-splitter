@@ -508,6 +508,77 @@ def test_classificar_holerite_nao_regrediu():
     print('OK: Holerite continua classificando como Holerite')
 
 
+# ── _disparar_fila_combinado (v2.28 — Evolution API) ──────────────────────────
+
+ENVIO_COMB = {'id': 'recENV1', 'fields': {
+    'Tipo': app.TIPO_ENVIO_COMBINADO,
+    'Status': 'Preparando',
+    'Canal': 'WhatsApp',
+    'Destinatário': '5515999998888',
+    'Arquivos': [
+        {'url': 'https://x/hol.pdf', 'filename': 'hol.pdf'},
+        {'url': 'https://x/ponto.pdf', 'filename': 'ponto.pdf'},
+    ],
+    'Funcionário(s) Vinculado(s)': [{'id': 'recF', 'name': 'FULANO DE TAL'}],
+}}
+
+
+def test_normalizar_numero_evolution():
+    assert app._normalizar_numero_evolution('15 99830-0552') == '5515998300552'
+    assert app._normalizar_numero_evolution('5515997061802') == '5515997061802'
+    assert app._normalizar_numero_evolution('011992101916') == '5511992101916'
+    assert app._normalizar_numero_evolution('') is None
+    print('OK: número normalizado para o formato Evolution (55+DDD+número)')
+
+
+@patch('app._at_listar_todos', return_value=[ENVIO_COMB])
+def test_disparar_dry_run(mock_listar):
+    res = app._disparar_fila_combinado(dry_run=True)
+    assert res['dry_run'] is True
+    assert res['total_enviados'] == 1
+    assert res['enviados'][0]['acao'] == 'enviaria'
+    assert res['enviados'][0]['destinatario'] == '5515999998888'
+    print('OK: disparo dry_run lista 1 envio sem mandar nada')
+
+
+@patch('app.AIRTABLE_API_KEY', 'fake-key')
+@patch('app.EVOLUTION_API_KEY', 'fake-evo-key')
+@patch('app._at_throttle', lambda: None)
+@patch('app.requests.patch')
+@patch('app.requests.post')
+@patch('app._at_listar_todos', return_value=[ENVIO_COMB])
+def test_disparar_envio_real_com_numero_teste(mock_listar, mock_post, mock_patch):
+    mock_post.return_value = _resposta(200, {'key': {'id': 'msg1'}})
+    mock_patch.return_value = _resposta(200, {'id': 'recENV1'})
+
+    res = app._disparar_fila_combinado(dry_run=False, numero_teste='5511777776666')
+
+    assert res['total_enviados'] == 1
+    assert res['total_falhas'] == 0
+    # 2 PDFs enviados via Evolution
+    assert mock_post.call_count == 2
+    # todos para o número de teste, como documento
+    for chamada in mock_post.call_args_list:
+        _, kwargs = chamada
+        assert kwargs['json']['number'] == '5511777776666'
+        assert kwargs['json']['mediatype'] == 'document'
+    # 1º documento leva legenda; 2º não
+    assert 'caption' in mock_post.call_args_list[0][1]['json']
+    assert 'caption' not in mock_post.call_args_list[1][1]['json']
+    # marcou Enviado
+    _, kwargs_patch = mock_patch.call_args
+    assert kwargs_patch['json']['fields'][app.F_ENVIO_STATUS] == 'Enviado'
+    print('OK: disparo real envia 2 PDFs pela Evolution e marca "Enviado" (com número de teste)')
+
+
+@patch('app.EVOLUTION_API_KEY', '')
+@patch('app._at_listar_todos', return_value=[ENVIO_COMB])
+def test_disparar_sem_chave_evolution_bloqueia(mock_listar):
+    res = app._disparar_fila_combinado(dry_run=False)
+    assert res.get('status') == 'erro'
+    print('OK: disparo real sem EVOLUTION_API_KEY é bloqueado com erro claro')
+
+
 if __name__ == '__main__':
     test_normalizar_nome_ignora_caixa_acentos_espacos()
     test_normalizar_nome_remove_sufixos_societarios()
@@ -537,4 +608,8 @@ if __name__ == '__main__':
     test_gerar_fila_combinado_cria_registro_real()
     test_classificar_cartao_ponto_secullum()
     test_classificar_holerite_nao_regrediu()
+    test_normalizar_numero_evolution()
+    test_disparar_dry_run()
+    test_disparar_envio_real_com_numero_teste()
+    test_disparar_sem_chave_evolution_bloqueia()
     print('\nTodos os testes (Fase 3 - Fila de Envios) passaram.')

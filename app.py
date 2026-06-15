@@ -110,6 +110,8 @@ F_ENVIO_FUNC     = 'fldcm9bAj13phGQqS'   # Funcionário(s) Vinculado(s) (link)
 F_ENVIO_HASH     = 'fldiu4OgOQolil57a'   # Hash Recibo
 F_ENVIO_LIDO_EM  = 'fldwPmloi2rFZOL2a'   # Recibo Lido em
 F_ENVIO_ARQUIVOS = 'fldiO4G7OO1FAjn5o'   # Arquivos (anexos genéricos — usado p/ Cartão Ponto)
+F_ENVIO_DATA     = 'fldZm5SbVuFoxB6ge'   # Data envio
+F_ENVIO_ERRO     = 'fldxaCcWELeEclZt7'   # Erro (texto do erro de disparo)
 
 TIPO_ENVIO_PONTO = 'Cartão Ponto Mensal'   # Tipo de envio espelhado p/ Folha de Ponto/Cartão Ponto
 TIPO_ENVIO_COMBINADO = 'Holerite + Cartão Ponto Mensal'   # v2.25 — envio único c/ 2 PDFs (Holerite + Ponto)
@@ -146,6 +148,12 @@ F_PEND_OBS    = 'fld2bqGLlotCVRBn5'
 F_PEND_DATA   = 'fldRolmP0rSbJevUZ'
 
 EMAIL_WEBHOOK_KEY = os.environ.get('EMAIL_WEBHOOK_KEY', '')
+
+# Evolution API (gateway WhatsApp) — v2.28. URL e instância não são segredo
+# (default embutido); a API KEY é secreta e DEVE vir por variável de ambiente.
+EVOLUTION_API_URL  = os.environ.get('EVOLUTION_API_URL', 'http://143.95.214.239:8080').rstrip('/')
+EVOLUTION_INSTANCE = os.environ.get('EVOLUTION_INSTANCE', 'magnata')
+EVOLUTION_API_KEY  = os.environ.get('EVOLUTION_API_KEY', '')
 
 # Regras de classificação de documento (Fase 2)
 # Lista de (tipo_documento, [regex de palavras-chave]) — primeira que casar vence
@@ -1979,7 +1987,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.27',
+        'versao': '2.28',
         'ram_mb': _mem_mb(),
     })
 
@@ -3870,6 +3878,170 @@ def normalizar_whatsapp():
     dry_run = body.get('dry_run', True)
 
     resultado = _normalizar_whatsapp_funcionarios(limit=limit, dry_run=dry_run)
+    return jsonify(resultado)
+
+
+def _normalizar_numero_evolution(dest: str):
+    """Garante número no formato da Evolution (DDI 55 + DDD + número, só dígitos)."""
+    if not dest:
+        return None
+    digitos = re.sub(r'\D', '', str(dest))
+    if not digitos:
+        return None
+    if digitos.startswith('0') and len(digitos) in (12, 13):
+        digitos = digitos[1:]
+    if not digitos.startswith('55') and len(digitos) in (10, 11):
+        digitos = '55' + digitos
+    return digitos if len(digitos) in (12, 13) else None
+
+
+def _evolution_enviar_documento(numero: str, media_url: str, filename: str, caption=None):
+    """Envia 1 documento (PDF) via Evolution API v2 (sendMedia)."""
+    endpoint = f'{EVOLUTION_API_URL}/message/sendMedia/{EVOLUTION_INSTANCE}'
+    payload = {
+        'number': numero,
+        'mediatype': 'document',
+        'mimetype': 'application/pdf',
+        'media': media_url,
+        'fileName': filename,
+    }
+    if caption:
+        payload['caption'] = caption
+    r = requests.post(
+        endpoint,
+        headers={'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json'},
+        json=payload,
+        timeout=90,
+    )
+    if not (200 <= r.status_code < 300):
+        raise RuntimeError(f'Evolution HTTP {r.status_code}: {r.text[:300]}')
+    return r.json()
+
+
+def _marcar_envio_status(envio_id: str, status: str, erro: str = None):
+    _at_throttle()
+    fields = {F_ENVIO_STATUS: status}
+    if status == 'Enviado':
+        fields[F_ENVIO_DATA] = datetime.now().strftime('%Y-%m-%d')
+    if erro:
+        fields[F_ENVIO_ERRO] = erro[:1000]
+    r = requests.patch(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ENVIOS}/{envio_id}',
+        headers=_at_headers(),
+        json={'fields': fields, 'typecast': True},
+        timeout=15,
+    )
+    _raise_for_airtable(r, f'marcar envio {envio_id}')
+
+
+def _disparar_fila_combinado(limit=None, dry_run=True, numero_teste=None):
+    """
+    v2.28 — Lê os envios COMBINADOS (Holerite + Cartão Ponto) em Status
+    "Preparando" e dispara cada um pela Evolution API: envia os 2 PDFs em
+    sequência para o WhatsApp do colaborador e marca o envio como "Enviado".
+
+    Segurança:
+      - dry_run=True (padrão): não envia nada, só lista o que enviaria.
+      - numero_teste: se informado, TODOS os envios vão para esse número
+        (teste controlado), sem tocar os destinatários reais.
+      - limit: limita quantos envios processa (ex.: limit=1 p/ teste).
+    """
+    if not dry_run and not EVOLUTION_API_KEY:
+        return {'status': 'erro', 'erro': 'EVOLUTION_API_KEY não configurada no ambiente'}
+
+    enviados, falhas, ignorados = [], [], []
+    campos = ['Tipo', 'Status', 'Canal', 'Destinatário', 'Arquivos', 'Funcionário(s) Vinculado(s)']
+
+    for rec in _at_listar_todos(TABLE_ENVIOS, campos):
+        f = rec['fields']
+        if (f.get('Tipo') != TIPO_ENVIO_COMBINADO or f.get('Status') != 'Preparando'
+                or f.get('Canal') != 'WhatsApp'):
+            continue
+        if limit is not None and (len(enviados) + len(falhas)) >= limit:
+            break
+
+        func = (f.get('Funcionário(s) Vinculado(s)') or [])
+        nome = func[0]['name'] if func and isinstance(func[0], dict) else None
+        arquivos = f.get('Arquivos') or []
+        numero = _normalizar_numero_evolution(numero_teste or f.get('Destinatário'))
+
+        item = {
+            'envio_id': rec['id'], 'funcionario': nome,
+            'destinatario': numero, 'qtd_anexos': len(arquivos),
+        }
+
+        if not numero or len(arquivos) < 2:
+            item['motivo'] = 'numero_invalido' if not numero else 'menos_de_2_anexos'
+            ignorados.append(item)
+            continue
+
+        if dry_run:
+            item['acao'] = 'enviaria'
+            enviados.append(item)
+            continue
+
+        try:
+            for i, a in enumerate(arquivos[:2]):
+                caption = (
+                    f'Olá{(" " + nome) if nome else ""}! Seguem seus documentos do mês — '
+                    f'Holerite e Cartão Ponto. Magnata Portaria e Serviços.'
+                ) if i == 0 else None
+                _evolution_enviar_documento(numero, a['url'], a.get('filename', 'documento.pdf'), caption)
+                _at_throttle()
+            _marcar_envio_status(rec['id'], 'Enviado')
+            item['acao'] = 'enviado'
+            enviados.append(item)
+        except Exception as exc:
+            logger.error(f'[DISPARO] falha no envio {rec["id"]} ({nome}): {exc}')
+            try:
+                _marcar_envio_status(rec['id'], 'Erro', erro=str(exc))
+            except Exception:
+                pass
+            item['acao'] = 'falhou'
+            item['erro'] = str(exc)
+            falhas.append(item)
+
+    return {
+        'status': 'concluido',
+        'dry_run': dry_run,
+        'numero_teste': numero_teste,
+        'total_enviados': len(enviados),
+        'total_falhas': len(falhas),
+        'total_ignorados': len(ignorados),
+        'enviados': enviados,
+        'falhas': falhas,
+        'ignorados': ignorados,
+    }
+
+
+@app.route('/disparar-fila-combinado', methods=['POST', 'OPTIONS'])
+def disparar_fila_combinado():
+    """
+    v2.28 — Dispara pela Evolution API os envios combinados (Holerite + Ponto)
+    em Status "Preparando". Body JSON:
+      - dry_run: true (padrão) só simula
+      - limit: limita a quantidade (ex.: 1 para teste)
+      - numero_teste: redireciona TODOS os envios para 1 número (teste seguro)
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    body = request.get_json(silent=True) or {}
+    limit = body.get('limit')
+    try:
+        limit = int(limit) if limit else None
+    except (ValueError, TypeError):
+        limit = None
+    dry_run = body.get('dry_run', True)
+    numero_teste = body.get('numero_teste')
+
+    resultado = _disparar_fila_combinado(limit=limit, dry_run=dry_run, numero_teste=numero_teste)
     return jsonify(resultado)
 
 
