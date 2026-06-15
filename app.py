@@ -151,7 +151,9 @@ EMAIL_WEBHOOK_KEY = os.environ.get('EMAIL_WEBHOOK_KEY', '')
 # Lista de (tipo_documento, [regex de palavras-chave]) — primeira que casar vence
 TIPO_DOC_REGRAS = [
     ('Holerite', [r'Recibo\s+de\s+Pagamento', r'Total\s+de\s+Vencimentos', r'Valor\s+L[íi]quido']),
-    ('Folha de Ponto', [r'Folha\s+de\s+Ponto', r'Espelho\s+de\s+Ponto']),
+    ('Folha de Ponto', [r'Folha\s+de\s+Ponto', r'Espelho\s+de\s+Ponto',
+                         r'Cart[ãa]o\s+(?:de\s+)?Ponto', r'Secullum',
+                         r'Ponto\s+Web']),
     ('Contrato de Experiência', [r'Contrato\s+de\s+Experi[êe]ncia']),
     ('Contrato de Trabalho', [r'Contrato\s+de\s+Trabalho', r'\bCTPS\b']),
     ('Férias', [r'Aviso\s+de\s+F[ée]rias', r'Recibo\s+de\s+F[ée]rias', r'Per[íi]odo\s+de\s+Gozo']),
@@ -1977,7 +1979,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.25',
+        'versao': '2.26',
         'ram_mb': _mem_mb(),
     })
 

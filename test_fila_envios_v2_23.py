@@ -487,6 +487,27 @@ def test_gerar_fila_combinado_cria_registro_real(mock_criar, mock_listar, mock_c
     print('OK: combinado real cria 1 envio com os 2 PDFs anexados na ordem correta + Hash Recibo')
 
 
+# ── classificar_documento (v2.26 — Cartão Ponto Secullum) ─────────────────────
+
+def test_classificar_cartao_ponto_secullum():
+    texto = (
+        'CARTÃO PONTO\n'
+        'Período: 28/04/2026 até 28/05/2026.\n'
+        'Secullum Ponto Web | Sonoda Informática\n'
+        'HORÁRIO DE TRABALHO  EMPRESA: MAGNATA PORTARIA E SERVIÇOS LTDA'
+    )
+    tipo, conf = app.classificar_documento(texto)
+    assert tipo == 'Folha de Ponto', f'esperava Folha de Ponto, veio {tipo}'
+    print('OK: Cartão Ponto (Secullum) classifica como Folha de Ponto')
+
+
+def test_classificar_holerite_nao_regrediu():
+    texto = 'MAGNATA ... Total de Vencimentos 2.290,13 ... Valor Líquido 2.108,34'
+    tipo, _ = app.classificar_documento(texto)
+    assert tipo == 'Holerite', f'esperava Holerite, veio {tipo}'
+    print('OK: Holerite continua classificando como Holerite')
+
+
 if __name__ == '__main__':
     test_normalizar_nome_ignora_caixa_acentos_espacos()
     test_normalizar_nome_remove_sufixos_societarios()
@@ -514,4 +535,6 @@ if __name__ == '__main__':
     test_gerar_fila_combinado_dry_run()
     test_gerar_fila_combinado_ignora_pendente()
     test_gerar_fila_combinado_cria_registro_real()
+    test_classificar_cartao_ponto_secullum()
+    test_classificar_holerite_nao_regrediu()
     print('\nTodos os testes (Fase 3 - Fila de Envios) passaram.')
