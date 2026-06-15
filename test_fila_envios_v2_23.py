@@ -729,6 +729,25 @@ def test_disparar_fila_email_sem_credenciais_bloqueia():
     print('OK: disparo real de e-mail sem credenciais é bloqueado com erro claro')
 
 
+@patch('app._at_throttle', lambda: None)
+@patch('app._anexar_attachment')
+@patch('app._criar_registro', return_value='recGUIA')
+def test_processar_guia_comum(mock_criar, mock_anexar):
+    import os
+    import tempfile
+    fd, caminho = tempfile.mkstemp(suffix='.pdf')
+    os.write(fd, b'%PDF-1.4 x')
+    os.close(fd)
+    try:
+        res = app._processar_guia_comum(caminho, 'INSS', 'GPS INSS Maio.pdf', 'Maio 2026')
+    finally:
+        os.remove(caminho)
+    assert res['record_id'] == 'recGUIA'
+    assert mock_criar.call_args[0][0] == app.TABLE_GUIAS
+    assert mock_anexar.called
+    print('OK: _processar_guia_comum cria registro na aba Guias e anexa o PDF (doc comum)')
+
+
 def test_smtp_enviar_email_monta_mensagem():
     with patch.object(app, 'EMAIL_SENDER', 'contato@x.com'), \
          patch.object(app, 'EMAIL_SENDER_PASSWORD', 'senha-app'), \
@@ -782,5 +801,6 @@ if __name__ == '__main__':
     test_gerar_fila_email_d2_sem_folha_d2_ignora()
     test_disparar_fila_email_dry_run()
     test_disparar_fila_email_sem_credenciais_bloqueia()
+    test_processar_guia_comum()
     test_smtp_enviar_email_monta_mensagem()
     print('\nTodos os testes (Fase 3 - Fila de Envios) passaram.')

@@ -189,6 +189,7 @@ function listarGatilhos() {
 // ───────────────────────────────────────────────────────────────────────────
 
 var FATIADOR_URL = 'https://magnata-holerite-splitter.onrender.com/processar-doc-cliente';
+var GUIA_URL     = 'https://magnata-holerite-splitter.onrender.com/processar-guia';
 
 /**
  * Busca e-mails por `query`, extrai os anexos PDF e envia cada um ao fatiador
@@ -245,4 +246,44 @@ function fatiarExtrato_Abril() {
   fatiarDocsHistorico(
     'from:jaqueline@saviancontabilidade.com.br has:attachment ("COLABORADORES POR CONDOMINIOS" OR extrato OR folha) after:2026/05/01 before:2026/05/20',
     'extrato', 'Abril 2026');
+}
+
+/**
+ * Captura GUIAS/COMPROVANTES comuns (INSS, DCTFWeb, PIS/COFINS) — documento
+ * único broadcast (vai p/ TODOS os clientes). Cria 1 registro por PDF na aba
+ * Guias e Comprovantes. O log mostra o record_id de cada um — anote-os para
+ * usar em "guias_ids" no /gerar-fila-envios-email.
+ */
+function capturarGuias(query, tipoGuia, folhaMensal) {
+  var threads = GmailApp.search(query);
+  Logger.log('Query: ' + query + ' | threads: ' + threads.length);
+  var ids = [];
+  for (var t = 0; t < threads.length; t++) {
+    var msgs = threads[t].getMessages();
+    for (var m = 0; m < msgs.length; m++) {
+      var atts = msgs[m].getAttachments({ includeInlineImages: false, includeAttachments: true });
+      for (var a = 0; a < atts.length; a++) {
+        var att = atts[a];
+        var nome = att.getName().toLowerCase();
+        if (att.getContentType() !== 'application/pdf' && !nome.endsWith('.pdf')) continue;
+        var resp = UrlFetchApp.fetch(GUIA_URL, {
+          method: 'post',
+          payload: { pdf: att.copyBlob(), tipo: tipoGuia || '', nome: att.getName(), folha_mensal: folhaMensal || '' },
+          muteHttpExceptions: true,
+        });
+        var body = resp.getContentText();
+        Logger.log('[GUIA ' + (tipoGuia || '') + '] ' + att.getName() +
+                   ' -> HTTP ' + resp.getResponseCode() + ': ' + body.substring(0, 300));
+        try { var j = JSON.parse(body); if (j.record_id) ids.push(j.record_id); } catch (e) {}
+      }
+    }
+  }
+  Logger.log('record_ids das guias criadas (use em guias_ids): ' + JSON.stringify(ids));
+}
+
+function capturarGuias_DCTFWeb_Abril() {
+  capturarGuias('from:saviancontabilidade.com.br has:attachment DCTFWEB after:2026/05/01 before:2026/05/31', 'DCTFWeb', 'Abril 2026');
+}
+function capturarGuias_PisCofins_Abril() {
+  capturarGuias('from:saviancontabilidade.com.br has:attachment ("PIS E COFINS" OR PIS OR COFINS) after:2026/05/01 before:2026/05/31', 'PIS/COFINS', 'Abril 2026');
 }

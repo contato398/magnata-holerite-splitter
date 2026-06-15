@@ -143,6 +143,11 @@ F_FGTS_CLIENTE = 'fldGFwcySH5TXBjDB'
 F_FGTS_FOLHA   = 'fld22SuzevUvtaMkg'
 F_FGTS_PDF     = 'fldYZS5KB9yKK4lMH'
 F_FGTS_DATA    = 'fldoFNd8CgL5ZZ63C'
+# Guias e Comprovantes (documentos COMUNS — broadcast)
+F_GUIA_STATUS  = 'fldwOQfBzyH7rVx2O'
+F_GUIA_TIPO    = 'fldZc4A6stiQPI8qt'
+F_GUIA_PDF     = 'fldmC813USDUA3eVl'   # PDF GUIA
+F_GUIA_NOME    = 'fldOLOkac6twvlfZR'   # Nome documento
 # Envios — campos de e-mail (link p/ os documentos do pacote)
 F_ENVIO_TEXTO   = 'fldGeaadeNYWaa4Og'   # Texto do Email
 F_ENVIO_EXTRATO = 'fldITxIfLG8TKntBu'   # Extrato Mensal (link)
@@ -4584,6 +4589,58 @@ def disparar_fila_email():
 
     resultado = _disparar_fila_email(limit=limit, dry_run=dry_run, email_teste=email_teste)
     return jsonify(resultado)
+
+
+def _processar_guia_comum(caminho_pdf: str, tipo_guia: str, nome_doc: str, folha_mensal: str):
+    """Arquiva 1 Guia/Comprovante (documento COMUM — INSS, DCTFWeb, PIS/COFINS)
+    como 1 registro na aba Guias e Comprovantes, anexando o PDF. Não fatia nem
+    casa cliente (é broadcast: o mesmo doc vai p/ todos via guias_ids)."""
+    campos = {F_GUIA_STATUS: 'Recebido'}
+    if tipo_guia:
+        campos[F_GUIA_TIPO] = tipo_guia
+    if nome_doc:
+        campos[F_GUIA_NOME] = nome_doc
+    rec_id = _criar_registro(TABLE_GUIAS, campos)
+    fname = nome_doc or f'Guia {tipo_guia or ""} {folha_mensal or ""}'.strip() or 'guia.pdf'
+    if not fname.lower().endswith('.pdf'):
+        fname += '.pdf'
+    with open(caminho_pdf, 'rb') as fh:
+        _anexar_attachment(TABLE_GUIAS, rec_id, F_GUIA_PDF, fh.read(), fname)
+    return {'status': 'concluido', 'record_id': rec_id, 'tipo': tipo_guia,
+            'nome_documento': nome_doc, 'folha_mensal': folha_mensal}
+
+
+@app.route('/processar-guia', methods=['POST', 'OPTIONS'])
+def processar_guia():
+    """
+    v2.29 — Arquiva 1 Guia/Comprovante COMUM (INSS, DCTFWeb, PIS/COFINS) na aba
+    Guias e Comprovantes. multipart/form-data:
+      - pdf: arquivo
+      - tipo: opcional (ex.: "INSS", "DCTFWeb") — preenche o campo Tipo
+      - nome: opcional (Nome documento; default = nome do arquivo)
+      - folha_mensal: opcional (referência)
+    Não exige X-API-KEY (só AIRTABLE_API_KEY do servidor). Retorna record_id —
+    use-o depois em guias_ids no /gerar-fila-envios-email (broadcast).
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    tipo_guia = (request.form.get('tipo') or '').strip()
+    nome_doc = (request.form.get('nome') or '').strip()
+    folha_mensal = (request.form.get('folha_mensal') or '').strip()
+
+    caminho = extrair_pdf_do_request()
+    if not caminho:
+        return jsonify({'status': 'erro', 'erro': 'PDF não enviado (campo "pdf")'}), 400
+    try:
+        return jsonify(_processar_guia_comum(caminho, tipo_guia, nome_doc, folha_mensal))
+    finally:
+        try:
+            os.remove(caminho)
+        except OSError:
+            pass
 
 
 @app.route('/recibo/<hash_recibo>', methods=['GET'])
