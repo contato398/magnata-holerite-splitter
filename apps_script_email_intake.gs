@@ -246,7 +246,7 @@ function fatiarFGTS_Abril() {
 // Mira cirúrgica: só anexos cujo NOME contém "extrato mensal".
 function fatiarExtrato_Maio() {
   fatiarDocsHistorico(
-    'from:jaqueline@saviancontabilidade.com.br has:attachment after:2026/05/25 before:2026/06/15',
+    'from:jaqueline@saviancontabilidade.com.br has:attachment after:2026/05/25 before:2026/06/16',
     'extrato', 'Maio 2026', 'extrato mensal');
 }
 function fatiarExtrato_Abril() {
