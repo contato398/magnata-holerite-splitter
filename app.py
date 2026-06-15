@@ -131,6 +131,8 @@ TABLE_EXTRATO = 'tblJCUcFBVTH5W2kP'   # Extratos Mensais
 TABLE_FGTS    = 'tbl8ehgLa00cE1U3s'   # FGTS Digital
 TABLE_GUIAS   = 'tbl6FT1YzK1yqI77l'   # Guias e Comprovantes
 
+CNPJ_MAGNATA = '17987187000161'   # CNPJ do empregador — nunca é cliente-destino
+
 # Extratos Mensais
 F_EXT_STATUS  = 'fldozFq8FJAOZMqns'
 F_EXT_FOLHA   = 'fldDqvqtFqN0U5UBD'
@@ -4127,10 +4129,15 @@ def _carregar_indice_clientes():
     for rec in _at_listar_todos(TABLE_CLIENTES, ['Nome', 'Cliente', 'CNPJ']):
         f = rec['fields']
         nome = f.get('Nome') or f.get('Cliente') or ''
-        cnpj = re.sub(r'\D', '', f.get('CNPJ') or '')
-        if len(cnpj) == 14:
-            por_cnpj[cnpj] = (rec['id'], nome)
         nome_norm = _normalizar_texto_busca(nome)
+        # Exclui a PRÓPRIA Magnata (empregador): o nome/CNPJ dela aparece no
+        # cabeçalho de TODA página do extrato/FGTS — não é condomínio-destino.
+        # Sem isso, páginas que não casam o condomínio "vazam" para a Magnata.
+        if 'MAGNATA' in nome_norm:
+            continue
+        cnpj = re.sub(r'\D', '', f.get('CNPJ') or '')
+        if len(cnpj) == 14 and cnpj != CNPJ_MAGNATA:
+            por_cnpj[cnpj] = (rec['id'], nome)
         if len(nome_norm) >= 4:
             nomes.append((nome_norm, rec['id'], nome))
     nomes.sort(key=lambda x: len(x[0]), reverse=True)
