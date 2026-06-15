@@ -115,6 +115,45 @@ F_ENVIO_ERRO     = 'fldxaCcWELeEclZt7'   # Erro (texto do erro de disparo)
 
 TIPO_ENVIO_PONTO = 'Cartão Ponto Mensal'   # Tipo de envio espelhado p/ Folha de Ponto/Cartão Ponto
 TIPO_ENVIO_COMBINADO = 'Holerite + Cartão Ponto Mensal'   # v2.25 — envio único c/ 2 PDFs (Holerite + Ponto)
+TIPO_ENVIO_EMAIL_CLIENTE = 'Pacote Mensal Cliente'   # v2.29 — e-mail consolidado p/ cliente/escritório
+
+# ── v2.29 — Distribuição por E-mail (SMTP) + fatiamento por cliente ──────────
+# Remetente/SMTP: 100% por variável de ambiente (NUNCA hardcode de senha).
+# Default = Gmail (contato@ é Gmail-hosted). Para Outlook/Hotmail, defina
+# SMTP_HOST=smtp-mail.outlook.com no Render.
+SMTP_HOST             = os.environ.get('SMTP_HOST', 'smtp.gmail.com')
+SMTP_PORT             = int(os.environ.get('SMTP_PORT', '587'))
+EMAIL_SENDER          = os.environ.get('EMAIL_SENDER', '')
+EMAIL_SENDER_PASSWORD = os.environ.get('EMAIL_SENDER_PASSWORD', '')
+EMAIL_SENDER_NOME     = os.environ.get('EMAIL_SENDER_NOME', 'Magnata Portaria e Serviços')
+
+TABLE_EXTRATO = 'tblJCUcFBVTH5W2kP'   # Extratos Mensais
+TABLE_FGTS    = 'tbl8ehgLa00cE1U3s'   # FGTS Digital
+TABLE_GUIAS   = 'tbl6FT1YzK1yqI77l'   # Guias e Comprovantes
+
+# Extratos Mensais
+F_EXT_STATUS  = 'fldozFq8FJAOZMqns'
+F_EXT_FOLHA   = 'fldDqvqtFqN0U5UBD'
+F_EXT_CLIENTE = 'fldKtdZpZ4fd7XpAX'
+F_EXT_PDF     = 'fldznv1E24rfbZt34'
+F_EXT_DATA    = 'fldZ3q923bEAqUekZ'
+# FGTS Digital
+F_FGTS_STATUS  = 'fldNb2ueeOHjyRi65'
+F_FGTS_CLIENTE = 'fldGFwcySH5TXBjDB'
+F_FGTS_FOLHA   = 'fld22SuzevUvtaMkg'
+F_FGTS_PDF     = 'fldYZS5KB9yKK4lMH'
+F_FGTS_DATA    = 'fldoFNd8CgL5ZZ63C'
+# Envios — campos de e-mail (link p/ os documentos do pacote)
+F_ENVIO_TEXTO   = 'fldGeaadeNYWaa4Og'   # Texto do Email
+F_ENVIO_EXTRATO = 'fldITxIfLG8TKntBu'   # Extrato Mensal (link)
+F_ENVIO_FGTS    = 'fldnsrSDCpK3YAXbm'   # FGTS Digital (link)
+F_ENVIO_GUIAS   = 'fld0Pm44oScZX7yRx'   # Guias e Comprovantes (link)
+
+# Nomes (não ids) dos campos lookup de PDF na Envios — usados p/ montar anexos
+ENVIO_LOOKUP_PDFS = [
+    'PDF HOLERITES', 'PDF EXTRATO MENSAL', 'PDF FGTS Digital', 'PDF GUIAS',
+    'PDF CERTIDÕES', 'PDF FERIAS', 'PDF CONTRATAÇÃO - RESCISÃO', 'Arquivos',
+]
 
 # Emails Savian
 F_EMAIL_NAME     = 'fldwKHHiVVEKySwx4'
@@ -1987,7 +2026,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.28',
+        'versao': '2.29',
         'ram_mb': _mem_mb(),
     })
 
@@ -4042,6 +4081,482 @@ def disparar_fila_combinado():
     numero_teste = body.get('numero_teste')
 
     resultado = _disparar_fila_combinado(limit=limit, dry_run=dry_run, numero_teste=numero_teste)
+    return jsonify(resultado)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# v2.29 — DISTRIBUIÇÃO POR E-MAIL (CLIENTES/ESCRITÓRIOS)
+#   1) Fatiador POR CLIENTE (Extrato Mensal / FGTS Digital) — espelha o
+#      fatiador por CPF, mas casa cada página a um Cliente (por CNPJ; fallback
+#      por Nome). Resolve de vez o histórico "SEM CLIENTE".
+#   2) Gerador da fila de e-mail: 1 pacote por Cliente Ativo (holerites do mês
+#      + extrato + FGTS exclusivos + guias comuns).
+#   3) Motor SMTP: dispara os pacotes (dry_run/limit/email_teste — testar antes).
+# ═══════════════════════════════════════════════════════════════════════════
+
+def extrair_cnpj(texto: str):
+    """Extrai o 1º CNPJ (14 dígitos) do texto, normalizado só com dígitos."""
+    if not texto:
+        return None
+    m = re.search(r'\d{2}[.\s]?\d{3}[.\s]?\d{3}[/\s]?\d{4}[-\s]?\d{2}', texto)
+    if not m:
+        return None
+    dig = re.sub(r'\D', '', m.group(0))
+    return dig if len(dig) == 14 else None
+
+
+def _normalizar_texto_busca(s: str) -> str:
+    s = unicodedata.normalize('NFKD', s or '')
+    s = ''.join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r'\s+', ' ', s).strip().upper()
+
+
+def _carregar_indice_clientes():
+    """Índice p/ casar páginas → Cliente. Retorna (por_cnpj, nomes):
+      - por_cnpj: {cnpj14: (cliente_id, nome)}
+      - nomes: [(nome_norm, cliente_id, nome)] ordenado do nome mais longo p/ o
+        mais curto (evita casar 'SKY' antes de 'EDIFICIO SKY TATUI').
+    """
+    por_cnpj = {}
+    nomes = []
+    for rec in _at_listar_todos(TABLE_CLIENTES, ['Nome', 'Cliente', 'CNPJ']):
+        f = rec['fields']
+        nome = f.get('Nome') or f.get('Cliente') or ''
+        cnpj = re.sub(r'\D', '', f.get('CNPJ') or '')
+        if len(cnpj) == 14:
+            por_cnpj[cnpj] = (rec['id'], nome)
+        nome_norm = _normalizar_texto_busca(nome)
+        if len(nome_norm) >= 4:
+            nomes.append((nome_norm, rec['id'], nome))
+    nomes.sort(key=lambda x: len(x[0]), reverse=True)
+    return por_cnpj, nomes
+
+
+def construir_mapa_cliente(caminho_pdf: str):
+    """
+    Pass 1 do fatiador POR CLIENTE (espelha construir_mapa_cpf). Para cada
+    página, casa a um Cliente: 1º por qualquer CNPJ da página que pertença a um
+    cliente conhecido; 2º (fallback) pelo Nome do cliente presente no texto.
+    Retorna ({cliente_id: {'nome':.., 'paginas':[int]}}, total, paginas_sem_cliente).
+    """
+    por_cnpj, nomes = _carregar_indice_clientes()
+    mapa, sem_cliente = {}, []
+    with pdfplumber.open(caminho_pdf) as pdf:
+        total = len(pdf.pages)
+        logger.info(f'[MAPA-CLI] Total de páginas: {total}')
+        for i in range(total):
+            try:
+                texto = pdf.pages[i].extract_text() or ''
+            except Exception as exc:
+                logger.warning(f'[MAPA-CLI] pág {i+1}: erro extração → {exc}')
+                texto = ''
+
+            cliente_id = cliente_nome = None
+            # 1) por CNPJ (qualquer CNPJ da página que seja de um cliente conhecido)
+            for c in re.findall(r'\d{2}[.\s]?\d{3}[.\s]?\d{3}[/\s]?\d{4}[-\s]?\d{2}', texto):
+                dig = re.sub(r'\D', '', c)
+                if dig in por_cnpj:
+                    cliente_id, cliente_nome = por_cnpj[dig]
+                    break
+            # 2) fallback por Nome do cliente no texto
+            if not cliente_id:
+                texto_norm = _normalizar_texto_busca(texto)
+                for nome_norm, cid, cnome in nomes:
+                    if nome_norm in texto_norm:
+                        cliente_id, cliente_nome = cid, cnome
+                        break
+
+            if cliente_id:
+                if cliente_id not in mapa:
+                    mapa[cliente_id] = {'nome': cliente_nome, 'paginas': []}
+                mapa[cliente_id]['paginas'].append(i)
+                logger.info(f'[MAPA-CLI] pág {i+1:03d}/{total}: → {cliente_nome}')
+            else:
+                sem_cliente.append(i)
+                logger.info(f'[MAPA-CLI] pág {i+1:03d}/{total}: SEM CLIENTE')
+
+            del texto
+            if (i + 1) % 15 == 0:
+                gc.collect()
+    gc.collect()
+    logger.info(f'[MAPA-CLI] {len(mapa)} clientes | {len(sem_cliente)} págs sem cliente')
+    return mapa, total, sem_cliente
+
+
+def _processar_doc_cliente_master(caminho_pdf: str, tipo: str, folha_mensal: str):
+    """Fatia um mestre (Extrato Mensal OU FGTS Digital) por cliente e cria 1
+    registro por cliente na tabela respectiva, anexando só as páginas dele.
+    tipo: 'extrato' | 'fgts'."""
+    if tipo == 'extrato':
+        table, f_cli, f_folha, f_pdf, f_data, f_status = (
+            TABLE_EXTRATO, F_EXT_CLIENTE, F_EXT_FOLHA, F_EXT_PDF, F_EXT_DATA, F_EXT_STATUS)
+        rotulo = 'Extrato Mensal'
+    elif tipo == 'fgts':
+        table, f_cli, f_folha, f_pdf, f_data, f_status = (
+            TABLE_FGTS, F_FGTS_CLIENTE, F_FGTS_FOLHA, F_FGTS_PDF, F_FGTS_DATA, F_FGTS_STATUS)
+        rotulo = 'FGTS Digital'
+    else:
+        return {'status': 'erro', 'erro': f'tipo inválido: {tipo} (use extrato|fgts)'}
+
+    mapa, total, sem_cliente = construir_mapa_cliente(caminho_pdf)
+    hoje = datetime.now().strftime('%Y-%m-%d')
+    criados, falhas = [], []
+    for cliente_id, dados in mapa.items():
+        nome_cli = dados['nome'] or cliente_id
+        try:
+            pdf_bytes = extrair_pdf_colaborador(caminho_pdf, dados['paginas'])
+            campos = {
+                f_cli: [cliente_id],
+                f_folha: folha_mensal or '',
+                f_status: 'Recebido',
+                f_data: hoje,
+            }
+            rec_id = _criar_registro(table, campos)
+            fname = f'{rotulo} - {folha_mensal or ""} - {nome_cli}.pdf'.strip()
+            _anexar_attachment(table, rec_id, f_pdf, pdf_bytes, fname)
+            criados.append({
+                'cliente': nome_cli, 'cliente_id': cliente_id,
+                'paginas': [p + 1 for p in dados['paginas']], 'record_id': rec_id,
+            })
+        except Exception as exc:
+            logger.error(f'[DOC-CLI] falha cliente {nome_cli}: {exc}')
+            falhas.append({'cliente': nome_cli, 'cliente_id': cliente_id, 'erro': str(exc)})
+
+    return {
+        'status': 'concluido', 'tipo': rotulo, 'folha_mensal': folha_mensal,
+        'total_paginas': total, 'clientes_identificados': len(mapa),
+        'registros_criados': len(criados),
+        'paginas_sem_cliente': [p + 1 for p in sem_cliente],
+        'criados': criados, 'falhas': falhas,
+    }
+
+
+@app.route('/processar-doc-cliente', methods=['POST', 'OPTIONS'])
+def processar_doc_cliente():
+    """
+    v2.29 — Fatia um PDF mestre (Extrato Mensal ou FGTS Digital) por CLIENTE.
+    multipart/form-data:
+      - pdf: arquivo mestre
+      - tipo: 'extrato' | 'fgts'
+      - folha_mensal: ex. "Maio 2026"
+    Não exige X-API-KEY (só a AIRTABLE_API_KEY do servidor) — igual ao
+    /processar-folha-ponto. Cria 1 registro por cliente na aba respectiva.
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    tipo = (request.form.get('tipo') or '').strip().lower()
+    folha_mensal = (request.form.get('folha_mensal') or '').strip()
+    if tipo not in ('extrato', 'fgts'):
+        return jsonify({'status': 'erro', 'erro': "tipo deve ser 'extrato' ou 'fgts'"}), 400
+
+    caminho = extrair_pdf_do_request()
+    if not caminho:
+        return jsonify({'status': 'erro', 'erro': 'PDF não enviado (campo "pdf")'}), 400
+    try:
+        resultado = _processar_doc_cliente_master(caminho, tipo, folha_mensal)
+        return jsonify(resultado)
+    finally:
+        try:
+            os.remove(caminho)
+        except OSError:
+            pass
+
+
+def _gerar_fila_envios_email(folha_mensal=None, guias_ids=None, limit=None, dry_run=True):
+    """
+    v2.29 — Gera a fila de e-mail por CLIENTE. Para cada Cliente Ativo com
+    e-mail (campo Email; fallback Email Contador do escritório), consolida num
+    único envio Canal="E-mail":
+      - Holerites do mês dos funcionários daquele cliente (link)
+      - Extrato Mensal do mês do cliente (link)
+      - FGTS Digital do mês do cliente (link)
+      - Guias comuns (broadcast) — apenas se `guias_ids` for informado
+    Ignora clientes já com envio do tipo pendente (não duplica). Os PDFs em si
+    são resolvidos na hora do disparo via os campos lookup da Envios.
+
+    dry_run=True (padrão): não cria nada, só simula.
+    """
+    clientes_ctx, locais, funcionarios = _carregar_contexto_distribuicao()
+    _, cliente_pendentes = _carregar_envios_pendentes(TIPO_ENVIO_EMAIL_CLIENTE)
+    guias_ids = guias_ids or []
+    filtro_folha = f'{{Folha Mensal}}="{folha_mensal}"' if folha_mensal else None
+
+    # Holerites do mês agrupados por cliente
+    holerites_por_cliente = {}
+    for rec in _at_listar_todos(TABLE_HOL, ['Holerite', 'Funcionário', 'Folha Mensal', 'PDF HOLERITE'], filtro_folha):
+        if not rec['fields'].get('PDF HOLERITE'):
+            continue
+        c = _classificar_holerite_distribuicao(rec, clientes_ctx, locais, funcionarios)
+        if c['cliente_id']:
+            holerites_por_cliente.setdefault(c['cliente_id'], []).append(rec['id'])
+
+    # Extratos / FGTS do mês por cliente
+    def _docs_por_cliente(table, f_cli_nome):
+        out = {}
+        for rec in _at_listar_todos(table, ['Folha Mensal', 'Cliente', 'PDF ARQUIVO'], filtro_folha):
+            f = rec['fields']
+            if not f.get('PDF ARQUIVO'):
+                continue
+            for cid in (f.get('Cliente') or []):
+                cid = cid['id'] if isinstance(cid, dict) else cid
+                out.setdefault(cid, []).append(rec['id'])
+        return out
+
+    extratos_por_cliente = _docs_por_cliente(TABLE_EXTRATO, 'Cliente')
+    fgts_por_cliente = _docs_por_cliente(TABLE_FGTS, 'Cliente')
+
+    # Clientes Ativos + e-mail (com fallback p/ escritório)
+    envios, ignorados = [], []
+    clientes = _at_listar_todos(TABLE_CLIENTES, ['Nome', 'Cliente', 'Email', 'Email Contador', 'Status'])
+    if limit:
+        clientes = clientes[:limit]
+
+    for rec in clientes:
+        cid = rec['id']
+        f = rec['fields']
+        nome = f.get('Nome') or f.get('Cliente') or cid
+        status = f.get('Status')
+        status_nome = status['name'] if isinstance(status, dict) else status
+        if status_nome != 'Ativo':
+            continue
+        if cid in cliente_pendentes:
+            ignorados.append({'cliente': nome, 'motivo': 'ja_possui_envio_email_pendente'})
+            continue
+
+        email = f.get('Email')
+        if not email:
+            contador = f.get('Email Contador') or []
+            email = contador[0] if contador else None
+        hol = holerites_por_cliente.get(cid, [])
+        ext = extratos_por_cliente.get(cid, [])
+        fgts = fgts_por_cliente.get(cid, [])
+
+        motivos = []
+        if not email:
+            motivos.append('email_ausente')
+        if not (hol or ext or fgts or guias_ids):
+            motivos.append('sem_documentos_do_mes')
+        if motivos:
+            ignorados.append({'cliente': nome, 'motivo': 'nao_pronto', 'motivos': motivos})
+            continue
+
+        item = {
+            'cliente': nome, 'cliente_id': cid, 'email': email,
+            'qtd_holerites': len(hol), 'qtd_extratos': len(ext),
+            'qtd_fgts': len(fgts), 'qtd_guias': len(guias_ids),
+        }
+        if dry_run:
+            item['acao'] = 'criaria_envio'
+        else:
+            campos = {
+                F_ENVIO_TIPO: TIPO_ENVIO_EMAIL_CLIENTE,
+                F_ENVIO_CANAL: 'E-mail',
+                F_ENVIO_DEST: email,
+                F_ENVIO_EMAIL: email,
+                F_ENVIO_CLIENTE: [cid],
+            }
+            if hol:
+                campos[F_ENVIO_HOLERITES] = hol
+            if ext:
+                campos[F_ENVIO_EXTRATO] = ext
+            if fgts:
+                campos[F_ENVIO_FGTS] = fgts
+            if guias_ids:
+                campos[F_ENVIO_GUIAS] = guias_ids
+            envio_id, _ = _criar_envio_documento(campos)
+            item['acao'] = 'envio_criado'
+            item['envio_id'] = envio_id
+        envios.append(item)
+
+    return {
+        'status': 'concluido', 'dry_run': dry_run, 'folha_mensal': folha_mensal,
+        'total_envios': len(envios), 'total_ignorados': len(ignorados),
+        'envios': envios, 'ignorados': ignorados,
+    }
+
+
+@app.route('/gerar-fila-envios-email', methods=['POST', 'OPTIONS'])
+def gerar_fila_envios_email():
+    """
+    v2.29 — Gera a fila de e-mail (1 pacote por Cliente Ativo). Body JSON:
+      - folha_mensal: ex. "Maio 2026"
+      - guias_ids: lista de record ids da aba Guias e Comprovantes a anexar em
+        TODOS os clientes (broadcast). Opcional.
+      - limit / dry_run (padrão true).
+    Protegido por X-API-KEY (EMAIL_WEBHOOK_KEY).
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    body = request.get_json(silent=True) or {}
+    folha_mensal = body.get('folha_mensal')
+    guias_ids = body.get('guias_ids') or []
+    limit = body.get('limit')
+    try:
+        limit = int(limit) if limit else None
+    except (ValueError, TypeError):
+        limit = None
+    dry_run = body.get('dry_run', True)
+
+    resultado = _gerar_fila_envios_email(
+        folha_mensal=folha_mensal, guias_ids=guias_ids, limit=limit, dry_run=dry_run)
+    return jsonify(resultado)
+
+
+def _baixar_attachment_bytes(url: str) -> bytes:
+    r = requests.get(url, timeout=90)
+    r.raise_for_status()
+    return r.content
+
+
+def _smtp_enviar_email(destinatario: str, assunto: str, corpo_texto: str, anexos: list):
+    """Envia 1 e-mail com anexos PDF via SMTP (config 100% por env). anexos:
+    lista de (filename, bytes). Levanta exceção em falha."""
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.mime.application import MIMEApplication
+    from email.utils import formataddr
+
+    if not EMAIL_SENDER or not EMAIL_SENDER_PASSWORD:
+        raise RuntimeError('EMAIL_SENDER/EMAIL_SENDER_PASSWORD não configurados no ambiente')
+
+    msg = MIMEMultipart()
+    msg['From'] = formataddr((EMAIL_SENDER_NOME, EMAIL_SENDER))
+    msg['To'] = destinatario
+    msg['Subject'] = assunto
+    msg.attach(MIMEText(corpo_texto, 'plain', 'utf-8'))
+    for fname, conteudo in anexos:
+        part = MIMEApplication(conteudo, _subtype='pdf')
+        part.add_header('Content-Disposition', 'attachment', filename=fname)
+        msg.attach(part)
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=90) as server:
+        server.ehlo()
+        server.starttls()
+        server.login(EMAIL_SENDER, EMAIL_SENDER_PASSWORD)
+        server.send_message(msg)
+
+
+def _disparar_fila_email(limit=None, dry_run=True, email_teste=None):
+    """
+    v2.29 — Lê os envios Canal="E-mail" / Tipo="Pacote Mensal Cliente" em
+    Status "Preparando", monta o e-mail consolidado (todos os PDFs dos campos
+    lookup), envia via SMTP e marca "Enviado".
+
+    Segurança:
+      - dry_run=True (padrão): não envia nada, só lista o que enviaria.
+      - email_teste: redireciona TODOS os envios p/ esse e-mail (teste seguro).
+      - limit: limita quantos envios processa (ex.: 1 p/ teste).
+    """
+    if not dry_run and (not EMAIL_SENDER or not EMAIL_SENDER_PASSWORD):
+        return {'status': 'erro', 'erro': 'EMAIL_SENDER/EMAIL_SENDER_PASSWORD não configurados no ambiente'}
+
+    campos = ['Tipo', 'Status', 'Canal', 'Email', 'Destinatário', 'Cliente',
+              'Texto do Email'] + ENVIO_LOOKUP_PDFS
+    enviados, falhas, ignorados = [], [], []
+
+    for rec in _at_listar_todos(TABLE_ENVIOS, campos):
+        f = rec['fields']
+        if (f.get('Tipo') != TIPO_ENVIO_EMAIL_CLIENTE or f.get('Status') != 'Preparando'
+                or f.get('Canal') != 'E-mail'):
+            continue
+        if limit is not None and (len(enviados) + len(falhas)) >= limit:
+            break
+
+        destino = email_teste or f.get('Email') or f.get('Destinatário')
+        cli = f.get('Cliente') or []
+        cli_nome = cli[0]['name'] if cli and isinstance(cli[0], dict) else None
+
+        anexos_meta = []
+        for campo in ENVIO_LOOKUP_PDFS:
+            for a in (f.get(campo) or []):
+                if isinstance(a, dict) and a.get('url'):
+                    anexos_meta.append((a.get('filename', 'documento.pdf'), a['url']))
+
+        item = {'envio_id': rec['id'], 'cliente': cli_nome,
+                'destinatario': destino, 'qtd_anexos': len(anexos_meta)}
+
+        if not destino or '@' not in destino:
+            item['motivo'] = 'email_invalido'
+            ignorados.append(item)
+            continue
+        if not anexos_meta:
+            item['motivo'] = 'sem_anexos'
+            ignorados.append(item)
+            continue
+        if dry_run:
+            item['acao'] = 'enviaria'
+            enviados.append(item)
+            continue
+
+        try:
+            anexos = [(fn, _baixar_attachment_bytes(u)) for fn, u in anexos_meta]
+            assunto = (f'Documentos do mês'
+                       f'{(" - " + cli_nome) if cli_nome else ""} — Magnata Portaria e Serviços')
+            corpo = f.get('Texto do Email') or (
+                f'Olá{(" " + cli_nome) if cli_nome else ""},\n\n'
+                'Seguem em anexo os documentos do mês referentes ao seu condomínio/empresa '
+                '(holerites, extrato da folha, FGTS e guias, quando aplicável).\n\n'
+                'Qualquer dúvida, estamos à disposição.\n\n'
+                'Atenciosamente,\nMagnata Portaria e Serviços'
+            )
+            _smtp_enviar_email(destino, assunto, corpo, anexos)
+            _marcar_envio_status(rec['id'], 'Enviado')
+            item['acao'] = 'enviado'
+            enviados.append(item)
+        except Exception as exc:
+            logger.error(f'[EMAIL] falha no envio {rec["id"]} ({cli_nome}): {exc}')
+            try:
+                _marcar_envio_status(rec['id'], 'Erro', erro=str(exc))
+            except Exception:
+                pass
+            item['acao'] = 'falhou'
+            item['erro'] = str(exc)
+            falhas.append(item)
+
+    return {
+        'status': 'concluido', 'dry_run': dry_run, 'email_teste': email_teste,
+        'total_enviados': len(enviados), 'total_falhas': len(falhas),
+        'total_ignorados': len(ignorados),
+        'enviados': enviados, 'falhas': falhas, 'ignorados': ignorados,
+    }
+
+
+@app.route('/disparar-fila-email', methods=['POST', 'OPTIONS'])
+def disparar_fila_email():
+    """
+    v2.29 — Dispara via SMTP os pacotes de e-mail (Tipo="Pacote Mensal Cliente",
+    Status="Preparando"). Body JSON:
+      - dry_run: true (padrão) só simula
+      - limit: limita a quantidade (ex.: 1 para teste)
+      - email_teste: redireciona TODOS os envios p/ 1 e-mail (teste seguro)
+    Protegido por X-API-KEY (EMAIL_WEBHOOK_KEY).
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+
+    body = request.get_json(silent=True) or {}
+    limit = body.get('limit')
+    try:
+        limit = int(limit) if limit else None
+    except (ValueError, TypeError):
+        limit = None
+    dry_run = body.get('dry_run', True)
+    email_teste = body.get('email_teste')
+
+    resultado = _disparar_fila_email(limit=limit, dry_run=dry_run, email_teste=email_teste)
     return jsonify(resultado)
 
 

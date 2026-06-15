@@ -579,6 +579,124 @@ def test_disparar_sem_chave_evolution_bloqueia(mock_listar):
     print('OK: disparo real sem EVOLUTION_API_KEY é bloqueado com erro claro')
 
 
+# ── v2.29 — Fatiador por cliente + fila/SMTP de e-mail ───────────────────────
+
+class _FakePage:
+    def __init__(self, texto):
+        self._t = texto
+    def extract_text(self):
+        return self._t
+
+
+class _FakePdf:
+    def __init__(self, textos):
+        self.pages = [_FakePage(t) for t in textos]
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        return False
+
+
+def test_extrair_cnpj():
+    assert app.extrair_cnpj('CNPJ: 03.043.067/0001-00 blah') == '03043067000100'
+    assert app.extrair_cnpj('sem cnpj aqui') is None
+    print('OK: extrair_cnpj normaliza para 14 dígitos')
+
+
+def test_normalizar_texto_busca():
+    assert app._normalizar_texto_busca('Edifício  Sky  Tatuí') == 'EDIFICIO SKY TATUI'
+    print('OK: _normalizar_texto_busca remove acentos/caixa/espaços')
+
+
+@patch('app._at_throttle', lambda: None)
+@patch('app._at_listar_todos')
+@patch('app.pdfplumber')
+def test_construir_mapa_cliente_cnpj_e_nome(mock_pp, mock_listar):
+    mock_listar.return_value = [
+        {'id': 'recCDG', 'fields': {'Nome': 'CDG CONSTRUTORA', 'CNPJ': '03.043.067/0001-00'}},
+        {'id': 'recSKY', 'fields': {'Nome': 'EDIFICIO SKY TATUI', 'CNPJ': ''}},
+    ]
+    # pág 0 casa por CNPJ; pág 1 casa por nome; pág 2 fica sem cliente
+    mock_pp.open.return_value = _FakePdf([
+        'Folha ... 03.043.067/0001-00 ... total',
+        'EXTRATO EDIFICIO SKY TATUI maio',
+        'documento qualquer sem identificacao',
+    ])
+    mapa, total, sem = app.construir_mapa_cliente('/tmp/x.pdf')
+    assert total == 3
+    assert mapa['recCDG']['paginas'] == [0]
+    assert mapa['recSKY']['paginas'] == [1]
+    assert sem == [2]
+    print('OK: construir_mapa_cliente casa por CNPJ e por Nome (fallback), e marca sem-cliente')
+
+
+@patch('app._at_throttle', lambda: None)
+@patch('app._carregar_envios_pendentes', lambda tipo: (set(), set()))
+@patch('app._carregar_contexto_distribuicao', lambda: ({}, {}, {}))
+@patch('app._at_listar_todos')
+def test_gerar_fila_email_dry_run(mock_listar):
+    def fake(table, fields=None, filtro=None):
+        if table == app.TABLE_CLIENTES:
+            return [{'id': 'recCLI', 'fields': {
+                'Nome': 'COLASO', 'Email': 'cliente@x.com', 'Status': {'name': 'Ativo'}}}]
+        return []
+    mock_listar.side_effect = fake
+    res = app._gerar_fila_envios_email(folha_mensal='Maio 2026', guias_ids=['recG1'], dry_run=True)
+    assert res['total_envios'] == 1
+    assert res['envios'][0]['acao'] == 'criaria_envio'
+    assert res['envios'][0]['email'] == 'cliente@x.com'
+    print('OK: _gerar_fila_envios_email (dry_run) monta 1 pacote por cliente ativo')
+
+
+@patch('app._at_throttle', lambda: None)
+@patch('app._carregar_envios_pendentes', lambda tipo: (set(), set()))
+@patch('app._carregar_contexto_distribuicao', lambda: ({}, {}, {}))
+@patch('app._at_listar_todos')
+def test_gerar_fila_email_ignora_sem_email(mock_listar):
+    def fake(table, fields=None, filtro=None):
+        if table == app.TABLE_CLIENTES:
+            return [{'id': 'recCLI', 'fields': {'Nome': 'X', 'Status': {'name': 'Ativo'}}}]
+        return []
+    mock_listar.side_effect = fake
+    res = app._gerar_fila_envios_email(guias_ids=['recG1'], dry_run=True)
+    assert res['total_envios'] == 0
+    assert res['ignorados'][0]['motivos'] == ['email_ausente']
+    print('OK: _gerar_fila_envios_email ignora cliente sem e-mail')
+
+
+@patch('app._at_throttle', lambda: None)
+@patch('app._at_listar_todos')
+def test_disparar_fila_email_dry_run(mock_listar):
+    mock_listar.return_value = [{'id': 'recENV', 'fields': {
+        'Tipo': app.TIPO_ENVIO_EMAIL_CLIENTE, 'Status': 'Preparando', 'Canal': 'E-mail',
+        'Email': 'cliente@x.com', 'Cliente': [{'id': 'recCLI', 'name': 'COLASO'}],
+        'PDF HOLERITES': [{'url': 'http://a/h.pdf', 'filename': 'h.pdf'}],
+    }}]
+    res = app._disparar_fila_email(dry_run=True)
+    assert res['total_enviados'] == 1
+    assert res['enviados'][0]['acao'] == 'enviaria'
+    assert res['enviados'][0]['qtd_anexos'] == 1
+    print('OK: _disparar_fila_email (dry_run) lista o que enviaria com anexos resolvidos')
+
+
+def test_disparar_fila_email_sem_credenciais_bloqueia():
+    with patch.object(app, 'EMAIL_SENDER', ''), patch.object(app, 'EMAIL_SENDER_PASSWORD', ''):
+        res = app._disparar_fila_email(dry_run=False)
+    assert res['status'] == 'erro'
+    print('OK: disparo real de e-mail sem credenciais é bloqueado com erro claro')
+
+
+def test_smtp_enviar_email_monta_mensagem():
+    with patch.object(app, 'EMAIL_SENDER', 'contato@x.com'), \
+         patch.object(app, 'EMAIL_SENDER_PASSWORD', 'senha-app'), \
+         patch('smtplib.SMTP') as mock_smtp:
+        server = mock_smtp.return_value.__enter__.return_value
+        app._smtp_enviar_email('dest@y.com', 'Assunto', 'corpo', [('h.pdf', b'%PDF-1.4 x')])
+        server.login.assert_called_once_with('contato@x.com', 'senha-app')
+        assert server.send_message.called
+    print('OK: _smtp_enviar_email faz login e envia a mensagem com anexo')
+
+
 if __name__ == '__main__':
     test_normalizar_nome_ignora_caixa_acentos_espacos()
     test_normalizar_nome_remove_sufixos_societarios()
@@ -612,4 +730,12 @@ if __name__ == '__main__':
     test_disparar_dry_run()
     test_disparar_envio_real_com_numero_teste()
     test_disparar_sem_chave_evolution_bloqueia()
+    test_extrair_cnpj()
+    test_normalizar_texto_busca()
+    test_construir_mapa_cliente_cnpj_e_nome()
+    test_gerar_fila_email_dry_run()
+    test_gerar_fila_email_ignora_sem_email()
+    test_disparar_fila_email_dry_run()
+    test_disparar_fila_email_sem_credenciais_bloqueia()
+    test_smtp_enviar_email_monta_mensagem()
     print('\nTodos os testes (Fase 3 - Fila de Envios) passaram.')
