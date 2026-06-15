@@ -665,6 +665,49 @@ def test_gerar_fila_email_ignora_sem_email(mock_listar):
 
 
 @patch('app._at_throttle', lambda: None)
+@patch('app._carregar_envios_pendentes', lambda tipo: (set(), set()))
+@patch('app._carregar_contexto_distribuicao', lambda: ({}, {}, {}))
+@patch('app._at_listar_todos')
+def test_gerar_fila_email_d2_usa_mes_anterior(mock_listar):
+    # Cliente com "Exige D-2" deve puxar os documentos de Abril (D-2), não Maio.
+    def fake(table, fields=None, filtro=None):
+        if table == app.TABLE_EXTRATO and filtro and 'Abril 2026' in filtro:
+            return [{'id': 'recEXT', 'fields': {
+                'Cliente': [{'id': 'recCLI'}], 'PDF ARQUIVO': [{'url': 'http://x'}]}}]
+        if table == app.TABLE_CLIENTES:
+            return [{'id': 'recCLI', 'fields': {
+                'Nome': 'CONDOMINIO D2', 'Email': 'd2@x.com',
+                'Status': {'name': 'Ativo'}, 'Exige D-2': True}}]
+        return []
+    mock_listar.side_effect = fake
+    res = app._gerar_fila_envios_email(
+        folha_mensal='Maio 2026', folha_mensal_d2='Abril 2026', dry_run=True)
+    assert res['total_envios'] == 1
+    assert res['envios'][0]['folha'] == 'Abril 2026'
+    assert res['envios'][0]['d2'] is True
+    assert res['envios'][0]['qtd_extratos'] == 1
+    print('OK: flag Exige D-2 faz o cliente receber os documentos de 2 meses atrás (D-2)')
+
+
+@patch('app._at_throttle', lambda: None)
+@patch('app._carregar_envios_pendentes', lambda tipo: (set(), set()))
+@patch('app._carregar_contexto_distribuicao', lambda: ({}, {}, {}))
+@patch('app._at_listar_todos')
+def test_gerar_fila_email_d2_sem_folha_d2_ignora(mock_listar):
+    def fake(table, fields=None, filtro=None):
+        if table == app.TABLE_CLIENTES:
+            return [{'id': 'recCLI', 'fields': {
+                'Nome': 'X', 'Email': 'c@x.com',
+                'Status': {'name': 'Ativo'}, 'Exige D-2': True}}]
+        return []
+    mock_listar.side_effect = fake
+    res = app._gerar_fila_envios_email(folha_mensal='Maio 2026', guias_ids=['recG1'], dry_run=True)
+    assert res['total_envios'] == 0
+    assert res['ignorados'][0]['motivo'] == 'exige_d2_sem_folha_d2_informada'
+    print('OK: cliente Exige D-2 sem folha_mensal_d2 informada é ignorado com motivo claro')
+
+
+@patch('app._at_throttle', lambda: None)
 @patch('app._at_listar_todos')
 def test_disparar_fila_email_dry_run(mock_listar):
     mock_listar.return_value = [{'id': 'recENV', 'fields': {
@@ -735,6 +778,8 @@ if __name__ == '__main__':
     test_construir_mapa_cliente_cnpj_e_nome()
     test_gerar_fila_email_dry_run()
     test_gerar_fila_email_ignora_sem_email()
+    test_gerar_fila_email_d2_usa_mes_anterior()
+    test_gerar_fila_email_d2_sem_folha_d2_ignora()
     test_disparar_fila_email_dry_run()
     test_disparar_fila_email_sem_credenciais_bloqueia()
     test_smtp_enviar_email_monta_mensagem()

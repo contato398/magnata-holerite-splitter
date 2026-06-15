@@ -4265,7 +4265,8 @@ def processar_doc_cliente():
             pass
 
 
-def _gerar_fila_envios_email(folha_mensal=None, guias_ids=None, limit=None, dry_run=True):
+def _gerar_fila_envios_email(folha_mensal=None, folha_mensal_d2=None,
+                             guias_ids=None, limit=None, dry_run=True):
     """
     v2.29 — Gera a fila de e-mail por CLIENTE. Para cada Cliente Ativo com
     e-mail (campo Email; fallback Email Contador do escritório), consolida num
@@ -4274,6 +4275,12 @@ def _gerar_fila_envios_email(folha_mensal=None, guias_ids=None, limit=None, dry_
       - Extrato Mensal do mês do cliente (link)
       - FGTS Digital do mês do cliente (link)
       - Guias comuns (broadcast) — apenas se `guias_ids` for informado
+
+    Flag "Exige D-2" (Clientes): clientes marcados recebem os documentos de
+    `folha_mensal_d2` (2 meses atrás, ex.: Abril); os demais recebem
+    `folha_mensal` (mês passado, ex.: Maio). Por isso buscamos os documentos de
+    AMBAS as folhas e escolhemos a certa por cliente.
+
     Ignora clientes já com envio do tipo pendente (não duplica). Os PDFs em si
     são resolvidos na hora do disparo via os campos lookup da Envios.
 
@@ -4282,35 +4289,42 @@ def _gerar_fila_envios_email(folha_mensal=None, guias_ids=None, limit=None, dry_
     clientes_ctx, locais, funcionarios = _carregar_contexto_distribuicao()
     _, cliente_pendentes = _carregar_envios_pendentes(TIPO_ENVIO_EMAIL_CLIENTE)
     guias_ids = guias_ids or []
-    filtro_folha = f'{{Folha Mensal}}="{folha_mensal}"' if folha_mensal else None
+    folhas_alvo = [f for f in (folha_mensal, folha_mensal_d2) if f]
 
-    # Holerites do mês agrupados por cliente
-    holerites_por_cliente = {}
-    for rec in _at_listar_todos(TABLE_HOL, ['Holerite', 'Funcionário', 'Folha Mensal', 'PDF HOLERITE'], filtro_folha):
-        if not rec['fields'].get('PDF HOLERITE'):
-            continue
-        c = _classificar_holerite_distribuicao(rec, clientes_ctx, locais, funcionarios)
-        if c['cliente_id']:
-            holerites_por_cliente.setdefault(c['cliente_id'], []).append(rec['id'])
-
-    # Extratos / FGTS do mês por cliente
-    def _docs_por_cliente(table, f_cli_nome):
-        out = {}
-        for rec in _at_listar_todos(table, ['Folha Mensal', 'Cliente', 'PDF ARQUIVO'], filtro_folha):
-            f = rec['fields']
-            if not f.get('PDF ARQUIVO'):
+    # Holerites por folha → por cliente: {folha: {cliente_id: [holerite_ids]}}
+    holerites_idx = {}
+    for folha in folhas_alvo:
+        dest = holerites_idx.setdefault(folha, {})
+        filtro = f'{{Folha Mensal}}="{folha}"'
+        for rec in _at_listar_todos(TABLE_HOL, ['Holerite', 'Funcionário', 'Folha Mensal', 'PDF HOLERITE'], filtro):
+            if not rec['fields'].get('PDF HOLERITE'):
                 continue
-            for cid in (f.get('Cliente') or []):
-                cid = cid['id'] if isinstance(cid, dict) else cid
-                out.setdefault(cid, []).append(rec['id'])
-        return out
+            c = _classificar_holerite_distribuicao(rec, clientes_ctx, locais, funcionarios)
+            if c['cliente_id']:
+                dest.setdefault(c['cliente_id'], []).append(rec['id'])
 
-    extratos_por_cliente = _docs_por_cliente(TABLE_EXTRATO, 'Cliente')
-    fgts_por_cliente = _docs_por_cliente(TABLE_FGTS, 'Cliente')
+    # Extratos / FGTS por folha → por cliente (mesma estrutura)
+    def _docs_idx(table):
+        idx = {}
+        for folha in folhas_alvo:
+            dest = idx.setdefault(folha, {})
+            filtro = f'{{Folha Mensal}}="{folha}"'
+            for rec in _at_listar_todos(table, ['Folha Mensal', 'Cliente', 'PDF ARQUIVO'], filtro):
+                f = rec['fields']
+                if not f.get('PDF ARQUIVO'):
+                    continue
+                for cid in (f.get('Cliente') or []):
+                    cid = cid['id'] if isinstance(cid, dict) else cid
+                    dest.setdefault(cid, []).append(rec['id'])
+        return idx
 
-    # Clientes Ativos + e-mail (com fallback p/ escritório)
+    extratos_idx = _docs_idx(TABLE_EXTRATO)
+    fgts_idx = _docs_idx(TABLE_FGTS)
+
+    # Clientes Ativos + e-mail (com fallback p/ escritório) + flag Exige D-2
     envios, ignorados = [], []
-    clientes = _at_listar_todos(TABLE_CLIENTES, ['Nome', 'Cliente', 'Email', 'Email Contador', 'Status'])
+    clientes = _at_listar_todos(
+        TABLE_CLIENTES, ['Nome', 'Cliente', 'Email', 'Email Contador', 'Status', 'Exige D-2'])
     if limit:
         clientes = clientes[:limit]
 
@@ -4326,13 +4340,19 @@ def _gerar_fila_envios_email(folha_mensal=None, guias_ids=None, limit=None, dry_
             ignorados.append({'cliente': nome, 'motivo': 'ja_possui_envio_email_pendente'})
             continue
 
+        exige_d2 = bool(f.get('Exige D-2'))
+        if exige_d2 and not folha_mensal_d2:
+            ignorados.append({'cliente': nome, 'motivo': 'exige_d2_sem_folha_d2_informada'})
+            continue
+        folha_cli = folha_mensal_d2 if exige_d2 else folha_mensal
+
         email = f.get('Email')
         if not email:
             contador = f.get('Email Contador') or []
             email = contador[0] if contador else None
-        hol = holerites_por_cliente.get(cid, [])
-        ext = extratos_por_cliente.get(cid, [])
-        fgts = fgts_por_cliente.get(cid, [])
+        hol = holerites_idx.get(folha_cli, {}).get(cid, [])
+        ext = extratos_idx.get(folha_cli, {}).get(cid, [])
+        fgts = fgts_idx.get(folha_cli, {}).get(cid, [])
 
         motivos = []
         if not email:
@@ -4345,6 +4365,7 @@ def _gerar_fila_envios_email(folha_mensal=None, guias_ids=None, limit=None, dry_
 
         item = {
             'cliente': nome, 'cliente_id': cid, 'email': email,
+            'folha': folha_cli, 'd2': exige_d2,
             'qtd_holerites': len(hol), 'qtd_extratos': len(ext),
             'qtd_fgts': len(fgts), 'qtd_guias': len(guias_ids),
         }
@@ -4372,7 +4393,8 @@ def _gerar_fila_envios_email(folha_mensal=None, guias_ids=None, limit=None, dry_
         envios.append(item)
 
     return {
-        'status': 'concluido', 'dry_run': dry_run, 'folha_mensal': folha_mensal,
+        'status': 'concluido', 'dry_run': dry_run,
+        'folha_mensal': folha_mensal, 'folha_mensal_d2': folha_mensal_d2,
         'total_envios': len(envios), 'total_ignorados': len(ignorados),
         'envios': envios, 'ignorados': ignorados,
     }
@@ -4382,7 +4404,9 @@ def _gerar_fila_envios_email(folha_mensal=None, guias_ids=None, limit=None, dry_
 def gerar_fila_envios_email():
     """
     v2.29 — Gera a fila de e-mail (1 pacote por Cliente Ativo). Body JSON:
-      - folha_mensal: ex. "Maio 2026"
+      - folha_mensal: mês normal (D-1), ex. "Maio 2026"
+      - folha_mensal_d2: mês de 2 atrás (D-2), ex. "Abril 2026" — usado só pelos
+        clientes com a flag "Exige D-2" marcada no Airtable.
       - guias_ids: lista de record ids da aba Guias e Comprovantes a anexar em
         TODOS os clientes (broadcast). Opcional.
       - limit / dry_run (padrão true).
@@ -4398,6 +4422,7 @@ def gerar_fila_envios_email():
 
     body = request.get_json(silent=True) or {}
     folha_mensal = body.get('folha_mensal')
+    folha_mensal_d2 = body.get('folha_mensal_d2')
     guias_ids = body.get('guias_ids') or []
     limit = body.get('limit')
     try:
@@ -4407,7 +4432,8 @@ def gerar_fila_envios_email():
     dry_run = body.get('dry_run', True)
 
     resultado = _gerar_fila_envios_email(
-        folha_mensal=folha_mensal, guias_ids=guias_ids, limit=limit, dry_run=dry_run)
+        folha_mensal=folha_mensal, folha_mensal_d2=folha_mensal_d2,
+        guias_ids=guias_ids, limit=limit, dry_run=dry_run)
     return jsonify(resultado)
 
 
