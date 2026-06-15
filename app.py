@@ -2043,7 +2043,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.29',
+        'versao': '2.31',
         'ram_mb': _mem_mb(),
     })
 
