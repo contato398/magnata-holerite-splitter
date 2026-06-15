@@ -762,29 +762,46 @@ def test_fmt_quando():
 
 
 def test_formatar_protocolo():
-    txt = app._formatar_protocolo([('Fulano', '15/06/2026 às 18:53'), ('Ciclano', '15/06/2026 às 18:54')])
+    txt = app._formatar_protocolo([
+        ('Fulano', '15/06/2026 às 18:53', '15/06/2026 às 19:00'),
+        ('Ciclano', '15/06/2026 às 18:54', ''),
+    ])
     assert 'PROTOCOLO DE ENTREGA' in txt
-    assert 'Fulano — enviado em 15/06/2026 às 18:53' in txt
+    assert 'Fulano — enviado em 15/06/2026 às 18:53 · LIDO em 15/06/2026 às 19:00 ✓' in txt
+    assert 'Ciclano — enviado em 15/06/2026 às 18:54 · (aguardando leitura)' in txt
     assert app._formatar_protocolo([]) == ''
-    print('OK: _formatar_protocolo monta o bloco e fica vazio sem colaboradores')
+    print('OK: _formatar_protocolo mostra enviado + leitura (lido / aguardando)')
 
 
 @patch('app._at_throttle', lambda: None)
-@patch('app._carregar_contexto_distribuicao', return_value=(
-    {'recCLI1': {}},
-    {'recLOC1': {'cliente_ids': ['recCLI1']}},
-    {'recF1': {'nome': 'Fulano', 'locais_ids': ['recLOC1']}},
-))
 @patch('app._at_listar_todos')
-def test_protocolos_entrega_por_cliente(mock_listar, mock_ctx):
+def test_protocolos_entrega_por_cliente(mock_listar):
+    ctx = (
+        {'recCLI1': {}},
+        {'recLOC1': {'cliente_ids': ['recCLI1']}},
+        {'recF1': {'nome': 'Fulano', 'locais_ids': ['recLOC1']}},
+    )
     mock_listar.return_value = [{'id': 'recENV', 'fields': {
         'Tipo': app.TIPO_ENVIO_COMBINADO, 'Status': 'Enviado', 'Canal': 'WhatsApp',
         'Funcionário(s) Vinculado(s)': [{'id': 'recF1', 'name': 'Fulano'}],
         'Enviado em': '2026-06-15T18:53:00-03:00',
+        'Recibo Lido em': '2026-06-15T19:00:00-03:00',
     }}]
-    out = app._protocolos_entrega_por_cliente()
-    assert out['recCLI1'] == [('Fulano', '15/06/2026 às 18:53')]
-    print('OK: _protocolos_entrega_por_cliente mapeia colaborador->cliente com data/hora do WhatsApp')
+    out = app._protocolos_entrega_por_cliente(ctx)
+    assert out['recCLI1'] == [('Fulano', '15/06/2026 às 18:53', '15/06/2026 às 19:00')]
+    print('OK: _protocolos_entrega_por_cliente traz colaborador->cliente com envio E leitura')
+
+
+def test_ponto_pdfs_por_cliente():
+    ctx = (
+        {'recCLI1': {}},
+        {'recLOC1': {'cliente_ids': ['recCLI1']}},
+        {'recF1': {'nome': 'Fulano', 'locais_ids': ['recLOC1'],
+                   'pdf_folha_ponto': [{'url': 'http://x/ponto.pdf', 'filename': 'ponto.pdf'}]}},
+    )
+    out = app._ponto_pdfs_por_cliente(ctx)
+    assert out['recCLI1'] == [('ponto.pdf', 'http://x/ponto.pdf')]
+    print('OK: _ponto_pdfs_por_cliente agrupa cartão de ponto do colaborador pelo cliente')
 
 
 def test_smtp_enviar_email_monta_mensagem():
@@ -844,5 +861,6 @@ if __name__ == '__main__':
     test_fmt_quando()
     test_formatar_protocolo()
     test_protocolos_entrega_por_cliente()
+    test_ponto_pdfs_por_cliente()
     test_smtp_enviar_email_monta_mensagem()
     print('\nTodos os testes (Fase 3 - Fila de Envios) passaram.')

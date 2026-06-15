@@ -152,10 +152,14 @@ F_GUIA_TIPO    = 'fldZc4A6stiQPI8qt'
 F_GUIA_PDF     = 'fldmC813USDUA3eVl'   # PDF GUIA
 F_GUIA_NOME    = 'fldOLOkac6twvlfZR'   # Nome documento
 # Envios — campos de e-mail (link p/ os documentos do pacote)
-F_ENVIO_TEXTO   = 'fldGeaadeNYWaa4Og'   # Texto do Email
-F_ENVIO_EXTRATO = 'fldITxIfLG8TKntBu'   # Extrato Mensal (link)
-F_ENVIO_FGTS    = 'fldnsrSDCpK3YAXbm'   # FGTS Digital (link)
-F_ENVIO_GUIAS   = 'fld0Pm44oScZX7yRx'   # Guias e Comprovantes (link)
+F_ENVIO_TEXTO    = 'fldGeaadeNYWaa4Og'   # Texto do Email
+F_ENVIO_EXTRATO  = 'fldITxIfLG8TKntBu'   # Extrato Mensal (link)
+F_ENVIO_FGTS     = 'fldnsrSDCpK3YAXbm'   # FGTS Digital (link)
+F_ENVIO_GUIAS    = 'fld0Pm44oScZX7yRx'   # Guias e Comprovantes (link)
+F_ENVIO_CERTIDOES = 'fldJAcWLvXyTkkruw'  # Certidões (link) — v2.31
+
+# URL pública (p/ o link de Recibo Digital de Leitura no WhatsApp — comprovação)
+RECIBO_BASE_URL = os.environ.get('PUBLIC_BASE_URL', 'https://magnata-holerite-splitter.onrender.com').rstrip('/')
 
 # Nomes (não ids) dos campos lookup de PDF na Envios — usados p/ montar anexos
 ENVIO_LOOKUP_PDFS = [
@@ -3999,7 +4003,8 @@ def _disparar_fila_combinado(limit=None, dry_run=True, numero_teste=None):
         return {'status': 'erro', 'erro': 'EVOLUTION_API_KEY não configurada no ambiente'}
 
     enviados, falhas, ignorados = [], [], []
-    campos = ['Tipo', 'Status', 'Canal', 'Destinatário', 'Arquivos', 'Funcionário(s) Vinculado(s)']
+    campos = ['Tipo', 'Status', 'Canal', 'Destinatário', 'Arquivos',
+              'Funcionário(s) Vinculado(s)', 'Hash Recibo']
 
     for rec in _at_listar_todos(TABLE_ENVIOS, campos):
         f = rec['fields']
@@ -4012,6 +4017,7 @@ def _disparar_fila_combinado(limit=None, dry_run=True, numero_teste=None):
         func = (f.get('Funcionário(s) Vinculado(s)') or [])
         nome = func[0]['name'] if func and isinstance(func[0], dict) else None
         arquivos = f.get('Arquivos') or []
+        hash_recibo = f.get('Hash Recibo')
         numero = _normalizar_numero_evolution(numero_teste or f.get('Destinatário'))
 
         item = {
@@ -4029,12 +4035,17 @@ def _disparar_fila_combinado(limit=None, dry_run=True, numero_teste=None):
             enviados.append(item)
             continue
 
+        # Link de confirmação de recebimento (comprovação de leitura): ao abrir,
+        # o colaborador marca "Recibo Lido em" -> entra no Protocolo de Entrega.
+        link_recibo = f'{RECIBO_BASE_URL}/recibo/{hash_recibo}' if hash_recibo else None
+
         try:
             for i, a in enumerate(arquivos[:2]):
-                caption = (
+                caption = ((
                     f'Olá{(" " + nome) if nome else ""}! Seguem seus documentos do mês — '
                     f'Holerite e Cartão Ponto. Magnata Portaria e Serviços.'
-                ) if i == 0 else None
+                    + (f'\n\nConfirme o recebimento abrindo: {link_recibo}' if link_recibo else '')
+                ) if i == 0 else None)
                 _evolution_enviar_documento(numero, a['url'], a.get('filename', 'documento.pdf'), caption)
                 _at_throttle()
             _marcar_envio_status(rec['id'], 'Enviado')
@@ -4308,7 +4319,7 @@ def processar_doc_cliente():
 
 
 def _gerar_fila_envios_email(folha_mensal=None, folha_mensal_d2=None,
-                             guias_ids=None, limit=None, dry_run=True):
+                             guias_ids=None, certidoes_ids=None, limit=None, dry_run=True):
     """
     v2.29 — Gera a fila de e-mail por CLIENTE. Para cada Cliente Ativo com
     e-mail (campo Email; fallback Email Contador do escritório), consolida num
@@ -4331,6 +4342,7 @@ def _gerar_fila_envios_email(folha_mensal=None, folha_mensal_d2=None,
     clientes_ctx, locais, funcionarios = _carregar_contexto_distribuicao()
     _, cliente_pendentes = _carregar_envios_pendentes(TIPO_ENVIO_EMAIL_CLIENTE)
     guias_ids = guias_ids or []
+    certidoes_ids = certidoes_ids or []
     folhas_alvo = [f for f in (folha_mensal, folha_mensal_d2) if f]
 
     # Holerites por folha → por cliente: {folha: {cliente_id: [holerite_ids]}}
@@ -4399,7 +4411,7 @@ def _gerar_fila_envios_email(folha_mensal=None, folha_mensal_d2=None,
         motivos = []
         if not email:
             motivos.append('email_ausente')
-        if not (hol or ext or fgts or guias_ids):
+        if not (hol or ext or fgts or guias_ids or certidoes_ids):
             motivos.append('sem_documentos_do_mes')
         if motivos:
             ignorados.append({'cliente': nome, 'motivo': 'nao_pronto', 'motivos': motivos})
@@ -4429,6 +4441,8 @@ def _gerar_fila_envios_email(folha_mensal=None, folha_mensal_d2=None,
                 campos[F_ENVIO_FGTS] = fgts
             if guias_ids:
                 campos[F_ENVIO_GUIAS] = guias_ids
+            if certidoes_ids:
+                campos[F_ENVIO_CERTIDOES] = certidoes_ids
             envio_id, _ = _criar_envio_documento(campos)
             item['acao'] = 'envio_criado'
             item['envio_id'] = envio_id
@@ -4466,6 +4480,7 @@ def gerar_fila_envios_email():
     folha_mensal = body.get('folha_mensal')
     folha_mensal_d2 = body.get('folha_mensal_d2')
     guias_ids = body.get('guias_ids') or []
+    certidoes_ids = body.get('certidoes_ids') or []
     limit = body.get('limit')
     try:
         limit = int(limit) if limit else None
@@ -4475,7 +4490,7 @@ def gerar_fila_envios_email():
 
     resultado = _gerar_fila_envios_email(
         folha_mensal=folha_mensal, folha_mensal_d2=folha_mensal_d2,
-        guias_ids=guias_ids, limit=limit, dry_run=dry_run)
+        guias_ids=guias_ids, certidoes_ids=certidoes_ids, limit=limit, dry_run=dry_run)
     return jsonify(resultado)
 
 
@@ -4526,12 +4541,8 @@ def _fmt_quando(valor):
         return str(valor)
 
 
-def _protocolos_entrega_por_cliente():
-    """Protocolo de Entrega (segurança jurídica): {cliente_id: [(nome, quando)]}
-    a partir dos envios COMBINADOS (Holerite+Ponto) já ENVIADOS por WhatsApp.
-    `quando` usa o timestamp exato (campo "Enviado em"); se ausente (envios
-    antigos), cai para a "Data envio" (só data)."""
-    _clientes, locais, funcionarios = _carregar_contexto_distribuicao()
+def _mapa_func_cliente(locais, funcionarios):
+    """{funcionario_id: cliente_id} via Funcionário->Locais de trabalho->Cliente."""
     func_cliente = {}
     for fid, dados in funcionarios.items():
         for lid in (dados.get('locais_ids') or []):
@@ -4539,20 +4550,50 @@ def _protocolos_entrega_por_cliente():
             if loc and (loc.get('cliente_ids')):
                 func_cliente[fid] = loc['cliente_ids'][0]
                 break
+    return func_cliente
+
+
+def _protocolos_entrega_por_cliente(contexto=None):
+    """Protocolo de Entrega (segurança jurídica): {cliente_id: [(nome, enviado,
+    lido)]} a partir dos envios COMBINADOS (Holerite+Ponto) já ENVIADOS por
+    WhatsApp. `enviado` usa o timestamp exato ("Enviado em"); `lido` vem do
+    "Recibo Lido em" (quando o colaborador abriu o link de recibo) — '' se ainda
+    não lido."""
+    _clientes, locais, funcionarios = contexto or _carregar_contexto_distribuicao()
+    func_cliente = _mapa_func_cliente(locais, funcionarios)
     out = {}
-    campos = ['Tipo', 'Status', 'Canal', 'Funcionário(s) Vinculado(s)', 'Data envio', 'Enviado em']
+    campos = ['Tipo', 'Status', 'Canal', 'Funcionário(s) Vinculado(s)',
+              'Data envio', 'Enviado em', 'Recibo Lido em']
     for rec in _at_listar_todos(TABLE_ENVIOS, campos):
         f = rec['fields']
         if (f.get('Tipo') != TIPO_ENVIO_COMBINADO or f.get('Status') != 'Enviado'
                 or f.get('Canal') != 'WhatsApp'):
             continue
-        quando = _fmt_quando(f.get('Enviado em') or f.get('Data envio'))
+        enviado = _fmt_quando(f.get('Enviado em') or f.get('Data envio'))
+        lido = _fmt_quando(f.get('Recibo Lido em')) if f.get('Recibo Lido em') else ''
         for fl in (f.get('Funcionário(s) Vinculado(s)') or []):
             fid = fl['id'] if isinstance(fl, dict) else fl
             nome = fl['name'] if isinstance(fl, dict) else funcionarios.get(fid, {}).get('nome', fid)
             cid = func_cliente.get(fid)
             if cid:
-                out.setdefault(cid, []).append((nome, quando))
+                out.setdefault(cid, []).append((nome, enviado, lido))
+    return out
+
+
+def _ponto_pdfs_por_cliente(contexto=None):
+    """{cliente_id: [(filename, url)]} dos Cartões de Ponto (último PDF Folha
+    Ponto de cada colaborador), agrupados pelo cliente do colaborador."""
+    _clientes, locais, funcionarios = contexto or _carregar_contexto_distribuicao()
+    func_cliente = _mapa_func_cliente(locais, funcionarios)
+    out = {}
+    for fid, dados in funcionarios.items():
+        anexos = dados.get('pdf_folha_ponto') or []
+        if not anexos:
+            continue
+        pdf = anexos[-1]
+        cid = func_cliente.get(fid)
+        if cid and isinstance(pdf, dict) and pdf.get('url'):
+            out.setdefault(cid, []).append((pdf.get('filename', 'cartao_ponto.pdf'), pdf['url']))
     return out
 
 
@@ -4565,8 +4606,9 @@ def _formatar_protocolo(linhas):
         'Comprovação de envio dos documentos individuais (Holerite e Folha de '
         'Ponto) aos colaboradores deste condomínio, via WhatsApp:', '',
     ]
-    for nome, quando in sorted(set(linhas)):
-        corpo.append(f'  • {nome} — enviado em {quando}')
+    for nome, enviado, lido in sorted(set(linhas)):
+        leitura = f' · LIDO em {lido} ✓' if lido else ' · (aguardando leitura)'
+        corpo.append(f'  • {nome} — enviado em {enviado}{leitura}')
     corpo += ['', 'Protocolo gerado automaticamente por Magnata Portaria e Serviços.']
     return '\n'.join(corpo)
 
@@ -4586,7 +4628,9 @@ def _disparar_fila_email(limit=None, dry_run=True, email_teste=None):
     if not dry_run and (not EMAIL_SENDER or not EMAIL_SENDER_PASSWORD):
         return {'status': 'erro', 'erro': 'EMAIL_SENDER/EMAIL_SENDER_PASSWORD não configurados no ambiente'}
 
-    protocolos = _protocolos_entrega_por_cliente()   # {cliente_id: [(nome, quando)]}
+    contexto = _carregar_contexto_distribuicao()
+    protocolos = _protocolos_entrega_por_cliente(contexto)     # {cliente_id: [(nome, enviado, lido)]}
+    ponto_por_cliente = _ponto_pdfs_por_cliente(contexto)      # {cliente_id: [(filename, url)]}
     campos = ['Tipo', 'Status', 'Canal', 'Email', 'Destinatário', 'Cliente',
               'Texto do Email'] + ENVIO_LOOKUP_PDFS
     enviados, falhas, ignorados = [], [], []
@@ -4610,6 +4654,8 @@ def _disparar_fila_email(limit=None, dry_run=True, email_teste=None):
             for a in (f.get(campo) or []):
                 if isinstance(a, dict) and a.get('url'):
                     anexos_meta.append((a.get('filename', 'documento.pdf'), a['url']))
+        # Cartões de Ponto dos colaboradores deste cliente (vêm de Funcionários)
+        anexos_meta += ponto_por_cliente.get(cli_id, [])
 
         item = {'envio_id': rec['id'], 'cliente': cli_nome,
                 'destinatario': destino, 'qtd_anexos': len(anexos_meta),
