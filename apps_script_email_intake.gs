@@ -287,3 +287,9 @@ function capturarGuias_DCTFWeb_Abril() {
 function capturarGuias_PisCofins_Abril() {
   capturarGuias('from:saviancontabilidade.com.br has:attachment ("PIS E COFINS" OR PIS OR COFINS) after:2026/05/01 before:2026/05/31', 'PIS/COFINS', 'Abril 2026');
 }
+function capturarGuias_DCTFWeb_Maio() {
+  capturarGuias('from:saviancontabilidade.com.br has:attachment DCTFWEB after:2026/06/01 before:2026/06/30', 'DCTFWeb', 'Maio 2026');
+}
+function capturarGuias_PisCofins_Maio() {
+  capturarGuias('from:saviancontabilidade.com.br has:attachment ("PIS E COFINS" OR PIS OR COFINS) after:2026/06/01 before:2026/06/30', 'PIS/COFINS', 'Maio 2026');
+}
