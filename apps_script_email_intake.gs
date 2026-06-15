@@ -199,9 +199,13 @@ var GUIA_URL     = 'https://magnata-holerite-splitter.onrender.com/processar-gui
  * "Execuções / Ver registros". ATENÇÃO: cria registros no Airtable — rode 1x
  * por (tipo, folha); se repetir, é preciso deduplicar depois.
  */
-function fatiarDocsHistorico(query, tipo, folhaMensal) {
+// `filtroNome` (opcional): se informado, SÓ envia anexos cujo nome contenha
+// esse texto (ex.: "extrato da folha") — mira cirúrgica no documento mestre.
+// Utilities.sleep de 2s entre chamadas evita o 503 do Render grátis.
+function fatiarDocsHistorico(query, tipo, folhaMensal, filtroNome) {
+  var alvo = filtroNome ? filtroNome.toLowerCase() : null;
   var threads = GmailApp.search(query);
-  Logger.log('Query: ' + query + ' | threads: ' + threads.length);
+  Logger.log('Query: ' + query + ' | threads: ' + threads.length + (alvo ? ' | filtroNome: "' + alvo + '"' : ''));
   var enviados = 0;
   for (var t = 0; t < threads.length; t++) {
     var msgs = threads[t].getMessages();
@@ -211,6 +215,7 @@ function fatiarDocsHistorico(query, tipo, folhaMensal) {
         var att = atts[a];
         var nome = att.getName().toLowerCase();
         if (att.getContentType() !== 'application/pdf' && !nome.endsWith('.pdf')) continue;
+        if (alvo && nome.indexOf(alvo) === -1) continue;   // mira por nome do arquivo
         var resp = UrlFetchApp.fetch(FATIADOR_URL, {
           method: 'post',
           payload: { pdf: att.copyBlob(), tipo: tipo, folha_mensal: folhaMensal },
@@ -218,8 +223,9 @@ function fatiarDocsHistorico(query, tipo, folhaMensal) {
         });
         Logger.log('[' + folhaMensal + '/' + tipo + '] ' + att.getName() +
                    ' -> HTTP ' + resp.getResponseCode() + ': ' +
-                   resp.getContentText().substring(0, 500));
+                   resp.getContentText().substring(0, 600));
         enviados++;
+        Utilities.sleep(2000);   // respiro p/ o Render grátis não dar 503
       }
     }
   }
@@ -237,15 +243,16 @@ function fatiarFGTS_Abril() {
     'from:jaqueline@saviancontabilidade.com.br subject:FGTSDIGITAL after:2026/05/01 before:2026/05/15',
     'fgts', 'Abril 2026');
 }
+// Mira cirúrgica: só anexos cujo NOME contém "extrato da folha".
 function fatiarExtrato_Maio() {
   fatiarDocsHistorico(
-    'from:jaqueline@saviancontabilidade.com.br has:attachment (extrato OR folha OR condominio OR "por condominios") after:2026/05/25 before:2026/06/12',
-    'extrato', 'Maio 2026');
+    'from:jaqueline@saviancontabilidade.com.br has:attachment after:2026/05/25 before:2026/06/15',
+    'extrato', 'Maio 2026', 'extrato da folha');
 }
 function fatiarExtrato_Abril() {
   fatiarDocsHistorico(
-    'from:jaqueline@saviancontabilidade.com.br has:attachment ("COLABORADORES POR CONDOMINIOS" OR extrato OR folha) after:2026/05/01 before:2026/05/20',
-    'extrato', 'Abril 2026');
+    'from:jaqueline@saviancontabilidade.com.br has:attachment after:2026/05/01 before:2026/05/25',
+    'extrato', 'Abril 2026', 'extrato da folha');
 }
 
 /**
