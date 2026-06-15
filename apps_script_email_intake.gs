@@ -29,14 +29,17 @@ var LABEL_PROCESSADO = 'Processado-Render';
 // Caixa oficial de recebimento dos documentos (conta Gmail onde este script roda).
 var CAIXA_OFICIAL = 'contato@magnataservicos.com.br';
 
-// Remetente que envia a maioria/totalidade dos documentos (holerites, FGTS, etc.).
-// Usado como rede de segurança na busca: além de pegar e-mails já marcados com
-// LABEL_ENTRADA (via filtro do Gmail), também busca diretamente e-mails deste
-// remetente, mesmo que o filtro de label ainda não tenha sido configurado/ajustado.
-var REMETENTE_DOCUMENTOS = 'dpessoal.contabilidade1@hotmail.com';
+// Remetentes CONFIÁVEIS de documentos. E-mails vindos de qualquer um destes são
+// processados automaticamente, SEM exigir o label manual LABEL_ENTRADA — cobre
+// tanto envios diretos do contador quanto encaminhamentos da nossa própria caixa.
+var REMETENTES_CONFIAVEIS = [
+  'contato@magnataservicos.com.br',      // nossa caixa (encaminhamentos)
+  'dpessoal.contabilidade1@hotmail.com', // contador (Departamento Pessoal)
+];
 
-// Modo de teste: true = não grava nada no Airtable, apenas retorna o que faria
-var DRY_RUN = true;
+// Modo de teste: true = não grava nada no Airtable, apenas simula.
+// Motor definitivo ARMADO: false (processa e marca como Processado-Render).
+var DRY_RUN = false;
 
 // ───────────────────────────────────────────────────────────────────────────
 // SETUP — rode uma vez para guardar a API key com segurança
@@ -62,10 +65,13 @@ function processarEmails() {
     return;
   }
 
-  // Busca por label (fluxo normal, via filtro do Gmail) OU diretamente pelo
-  // remetente oficial de documentos — garante captura mesmo se o filtro de
-  // label ainda não estiver aplicando LABEL_ENTRADA corretamente.
-  var query = '(label:' + LABEL_ENTRADA + ' OR from:' + REMETENTE_DOCUMENTOS + ') ' +
+  // Captura e-mails marcados com LABEL_ENTRADA OU vindos de QUALQUER remetente
+  // confiável (sem exigir label manual nesses casos). Sempre exclui o que já
+  // foi processado (LABEL_PROCESSADO), evitando reprocessamento/duplicação.
+  var condicoesRemetente = REMETENTES_CONFIAVEIS.map(function (e) {
+    return 'from:' + e;
+  }).join(' OR ');
+  var query = '(label:' + LABEL_ENTRADA + ' OR ' + condicoesRemetente + ') ' +
               '-label:' + LABEL_PROCESSADO;
   var threads = GmailApp.search(query);
   Logger.log('Threads encontradas: ' + threads.length);
@@ -130,5 +136,46 @@ function processarEmails() {
         thread.addLabel(GmailApp.getUserLabelByName(LABEL_PROCESSADO));
       }
     }
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// GATILHO AUTOMÁTICO (Time-driven Trigger) — roda processarEmails() a cada hora
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * Cria o gatilho horário de processarEmails(). Idempotente: remove qualquer
+ * gatilho anterior da mesma função antes de criar, para nunca duplicar.
+ * Rode esta função UMA vez (script.google.com → criarGatilhoHorario → Executar)
+ * e autorize as permissões quando solicitado.
+ */
+function criarGatilhoHorario() {
+  removerGatilhos(); // evita gatilhos duplicados
+  ScriptApp.newTrigger('processarEmails')
+    .timeBased()
+    .everyHours(1)
+    .create();
+  Logger.log('Gatilho horário criado: processarEmails() roda a cada 1 hora.');
+}
+
+/** Remove todos os gatilhos da função processarEmails (para desarmar/recriar). */
+function removerGatilhos() {
+  var gatilhos = ScriptApp.getProjectTriggers();
+  var removidos = 0;
+  for (var i = 0; i < gatilhos.length; i++) {
+    if (gatilhos[i].getHandlerFunction() === 'processarEmails') {
+      ScriptApp.deleteTrigger(gatilhos[i]);
+      removidos++;
+    }
+  }
+  Logger.log('Gatilhos removidos: ' + removidos);
+}
+
+/** Lista os gatilhos ativos (diagnóstico). */
+function listarGatilhos() {
+  var gatilhos = ScriptApp.getProjectTriggers();
+  Logger.log('Total de gatilhos: ' + gatilhos.length);
+  for (var i = 0; i < gatilhos.length; i++) {
+    Logger.log('- ' + gatilhos[i].getHandlerFunction() + ' / ' + gatilhos[i].getEventType());
   }
 }
