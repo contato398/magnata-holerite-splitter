@@ -611,23 +611,29 @@ def test_normalizar_texto_busca():
 @patch('app._at_throttle', lambda: None)
 @patch('app._at_listar_todos')
 @patch('app.pdfplumber')
-def test_construir_mapa_cliente_cnpj_e_nome(mock_pp, mock_listar):
+def test_construir_mapa_cliente_seccionado(mock_pp, mock_listar):
     mock_listar.return_value = [
         {'id': 'recCDG', 'fields': {'Nome': 'CDG CONSTRUTORA', 'CNPJ': '03.043.067/0001-00'}},
         {'id': 'recSKY', 'fields': {'Nome': 'EDIFICIO SKY TATUI', 'CNPJ': ''}},
+        {'id': 'recMAG', 'fields': {'Nome': 'MAGNATA PORTARIA', 'CNPJ': ''}},  # deve ser excluída
     ]
-    # pág 0 casa por CNPJ; pág 1 casa por nome; pág 2 fica sem cliente
+    mag = '17.987.187/0001-61'  # CNPJ da Magnata (empregador) em TODA página
+    # Seções: CDG (cnpj) + detalhe; SKY (nome) + detalhe; tomador DESCONHECIDO + detalhe
     mock_pp.open.return_value = _FakePdf([
-        'Folha ... 03.043.067/0001-00 ... total',
-        'EXTRATO EDIFICIO SKY TATUI maio',
-        'documento qualquer sem identificacao',
+        f'MAGNATA {mag} cabecalho 03.043.067/0001-00 CDG',  # 0: CDG (header)
+        f'MAGNATA {mag} continuacao da folha do tomador',    # 1: detalhe → CDG
+        f'MAGNATA {mag} EXTRATO EDIFICIO SKY TATUI',         # 2: SKY (header por nome)
+        f'MAGNATA {mag} continuacao tomador',                # 3: detalhe → SKY
+        f'MAGNATA {mag} tomador 99.888.777/0001-66 NAO CADASTRADO',  # 4: desconhecido
+        f'MAGNATA {mag} continuacao do desconhecido',        # 5: detalhe → sem cliente
     ])
     mapa, total, sem = app.construir_mapa_cliente('/tmp/x.pdf')
-    assert total == 3
-    assert mapa['recCDG']['paginas'] == [0]
-    assert mapa['recSKY']['paginas'] == [1]
-    assert sem == [2]
-    print('OK: construir_mapa_cliente casa por CNPJ e por Nome (fallback), e marca sem-cliente')
+    assert total == 6
+    assert mapa['recCDG']['paginas'] == [0, 1]      # header + detalhe (carry-forward)
+    assert mapa['recSKY']['paginas'] == [2, 3]
+    assert 'recMAG' not in mapa                       # Magnata excluída
+    assert sem == [4, 5]                              # tomador desconhecido quebra o carry-forward
+    print('OK: construir_mapa_cliente secciona por tomador (carry-forward), exclui Magnata e quebra em tomador desconhecido')
 
 
 @patch('app._at_throttle', lambda: None)
@@ -794,7 +800,7 @@ if __name__ == '__main__':
     test_disparar_sem_chave_evolution_bloqueia()
     test_extrair_cnpj()
     test_normalizar_texto_busca()
-    test_construir_mapa_cliente_cnpj_e_nome()
+    test_construir_mapa_cliente_seccionado()
     test_gerar_fila_email_dry_run()
     test_gerar_fila_email_ignora_sem_email()
     test_gerar_fila_email_d2_usa_mes_anterior()

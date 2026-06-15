@@ -4146,13 +4146,24 @@ def _carregar_indice_clientes():
 
 def construir_mapa_cliente(caminho_pdf: str):
     """
-    Pass 1 do fatiador POR CLIENTE (espelha construir_mapa_cpf). Para cada
-    página, casa a um Cliente: 1º por qualquer CNPJ da página que pertença a um
-    cliente conhecido; 2º (fallback) pelo Nome do cliente presente no texto.
+    Pass 1 do fatiador POR CLIENTE — modelo SECCIONADO POR TOMADOR.
+
+    O Extrato Mensal/FGTS é organizado em seções: a 1ª página de cada tomador
+    traz o CNPJ (ou nome) do condomínio; as páginas seguintes (só com o CNPJ da
+    Magnata, o empregador) são o DETALHE daquele tomador. Por isso:
+      1) Página com CNPJ/nome de cliente conhecido → identifica a seção (vira o
+         "tomador atual") e a página entra para ele.
+      2) Página SEM identificação E sem outro CNPJ tomador → DETALHE: herda o
+         tomador atual (carry-forward).
+      3) Página com um CNPJ tomador DESCONHECIDO (≠ Magnata, não cadastrado) →
+         é uma nova seção de cliente não cadastrado: QUEBRA o carry-forward
+         (zera o tomador atual) e vai para sem_cliente — evita grudar no anterior.
+
     Retorna ({cliente_id: {'nome':.., 'paginas':[int]}}, total, paginas_sem_cliente).
     """
     por_cnpj, nomes = _carregar_indice_clientes()
     mapa, sem_cliente = {}, []
+    cliente_atual = None  # (id, nome) da seção/tomador corrente
     with pdfplumber.open(caminho_pdf) as pdf:
         total = len(pdf.pages)
         logger.info(f'[MAPA-CLI] Total de páginas: {total}')
@@ -4163,20 +4174,36 @@ def construir_mapa_cliente(caminho_pdf: str):
                 logger.warning(f'[MAPA-CLI] pág {i+1}: erro extração → {exc}')
                 texto = ''
 
+            # CNPJs da página, excluindo o da Magnata (empregador onipresente)
+            cnpjs_pagina = [
+                re.sub(r'\D', '', c) for c in
+                re.findall(r'\d{2}[.\s]?\d{3}[.\s]?\d{3}[/\s]?\d{4}[-\s]?\d{2}', texto)
+            ]
+            tomador_cnpjs = [c for c in cnpjs_pagina if len(c) == 14 and c != CNPJ_MAGNATA]
+
             cliente_id = cliente_nome = None
-            # 1) por CNPJ (qualquer CNPJ da página que seja de um cliente conhecido)
-            for c in re.findall(r'\d{2}[.\s]?\d{3}[.\s]?\d{3}[/\s]?\d{4}[-\s]?\d{2}', texto):
-                dig = re.sub(r'\D', '', c)
-                if dig in por_cnpj:
-                    cliente_id, cliente_nome = por_cnpj[dig]
+            for c in tomador_cnpjs:                       # 1a) por CNPJ do tomador
+                if c in por_cnpj:
+                    cliente_id, cliente_nome = por_cnpj[c]
                     break
-            # 2) fallback por Nome do cliente no texto
-            if not cliente_id:
+            if not cliente_id:                            # 1b) por Nome do cliente
                 texto_norm = _normalizar_texto_busca(texto)
                 for nome_norm, cid, cnome in nomes:
                     if nome_norm in texto_norm:
                         cliente_id, cliente_nome = cid, cnome
                         break
+
+            if cliente_id:
+                cliente_atual = (cliente_id, cliente_nome)   # abre/atualiza a seção
+            elif tomador_cnpjs:
+                # nova seção de tomador NÃO cadastrado → quebra o carry-forward
+                cliente_atual = None
+                sem_cliente.append(i)
+                logger.info(f'[MAPA-CLI] pág {i+1:03d}/{total}: SEM CLIENTE (tomador desconhecido {tomador_cnpjs})')
+                del texto
+                continue
+            elif cliente_atual:
+                cliente_id, cliente_nome = cliente_atual     # detalhe → herda a seção
 
             if cliente_id:
                 if cliente_id not in mapa:
