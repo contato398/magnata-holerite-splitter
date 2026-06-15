@@ -243,16 +243,16 @@ function fatiarFGTS_Abril() {
     'from:jaqueline@saviancontabilidade.com.br subject:FGTSDIGITAL after:2026/05/01 before:2026/05/15',
     'fgts', 'Abril 2026');
 }
-// Mira cirúrgica: só anexos cujo NOME contém "extrato da folha".
+// Mira cirúrgica: só anexos cujo NOME contém "extrato mensal".
 function fatiarExtrato_Maio() {
   fatiarDocsHistorico(
     'from:jaqueline@saviancontabilidade.com.br has:attachment after:2026/05/25 before:2026/06/15',
-    'extrato', 'Maio 2026', 'extrato da folha');
+    'extrato', 'Maio 2026', 'extrato mensal');
 }
 function fatiarExtrato_Abril() {
   fatiarDocsHistorico(
     'from:jaqueline@saviancontabilidade.com.br has:attachment after:2026/05/01 before:2026/05/25',
-    'extrato', 'Abril 2026', 'extrato da folha');
+    'extrato', 'Abril 2026', 'extrato mensal');
 }
 
 /**
