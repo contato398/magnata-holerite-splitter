@@ -23,7 +23,7 @@ import logging
 import requests
 from collections import Counter
 from calendar import monthrange
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify, redirect
 import pdfplumber
 import uuid as _uuid
@@ -112,6 +112,7 @@ F_ENVIO_LIDO_EM  = 'fldwPmloi2rFZOL2a'   # Recibo Lido em
 F_ENVIO_ARQUIVOS = 'fldiO4G7OO1FAjn5o'   # Arquivos (anexos genéricos — usado p/ Cartão Ponto)
 F_ENVIO_DATA     = 'fldZm5SbVuFoxB6ge'   # Data envio
 F_ENVIO_ERRO     = 'fldxaCcWELeEclZt7'   # Erro (texto do erro de disparo)
+F_ENVIO_ENVIADO_EM = 'fldagEB513S7tPeJh' # Enviado em (timestamp exato BRT) — Protocolo de Entrega
 
 TIPO_ENVIO_PONTO = 'Cartão Ponto Mensal'   # Tipo de envio espelhado p/ Folha de Ponto/Cartão Ponto
 TIPO_ENVIO_COMBINADO = 'Holerite + Cartão Ponto Mensal'   # v2.25 — envio único c/ 2 PDFs (Holerite + Ponto)
@@ -3968,7 +3969,9 @@ def _marcar_envio_status(envio_id: str, status: str, erro: str = None):
     _at_throttle()
     fields = {F_ENVIO_STATUS: status}
     if status == 'Enviado':
-        fields[F_ENVIO_DATA] = datetime.now().strftime('%Y-%m-%d')
+        agora_brt = datetime.now(timezone(timedelta(hours=-3)))   # horário de Brasília
+        fields[F_ENVIO_DATA] = agora_brt.strftime('%Y-%m-%d')
+        fields[F_ENVIO_ENVIADO_EM] = agora_brt.isoformat()        # timestamp exato p/ Protocolo
     if erro:
         fields[F_ENVIO_ERRO] = erro[:1000]
     r = requests.patch(
@@ -4511,11 +4514,69 @@ def _smtp_enviar_email(destinatario: str, assunto: str, corpo_texto: str, anexos
         server.send_message(msg)
 
 
+def _fmt_quando(valor):
+    """Formata um ISO datetime/date -> 'dd/mm/aaaa às HH:MM' (ou só a data)."""
+    if not valor:
+        return 'data não registrada'
+    try:
+        if 'T' in valor:
+            return datetime.fromisoformat(valor).strftime('%d/%m/%Y às %H:%M')
+        return datetime.strptime(valor[:10], '%Y-%m-%d').strftime('%d/%m/%Y')
+    except Exception:
+        return str(valor)
+
+
+def _protocolos_entrega_por_cliente():
+    """Protocolo de Entrega (segurança jurídica): {cliente_id: [(nome, quando)]}
+    a partir dos envios COMBINADOS (Holerite+Ponto) já ENVIADOS por WhatsApp.
+    `quando` usa o timestamp exato (campo "Enviado em"); se ausente (envios
+    antigos), cai para a "Data envio" (só data)."""
+    _clientes, locais, funcionarios = _carregar_contexto_distribuicao()
+    func_cliente = {}
+    for fid, dados in funcionarios.items():
+        for lid in (dados.get('locais_ids') or []):
+            loc = locais.get(lid)
+            if loc and (loc.get('cliente_ids')):
+                func_cliente[fid] = loc['cliente_ids'][0]
+                break
+    out = {}
+    campos = ['Tipo', 'Status', 'Canal', 'Funcionário(s) Vinculado(s)', 'Data envio', 'Enviado em']
+    for rec in _at_listar_todos(TABLE_ENVIOS, campos):
+        f = rec['fields']
+        if (f.get('Tipo') != TIPO_ENVIO_COMBINADO or f.get('Status') != 'Enviado'
+                or f.get('Canal') != 'WhatsApp'):
+            continue
+        quando = _fmt_quando(f.get('Enviado em') or f.get('Data envio'))
+        for fl in (f.get('Funcionário(s) Vinculado(s)') or []):
+            fid = fl['id'] if isinstance(fl, dict) else fl
+            nome = fl['name'] if isinstance(fl, dict) else funcionarios.get(fid, {}).get('nome', fid)
+            cid = func_cliente.get(fid)
+            if cid:
+                out.setdefault(cid, []).append((nome, quando))
+    return out
+
+
+def _formatar_protocolo(linhas):
+    """Monta o texto do Protocolo de Entrega para o corpo do e-mail."""
+    if not linhas:
+        return ''
+    corpo = [
+        '', '', '====== PROTOCOLO DE ENTREGA ======',
+        'Comprovação de envio dos documentos individuais (Holerite e Folha de '
+        'Ponto) aos colaboradores deste condomínio, via WhatsApp:', '',
+    ]
+    for nome, quando in sorted(set(linhas)):
+        corpo.append(f'  • {nome} — enviado em {quando}')
+    corpo += ['', 'Protocolo gerado automaticamente por Magnata Portaria e Serviços.']
+    return '\n'.join(corpo)
+
+
 def _disparar_fila_email(limit=None, dry_run=True, email_teste=None):
     """
-    v2.29 — Lê os envios Canal="E-mail" / Tipo="Pacote Mensal Cliente" em
+    v2.29/v2.30 — Lê os envios Canal="E-mail" / Tipo="Pacote Mensal Cliente" em
     Status "Preparando", monta o e-mail consolidado (todos os PDFs dos campos
-    lookup), envia via SMTP e marca "Enviado".
+    lookup) + o PROTOCOLO DE ENTREGA (colaboradores + data/hora do WhatsApp),
+    envia via SMTP e marca "Enviado".
 
     Segurança:
       - dry_run=True (padrão): não envia nada, só lista o que enviaria.
@@ -4525,6 +4586,7 @@ def _disparar_fila_email(limit=None, dry_run=True, email_teste=None):
     if not dry_run and (not EMAIL_SENDER or not EMAIL_SENDER_PASSWORD):
         return {'status': 'erro', 'erro': 'EMAIL_SENDER/EMAIL_SENDER_PASSWORD não configurados no ambiente'}
 
+    protocolos = _protocolos_entrega_por_cliente()   # {cliente_id: [(nome, quando)]}
     campos = ['Tipo', 'Status', 'Canal', 'Email', 'Destinatário', 'Cliente',
               'Texto do Email'] + ENVIO_LOOKUP_PDFS
     enviados, falhas, ignorados = [], [], []
@@ -4540,6 +4602,8 @@ def _disparar_fila_email(limit=None, dry_run=True, email_teste=None):
         destino = email_teste or f.get('Email') or f.get('Destinatário')
         cli = f.get('Cliente') or []
         cli_nome = cli[0]['name'] if cli and isinstance(cli[0], dict) else None
+        cli_id = cli[0]['id'] if cli and isinstance(cli[0], dict) else None
+        protocolo_linhas = protocolos.get(cli_id, [])
 
         anexos_meta = []
         for campo in ENVIO_LOOKUP_PDFS:
@@ -4548,7 +4612,8 @@ def _disparar_fila_email(limit=None, dry_run=True, email_teste=None):
                     anexos_meta.append((a.get('filename', 'documento.pdf'), a['url']))
 
         item = {'envio_id': rec['id'], 'cliente': cli_nome,
-                'destinatario': destino, 'qtd_anexos': len(anexos_meta)}
+                'destinatario': destino, 'qtd_anexos': len(anexos_meta),
+                'qtd_colaboradores_protocolo': len(protocolo_linhas)}
 
         if not destino or '@' not in destino:
             item['motivo'] = 'email_invalido'
@@ -4574,6 +4639,7 @@ def _disparar_fila_email(limit=None, dry_run=True, email_teste=None):
                 'Qualquer dúvida, estamos à disposição.\n\n'
                 'Atenciosamente,\nMagnata Portaria e Serviços'
             )
+            corpo += _formatar_protocolo(protocolo_linhas)   # anexa o Protocolo de Entrega
             _smtp_enviar_email(destino, assunto, corpo, anexos)
             _marcar_envio_status(rec['id'], 'Enviado')
             item['acao'] = 'enviado'

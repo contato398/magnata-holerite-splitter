@@ -754,6 +754,39 @@ def test_processar_guia_comum(mock_criar, mock_anexar):
     print('OK: _processar_guia_comum cria registro na aba Guias e anexa o PDF (doc comum)')
 
 
+def test_fmt_quando():
+    assert app._fmt_quando('2026-06-15T18:53:00-03:00') == '15/06/2026 às 18:53'
+    assert app._fmt_quando('2026-06-15') == '15/06/2026'
+    assert app._fmt_quando(None) == 'data não registrada'
+    print('OK: _fmt_quando formata datetime (com hora) e date (só data)')
+
+
+def test_formatar_protocolo():
+    txt = app._formatar_protocolo([('Fulano', '15/06/2026 às 18:53'), ('Ciclano', '15/06/2026 às 18:54')])
+    assert 'PROTOCOLO DE ENTREGA' in txt
+    assert 'Fulano — enviado em 15/06/2026 às 18:53' in txt
+    assert app._formatar_protocolo([]) == ''
+    print('OK: _formatar_protocolo monta o bloco e fica vazio sem colaboradores')
+
+
+@patch('app._at_throttle', lambda: None)
+@patch('app._carregar_contexto_distribuicao', return_value=(
+    {'recCLI1': {}},
+    {'recLOC1': {'cliente_ids': ['recCLI1']}},
+    {'recF1': {'nome': 'Fulano', 'locais_ids': ['recLOC1']}},
+))
+@patch('app._at_listar_todos')
+def test_protocolos_entrega_por_cliente(mock_listar, mock_ctx):
+    mock_listar.return_value = [{'id': 'recENV', 'fields': {
+        'Tipo': app.TIPO_ENVIO_COMBINADO, 'Status': 'Enviado', 'Canal': 'WhatsApp',
+        'Funcionário(s) Vinculado(s)': [{'id': 'recF1', 'name': 'Fulano'}],
+        'Enviado em': '2026-06-15T18:53:00-03:00',
+    }}]
+    out = app._protocolos_entrega_por_cliente()
+    assert out['recCLI1'] == [('Fulano', '15/06/2026 às 18:53')]
+    print('OK: _protocolos_entrega_por_cliente mapeia colaborador->cliente com data/hora do WhatsApp')
+
+
 def test_smtp_enviar_email_monta_mensagem():
     with patch.object(app, 'EMAIL_SENDER', 'contato@x.com'), \
          patch.object(app, 'EMAIL_SENDER_PASSWORD', 'senha-app'), \
@@ -808,5 +841,8 @@ if __name__ == '__main__':
     test_disparar_fila_email_dry_run()
     test_disparar_fila_email_sem_credenciais_bloqueia()
     test_processar_guia_comum()
+    test_fmt_quando()
+    test_formatar_protocolo()
+    test_protocolos_entrega_por_cliente()
     test_smtp_enviar_email_monta_mensagem()
     print('\nTodos os testes (Fase 3 - Fila de Envios) passaram.')
