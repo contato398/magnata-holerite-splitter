@@ -180,3 +180,69 @@ function listarGatilhos() {
     Logger.log('- ' + gatilhos[i].getHandlerFunction() + ' / ' + gatilhos[i].getEventType());
   }
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// VARREDURA HISTÓRICA (v2.29) — pesca PDFs mestres de Extrato/FGTS direto da
+// caixa do contato@ e envia ao FATIADOR POR CLIENTE (/processar-doc-cliente).
+// Não precisa baixar nada no PC: o Apps Script lê o anexo e manda pro servidor,
+// que fatia por cliente e cria os registros nas abas Extratos Mensais / FGTS.
+// ───────────────────────────────────────────────────────────────────────────
+
+var FATIADOR_URL = 'https://magnata-holerite-splitter.onrender.com/processar-doc-cliente';
+
+/**
+ * Busca e-mails por `query`, extrai os anexos PDF e envia cada um ao fatiador
+ * com `tipo` ('extrato' | 'fgts') e `folhaMensal` (ex.: "Maio 2026").
+ * Modo log: mostra cada PDF enviado e a resposta JSON do servidor (clientes
+ * identificados / páginas sem cliente). Rode pelo editor (Executar) e veja
+ * "Execuções / Ver registros". ATENÇÃO: cria registros no Airtable — rode 1x
+ * por (tipo, folha); se repetir, é preciso deduplicar depois.
+ */
+function fatiarDocsHistorico(query, tipo, folhaMensal) {
+  var threads = GmailApp.search(query);
+  Logger.log('Query: ' + query + ' | threads: ' + threads.length);
+  var enviados = 0;
+  for (var t = 0; t < threads.length; t++) {
+    var msgs = threads[t].getMessages();
+    for (var m = 0; m < msgs.length; m++) {
+      var atts = msgs[m].getAttachments({ includeInlineImages: false, includeAttachments: true });
+      for (var a = 0; a < atts.length; a++) {
+        var att = atts[a];
+        var nome = att.getName().toLowerCase();
+        if (att.getContentType() !== 'application/pdf' && !nome.endsWith('.pdf')) continue;
+        var resp = UrlFetchApp.fetch(FATIADOR_URL, {
+          method: 'post',
+          payload: { pdf: att.copyBlob(), tipo: tipo, folha_mensal: folhaMensal },
+          muteHttpExceptions: true,
+        });
+        Logger.log('[' + folhaMensal + '/' + tipo + '] ' + att.getName() +
+                   ' -> HTTP ' + resp.getResponseCode() + ': ' +
+                   resp.getContentText().substring(0, 500));
+        enviados++;
+      }
+    }
+  }
+  Logger.log('Total de PDFs enviados ao fatiador: ' + enviados);
+}
+
+// ── Atalhos prontos (Savian) — rode 1 por vez e confira os registros ─────────
+function fatiarFGTS_Maio() {
+  fatiarDocsHistorico(
+    'from:jaqueline@saviancontabilidade.com.br subject:FGTSDIGITAL after:2026/05/25 before:2026/06/10',
+    'fgts', 'Maio 2026');
+}
+function fatiarFGTS_Abril() {
+  fatiarDocsHistorico(
+    'from:jaqueline@saviancontabilidade.com.br subject:FGTSDIGITAL after:2026/05/01 before:2026/05/15',
+    'fgts', 'Abril 2026');
+}
+function fatiarExtrato_Maio() {
+  fatiarDocsHistorico(
+    'from:jaqueline@saviancontabilidade.com.br has:attachment (extrato OR folha OR condominio OR "por condominios") after:2026/05/25 before:2026/06/12',
+    'extrato', 'Maio 2026');
+}
+function fatiarExtrato_Abril() {
+  fatiarDocsHistorico(
+    'from:jaqueline@saviancontabilidade.com.br has:attachment ("COLABORADORES POR CONDOMINIOS" OR extrato OR folha) after:2026/05/01 before:2026/05/20',
+    'extrato', 'Abril 2026');
+}
