@@ -16,6 +16,7 @@ import gc
 import time
 import zipfile
 import base64
+import mimetypes
 import hashlib
 import secrets
 import unicodedata
@@ -150,6 +151,7 @@ F_FGTS_DATA    = 'fldoFNd8CgL5ZZ63C'
 F_GUIA_STATUS  = 'fldwOQfBzyH7rVx2O'
 F_GUIA_TIPO    = 'fldZc4A6stiQPI8qt'
 F_GUIA_PDF     = 'fldmC813USDUA3eVl'   # PDF GUIA
+F_GUIA_COMPROV = 'fldBSFBpAUvJFMzbH'   # PDF COMPROVANTE (comprovantes de pagamento, VR/VA…)
 F_GUIA_NOME    = 'fldOLOkac6twvlfZR'   # Nome documento
 # Envios — campos de e-mail (link p/ os documentos do pacote)
 F_ENVIO_TEXTO    = 'fldGeaadeNYWaa4Og'   # Texto do Email
@@ -4771,14 +4773,13 @@ def _processar_guia_comum(caminho_pdf: str, tipo_guia: str, nome_doc: str, folha
 @app.route('/processar-guia', methods=['POST', 'OPTIONS'])
 def processar_guia():
     """
-    v2.29 — Arquiva 1 Guia/Comprovante COMUM (INSS, DCTFWeb, PIS/COFINS) na aba
-    Guias e Comprovantes. multipart/form-data:
-      - pdf: arquivo
-      - tipo: opcional (ex.: "INSS", "DCTFWeb") — preenche o campo Tipo
-      - nome: opcional (Nome documento; default = nome do arquivo)
-      - folha_mensal: opcional (referência)
-    Não exige X-API-KEY (só AIRTABLE_API_KEY do servidor). Retorna record_id —
-    use-o depois em guias_ids no /gerar-fila-envios-email (broadcast).
+    v2.29/v2.31 — Arquiva 1 Guia/Comprovante COMUM (INSS, DCTFWeb, FGTS, VR/VA…)
+    na aba Guias e Comprovantes (documento broadcast). multipart/form-data:
+      - 1+ arquivos (qualquer tipo: PDF, XLS…) — qualquer nome de campo
+      - tipo: opcional (ex.: "DCTFWeb", "FGTS", "VR Benefícios")
+      - nome: opcional (Nome documento)
+      - campo: 'guia' (padrão) ou 'comprovante' — onde anexar (PDF GUIA vs PDF COMPROVANTE)
+    Não exige X-API-KEY. Retorna record_id — use em guias_ids no broadcast.
     """
     if request.method == 'OPTIONS':
         return jsonify({}), 200
@@ -4787,18 +4788,37 @@ def processar_guia():
 
     tipo_guia = (request.form.get('tipo') or '').strip()
     nome_doc = (request.form.get('nome') or '').strip()
-    folha_mensal = (request.form.get('folha_mensal') or '').strip()
+    campo = (request.form.get('campo') or 'guia').strip().lower()
+    field_id = F_GUIA_COMPROV if campo == 'comprovante' else F_GUIA_PDF
 
-    caminho = extrair_pdf_do_request()
-    if not caminho:
-        return jsonify({'status': 'erro', 'erro': 'PDF não enviado (campo "pdf")'}), 400
-    try:
-        return jsonify(_processar_guia_comum(caminho, tipo_guia, nome_doc, folha_mensal))
-    finally:
+    # Coleta TODOS os arquivos enviados (qualquer tipo), em memória (são leves).
+    arquivos = []
+    for fs in request.files.values():
+        dados = fs.read()
+        if dados:
+            arquivos.append((fs.filename or 'arquivo', dados))
+    if not arquivos:
+        return jsonify({'status': 'erro', 'erro': 'nenhum arquivo enviado'}), 400
+
+    campos = {F_GUIA_STATUS: 'Recebido'}
+    if tipo_guia:
+        campos[F_GUIA_TIPO] = tipo_guia
+    if nome_doc:
+        campos[F_GUIA_NOME] = nome_doc
+    rec_id = _criar_registro(TABLE_GUIAS, campos)
+
+    anexados, falhas = [], []
+    for fname, dados in arquivos:
+        ct = (mimetypes.guess_type(fname)[0] or 'application/octet-stream')
         try:
-            os.remove(caminho)
-        except OSError:
-            pass
+            _anexar_attachment(TABLE_GUIAS, rec_id, field_id, dados, fname, ct)
+            anexados.append(fname)
+        except Exception as exc:
+            logger.error(f'[GUIA] falha ao anexar {fname}: {exc}')
+            falhas.append({'arquivo': fname, 'erro': str(exc)})
+
+    return jsonify({'status': 'concluido', 'record_id': rec_id, 'campo': campo,
+                    'tipo': tipo_guia, 'anexos': anexados, 'falhas': falhas})
 
 
 @app.route('/recibo/<hash_recibo>', methods=['GET'])
