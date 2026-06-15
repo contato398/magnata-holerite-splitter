@@ -33,8 +33,9 @@ var CAIXA_OFICIAL = 'contato@magnataservicos.com.br';
 // processados automaticamente, SEM exigir o label manual LABEL_ENTRADA — cobre
 // tanto envios diretos do contador quanto encaminhamentos da nossa própria caixa.
 var REMETENTES_CONFIAVEIS = [
-  'contato@magnataservicos.com.br',      // nossa caixa (encaminhamentos)
-  'dpessoal.contabilidade1@hotmail.com', // contador (Departamento Pessoal)
+  'contato@magnataservicos.com.br',          // nossa caixa (encaminhamentos)
+  'dpessoal.contabilidade1@hotmail.com',     // contador novo (Departamento Pessoal)
+  'jaqueline@saviancontabilidade.com.br',    // contador Savian (legado — docs até Maio/2026)
 ];
 
 // Modo de teste: true = não grava nada no Airtable, apenas simula.
