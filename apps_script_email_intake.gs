@@ -34,7 +34,7 @@ var CAIXA_OFICIAL = 'contato@magnataservicos.com.br';
 // tanto envios diretos do contador quanto encaminhamentos da nossa própria caixa.
 var REMETENTES_CONFIAVEIS = [
   'contato@magnataservicos.com.br',          // nossa caixa (encaminhamentos)
-  'dpessoal.contabilidade1@hotmail.com',     // contador novo (Departamento Pessoal)
+  'dp.contabilidade1@hotmail.com',           // contador novo (Departamento Pessoal)
   'jaqueline@saviancontabilidade.com.br',    // contador Savian (legado — docs até Maio/2026)
 ];
 
