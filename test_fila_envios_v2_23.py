@@ -768,9 +768,11 @@ def test_formatar_protocolo():
     ])
     assert 'PROTOCOLO DE ENTREGA' in txt
     assert 'Fulano — enviado em 15/06/2026 às 18:53 · LIDO em 15/06/2026 às 19:00 ✓' in txt
-    assert 'Ciclano — enviado em 15/06/2026 às 18:54 · (aguardando leitura)' in txt
+    # Sem leitura registrada (caso Maio): mostra só o ENVIO, sem "aguardando".
+    assert 'Ciclano — enviado em 15/06/2026 às 18:54' in txt
+    assert 'aguardando' not in txt
     assert app._formatar_protocolo([]) == ''
-    print('OK: _formatar_protocolo mostra enviado + leitura (lido / aguardando)')
+    print('OK: _formatar_protocolo mostra só ENVIO quando não há leitura; LIDO quando há')
 
 
 @patch('app._at_throttle', lambda: None)

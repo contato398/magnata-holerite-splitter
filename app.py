@@ -4606,8 +4606,10 @@ def _formatar_protocolo(linhas):
         'Comprovação de envio dos documentos individuais (Holerite e Folha de '
         'Ponto) aos colaboradores deste condomínio, via WhatsApp:', '',
     ]
+    # "LIDO em" só aparece quando há leitura registrada (a partir do mês em que o
+    # link de recibo passa a acompanhar o WhatsApp). Sem isso, fica só o ENVIO.
     for nome, enviado, lido in sorted(set(linhas)):
-        leitura = f' · LIDO em {lido} ✓' if lido else ' · (aguardando leitura)'
+        leitura = f' · LIDO em {lido} ✓' if lido else ''
         corpo.append(f'  • {nome} — enviado em {enviado}{leitura}')
     corpo += ['', 'Protocolo gerado automaticamente por Magnata Portaria e Serviços.']
     return '\n'.join(corpo)
