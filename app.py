@@ -112,6 +112,7 @@ F_ENVIO_LIDO_EM  = 'fldwPmloi2rFZOL2a'   # Recibo Lido em
 F_ENVIO_ARQUIVOS = 'fldiO4G7OO1FAjn5o'   # Arquivos (anexos genéricos — usado p/ Cartão Ponto)
 
 TIPO_ENVIO_PONTO = 'Cartão Ponto Mensal'   # Tipo de envio espelhado p/ Folha de Ponto/Cartão Ponto
+TIPO_ENVIO_COMBINADO = 'Holerite + Cartão Ponto Mensal'   # v2.25 — envio único c/ 2 PDFs (Holerite + Ponto)
 
 # Emails Savian
 F_EMAIL_NAME     = 'fldwKHHiVVEKySwx4'
@@ -1976,7 +1977,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.24',
+        'versao': '2.25',
         'ram_mb': _mem_mb(),
     })
 
@@ -3537,6 +3538,157 @@ def gerar_fila_envios_ponto():
     dry_run = body.get('dry_run', True)
 
     resultado = _gerar_fila_envios_folha_ponto(limit=limit, dry_run=dry_run)
+    return jsonify(resultado)
+
+
+def _gerar_fila_envios_combinado(folha_mensal=None, limit=None, dry_run=True):
+    """
+    v2.25 — Fila de Envio COMBINADO (Holerite + Cartão Ponto na MESMA
+    mensagem de WhatsApp).
+
+    Para cada Colaborador pronto em AMBOS os documentos, cria 1 único envio
+    Canal="WhatsApp" anexando os 2 PDFs no campo "Arquivos", na ordem
+    [Holerite, Ponto]. A automação da Evolution API envia os dois anexos em
+    sequência numa só mensagem.
+
+    Critério de "pronto": WhatsApp preenchido + Holerite do mês com PDF
+    (filtrado por `folha_mensal`) + PDF Folha de Ponto no prontuário. Quem
+    estiver pronto em só um dos dois é ignorado (e segue pelos endpoints
+    individuais já existentes). Colaboradores com envio combinado pendente
+    (Status="Preparando"/"Enviado") são ignorados p/ não duplicar a fila.
+
+    dry_run=True (padrão): não grava nada, apenas simula.
+    """
+    clientes, locais, funcionarios = _carregar_contexto_distribuicao()
+    func_pendentes, _ = _carregar_envios_pendentes(TIPO_ENVIO_COMBINADO)
+
+    # Mapa funcionario_id -> Holerite (com PDF) da folha_mensal informada.
+    filtro = f'{{Folha Mensal}}="{folha_mensal}"' if folha_mensal else None
+    holerite_fields = ['Holerite', 'Funcionário', 'Folha Mensal', 'PDF HOLERITE']
+    holerite_por_func = {}
+    for rec in _at_listar_todos(TABLE_HOL, holerite_fields, filtro):
+        f = rec['fields']
+        anexos = f.get('PDF HOLERITE') or []
+        if not anexos:
+            continue
+        for fid in (f.get('Funcionário', []) or []):
+            holerite_por_func[fid] = {
+                'holerite_id': rec['id'],
+                'holerite': f.get('Holerite'),
+                'pdf': anexos[-1],
+            }
+
+    func_ids = list(funcionarios.keys())
+    if limit:
+        func_ids = func_ids[:limit]
+
+    envios = []
+    ignorados = []
+
+    for func_id in func_ids:
+        dados = funcionarios[func_id]
+
+        if func_id in func_pendentes:
+            ignorados.append({
+                'funcionario_id': func_id, 'funcionario': dados.get('nome'),
+                'motivo': 'ja_possui_envio_combinado_pendente',
+            })
+            continue
+
+        whatsapp = dados.get('whatsapp')
+        anexos_ponto = dados.get('pdf_folha_ponto') or []
+        pdf_ponto = anexos_ponto[-1] if anexos_ponto else None
+        hol = holerite_por_func.get(func_id)
+
+        motivos = []
+        if not whatsapp:
+            motivos.append('whatsapp_ausente')
+        if not hol:
+            motivos.append('holerite_do_mes_ausente')
+        if not pdf_ponto:
+            motivos.append('pdf_folha_ponto_ausente')
+
+        if motivos:
+            ignorados.append({
+                'funcionario_id': func_id, 'funcionario': dados.get('nome'),
+                'motivo': 'nao_pronto', 'motivos': motivos,
+            })
+            continue
+
+        item = {
+            'funcionario': dados.get('nome'), 'funcionario_id': func_id,
+            'canal': 'WhatsApp', 'destinatario': whatsapp,
+            'holerite': hol['holerite'],
+            'arquivos': [hol['pdf'].get('filename'), pdf_ponto.get('filename')],
+        }
+
+        if dry_run:
+            item['acao'] = 'criaria_envio'
+        else:
+            campos = {
+                F_ENVIO_TIPO: TIPO_ENVIO_COMBINADO,
+                F_ENVIO_CANAL: 'WhatsApp',
+                F_ENVIO_DEST: whatsapp,
+                F_ENVIO_FUNC: [func_id],
+                F_ENVIO_HOLERITES: [hol['holerite_id']],
+                # Ordem garantida: Holerite primeiro, Cartão Ponto depois.
+                F_ENVIO_ARQUIVOS: [
+                    {'url': hol['pdf']['url']},
+                    {'url': pdf_ponto['url']},
+                ],
+            }
+            try:
+                envio_id, hash_recibo = _criar_envio_documento(campos)
+                item['acao'] = 'envio_criado'
+                item['envio_id'] = envio_id
+                item['hash_recibo'] = hash_recibo
+                item['link_recibo'] = f'/recibo/{hash_recibo}'
+            except AirtableError as exc:
+                logger.error(f'[FILA-COMBINADO] falha ao criar envio p/ {func_id}: {exc}')
+                item['acao'] = 'falhou'
+                item['erro'] = str(exc)
+
+        envios.append(item)
+
+    return {
+        'total_funcionarios_analisados': len(func_ids),
+        'envios': envios,
+        'ignorados': ignorados,
+        'dry_run': dry_run,
+    }
+
+
+@app.route('/gerar-fila-envios-combinado', methods=['POST', 'OPTIONS'])
+def gerar_fila_envios_combinado():
+    """
+    v2.25 — Gera a fila de envio COMBINADO: 1 mensagem WhatsApp por
+    colaborador com Holerite + Cartão Ponto anexados em sequência.
+
+    Body JSON opcional:
+      - folha_mensal: filtra o Holerite do mês (ex.: "Maio 2026")
+      - limit: limita a quantidade de Funcionários analisados
+      - dry_run: true (padrão) não grava nada, apenas simula
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    body = request.get_json(silent=True) or {}
+    folha_mensal = body.get('folha_mensal')
+    limit = body.get('limit')
+    try:
+        limit = int(limit) if limit else None
+    except (ValueError, TypeError):
+        limit = None
+    dry_run = body.get('dry_run', True)
+
+    resultado = _gerar_fila_envios_combinado(folha_mensal=folha_mensal, limit=limit, dry_run=dry_run)
     return jsonify(resultado)
 
 

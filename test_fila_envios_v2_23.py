@@ -411,6 +411,82 @@ def test_normalizar_whatsapp_cria_patch_real(mock_listar, mock_patch):
     print('OK: /normalizar-whatsapp grava o número normalizado via PATCH')
 
 
+# ── _gerar_fila_envios_combinado (v2.25 — Holerite + Ponto na mesma mensagem) ──
+
+ANEXO_HOLERITE = {'url': 'https://x/holerite_fulano.pdf', 'filename': 'holerite_fulano.pdf'}
+HOLERITE_FUNC1 = {'id': 'recHOL1', 'fields': {
+    'Holerite': 'Holerite Fulano',
+    'Funcionário': ['recFUNC1'],
+    'Folha Mensal': 'Maio 2026',
+    'PDF HOLERITE': [ANEXO_HOLERITE],
+}}
+
+
+@patch('app._carregar_envios_pendentes', return_value=(set(), set()))
+@patch('app._carregar_contexto_distribuicao', return_value=(CLIENTES, LOCAIS, FUNCIONARIOS_PONTO))
+@patch('app._at_listar_todos')
+def test_gerar_fila_combinado_dry_run(mock_listar, mock_contexto, mock_pend):
+    mock_listar.return_value = [HOLERITE_FUNC1]  # holerites de Maio
+
+    resultado = app._gerar_fila_envios_combinado(folha_mensal='Maio 2026', dry_run=True)
+
+    assert resultado['dry_run'] is True
+    assert len(resultado['envios']) == 1
+    envio = resultado['envios'][0]
+    assert envio['canal'] == 'WhatsApp'
+    assert envio['funcionario_id'] == 'recFUNC1'
+    # Ordem importa: Holerite primeiro, Cartão Ponto depois
+    assert envio['arquivos'] == ['holerite_fulano.pdf', 'cartao_ponto_fulano.pdf']
+    assert envio['acao'] == 'criaria_envio'
+
+    # recFUNC2 não tem WhatsApp nem holerite nem ponto -> ignorado nao_pronto
+    assert any(i['funcionario_id'] == 'recFUNC2' and i['motivo'] == 'nao_pronto'
+               for i in resultado['ignorados'])
+    print('OK: combinado dry_run gera 1 envio WhatsApp com 2 PDFs em sequência (Holerite + Ponto)')
+
+
+@patch('app._carregar_envios_pendentes', return_value=({'recFUNC1'}, set()))
+@patch('app._carregar_contexto_distribuicao', return_value=(CLIENTES, LOCAIS, FUNCIONARIOS_PONTO))
+@patch('app._at_listar_todos')
+def test_gerar_fila_combinado_ignora_pendente(mock_listar, mock_contexto, mock_pend):
+    mock_listar.return_value = [HOLERITE_FUNC1]
+
+    resultado = app._gerar_fila_envios_combinado(folha_mensal='Maio 2026', dry_run=True)
+
+    assert resultado['envios'] == []
+    assert any(i['funcionario_id'] == 'recFUNC1'
+               and i['motivo'] == 'ja_possui_envio_combinado_pendente'
+               for i in resultado['ignorados'])
+    print('OK: combinado ignora colaborador com envio combinado pendente (sem duplicar)')
+
+
+@patch('app._at_throttle', lambda: None)
+@patch('app._carregar_envios_pendentes', return_value=(set(), set()))
+@patch('app._carregar_contexto_distribuicao', return_value=(CLIENTES, LOCAIS, FUNCIONARIOS_PONTO))
+@patch('app._at_listar_todos')
+@patch('app._criar_registro', return_value='recENVIOCOMB')
+def test_gerar_fila_combinado_cria_registro_real(mock_criar, mock_listar, mock_contexto, mock_pend):
+    mock_listar.return_value = [HOLERITE_FUNC1]
+
+    resultado = app._gerar_fila_envios_combinado(folha_mensal='Maio 2026', dry_run=False)
+
+    assert len(resultado['envios']) == 1
+    envio = resultado['envios'][0]
+    assert envio['acao'] == 'envio_criado'
+    assert envio['link_recibo'] == f'/recibo/{envio["hash_recibo"]}'
+
+    _, campos = mock_criar.call_args[0]
+    assert campos[app.F_ENVIO_TIPO] == app.TIPO_ENVIO_COMBINADO
+    assert campos[app.F_ENVIO_CANAL] == 'WhatsApp'
+    # Os 2 anexos no campo Arquivos, na ordem [Holerite, Ponto]
+    assert campos[app.F_ENVIO_ARQUIVOS] == [
+        {'url': 'https://x/holerite_fulano.pdf'},
+        {'url': 'https://x/cartao_ponto_fulano.pdf'},
+    ]
+    assert app.F_ENVIO_HASH in campos
+    print('OK: combinado real cria 1 envio com os 2 PDFs anexados na ordem correta + Hash Recibo')
+
+
 if __name__ == '__main__':
     test_normalizar_nome_ignora_caixa_acentos_espacos()
     test_normalizar_nome_remove_sufixos_societarios()
@@ -435,4 +511,7 @@ if __name__ == '__main__':
     test_normalizar_telefone_vazio_ou_invalido_retorna_none()
     test_normalizar_whatsapp_dry_run()
     test_normalizar_whatsapp_cria_patch_real()
+    test_gerar_fila_combinado_dry_run()
+    test_gerar_fila_combinado_ignora_pendente()
+    test_gerar_fila_combinado_cria_registro_real()
     print('\nTodos os testes (Fase 3 - Fila de Envios) passaram.')
