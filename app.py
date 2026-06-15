@@ -1979,7 +1979,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.26',
+        'versao': '2.27',
         'ram_mb': _mem_mb(),
     })
 
@@ -2232,6 +2232,99 @@ def processar_holerites():
             'erro': str(exc),
             'etapa': etapa,
         }), 500
+
+
+@app.route('/processar-folha-ponto', methods=['POST', 'OPTIONS'])
+def processar_folha_ponto_master():
+    """
+    v2.27 — Recebe o PDF MESTRE consolidado de Folha de Ponto / Cartão Ponto,
+    fatia por CPF (igual ao /processar-holerites) e anexa o cartão INDIVIDUAL
+    de cada colaborador no campo "PDF Folha Ponto" (prontuário em Funcionários),
+    casando por CPF.
+
+    Resolve o caso do mestre consolidado: o handler de fila
+    (_processar_folha_ponto) anexa o arquivo inteiro a uma única pessoa (a 1ª
+    do PDF). Aqui cada colaborador recebe só o seu cartão.
+
+    Não exige X-API-KEY (espelha /processar-holerites); usa a AIRTABLE_API_KEY
+    do servidor. Body: multipart com campo "pdf" + opcional "folha_mensal".
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    caminho_pdf = extrair_pdf_do_request()
+    if not caminho_pdf or not os.path.exists(caminho_pdf) or os.path.getsize(caminho_pdf) < 100:
+        return jsonify({'status': 'erro', 'erro': 'PDF não recebido.'}), 400
+    with open(caminho_pdf, 'rb') as _f:
+        if _f.read(4) != b'%PDF':
+            os.unlink(caminho_pdf)
+            return jsonify({'status': 'erro', 'erro': 'Dados não são PDF válido.'}), 400
+
+    folha_mensal = (
+        request.form.get('folha_mensal')
+        or request.args.get('folha_mensal')
+        or (request.get_json(silent=True) or {}).get('folha_mensal')
+    )
+    if not folha_mensal:
+        nome_mes, ano, _ = mes_anterior_info()
+        folha_mensal = f'{nome_mes} {ano}'
+
+    mapa, total_paginas = construir_mapa_cpf(caminho_pdf)
+    if not mapa:
+        try:
+            os.unlink(caminho_pdf)
+        except OSError:
+            pass
+        return jsonify({'status': 'erro', 'erro': 'Nenhum CPF encontrado no PDF.'}), 422
+
+    anexados = []
+    erros = []
+    for cpf, dados in mapa.items():
+        nome_pdf = dados.get('nome')
+        paginas = dados.get('paginas')
+
+        if cpf.startswith('sem_cpf'):
+            erros.append({'cpf': 'N/A', 'nome': nome_pdf,
+                          'motivo': 'CPF não extraído', 'paginas': paginas})
+            continue
+
+        func_id, nome_at = buscar_funcionario_por_cpf(cpf)
+        if not func_id:
+            erros.append({'cpf': cpf, 'nome': nome_pdf,
+                          'motivo': 'Funcionário não encontrado no Airtable'})
+            continue
+
+        nome_final = nome_at or nome_pdf
+        filename = f'Folha de Ponto {folha_mensal} - {nome_final}.pdf'
+        try:
+            pdf_ind = extrair_pdf_colaborador(caminho_pdf, paginas)
+            _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_PDF_FOLHA, pdf_ind, filename)
+            anexados.append({
+                'cpf': cpf, 'nome': nome_final, 'funcionario_id': func_id,
+                'paginas': paginas, 'arquivo': filename,
+            })
+        except Exception as exc:
+            logger.error(f'[PONTO-MASTER] erro ao anexar Folha de Ponto {cpf}: {exc}')
+            erros.append({'cpf': cpf, 'nome': nome_final, 'motivo': str(exc)})
+
+    try:
+        os.unlink(caminho_pdf)
+    except OSError:
+        pass
+
+    return jsonify({
+        'status': 'concluido',
+        'folha_mensal': folha_mensal,
+        'total_colaboradores': len(mapa),
+        'total_anexados': len(anexados),
+        'total_erros': len(erros),
+        'total_paginas': total_paginas,
+        'anexados': anexados,
+        'erros': erros,
+    })
 
 
 @app.route('/corrigir-valores', methods=['POST', 'OPTIONS'])
