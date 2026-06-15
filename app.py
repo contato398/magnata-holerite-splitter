@@ -161,10 +161,13 @@ F_ENVIO_CERTIDOES = 'fldJAcWLvXyTkkruw'  # Certidões (link) — v2.31
 # URL pública (p/ o link de Recibo Digital de Leitura no WhatsApp — comprovação)
 RECIBO_BASE_URL = os.environ.get('PUBLIC_BASE_URL', 'https://magnata-holerite-splitter.onrender.com').rstrip('/')
 
-# Nomes (não ids) dos campos lookup de PDF na Envios — usados p/ montar anexos
+# Nomes (não ids) dos campos lookup de anexos na Envios — usados p/ montar o
+# e-mail. Aceitam qualquer tipo de arquivo (PDF, XLS, etc.). "PDF COMPROVANTES"
+# cobre comprovantes de pagamento (FGTS, DCTFWeb, VR/VA — broadcast).
 ENVIO_LOOKUP_PDFS = [
     'PDF HOLERITES', 'PDF EXTRATO MENSAL', 'PDF FGTS Digital', 'PDF GUIAS',
-    'PDF CERTIDÕES', 'PDF FERIAS', 'PDF CONTRATAÇÃO - RESCISÃO', 'Arquivos',
+    'PDF COMPROVANTES', 'PDF CERTIDÕES', 'PDF FERIAS', 'PDF CONTRATAÇÃO - RESCISÃO',
+    'Arquivos',
 ]
 
 # Emails Savian
@@ -4501,12 +4504,15 @@ def _baixar_attachment_bytes(url: str) -> bytes:
 
 
 def _smtp_enviar_email(destinatario: str, assunto: str, corpo_texto: str, anexos: list):
-    """Envia 1 e-mail com anexos PDF via SMTP (config 100% por env). anexos:
-    lista de (filename, bytes). Levanta exceção em falha."""
+    """Envia 1 e-mail por SMTP (config 100% por env) com anexos de QUALQUER tipo
+    (PDF, XLS, etc. — mime detectado pela extensão). anexos: lista de
+    (filename, bytes). Levanta exceção em falha."""
     import smtplib
+    import mimetypes
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
-    from email.mime.application import MIMEApplication
+    from email.mime.base import MIMEBase
+    from email import encoders
     from email.utils import formataddr
 
     if not EMAIL_SENDER or not EMAIL_SENDER_PASSWORD:
@@ -4518,7 +4524,11 @@ def _smtp_enviar_email(destinatario: str, assunto: str, corpo_texto: str, anexos
     msg['Subject'] = assunto
     msg.attach(MIMEText(corpo_texto, 'plain', 'utf-8'))
     for fname, conteudo in anexos:
-        part = MIMEApplication(conteudo, _subtype='pdf')
+        ctype, _enc = mimetypes.guess_type(fname)
+        maintype, subtype = (ctype.split('/', 1) if ctype else ('application', 'octet-stream'))
+        part = MIMEBase(maintype, subtype)
+        part.set_payload(conteudo)
+        encoders.encode_base64(part)
         part.add_header('Content-Disposition', 'attachment', filename=fname)
         msg.attach(part)
 
