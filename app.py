@@ -4437,6 +4437,7 @@ def _gerar_fila_envios_email(folha_mensal=None, folha_mensal_d2=None,
                 F_ENVIO_DEST: email,
                 F_ENVIO_EMAIL: email,
                 F_ENVIO_CLIENTE: [cid],
+                F_ENVIO_TEXTO: _corpo_maggie(nome, folha_cli),   # saudação Maggie + competência
             }
             if hol:
                 campos[F_ENVIO_HOLERITES] = hol
@@ -4627,6 +4628,49 @@ def _formatar_protocolo(linhas):
     return '\n'.join(corpo)
 
 
+def _corpo_maggie(cli_nome, competencia):
+    """Saudação/corpo base no estilo 'Maggie' (template aprovado pelo cliente),
+    com a competência da folha. v2.32."""
+    comp = f' referentes à competência {competencia}' if competencia else ' do mês'
+    sufixo = f', do condomínio/empresa {cli_nome}' if cli_nome else ''
+    return (
+        'Olá! Eu sou a Maggie, a Inteligência Artificial do Grupo Magnata. 😊\n\n'
+        'Estou aqui para tornar a comunicação e o atendimento mais rápidos, '
+        'práticos e transparentes.\n\n'
+        f'Seguem em anexo, em PDF, os documentos da folha de pagamento e encargos'
+        f'{comp}{sufixo}.'
+    )
+
+
+def _manifesto_anexos(nomes):
+    """Lista numerada dos anexos incluídos (transparência p/ o síndico conferir)."""
+    nomes = [n for n in nomes if n]
+    if not nomes:
+        return ''
+    linhas = ['', '', '📎 DOCUMENTOS ANEXADOS NESTE E-MAIL:']
+    for i, n in enumerate(sorted(set(nomes)), 1):
+        linhas.append(f'  {i}. {n}')
+    return '\n'.join(linhas)
+
+
+def _rodape_email():
+    """Assinatura + aviso de confidencialidade/LGPD."""
+    return (
+        '\n\n'
+        'Em caso de dúvidas ou necessidade de suporte mais detalhado, fale com '
+        'nossos atendentes:\n'
+        '✉️  contato@magnataservicos.com.br    ·    📱 (15) 98161-2263\n\n'
+        'Atenciosamente,\n'
+        'Grupo Magnata — Terceirização com excelência e inovação.\n\n'
+        '─────────────────────────────────────────────\n'
+        'AVISO DE CONFIDENCIALIDADE (LGPD – Lei nº 13.709/2018): Este e-mail e seus '
+        'anexos contêm informações confidenciais e dados pessoais destinados '
+        'EXCLUSIVAMENTE ao condomínio/empresa identificado. É vedada a cópia, o uso '
+        'ou a divulgação a terceiros não autorizados. Caso tenha recebido esta '
+        'mensagem por engano, por favor exclua-a e notifique o remetente.'
+    )
+
+
 def _disparar_fila_email(limit=None, dry_run=True, email_teste=None):
     """
     v2.29/v2.30 — Lê os envios Canal="E-mail" / Tipo="Pacote Mensal Cliente" em
@@ -4690,16 +4734,15 @@ def _disparar_fila_email(limit=None, dry_run=True, email_teste=None):
 
         try:
             anexos = [(fn, _baixar_attachment_bytes(u)) for fn, u in anexos_meta]
-            assunto = (f'Documentos do mês'
-                       f'{(" - " + cli_nome) if cli_nome else ""} — Magnata Portaria e Serviços')
-            corpo = f.get('Texto do Email') or (
-                f'Olá{(" " + cli_nome) if cli_nome else ""},\n\n'
-                'Seguem em anexo os documentos do mês referentes ao seu condomínio/empresa '
-                '(holerites, extrato da folha, FGTS e guias, quando aplicável).\n\n'
-                'Qualquer dúvida, estamos à disposição.\n\n'
-                'Atenciosamente,\nMagnata Portaria e Serviços'
-            )
-            corpo += _formatar_protocolo(protocolo_linhas)   # anexa o Protocolo de Entrega
+            assunto = (f'Documentos da Folha de Pagamento'
+                       f'{(" — " + cli_nome) if cli_nome else ""} — Grupo Magnata')
+            # Corpo = saudação Maggie (vem do gerador c/ competência) + manifesto
+            # dos anexos + Protocolo de Entrega + rodapé/LGPD.
+            corpo_base = f.get('Texto do Email') or _corpo_maggie(cli_nome, '')
+            corpo = (corpo_base
+                     + _manifesto_anexos([fn for fn, _ in anexos_meta])
+                     + _formatar_protocolo(protocolo_linhas)
+                     + _rodape_email())
             _smtp_enviar_email(destino, assunto, corpo, anexos)
             _marcar_envio_status(rec['id'], 'Enviado')
             item['acao'] = 'enviado'

@@ -806,6 +806,25 @@ def test_ponto_pdfs_por_cliente():
     print('OK: _ponto_pdfs_por_cliente agrupa cartão de ponto do colaborador pelo cliente')
 
 
+def test_corpo_maggie_com_competencia():
+    txt = app._corpo_maggie('CONDOMINIO MORADAS', 'Maio 2026')
+    assert 'Maggie' in txt
+    assert 'competência Maio 2026' in txt
+    assert 'CONDOMINIO MORADAS' in txt
+    print('OK: _corpo_maggie traz saudação Maggie + competência + cliente')
+
+
+def test_manifesto_e_rodape():
+    man = app._manifesto_anexos(['Extrato Mensal - Maio.pdf', 'FGTS.pdf', None])
+    assert 'DOCUMENTOS ANEXADOS' in man
+    assert '1. Extrato Mensal - Maio.pdf' in man
+    assert app._manifesto_anexos([]) == ''
+    rod = app._rodape_email()
+    assert 'LGPD' in rod and 'CONFIDENCIALIDADE' in rod
+    assert 'contato@magnataservicos.com.br' in rod
+    print('OK: manifesto lista anexos e rodapé tem assinatura + aviso LGPD')
+
+
 def test_smtp_enviar_email_monta_mensagem():
     with patch.object(app, 'EMAIL_SENDER', 'contato@x.com'), \
          patch.object(app, 'EMAIL_SENDER_PASSWORD', 'senha-app'), \
@@ -864,5 +883,7 @@ if __name__ == '__main__':
     test_formatar_protocolo()
     test_protocolos_entrega_por_cliente()
     test_ponto_pdfs_por_cliente()
+    test_corpo_maggie_com_competencia()
+    test_manifesto_e_rodape()
     test_smtp_enviar_email_monta_mensagem()
     print('\nTodos os testes (Fase 3 - Fila de Envios) passaram.')
