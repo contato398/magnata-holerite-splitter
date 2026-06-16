@@ -86,6 +86,7 @@ F_FUNC_CPF       = 'fld0Y3bXdArkSIJxo'
 F_FUNC_NOME      = 'fld2fSiomk9AOLGDb'   # Nome Completo
 F_FUNC_ADMISSAO  = 'fld5L1djmJugvLe8c'   # Data de Admissão
 F_FUNC_PDF_FOLHA = 'fldgBhXpEFmy20yxd'   # PDF Folha Ponto (prontuário)
+F_FUNC_RECIBOS   = 'fldFA03LEJ3wk3UmG'   # Recibos Pagamento (fatiados por colaborador) — v2.33
 F_FUNC_RESUMO_PONTO = 'fldI6soHhol2CdQpP'  # Resumo Cartão Ponto (extraído)
 
 # ── Tabelas/Campos Fase 2 — Caixa de Entrada ─────────────────────────────────
@@ -3063,11 +3064,12 @@ def _carregar_contexto_distribuicao():
             'whatsapp': rec['fields'].get('WhatsApp'),
             'locais_ids': rec['fields'].get('Locais de trabalho', []),
             'pdf_folha_ponto': rec['fields'].get('PDF Folha Ponto', []),
+            'recibos_pagamento': rec['fields'].get('Recibos Pagamento', []),
             'resumo_ponto': rec['fields'].get('Resumo Cartão Ponto (extraído)', ''),
         }
         for rec in _at_listar_todos(TABLE_FUNC, [
             'Nome Completo', 'WhatsApp', 'Locais de trabalho',
-            'PDF Folha Ponto', 'Resumo Cartão Ponto (extraído)',
+            'PDF Folha Ponto', 'Recibos Pagamento', 'Resumo Cartão Ponto (extraído)',
         ])
     }
     return clientes, locais, funcionarios
@@ -4610,6 +4612,23 @@ def _ponto_pdfs_por_cliente(contexto=None):
     return out
 
 
+def _recibos_pdfs_por_cliente(contexto=None):
+    """{cliente_id: [(filename, url)]} dos Recibos de Pagamento (salário,
+    assiduidade, almoço/janta) fatiados por colaborador, agrupados pelo cliente
+    do colaborador. v2.33."""
+    _clientes, locais, funcionarios = contexto or _carregar_contexto_distribuicao()
+    func_cliente = _mapa_func_cliente(locais, funcionarios)
+    out = {}
+    for fid, dados in funcionarios.items():
+        cid = func_cliente.get(fid)
+        if not cid:
+            continue
+        for a in (dados.get('recibos_pagamento') or []):
+            if isinstance(a, dict) and a.get('url'):
+                out.setdefault(cid, []).append((a.get('filename', 'recibo.pdf'), a['url']))
+    return out
+
+
 def _formatar_protocolo(linhas):
     """Monta o texto do Protocolo de Entrega para o corpo do e-mail."""
     if not linhas:
@@ -4689,6 +4708,7 @@ def _disparar_fila_email(limit=None, dry_run=True, email_teste=None):
     contexto = _carregar_contexto_distribuicao()
     protocolos = _protocolos_entrega_por_cliente(contexto)     # {cliente_id: [(nome, enviado, lido)]}
     ponto_por_cliente = _ponto_pdfs_por_cliente(contexto)      # {cliente_id: [(filename, url)]}
+    recibos_por_cliente = _recibos_pdfs_por_cliente(contexto)  # {cliente_id: [(filename, url)]}
     campos = ['Tipo', 'Status', 'Canal', 'Email', 'Destinatário', 'Cliente',
               'Texto do Email'] + ENVIO_LOOKUP_PDFS
     enviados, falhas, ignorados = [], [], []
@@ -4712,8 +4732,9 @@ def _disparar_fila_email(limit=None, dry_run=True, email_teste=None):
             for a in (f.get(campo) or []):
                 if isinstance(a, dict) and a.get('url'):
                     anexos_meta.append((a.get('filename', 'documento.pdf'), a['url']))
-        # Cartões de Ponto dos colaboradores deste cliente (vêm de Funcionários)
+        # Cartões de Ponto + Recibos dos colaboradores deste cliente (Funcionários)
         anexos_meta += ponto_por_cliente.get(cli_id, [])
+        anexos_meta += recibos_por_cliente.get(cli_id, [])
 
         item = {'envio_id': rec['id'], 'cliente': cli_nome,
                 'destinatario': destino, 'qtd_anexos': len(anexos_meta),
@@ -4862,6 +4883,70 @@ def processar_guia():
 
     return jsonify({'status': 'concluido', 'record_id': rec_id, 'campo': campo,
                     'tipo': tipo_guia, 'anexos': anexados, 'falhas': falhas})
+
+
+def _processar_recibos_master(caminho_pdf, tipo, folha_mensal):
+    """v2.33 — Fatia um mestre de RECIBOS (1 colaborador por página) por CPF e
+    anexa o recibo de cada colaborador no campo 'Recibos Pagamento' do
+    Funcionário. `tipo`: rótulo (ex.: 'Salário', 'Assiduidade', 'Almoço e Janta')."""
+    mapa, total = construir_mapa_cpf(caminho_pdf)
+    anexados, nao_vinculados = [], []
+    for cpf, dados in mapa.items():
+        if str(cpf).startswith('sem_cpf_'):
+            nao_vinculados.append({'motivo': 'cpf_nao_extraido',
+                                   'paginas': [p + 1 for p in dados['paginas']]})
+            continue
+        func = buscar_funcionario_por_cpf(cpf)
+        if not func:
+            nao_vinculados.append({'cpf': cpf, 'nome': dados.get('nome'),
+                                   'motivo': 'funcionario_nao_encontrado'})
+            continue
+        try:
+            pdf_bytes = extrair_pdf_colaborador(caminho_pdf, dados['paginas'])
+            fname = (f'Recibo {tipo} {folha_mensal or ""} - '
+                     f'{dados.get("nome") or cpf}.pdf').replace('  ', ' ').strip()
+            _anexar_attachment(TABLE_FUNC, func['id'], F_FUNC_RECIBOS, pdf_bytes, fname)
+            anexados.append({'cpf': cpf, 'nome': dados.get('nome'), 'func_id': func['id'],
+                             'paginas': [p + 1 for p in dados['paginas']]})
+        except Exception as exc:
+            logger.error(f'[RECIBOS] falha {cpf}: {exc}')
+            nao_vinculados.append({'cpf': cpf, 'erro': str(exc)})
+    return {
+        'status': 'concluido', 'tipo': tipo, 'folha_mensal': folha_mensal,
+        'total_paginas': total, 'recibos_anexados': len(anexados),
+        'anexados': anexados, 'nao_vinculados': nao_vinculados,
+    }
+
+
+@app.route('/processar-recibos', methods=['POST', 'OPTIONS'])
+def processar_recibos():
+    """
+    v2.33 — Fatia um PDF mestre de RECIBOS por colaborador (CPF) e anexa cada
+    recibo ao Funcionário (campo 'Recibos Pagamento') → entra no pacote de
+    e-mail do cliente daquele colaborador. multipart/form-data:
+      - pdf: arquivo mestre (1 colaborador por página)
+      - tipo: rótulo (ex.: "Salário", "Assiduidade", "Almoço e Janta")
+      - folha_mensal: ex. "Abril 2026"
+    Não exige X-API-KEY (só a AIRTABLE_API_KEY do servidor).
+    ATENÇÃO: rode 1x por tipo (re-rodar duplica os anexos no colaborador).
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    tipo = (request.form.get('tipo') or 'Recibo').strip()
+    folha_mensal = (request.form.get('folha_mensal') or '').strip()
+    caminho = extrair_pdf_do_request()
+    if not caminho:
+        return jsonify({'status': 'erro', 'erro': 'PDF não enviado (campo "pdf")'}), 400
+    try:
+        return jsonify(_processar_recibos_master(caminho, tipo, folha_mensal))
+    finally:
+        try:
+            os.remove(caminho)
+        except OSError:
+            pass
 
 
 @app.route('/recibo/<hash_recibo>', methods=['GET'])

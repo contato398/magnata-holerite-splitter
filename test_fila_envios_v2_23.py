@@ -806,6 +806,21 @@ def test_ponto_pdfs_por_cliente():
     print('OK: _ponto_pdfs_por_cliente agrupa cartão de ponto do colaborador pelo cliente')
 
 
+def test_recibos_pdfs_por_cliente():
+    ctx = (
+        {'recCLI1': {}},
+        {'recLOC1': {'cliente_ids': ['recCLI1']}},
+        {'recF1': {'nome': 'Fulano', 'locais_ids': ['recLOC1'],
+                   'recibos_pagamento': [
+                       {'url': 'http://x/sal.pdf', 'filename': 'Recibo Salário - Fulano.pdf'},
+                       {'url': 'http://x/ass.pdf', 'filename': 'Recibo Assiduidade - Fulano.pdf'}]}},
+    )
+    out = app._recibos_pdfs_por_cliente(ctx)
+    assert ('Recibo Salário - Fulano.pdf', 'http://x/sal.pdf') in out['recCLI1']
+    assert len(out['recCLI1']) == 2
+    print('OK: _recibos_pdfs_por_cliente agrupa recibos do colaborador pelo cliente')
+
+
 def test_corpo_maggie_com_competencia():
     txt = app._corpo_maggie('CONDOMINIO MORADAS', 'Maio 2026')
     assert 'Maggie' in txt
@@ -883,6 +898,7 @@ if __name__ == '__main__':
     test_formatar_protocolo()
     test_protocolos_entrega_por_cliente()
     test_ponto_pdfs_por_cliente()
+    test_recibos_pdfs_por_cliente()
     test_corpo_maggie_com_competencia()
     test_manifesto_e_rodape()
     test_smtp_enviar_email_monta_mensagem()
