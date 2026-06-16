@@ -4896,17 +4896,18 @@ def _processar_recibos_master(caminho_pdf, tipo, folha_mensal):
             nao_vinculados.append({'motivo': 'cpf_nao_extraido',
                                    'paginas': [p + 1 for p in dados['paginas']]})
             continue
-        func = buscar_funcionario_por_cpf(cpf)
-        if not func:
+        func_id, func_nome = buscar_funcionario_por_cpf(cpf)
+        if not func_id:
             nao_vinculados.append({'cpf': cpf, 'nome': dados.get('nome'),
                                    'motivo': 'funcionario_nao_encontrado'})
             continue
         try:
             pdf_bytes = extrair_pdf_colaborador(caminho_pdf, dados['paginas'])
+            nome_final = dados.get('nome') or func_nome or cpf
             fname = (f'Recibo {tipo} {folha_mensal or ""} - '
-                     f'{dados.get("nome") or cpf}.pdf').replace('  ', ' ').strip()
-            _anexar_attachment(TABLE_FUNC, func['id'], F_FUNC_RECIBOS, pdf_bytes, fname)
-            anexados.append({'cpf': cpf, 'nome': dados.get('nome'), 'func_id': func['id'],
+                     f'{nome_final}.pdf').replace('  ', ' ').strip()
+            _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_RECIBOS, pdf_bytes, fname)
+            anexados.append({'cpf': cpf, 'nome': nome_final, 'func_id': func_id,
                              'paginas': [p + 1 for p in dados['paginas']]})
         except Exception as exc:
             logger.error(f'[RECIBOS] falha {cpf}: {exc}')
