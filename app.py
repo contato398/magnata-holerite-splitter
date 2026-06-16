@@ -2041,11 +2041,26 @@ TIPOS_CONTRATO_5C = ('Contrato de Experiência', 'Contrato de Trabalho')
 
 @app.route('/health', methods=['GET'])
 def health():
+    at_ok = False
+    at_status = None
+    try:
+        r = requests.get(
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}',
+            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            params={'maxRecords': 1, 'fields[]': ['CPF']},
+            timeout=10,
+        )
+        at_status = r.status_code
+        at_ok = r.ok
+    except Exception as exc:
+        at_status = str(exc)
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.31',
+        'versao': '2.33',
         'ram_mb': _mem_mb(),
+        'airtable_ok': at_ok,
+        'airtable_status': at_status,
     })
 
 
