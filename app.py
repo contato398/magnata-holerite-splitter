@@ -2057,7 +2057,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.33',
+        'versao': '2.35',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -4524,9 +4524,38 @@ def _baixar_attachment_bytes(url: str) -> bytes:
 
 
 def _smtp_enviar_email(destinatario: str, assunto: str, corpo_texto: str, anexos: list):
-    """Envia 1 e-mail por SMTP (config 100% por env) com anexos de QUALQUER tipo
-    (PDF, XLS, etc. — mime detectado pela extensão). anexos: lista de
-    (filename, bytes). Levanta exceção em falha."""
+    """Envia 1 e-mail via Resend API (HTTPS/443) com fallback para SMTP.
+    anexos: lista de (filename, bytes).
+    Prioridade: RESEND_API_KEY presente → Resend; senão → SMTP clássico."""
+
+    RESEND_KEY = os.environ.get('RESEND_API_KEY', '')
+
+    if RESEND_KEY:
+        # ── Resend API (funciona no Render free tier — usa HTTPS porta 443) ──
+        destinatarios = [d.strip() for d in destinatario.split(',') if d.strip()]
+        payload = {
+            'from':    f'{EMAIL_SENDER_NOME} <{EMAIL_SENDER or "noreply@magnataservicos.com.br"}>',
+            'to':      destinatarios,
+            'subject': assunto,
+            'text':    corpo_texto,
+        }
+        if anexos:
+            payload['attachments'] = [
+                {'filename': fname, 'content': list(conteudo)}
+                for fname, conteudo in anexos
+            ]
+        r = requests.post(
+            'https://api.resend.com/emails',
+            headers={'Authorization': f'Bearer {RESEND_KEY}',
+                     'Content-Type': 'application/json'},
+            json=payload,
+            timeout=120,
+        )
+        if not r.ok:
+            raise RuntimeError(f'Resend erro {r.status_code}: {r.text[:300]}')
+        return  # sucesso
+
+    # ── Fallback SMTP ─────────────────────────────────────────────────────────
     import smtplib
     import mimetypes
     from email.mime.multipart import MIMEMultipart
@@ -4536,7 +4565,7 @@ def _smtp_enviar_email(destinatario: str, assunto: str, corpo_texto: str, anexos
     from email.utils import formataddr
 
     if not EMAIL_SENDER or not EMAIL_SENDER_PASSWORD:
-        raise RuntimeError('EMAIL_SENDER/EMAIL_SENDER_PASSWORD não configurados no ambiente')
+        raise RuntimeError('Configure RESEND_API_KEY (recomendado) ou EMAIL_SENDER+EMAIL_SENDER_PASSWORD')
 
     msg = MIMEMultipart()
     msg['From'] = formataddr((EMAIL_SENDER_NOME, EMAIL_SENDER))
