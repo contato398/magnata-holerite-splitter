@@ -4663,16 +4663,13 @@ def _formatar_protocolo(linhas):
 
 
 def _corpo_maggie(cli_nome, competencia):
-    """Saudação/corpo base no estilo 'Maggie' (template aprovado pelo cliente),
-    com a competência da folha. v2.32."""
+    """Corpo do e-mail — estilo humanizado assinado pela Bia. v2.34."""
     comp = f' referentes à competência {competencia}' if competencia else ' do mês'
-    sufixo = f', do condomínio/empresa {cli_nome}' if cli_nome else ''
+    cond = f' referente ao condomínio {cli_nome}' if cli_nome else ''
     return (
-        'Olá! Eu sou a Maggie, a Inteligência Artificial do Grupo Magnata. 😊\n\n'
-        'Estou aqui para tornar a comunicação e o atendimento mais rápidos, '
-        'práticos e transparentes.\n\n'
-        f'Seguem em anexo, em PDF, os documentos da folha de pagamento e encargos'
-        f'{comp}{sufixo}.'
+        'Olá, tudo bem?\n\n'
+        f'Segue em anexo a documentação{comp}{cond}.\n\n'
+        'Qualquer dúvida, é só chamar — estou à disposição!'
     )
 
 
@@ -4691,11 +4688,10 @@ def _rodape_email():
     """Assinatura + aviso de confidencialidade/LGPD."""
     return (
         '\n\n'
-        'Em caso de dúvidas ou necessidade de suporte mais detalhado, fale com '
-        'nossos atendentes:\n'
-        '✉️  contato@magnataservicos.com.br    ·    📱 (15) 98161-2263\n\n'
-        'Atenciosamente,\n'
-        'Grupo Magnata — Terceirização com excelência e inovação.\n\n'
+        'Um abraço,\n'
+        'Bia\n'
+        'Magnata Portaria e Serviços\n'
+        '(15) 98161-2263  ·  contato@magnataservicos.com.br\n\n'
         '─────────────────────────────────────────────\n'
         'AVISO DE CONFIDENCIALIDADE (LGPD – Lei nº 13.709/2018): Este e-mail e seus '
         'anexos contêm informações confidenciais e dados pessoais destinados '
@@ -5021,6 +5017,259 @@ def recibo_leitura(hash_recibo):
         return redirect(anexos_diretos[0]['url'])
 
     return 'Documento não encontrado.', 404
+
+
+# ─── VR/VA FATIAMENTO ─────────────────────────────────────────────────────────
+
+def _ler_xls_vr_va(dados_xls: bytes) -> dict:
+    """XLS relatorio VR/VA -> dict CPF_NUM -> {nome, cpf_fmt, va, vr}."""
+    import xlrd  # xlrd==1.2.0 suporta .xls legado
+    wb = xlrd.open_workbook(file_contents=dados_xls)
+    sh = wb.sheets()[0]
+    colaboradores = {}
+    # Header linha 23 (0-based); dados a partir da linha 24 (0-based)
+    # cols: 1=Nome, 2=Valor, 3=Produto, 4=CPF
+    for row in range(24, sh.nrows):
+        nome = str(sh.cell_value(row, 1)).strip()
+        if not nome or nome == 'Nome':
+            continue
+        try:
+            valor = float(sh.cell_value(row, 2))
+        except (ValueError, TypeError):
+            continue
+        produto = str(sh.cell_value(row, 3)).strip().lower()
+        cpf_raw = str(sh.cell_value(row, 4)).strip()
+        cpf = re.sub(r'\D', '', cpf_raw)
+        if len(cpf) < 11:
+            continue
+        if cpf not in colaboradores:
+            colaboradores[cpf] = {'nome': nome, 'cpf_fmt': cpf_raw, 'va': 0.0, 'vr': 0.0}
+        if 'alimenta' in produto:
+            colaboradores[cpf]['va'] += valor
+        elif 'refei' in produto:
+            colaboradores[cpf]['vr'] += valor
+    return colaboradores
+
+
+def _gerar_pdf_vr_va_cliente(nome_cliente: str, folha_mensal: str,
+                              colaboradores: list, pedido_num: str = '',
+                              data_pedido: str = '') -> bytes:
+    """PDF VR/VA por cliente. colaboradores: list de dicts {nome, cpf_fmt, va, vr}."""
+    from fpdf import FPDF
+
+    def fmt_brl(v: float) -> str:
+        return f'{v:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
+
+    _TZ = timezone(timedelta(hours=-3))
+    pdf = FPDF()
+    pdf.add_page()
+
+    pdf.set_font('Helvetica', 'B', 14)
+    pdf.cell(0, 8, 'Magnata Portaria e Servicos Ltda', ln=True, align='C')
+    pdf.set_font('Helvetica', '', 10)
+    pdf.cell(0, 6, f'Relatorio VR e VA - {folha_mensal}', ln=True, align='C')
+    pdf.cell(0, 6, f'Cliente: {nome_cliente}', ln=True, align='C')
+    if pedido_num:
+        pdf.cell(0, 5, f'Pedido N {pedido_num}  |  Pago em {data_pedido}', ln=True, align='C')
+    pdf.ln(4)
+
+    pdf.set_font('Helvetica', 'B', 8)
+    pdf.set_fill_color(220, 220, 220)
+    pdf.cell(75, 7, 'Nome', border=1, fill=True)
+    pdf.cell(38, 7, 'CPF', border=1, fill=True)
+    pdf.cell(25, 7, 'VA (R$)', border=1, fill=True, align='R')
+    pdf.cell(25, 7, 'VR (R$)', border=1, fill=True, align='R')
+    pdf.cell(0, 7, 'Total (R$)', border=1, fill=True, align='R', ln=True)
+
+    pdf.set_font('Helvetica', '', 7)
+    total_geral = 0.0
+    for col in sorted(colaboradores, key=lambda x: x['nome']):
+        total = col['va'] + col['vr']
+        total_geral += total
+        pdf.cell(75, 6, col['nome'][:43], border=1)
+        pdf.cell(38, 6, col['cpf_fmt'], border=1)
+        pdf.cell(25, 6, fmt_brl(col['va']), border=1, align='R')
+        pdf.cell(25, 6, fmt_brl(col['vr']), border=1, align='R')
+        pdf.cell(0, 6, fmt_brl(total), border=1, align='R', ln=True)
+
+    pdf.set_font('Helvetica', 'B', 8)
+    pdf.set_fill_color(200, 230, 200)
+    pdf.cell(163, 7, f'TOTAL - {len(colaboradores)} colaborador(es)', border=1, fill=True, align='R')
+    pdf.cell(0, 7, f'R$ {fmt_brl(total_geral)}', border=1, fill=True, align='R', ln=True)
+
+    pdf.ln(4)
+    pdf.set_font('Helvetica', 'I', 7)
+    agora = datetime.now(tz=_TZ).strftime('%d/%m/%Y %H:%M')
+    pdf.cell(0, 4, f'Gerado em {agora} | VA = Vale Alimentacao | VR = Vale Refeicao', ln=True)
+
+    return bytes(pdf.output())
+
+
+@app.route('/processar-vr-va', methods=['POST', 'OPTIONS'])
+def processar_vr_va():
+    """
+    v2.34 - Fatia relatorio VR/VA (XLS) por cliente via CPF->Local->Cliente,
+    gera PDF de prestacao de contas por condominio e indexa em Extratos Mensais
+    (ja incluso automaticamente no pacote de e-mail).
+
+    multipart/form-data:
+      xls          - arquivo XLS do relatorio VR/VA (obrigatorio)
+      comprovante  - PDF comprovante consolidado (opcional - arquiva em Guias)
+      folha_mensal - ex. 'Maio 2026' (obrigatorio)
+      pedido_num   - numero do pedido (opcional, ex. '767390003')
+      data_pedido  - data do pagamento (opcional, ex. '01/05/2026')
+      dry_run      - 'true'/'false' (padrao: 'true')
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY nao configurada'}), 500
+
+    folha_mensal = (request.form.get('folha_mensal') or '').strip()
+    dry_run      = request.form.get('dry_run', 'true').lower() != 'false'
+    pedido_num   = (request.form.get('pedido_num') or '767390003').strip()
+    data_pedido  = (request.form.get('data_pedido') or '01/05/2026').strip()
+
+    if not folha_mensal:
+        return jsonify({'status': 'erro', 'erro': 'folha_mensal obrigatorio'}), 400
+
+    xls_file = request.files.get('xls')
+    if not xls_file:
+        return jsonify({'status': 'erro', 'erro': 'arquivo xls obrigatorio'}), 400
+    xls_bytes = xls_file.read()
+
+    comp_file  = request.files.get('comprovante')
+    comp_bytes = comp_file.read() if comp_file else None
+    comp_nome  = comp_file.filename if comp_file else None
+
+    try:
+        # 1. Parse XLS
+        colaboradores_map = _ler_xls_vr_va(xls_bytes)
+        logger.info(f'[VR/VA] {len(colaboradores_map)} colaboradores no XLS')
+
+        # 2. Batch: todos os Locais (id -> lista de cliente_ids)
+        locais_map = {
+            rec['id']: rec['fields'].get('Cliente', [])
+            for rec in _at_listar_todos(TABLE_LOCAIS, ['Nome', 'Cliente'])
+        }
+
+        # 3. Batch: todos os Funcionarios (CPF -> locais_ids)
+        cpf_para_locais = {}
+        for rec in _at_listar_todos(TABLE_FUNC, ['CPF', 'Locais de trabalho']):
+            cpf = re.sub(r'\D', '', str(rec['fields'].get('CPF') or ''))
+            if cpf:
+                cpf_para_locais[cpf] = rec['fields'].get('Locais de trabalho') or []
+
+        # 4. Batch: todos os Clientes (id -> nome)
+        clientes_nome = {
+            rec['id']: rec['fields'].get('Nome', rec['id'])
+            for rec in _at_listar_todos(TABLE_CLIENTES, ['Nome'])
+        }
+
+        # 5. CPF -> primeiro cliente encontrado via Local
+        cpf_para_cliente_id = {}
+        for cpf, local_ids in cpf_para_locais.items():
+            for lid in local_ids:
+                client_ids = locais_map.get(lid, [])
+                if client_ids:
+                    cid = client_ids[0]
+                    # client_ids pode ser lista de strings ou de dicts
+                    if isinstance(cid, dict):
+                        cid = cid.get('id', cid)
+                    cpf_para_cliente_id[cpf] = cid
+                    break
+
+        # 6. Agrupar colaboradores do XLS por cliente
+        clientes_grupos = {}  # cliente_id -> {nome, colaboradores:[]}
+        sem_cliente = []
+
+        for cpf, dados in colaboradores_map.items():
+            cid = cpf_para_cliente_id.get(cpf)
+            if not cid:
+                sem_cliente.append({'cpf': dados['cpf_fmt'], 'nome': dados['nome']})
+                continue
+            if cid not in clientes_grupos:
+                clientes_grupos[cid] = {
+                    'nome': clientes_nome.get(cid, cid),
+                    'colaboradores': [],
+                }
+            clientes_grupos[cid]['colaboradores'].append({
+                'nome':    dados['nome'],
+                'cpf_fmt': dados['cpf_fmt'],
+                'va':      dados['va'],
+                'vr':      dados['vr'],
+            })
+
+        # 7. Gerar PDF e indexar por cliente em Extratos Mensais
+        resultados = []
+        _TZ = timezone(timedelta(hours=-3))
+        for cid, grupo in clientes_grupos.items():
+            nome_cli = grupo['nome']
+            cols     = grupo['colaboradores']
+            total    = sum(c['va'] + c['vr'] for c in cols)
+
+            if dry_run:
+                resultados.append({
+                    'cliente_id': cid, 'cliente': nome_cli,
+                    'colaboradores': len(cols), 'total_R$': round(total, 2),
+                    'acao': 'dry_run - PDF nao gerado',
+                })
+                continue
+
+            try:
+                pdf_bytes = _gerar_pdf_vr_va_cliente(
+                    nome_cliente=nome_cli,
+                    folha_mensal=folha_mensal,
+                    colaboradores=cols,
+                    pedido_num=pedido_num,
+                    data_pedido=data_pedido,
+                )
+            except Exception as exc:
+                resultados.append({'cliente_id': cid, 'cliente': nome_cli, 'erro': str(exc)})
+                continue
+
+            fname  = f'VR e VA {folha_mensal} - {nome_cli}.pdf'
+            rec_id = _criar_registro(TABLE_EXTRATO, {
+                F_EXT_STATUS:  'Concluido',
+                F_EXT_FOLHA:   folha_mensal,
+                F_EXT_CLIENTE: [cid],
+                F_EXT_DATA:    datetime.now(tz=_TZ).strftime('%Y-%m-%d'),
+            })
+            _anexar_attachment(TABLE_EXTRATO, rec_id, F_EXT_PDF, pdf_bytes, fname)
+
+            resultados.append({
+                'cliente_id': cid, 'cliente': nome_cli,
+                'colaboradores': len(cols), 'total_R$': round(total, 2),
+                'record_id': rec_id, 'arquivo': fname,
+            })
+
+        # 8. Comprovante consolidado (broadcast -> TABLE_GUIAS)
+        comp_record_id = None
+        if comp_bytes and not dry_run:
+            comp_record_id = _criar_registro(TABLE_GUIAS, {
+                F_GUIA_STATUS: 'Recebido',
+                F_GUIA_TIPO:   'VR/VA',
+                F_GUIA_NOME:   f'Comprovante VR e VA {folha_mensal}',
+            })
+            _anexar_attachment(
+                TABLE_GUIAS, comp_record_id, F_GUIA_COMPROV,
+                comp_bytes, comp_nome or f'Comprovante VR VA {folha_mensal}.pdf',
+            )
+
+        return jsonify({
+            'status':                   'dry_run' if dry_run else 'concluido',
+            'folha_mensal':             folha_mensal,
+            'total_colaboradores_xls':  len(colaboradores_map),
+            'clientes_processados':     len(clientes_grupos),
+            'sem_cliente':              len(sem_cliente),
+            'comprovante_record_id':    comp_record_id,
+            'resultados':               resultados,
+            'sem_cliente_detalhe':      sem_cliente,
+        })
+
+    except Exception as exc:
+        logger.exception(f'[VR/VA] erro: {exc}')
+        return jsonify({'status': 'erro', 'erro': str(exc)}), 500
 
 
 if __name__ == '__main__':
