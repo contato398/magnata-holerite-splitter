@@ -148,6 +148,7 @@ F_ASS_DATA_GERACAO    = 'fld8XKWxQk0IwZM2o'   # Data Geração
 F_ASS_PROCESSAR_ID    = 'fldEw0a0UOEH6O4DZ'   # Processar Arquivos ID (texto — não link, ver nota abaixo)
 F_ASS_FUNCIONARIO     = 'fldG4sjQ0QkFVakAu'   # Funcionário (link)
 F_ASS_TENTATIVAS      = 'fldXk0fVbrBH4xJnf'   # Tentativas (proteção contra força bruta nos 4 dígitos)
+F_ASS_EVIDENCIAS      = 'fldbfJnLF82YAhe96'   # Evidencias_Assinatura (texto consolidado: IP+Timestamp+User-Agent)
 
 MAX_TENTATIVAS_ASSINATURA = 5   # após isso, marca Status="Expirado"
 
@@ -2308,7 +2309,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.40',
+        'versao': '2.41',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -5468,6 +5469,7 @@ def _pagina_assinatura_html(hash_token: str, nome_doc: str, erro: str = None) ->
             border:none; border-radius:6px; cursor:pointer; font-weight:bold; }}
   button:hover {{ background:#234b6e; }}
   .aviso {{ font-size:12px; color:#888; margin-top:16px; }}
+  .termo {{ font-size:12px; color:#555; font-style:italic; margin:14px 0 8px; line-height:1.4; }}
 </style></head>
 <body>
   <div class="card">
@@ -5476,6 +5478,7 @@ def _pagina_assinatura_html(hash_token: str, nome_doc: str, erro: str = None) ->
     {erro_html}
     <form method="POST" action="/assinatura/{hash_token}">
       <input type="text" name="cpf" inputmode="numeric" pattern="\\d{{4}}" placeholder="Últimos 4 números do CPF" maxlength="4" required>
+      <p class="termo">Ao clicar abaixo, concordo eletronicamente com o recebimento e os termos do documento acima, sob as penas da lei.</p>
       <button type="submit">Confirmar e Assinar</button>
     </form>
     <p class="aviso">Ao confirmar, você declara ter recebido e tomado conhecimento do documento. Data, hora e IP de acesso serão registrados como comprovação.</p>
@@ -5797,7 +5800,17 @@ def assinatura_pagina(hash_token):
     # CPF confere — registrar assinatura
     ip_captura = _ip_real_da_requisicao()
     user_agent = request.headers.get('User-Agent', 'desconhecido')[:500]
-    agora_brt = datetime.now(timezone(timedelta(hours=-3))).isoformat()
+    agora_brt_dt = datetime.now(timezone(timedelta(hours=-3)))
+    agora_brt = agora_brt_dt.isoformat()
+
+    evidencias = (
+        f'IP: {ip_captura}\n'
+        f'Timestamp: {agora_brt_dt.strftime("%d/%m/%Y %H:%M:%S")} (horário de Brasília)\n'
+        f'User-Agent: {user_agent}\n'
+        f'CPF confirmado (4 últimos dígitos): {cpf_informado}\n'
+        f'Declaração: "Ao clicar, concordo eletronicamente com o recebimento e os termos '
+        f'do documento, sob as penas da lei."'
+    )
 
     _at_throttle()
     r_patch = requests.patch(
@@ -5810,6 +5823,7 @@ def assinatura_pagina(hash_token):
                 F_ASS_IP:             ip_captura,
                 F_ASS_USER_AGENT:     user_agent,
                 F_ASS_DATA_ASSINATURA: agora_brt,
+                F_ASS_EVIDENCIAS:     evidencias,
             },
             'typecast': True,
         },
