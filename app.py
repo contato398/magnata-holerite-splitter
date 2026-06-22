@@ -241,14 +241,20 @@ TIPO_DOC_REGRAS = [
     # colide com "Ficha de Registro de Empregado" (regras distintas abaixo).
     ('EPI', [r'Ficha\s+de\s+(?:Controle\s+de\s+)?EPI\b',
               r'Equipamento\s+de\s+Prote[çc][ãa]o\s+Individual',
-              r'Ficha\s+de\s+EPI[\'’]?s']),
+              r'Ficha\s+de\s+EPI[\'’]?s', r'\bEPI\b',
+              r'Recebi\s+(?:o|os|do|dos)\s+(?:seguintes\s+)?equipamentos?']),
     # Rescisão — precisa vir ANTES de Contrato de Trabalho/Experiência,
     # porque o texto de uma rescisão quase sempre cita "contrato de
     # trabalho" ("rescisão do contrato de trabalho..."), o que faria essas
     # regras genéricas capturarem o documento errado se viessem primeiro.
     ('Rescisão', [r'Termo\s+de\s+Rescis[ãa]o', r'Aviso\s+de\s+Rescis[ãa]o',
                    r'\bTRCT\b', r'Rescis[ãa]o\s+(?:do\s+)?Contrato\s+de\s+Trabalho',
-                   r'Homologa[çc][ãa]o\s+(?:de\s+)?Rescis[ãa]o']),
+                   r'Homologa[çc][ãa]o\s+(?:de\s+)?Rescis[ãa]o',
+                   # Variações reais observadas em produção (relatório de
+                   # cálculo de rescisão do sistema de folha — Secullum/SAVIAN):
+                   r'C[áa]lculo\s+de\s+Rescis[ãa]o', r'L[íi]quido\s+rescis[ãa]o',
+                   r'Motivo\s+demiss[ãa]o', r'Data\s+demiss[ãa]o',
+                   r'Data\s+de\s+demiss[ãa]o', r'F[ée]rias\s+Rescis[ãa]o']),
     # Termo de Prorrogação de Contrato de Experiência — precisa vir ANTES de
     # "Contrato de Experiência" pela mesma razão (o termo de prorrogação
     # sempre menciona "contrato de experiência" no corpo do texto).
@@ -260,7 +266,10 @@ TIPO_DOC_REGRAS = [
     # casaria com a regra \bCTPS\b de Contrato de Trabalho abaixo).
     ('Ficha de Registro de Empregado',
         [r'Ficha\s+de\s+Registro\s+de\s+Empregados?', r'Registro\s+de\s+Empregados?\b.{0,40}Ficha',
-          r'Livro\s+(?:de\s+)?Registro\s+de\s+Empregados?']),
+          r'Livro\s+(?:de\s+)?Registro\s+de\s+Empregados?',
+          # Variação real observada em produção: título "REGISTRO DE
+          # EMPREGADO" isolado (sem "Ficha de" antes), formulário de eSocial.
+          r'Registro\s+de\s+Empregados?\b', r'Matr[íi]cula\s+eSocial']),
     ('Contrato de Experiência', [r'Contrato\s+de\s+Experi[êe]ncia']),
     ('Contrato de Trabalho', [r'Contrato\s+de\s+Trabalho', r'\bCTPS\b']),
     ('Férias', [r'Aviso\s+de\s+F[ée]rias', r'Recibo\s+de\s+F[ée]rias', r'Per[íi]odo\s+de\s+Gozo']),
@@ -2309,7 +2318,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.41',
+        'versao': '2.42',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
