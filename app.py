@@ -134,6 +134,20 @@ TABLE_EXTRATO = 'tblJCUcFBVTH5W2kP'   # Extratos Mensais
 TABLE_FGTS    = 'tbl8ehgLa00cE1U3s'   # FGTS Digital
 TABLE_GUIAS   = 'tbl6FT1YzK1yqI77l'   # Guias e Comprovantes
 
+# Assinaturas Digitais — v2.38, fluxo de assinatura nativa (IP/CPF/timestamp)
+TABLE_ASSINATURAS    = 'tbl6xgW45637YJISv'
+F_ASS_NOME           = 'fld0CM8g3rv2JxmL0'   # Nome (primário)
+F_ASS_TIPO_DOC        = 'fldCKWzoTPeVarUmx'   # Tipo de Documento
+F_ASS_STATUS          = 'fldW7KJrXuU6hHYVC'   # Status (Pendente/Assinado/Expirado)
+F_ASS_HASH            = 'fldXgApUSbEJciu9r'   # Hash Token
+F_ASS_CPF_INFORMADO   = 'fldGILBsjU2g8uRgb'   # CPF Informado
+F_ASS_IP              = 'fldaObfgNMqszuGvb'   # IP Captura
+F_ASS_USER_AGENT      = 'fldMyC9l4BODOjyYx'   # User Agent
+F_ASS_DATA_ASSINATURA = 'fldOxZqGzXLtMs0xs'   # Data/Hora Assinatura
+F_ASS_DATA_GERACAO    = 'fld8XKWxQk0IwZM2o'   # Data Geração
+F_ASS_PROCESSAR_ID    = 'fldEw0a0UOEH6O4DZ'   # Processar Arquivos ID (texto — não link, ver nota abaixo)
+F_ASS_FUNCIONARIO     = 'fldG4sjQ0QkFVakAu'   # Funcionário (link)
+
 CNPJ_MAGNATA = '17987187000161'   # CNPJ do empregador — nunca é cliente-destino
 
 # Extratos Mensais
@@ -2291,7 +2305,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.37',
+        'versao': '2.38',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -5390,6 +5404,235 @@ def recibo_leitura(hash_recibo):
         return redirect(anexos_diretos[0]['url'])
 
     return 'Documento não encontrado.', 404
+
+
+# ─── ASSINATURA NATIVA (IP + CPF) ─────────────────────────────────────────────
+#
+# Fluxo: 1) /assinatura/gerar cria o registro em "Assinaturas Digitais" com um
+# Hash Token único e devolve o link. 2) O link é enviado ao colaborador (ex.:
+# via WhatsApp/Evolution API). 3) Colaborador abre /assinatura/<hash> (GET) —
+# página pede o CPF. 4) Ao confirmar (POST), o CPF informado é validado contra
+# o CPF cadastrado em Funcionários; se bater, grava IP real, User-Agent e
+# timestamp, marca a Assinatura como "Assinado" e também atualiza o Status do
+# registro de origem em Processar Arquivos para "Assinado".
+
+def _gerar_hash_assinatura() -> str:
+    """Token único (URL-safe) para o link de Assinatura Nativa."""
+    return secrets.token_urlsafe(24)
+
+
+def _ip_real_da_requisicao() -> str:
+    """Render fica atrás de proxy — o IP real do cliente vem em X-Forwarded-For
+    (primeiro IP da lista); fallback para remote_addr se o header não vier."""
+    xff = request.headers.get('X-Forwarded-For', '')
+    if xff:
+        return xff.split(',')[0].strip()
+    return request.remote_addr or 'desconhecido'
+
+
+def _pagina_assinatura_html(hash_token: str, nome_doc: str, erro: str = None) -> str:
+    erro_html = f'<p style="color:#c0392b;font-weight:bold;">{erro}</p>' if erro else ''
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Assinatura — Magnata Portaria e Serviços</title>
+<style>
+  body {{ font-family: Arial, sans-serif; background:#f4f6f8; margin:0; padding:24px; }}
+  .card {{ max-width:480px; margin:0 auto; background:#fff; border-radius:10px; padding:28px;
+           box-shadow:0 2px 10px rgba(0,0,0,0.08); }}
+  h1 {{ font-size:18px; color:#1a1a1a; }}
+  p {{ color:#444; font-size:14px; line-height:1.5; }}
+  input {{ width:100%; padding:12px; font-size:16px; border:1px solid #ccc; border-radius:6px;
+           margin:12px 0; box-sizing:border-box; }}
+  button {{ width:100%; padding:14px; font-size:16px; background:#2c5f8a; color:#fff;
+            border:none; border-radius:6px; cursor:pointer; font-weight:bold; }}
+  button:hover {{ background:#234b6e; }}
+  .aviso {{ font-size:12px; color:#888; margin-top:16px; }}
+</style></head>
+<body>
+  <div class="card">
+    <h1>Confirmação de Recebimento — {nome_doc}</h1>
+    <p>Para confirmar que você é o(a) destinatário(a) deste documento, digite seu CPF completo abaixo.</p>
+    {erro_html}
+    <form method="POST" action="/assinatura/{hash_token}">
+      <input type="text" name="cpf" placeholder="Somente números — ex: 12345678900" maxlength="14" required>
+      <button type="submit">Confirmar e Assinar</button>
+    </form>
+    <p class="aviso">Ao confirmar, você declara ter recebido e tomado conhecimento do documento. Data, hora e IP de acesso serão registrados como comprovação.</p>
+  </div>
+</body></html>"""
+
+
+def _pagina_assinatura_sucesso_html(nome_doc: str, quando: str) -> str:
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Assinatura confirmada</title>
+<style>
+  body {{ font-family: Arial, sans-serif; background:#f4f6f8; margin:0; padding:24px; }}
+  .card {{ max-width:480px; margin:0 auto; background:#fff; border-radius:10px; padding:28px;
+           box-shadow:0 2px 10px rgba(0,0,0,0.08); text-align:center; }}
+  h1 {{ color:#1e7a34; font-size:20px; }}
+  p {{ color:#444; font-size:14px; line-height:1.5; }}
+</style></head>
+<body>
+  <div class="card">
+    <h1>✅ Assinatura confirmada!</h1>
+    <p><strong>{nome_doc}</strong></p>
+    <p>Recebimento confirmado em {quando}.</p>
+    <p>Obrigado!</p>
+  </div>
+</body></html>"""
+
+
+@app.route('/assinatura/gerar', methods=['POST', 'OPTIONS'])
+def assinatura_gerar():
+    """
+    Cria um novo registro de Assinatura Nativa pendente e devolve o link.
+
+    Protegido por X-API-KEY (EMAIL_WEBHOOK_KEY).
+
+    Body JSON:
+      {
+        "funcionario_id": "rec...",        [obrigatório]
+        "tipo_documento": "Rescisão",      [obrigatório]
+        "processar_id": "rec...",          [opcional — Processar Arquivos a marcar como Assinado depois]
+        "nome_documento": "Rescisão - João Silva",  [opcional — usado no Nome do registro e na página]
+        "dry_run": false
+      }
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    data = request.get_json(force=True, silent=True) or {}
+
+    funcionario_id = data.get('funcionario_id')
+    tipo_documento = data.get('tipo_documento')
+    if not funcionario_id or not tipo_documento:
+        return jsonify({'status': 'erro', 'erro': 'funcionario_id e tipo_documento são obrigatórios'}), 400
+
+    processar_id = data.get('processar_id', '') or ''
+    nome_documento = data.get('nome_documento') or tipo_documento
+    dry_run = str(data.get('dry_run', False)).strip().lower() in ('1', 'true', 'yes', 'sim')
+
+    hash_token = _gerar_hash_assinatura()
+    link = f'{RECIBO_BASE_URL}/assinatura/{hash_token}'
+
+    if dry_run:
+        return jsonify({
+            'status': 'ok', 'dry_run': True, 'acao': 'criaria_assinatura',
+            'link': link, 'funcionario_id': funcionario_id,
+            'tipo_documento': tipo_documento, 'processar_id': processar_id,
+        })
+
+    campos = {
+        F_ASS_NOME:           nome_documento,
+        F_ASS_TIPO_DOC:       tipo_documento,
+        F_ASS_STATUS:         'Pendente',
+        F_ASS_HASH:           hash_token,
+        F_ASS_FUNCIONARIO:    [funcionario_id],
+        F_ASS_PROCESSAR_ID:   processar_id,
+        F_ASS_DATA_GERACAO:   datetime.now().isoformat(),
+    }
+    assinatura_id = _criar_registro(TABLE_ASSINATURAS, campos)
+
+    return jsonify({
+        'status': 'ok', 'dry_run': False, 'acao': 'assinatura_criada',
+        'assinatura_id': assinatura_id, 'link': link, 'hash_token': hash_token,
+    })
+
+
+@app.route('/assinatura/<hash_token>', methods=['GET', 'POST'])
+def assinatura_pagina(hash_token):
+    """Página pública de assinatura nativa — GET mostra o formulário de CPF,
+    POST valida o CPF contra Funcionários e, se bater, registra IP/User-Agent/
+    timestamp e marca a Assinatura (e o Processar Arquivos de origem) como
+    "Assinado". O hash funciona como token de acesso ao documento."""
+    if not AIRTABLE_API_KEY:
+        return 'Serviço indisponível.', 503
+
+    registro = _buscar_por_campo(TABLE_ASSINATURAS, 'Hash Token', hash_token)
+    if not registro:
+        return 'Link inválido ou expirado.', 404
+
+    fields = registro.get('fields', {})
+    nome_doc = fields.get('Nome', 'Documento')
+    status_atual = fields.get('Status', 'Pendente')
+
+    if status_atual == 'Assinado':
+        quando = _fmt_quando(fields.get('Data/Hora Assinatura'))
+        return _pagina_assinatura_sucesso_html(nome_doc, quando)
+
+    if request.method == 'GET':
+        return _pagina_assinatura_html(hash_token, nome_doc)
+
+    # POST — validar CPF informado
+    cpf_informado = re.sub(r'\D', '', request.form.get('cpf', ''))
+    if len(cpf_informado) != 11:
+        return _pagina_assinatura_html(hash_token, nome_doc, erro='CPF inválido — digite os 11 números do CPF.')
+
+    func_links = fields.get('Funcionário') or []
+    func_id = func_links[0]['id'] if func_links and isinstance(func_links[0], dict) else (func_links[0] if func_links else None)
+    if not func_id:
+        return _pagina_assinatura_html(hash_token, nome_doc, erro='Funcionário não vinculado a esta assinatura. Contate o RH.')
+
+    _at_throttle()
+    r_func = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        timeout=30,
+    )
+    if not r_func.ok:
+        return _pagina_assinatura_html(hash_token, nome_doc, erro='Erro ao validar dados. Tente novamente.')
+
+    cpf_cadastrado = re.sub(r'\D', '', r_func.json().get('fields', {}).get('CPF', '') or '')
+
+    if cpf_informado != cpf_cadastrado:
+        logger.warning(f'[ASSINATURA] CPF não confere — hash={hash_token}, func_id={func_id}')
+        return _pagina_assinatura_html(hash_token, nome_doc, erro='CPF não corresponde ao cadastro. Verifique e tente novamente.')
+
+    # CPF confere — registrar assinatura
+    ip_captura = _ip_real_da_requisicao()
+    user_agent = request.headers.get('User-Agent', 'desconhecido')[:500]
+    agora_brt = datetime.now(timezone(timedelta(hours=-3))).isoformat()
+
+    _at_throttle()
+    r_patch = requests.patch(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{registro["id"]}',
+        headers=_at_headers(),
+        json={
+            'fields': {
+                F_ASS_STATUS:         'Assinado',
+                F_ASS_CPF_INFORMADO:  cpf_informado,
+                F_ASS_IP:             ip_captura,
+                F_ASS_USER_AGENT:     user_agent,
+                F_ASS_DATA_ASSINATURA: agora_brt,
+            },
+            'typecast': True,
+        },
+        timeout=15,
+    )
+    if not r_patch.ok:
+        logger.error(f'[ASSINATURA] falha ao gravar assinatura {registro["id"]}: {r_patch.text[:300]}')
+        return _pagina_assinatura_html(hash_token, nome_doc, erro='Erro ao registrar assinatura. Tente novamente em alguns instantes.')
+
+    # Atualizar Status do documento de origem em Processar Arquivos, se vinculado
+    processar_id = fields.get('Processar Arquivos ID')
+    if processar_id:
+        try:
+            _atualizar_status_processar(processar_id, 'Assinado')
+        except Exception as exc:
+            logger.warning(f'[ASSINATURA] não foi possível atualizar Processar Arquivos {processar_id}: {exc}')
+
+    logger.info(f'[ASSINATURA] Assinado com sucesso — hash={hash_token}, func_id={func_id}, ip={ip_captura}')
+    return _pagina_assinatura_sucesso_html(nome_doc, _fmt_quando(agora_brt))
 
 
 # ─── VR/VA FATIAMENTO ─────────────────────────────────────────────────────────
