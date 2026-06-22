@@ -2291,7 +2291,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.36',
+        'versao': '2.37',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -3025,6 +3025,105 @@ def email_webhook():
         resultado['anexos_processados'].append(item)
 
     return jsonify(resultado)
+
+
+@app.route('/email/alerta-formato-invalido', methods=['POST', 'OPTIONS'])
+def email_alerta_formato_invalido():
+    """
+    Dispara automaticamente um e-mail de resposta avisando que o(s) anexo(s)
+    recebido(s) estão em formato não suportado (.RAR, .7z etc.) e pedindo
+    reenvio em PDF solto ou .ZIP.
+
+    Chamado pelo Google Apps Script (Magnata Email Listener) sempre que ele
+    detecta, num e-mail de remetente monitorado, anexo(s) compactado(s) que
+    não são PDF/ZIP. O envio em si usa a mesma infraestrutura de e-mail já
+    configurada no Render (Resend API / SMTP — _smtp_enviar_email), e não o
+    GmailApp do Apps Script, para manter toda a lógica de envio centralizada
+    no app.py.
+
+    Protegido por X-API-KEY (mesma EMAIL_WEBHOOK_KEY do /email/webhook).
+
+    Body JSON:
+      {
+        "remetente": "dpessoal.contabilidade1@hotmail.com",  [obrigatório]
+        "assunto_original": "MAGNATA - RESCISÕES",            [opcional]
+        "colaboradores": ["Antonio Marcelino Valerio", ...],  [opcional]
+        "arquivos_invalidos": ["01 - VITOR....rar", ...],     [opcional]
+        "dry_run": false
+      }
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+
+    data = request.get_json(force=True, silent=True) or {}
+
+    remetente = (data.get('remetente') or '').strip()
+    if not remetente:
+        return jsonify({'status': 'erro', 'erro': 'remetente é obrigatório'}), 400
+
+    assunto_original = data.get('assunto_original', '') or ''
+    colaboradores = data.get('colaboradores') or []
+    arquivos_invalidos = data.get('arquivos_invalidos') or []
+    dry_run = str(data.get('dry_run', False)).strip().lower() in ('1', 'true', 'yes', 'sim')
+
+    assunto = 'Magnata - Documentos em formato não aceito (.RAR) - reenvio necessário'
+
+    linhas_colab = '\n'.join(f'  - {nome}' for nome in colaboradores) or '  (lista de colaboradores não identificada)'
+    linhas_arq = '\n'.join(f'  - {fn}' for fn in arquivos_invalidos) or '  (nomes de arquivo não identificados)'
+
+    corpo = f"""Boa tarde, Jacqueline!
+
+Nosso sistema de recebimento automático de documentos identificou que o e-mail{f' "{assunto_original}"' if assunto_original else ''} veio com anexo(s) em formato compactado (.RAR), que não conseguimos abrir automaticamente.
+
+Poderia, por favor, reenviar o(s) documento(s) abaixo em PDF solto ou em arquivo .ZIP?
+
+Colaborador(es) pendente(s):
+{linhas_colab}
+
+Arquivo(s) recebido(s) no formato não aceito:
+{linhas_arq}
+
+Pedimos que, se possível, os próximos envios já sigam em PDF ou .ZIP, para que o processamento continue automático.
+
+Qualquer dúvida, estamos à disposição. Muito obrigado!
+
+Att,
+Magnata Portaria e Serviços
+(mensagem enviada automaticamente pelo sistema de processamento de documentos)
+"""
+
+    logger.info(
+        f'[ALERTA-FORMATO] remetente={remetente!r} | colaboradores={colaboradores} | '
+        f'arquivos={arquivos_invalidos} | dry_run={dry_run}'
+    )
+
+    if dry_run:
+        return jsonify({
+            'status': 'ok',
+            'dry_run': True,
+            'acao': 'enviaria_alerta',
+            'remetente': remetente,
+            'assunto': assunto,
+            'corpo': corpo,
+        })
+
+    try:
+        _smtp_enviar_email(remetente, assunto, corpo, [])
+    except Exception as exc:
+        logger.exception('[ALERTA-FORMATO] Erro ao enviar e-mail de alerta')
+        return jsonify({'status': 'erro', 'erro': str(exc)}), 500
+
+    return jsonify({
+        'status': 'ok',
+        'dry_run': False,
+        'acao': 'alerta_enviado',
+        'remetente': remetente,
+        'assunto': assunto,
+    })
 
 
 @app.route('/processar-fila', methods=['POST', 'OPTIONS'])
