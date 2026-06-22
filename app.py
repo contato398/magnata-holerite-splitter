@@ -88,6 +88,7 @@ F_FUNC_ADMISSAO  = 'fld5L1djmJugvLe8c'   # Data de Admissão
 F_FUNC_PDF_FOLHA = 'fldgBhXpEFmy20yxd'   # PDF Folha Ponto (prontuário)
 F_FUNC_RECIBOS   = 'fldFA03LEJ3wk3UmG'   # Recibos Pagamento (fatiados por colaborador) — v2.33
 F_FUNC_RESUMO_PONTO = 'fldI6soHhol2CdQpP'  # Resumo Cartão Ponto (extraído)
+F_FUNC_DOCS_ADMISSAO = 'fldV0KcIqK8ly8PKl'  # Documentos Admissionais (Kit Admissão agrupado)
 
 # ── Tabelas/Campos Fase 2 — Caixa de Entrada ─────────────────────────────────
 TABLE_EMAILS     = 'tblljRRrraXSipJd1'   # Emails Savian
@@ -1778,6 +1779,134 @@ def _criar_pre_cadastro_funcionario(campos_legiveis: dict) -> str:
     return _criar_registro(TABLE_FUNC, campos_at)
 
 
+# ── Kit de Admissão — agrupamento de Contrato + Ficha de Registro + Vale-Transporte ──
+#
+# Regra de negócio (definida pelo usuário em 2026-06-22): a contabilidade
+# sempre envia esses 3 documentos JUNTOS, no mesmo e-mail, para o mesmo
+# colaborador. Decisões:
+#   1. Ficha de Registro de Empregado é a FONTE PRIMÁRIA de dados (mais
+#      completa: nome, CPF, nascimento, admissão, cargo, telefone) — o
+#      Contrato de Experiência/Trabalho NUNCA cria o cadastro se sua Ficha
+#      de Registro irmã ainda não foi processada (ver _processar_contrato_stub).
+#   2. Contrato e Vale-Transporte (tipo "Outro") são vinculados ao MESMO
+#      funcionário — anexados ao campo "Documentos Admissionais" — em vez
+#      de ficarem soltos sem ligação com o cadastro.
+#
+# Detecção de "documento irmão" (mesmo Kit de Admissão): não há campo de
+# vínculo direto entre Processar Arquivos de attachments diferentes do
+# mesmo e-mail acessível por filterByFormula (linked record), então usamos
+# uma janela de tempo curta em "Data Processo" — na prática, o robô de
+# e-mail (Apps Script) processa todos os anexos de um mesmo e-mail em
+# sequência, poucos segundos um do outro (verificado empiricamente em
+# produção: gaps de 2-8s entre anexos do mesmo e-mail vs. minutos entre
+# e-mails diferentes). 20s é uma janela folgada e segura para esse padrão.
+JANELA_KIT_ADMISSAO_SEGUNDOS = 20
+TIPOS_KIT_ADMISSAO = ('Contrato de Experiência', 'Contrato de Trabalho',
+                       'Ficha de Registro de Empregado', 'Outro')
+
+
+def _buscar_documentos_irmaos_kit_admissao(ctx: dict):
+    """
+    Busca outros registros em "Processar Arquivos" cuja "Data Processo"
+    caia dentro de ±JANELA_KIT_ADMISSAO_SEGUNDOS do registro atual (ctx) e
+    cujo tipo esteja em TIPOS_KIT_ADMISSAO — heurística para "mesmo e-mail,
+    mesmo Kit de Admissão" (ver comentário acima).
+
+    Retorna lista de dicts: {proc_id, tipo_documento, status, arquivo_id, nome_arquivo}.
+    Nunca inclui o próprio ctx['proc_id'].
+    """
+    data_processo = ctx.get('data_holerite')  # não é o campo certo; buscamos via API abaixo
+    _at_throttle()
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}/{ctx["proc_id"]}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        timeout=15,
+    )
+    if not r.ok:
+        return []
+    data_processo_iso = r.json().get('fields', {}).get(F_PROC_DATA)
+    if not data_processo_iso:
+        return []
+    try:
+        centro = datetime.fromisoformat(data_processo_iso.replace('Z', '+00:00'))
+    except ValueError:
+        return []
+    inicio = (centro - timedelta(seconds=JANELA_KIT_ADMISSAO_SEGUNDOS)).isoformat()
+    fim = (centro + timedelta(seconds=JANELA_KIT_ADMISSAO_SEGUNDOS)).isoformat()
+
+    formula = (
+        f'AND(IS_AFTER({{Data Processo}}, "{inicio}"), '
+        f'IS_BEFORE({{Data Processo}}, "{fim}"))'
+    )
+    _at_throttle()
+    r2 = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={'filterByFormula': formula, 'maxRecords': 20},
+        timeout=30,
+    )
+    if not r2.ok:
+        return []
+
+    irmaos = []
+    for rec in r2.json().get('records', []):
+        if rec['id'] == ctx['proc_id']:
+            continue
+        fields = rec.get('fields', {})
+        tipo = fields.get('Tipo de Documento')
+        if tipo not in TIPOS_KIT_ADMISSAO:
+            continue
+        arquivos_link = fields.get('Arquivos 2') or []
+        arquivo_id = arquivos_link[0]['id'] if arquivos_link and isinstance(arquivos_link[0], dict) else (arquivos_link[0] if arquivos_link else None)
+        irmaos.append({
+            'proc_id': rec['id'],
+            'tipo_documento': tipo,
+            'status': fields.get('Status'),
+            'arquivo_id': arquivo_id,
+        })
+    return irmaos
+
+
+def _vincular_documento_ao_funcionario(func_id: str, arquivo_id: str):
+    """
+    Anexa o PDF do Arquivo informado ao campo "Documentos Admissionais" do
+    Funcionário — usado para agrupar Contrato/Vale-Transporte ao mesmo
+    cadastro criado a partir da Ficha de Registro (ou vice-versa). Evita
+    duplicar o anexo se ele já estiver lá (compara por nome do arquivo).
+    """
+    if not arquivo_id:
+        return False
+    _at_throttle()
+    r_arq = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ARQUIVOS}/{arquivo_id}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        timeout=15,
+    )
+    if not r_arq.ok:
+        return False
+    arquivo_fields = r_arq.json().get('fields', {})
+    attachments = arquivo_fields.get('Arquivo') or []
+    if not attachments:
+        return False
+    pdf_info = attachments[0]
+    nome_arquivo = pdf_info.get('filename', 'documento.pdf')
+
+    _at_throttle()
+    r_func = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        timeout=15,
+    )
+    if r_func.ok:
+        ja_anexados = r_func.json().get('fields', {}).get('Documentos Admissionais') or []
+        if any(a.get('filename') == nome_arquivo for a in ja_anexados):
+            return False  # já vinculado — não duplica
+
+    pdf_bytes = requests.get(pdf_info['url'], timeout=60).content
+    _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_DOCS_ADMISSAO, pdf_bytes, nome_arquivo)
+    return True
+
+
 CAMPOS_FICHA_REGISTRO_OBRIGATORIOS = ['nome_funcionario', 'cpf', 'data_admissao']
 CAMPOS_FICHA_REGISTRO_PARA_CONFIANCA = [
     'nome_funcionario', 'cpf', 'data_admissao', 'cargo_funcao', 'data_nascimento',
@@ -1872,6 +2001,7 @@ def _processar_ficha_registro_stub(ctx, dry_run):
 
     funcionario_existe = None
     nome_existente = None
+    func_id = None
     if dados['cpf']:
         func_id, nome_existente = buscar_funcionario_por_cpf(dados['cpf'])
         funcionario_existe = func_id is not None
@@ -1929,13 +2059,25 @@ def _processar_ficha_registro_stub(ctx, dry_run):
                     f'rechecagem imediatamente antes da criação — criação abortada.'
                 )
                 pre_cadastro_simulado = None
+                func_id = func_id_recheck
             else:
                 pre_cadastro_id = _criar_pre_cadastro_funcionario(campos_pre_cadastro)
+                func_id = pre_cadastro_id
     elif decisao_5c == 'enviar_para_revisao':
         pendencia_simulada = {
             'tipo': 'Ficha de Registro — revisão Fase 5C',
             'observacao': f'{motivo_decisao} (Arquivo: {ctx["nome_arquivo"]}, Processar: {ctx["proc_id"]}).',
         }
+
+    # Kit de Admissão — Ficha de Registro é a fonte primária; agrupa o
+    # Contrato e a Declaração de Vale-Transporte (mesmo e-mail) no campo
+    # "Documentos Admissionais" do funcionário recém-criado/encontrado.
+    documentos_vinculados = []
+    if not dry_run and func_id:
+        _vincular_documento_ao_funcionario(func_id, ctx['arquivo_id'])
+        for irmao in _buscar_documentos_irmaos_kit_admissao(ctx):
+            if irmao['arquivo_id'] and _vincular_documento_ao_funcionario(func_id, irmao['arquivo_id']):
+                documentos_vinculados.append(irmao)
 
     detalhes = {
         'tipo_documento': ctx['tipo_documento'],
@@ -1947,6 +2089,8 @@ def _processar_ficha_registro_stub(ctx, dry_run):
         'decisao_5c': decisao_5c,
         'pre_cadastro_simulado': pre_cadastro_simulado,
         'pre_cadastro_id': pre_cadastro_id,
+        'funcionario_id': func_id,
+        'documentos_kit_admissao_vinculados': documentos_vinculados,
         'pendencia_simulada': pendencia_simulada,
         'proxima_acao_sugerida': motivo_decisao,
     }
@@ -2001,9 +2145,50 @@ def _processar_contrato_stub(ctx, dry_run):
 
     funcionario_existe = None
     nome_existente = None
+    func_id = None
     if dados['cpf']:
         func_id, nome_existente = buscar_funcionario_por_cpf(dados['cpf'])
         funcionario_existe = func_id is not None
+
+    # Kit de Admissão — Ficha de Registro de Empregado é a fonte primária de
+    # dados (mais completa). Se o funcionário ainda não existe E há uma Ficha
+    # de Registro irmã (mesmo e-mail, ver _buscar_documentos_irmaos_kit_admissao)
+    # que ainda não foi processada, o Contrato CEDE a vez — não cria o cadastro
+    # a partir dos seus dados mais pobres. Cria Pendência orientando processar
+    # a Ficha primeiro; quando isso acontecer, o Contrato será vinculado ao
+    # funcionário criado pela Ficha (ver bloco de agrupamento mais abaixo).
+    if not funcionario_existe and not dry_run:
+        irmaos_aguardando_ficha = [
+            i for i in _buscar_documentos_irmaos_kit_admissao(ctx)
+            if i['tipo_documento'] == 'Ficha de Registro de Empregado'
+            and i['status'] in ('Pendente', 'Processando')
+        ]
+        if irmaos_aguardando_ficha:
+            return {
+                'acao': 'cedido_a_ficha_de_registro',
+                'status_final': 'Processando',
+                'detalhes': {
+                    'tipo_documento': ctx['tipo_documento'],
+                    'arquivo_id': ctx['arquivo_id'],
+                    'nome_arquivo': ctx['nome_arquivo'],
+                    'motivo': (
+                        'Kit de Admissão detectado: existe uma Ficha de Registro de '
+                        'Empregado irmã (mesmo e-mail) ainda não processada. Por ela ser '
+                        'a fonte primária de dados, o Contrato aguarda — processe a Ficha '
+                        'de Registro primeiro (Processar Arquivos: '
+                        f'{irmaos_aguardando_ficha[0]["proc_id"]}).'
+                    ),
+                },
+                'pendencia': {
+                    'tipo': 'Kit de Admissão — aguardando Ficha de Registro',
+                    'observacao': (
+                        f'Contrato "{ctx["nome_arquivo"]}" (Processar: {ctx["proc_id"]}) aguarda '
+                        f'o processamento da Ficha de Registro de Empregado irmã '
+                        f'(Processar: {irmaos_aguardando_ficha[0]["proc_id"]}), que é a fonte '
+                        f'primária de dados do Kit de Admissão.'
+                    ),
+                },
+            }
 
     # ── Fase 5C — decisão de pré-cadastro / revisão ──────────────────────────
     divergencia = None
@@ -2087,8 +2272,10 @@ def _processar_contrato_stub(ctx, dry_run):
                     'criação abortada para evitar duplicidade.'
                 )
                 pre_cadastro_simulado = None
+                func_id = func_id_recheck
             else:
                 pre_cadastro_id = _criar_pre_cadastro_funcionario(campos_pre_cadastro)
+                func_id = pre_cadastro_id
 
     elif decisao_5c == 'enviar_para_revisao':
         partes_obs = [motivo_decisao]
@@ -2103,6 +2290,19 @@ def _processar_contrato_stub(ctx, dry_run):
         }
 
     proxima_acao = motivo_decisao
+
+    # Kit de Admissão — vincula este Contrato (e qualquer Vale-Transporte
+    # irmão) ao funcionário, seja ele recém-criado aqui (caso raro: Ficha de
+    # Registro irmã ainda não chegou) ou já existente (caso normal: criado
+    # pela Ficha de Registro, que é a fonte primária — ver _processar_contrato_stub
+    # acima, bloco "cede a vez").
+    documentos_vinculados = []
+    if not dry_run and func_id:
+        _vincular_documento_ao_funcionario(func_id, ctx['arquivo_id'])
+        for irmao in _buscar_documentos_irmaos_kit_admissao(ctx):
+            if irmao['tipo_documento'] == 'Outro' and irmao['arquivo_id']:
+                if _vincular_documento_ao_funcionario(func_id, irmao['arquivo_id']):
+                    documentos_vinculados.append(irmao)
 
     detalhes = {
         'tipo_documento': ctx['tipo_documento'],
@@ -2120,6 +2320,8 @@ def _processar_contrato_stub(ctx, dry_run):
         'decisao_5c': decisao_5c,
         'pre_cadastro_simulado': pre_cadastro_simulado,
         'pre_cadastro_id': pre_cadastro_id,
+        'funcionario_id': func_id,
+        'documentos_kit_admissao_vinculados': documentos_vinculados,
         'pendencia_simulada': pendencia_simulada,
         'proxima_acao_sugerida': proxima_acao,
         'observacao': (
@@ -2506,7 +2708,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.43',
+        'versao': '2.44',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
