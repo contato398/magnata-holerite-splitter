@@ -147,6 +147,9 @@ F_ASS_DATA_ASSINATURA = 'fldOxZqGzXLtMs0xs'   # Data/Hora Assinatura
 F_ASS_DATA_GERACAO    = 'fld8XKWxQk0IwZM2o'   # Data Geração
 F_ASS_PROCESSAR_ID    = 'fldEw0a0UOEH6O4DZ'   # Processar Arquivos ID (texto — não link, ver nota abaixo)
 F_ASS_FUNCIONARIO     = 'fldG4sjQ0QkFVakAu'   # Funcionário (link)
+F_ASS_TENTATIVAS      = 'fldXk0fVbrBH4xJnf'   # Tentativas (proteção contra força bruta nos 4 dígitos)
+
+MAX_TENTATIVAS_ASSINATURA = 5   # após isso, marca Status="Expirado"
 
 CNPJ_MAGNATA = '17987187000161'   # CNPJ do empregador — nunca é cliente-destino
 
@@ -2305,7 +2308,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.38',
+        'versao': '2.39',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -5452,10 +5455,10 @@ def _pagina_assinatura_html(hash_token: str, nome_doc: str, erro: str = None) ->
 <body>
   <div class="card">
     <h1>Confirmação de Recebimento — {nome_doc}</h1>
-    <p>Para confirmar que você é o(a) destinatário(a) deste documento, digite seu CPF completo abaixo.</p>
+    <p>Para confirmar que você é o(a) destinatário(a) deste documento, digite os <strong>4 últimos números</strong> do seu CPF abaixo.</p>
     {erro_html}
     <form method="POST" action="/assinatura/{hash_token}">
-      <input type="text" name="cpf" placeholder="Somente números — ex: 12345678900" maxlength="14" required>
+      <input type="text" name="cpf" inputmode="numeric" pattern="\\d{{4}}" placeholder="Últimos 4 números do CPF" maxlength="4" required>
       <button type="submit">Confirmar e Assinar</button>
     </form>
     <p class="aviso">Ao confirmar, você declara ter recebido e tomado conhecimento do documento. Data, hora e IP de acesso serão registrados como comprovação.</p>
@@ -5570,13 +5573,19 @@ def assinatura_pagina(hash_token):
         quando = _fmt_quando(fields.get('Data/Hora Assinatura'))
         return _pagina_assinatura_sucesso_html(nome_doc, quando)
 
+    if status_atual == 'Expirado':
+        return _pagina_assinatura_html(
+            hash_token, nome_doc,
+            erro='Link expirado por excesso de tentativas incorretas. Contate o RH para gerar um novo link.'
+        )
+
     if request.method == 'GET':
         return _pagina_assinatura_html(hash_token, nome_doc)
 
-    # POST — validar CPF informado
+    # POST — validar os 4 últimos dígitos do CPF informado
     cpf_informado = re.sub(r'\D', '', request.form.get('cpf', ''))
-    if len(cpf_informado) != 11:
-        return _pagina_assinatura_html(hash_token, nome_doc, erro='CPF inválido — digite os 11 números do CPF.')
+    if len(cpf_informado) != 4:
+        return _pagina_assinatura_html(hash_token, nome_doc, erro='Digite os 4 últimos números do seu CPF.')
 
     func_links = fields.get('Funcionário') or []
     func_id = func_links[0]['id'] if func_links and isinstance(func_links[0], dict) else (func_links[0] if func_links else None)
@@ -5593,10 +5602,28 @@ def assinatura_pagina(hash_token):
         return _pagina_assinatura_html(hash_token, nome_doc, erro='Erro ao validar dados. Tente novamente.')
 
     cpf_cadastrado = re.sub(r'\D', '', r_func.json().get('fields', {}).get('CPF', '') or '')
+    ultimos4_cadastrado = cpf_cadastrado[-4:] if len(cpf_cadastrado) >= 4 else cpf_cadastrado
 
-    if cpf_informado != cpf_cadastrado:
-        logger.warning(f'[ASSINATURA] CPF não confere — hash={hash_token}, func_id={func_id}')
-        return _pagina_assinatura_html(hash_token, nome_doc, erro='CPF não corresponde ao cadastro. Verifique e tente novamente.')
+    if cpf_informado != ultimos4_cadastrado:
+        tentativas = (fields.get('Tentativas') or 0) + 1
+        logger.warning(f'[ASSINATURA] CPF não confere (tentativa {tentativas}) — hash={hash_token}, func_id={func_id}')
+
+        campos_falha = {F_ASS_TENTATIVAS: tentativas}
+        if tentativas >= MAX_TENTATIVAS_ASSINATURA:
+            campos_falha[F_ASS_STATUS] = 'Expirado'
+
+        _at_throttle()
+        requests.patch(
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{registro["id"]}',
+            headers=_at_headers(), json={'fields': campos_falha, 'typecast': True}, timeout=15,
+        )
+
+        if tentativas >= MAX_TENTATIVAS_ASSINATURA:
+            return _pagina_assinatura_html(
+                hash_token, nome_doc,
+                erro='Link expirado por excesso de tentativas incorretas. Contate o RH para gerar um novo link.'
+            )
+        return _pagina_assinatura_html(hash_token, nome_doc, erro='Os números não correspondem ao cadastro. Verifique e tente novamente.')
 
     # CPF confere — registrar assinatura
     ip_captura = _ip_real_da_requisicao()
