@@ -2308,7 +2308,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.39',
+        'versao': '2.40',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -4318,6 +4318,23 @@ def _normalizar_numero_evolution(dest: str):
     return digitos if len(digitos) in (12, 13) else None
 
 
+def _evolution_enviar_texto(numero: str, texto: str):
+    """Envia 1 mensagem de texto puro via Evolution API v2 (sendText) — usado
+    para o link de Assinatura Nativa (sem custo extra, mesma instância já
+    configurada para o envio de holerites)."""
+    endpoint = f'{EVOLUTION_API_URL}/message/sendText/{EVOLUTION_INSTANCE}'
+    payload = {'number': numero, 'text': texto}
+    r = requests.post(
+        endpoint,
+        headers={'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json'},
+        json=payload,
+        timeout=90,
+    )
+    if not (200 <= r.status_code < 300):
+        raise RuntimeError(f'Evolution HTTP {r.status_code}: {r.text[:300]}')
+    return r.json()
+
+
 def _evolution_enviar_documento(numero: str, media_url: str, filename: str, caption=None):
     """Envia 1 documento (PDF) via Evolution API v2 (sendMedia)."""
     endpoint = f'{EVOLUTION_API_URL}/message/sendMedia/{EVOLUTION_INSTANCE}'
@@ -5488,10 +5505,41 @@ def _pagina_assinatura_sucesso_html(nome_doc: str, quando: str) -> str:
 </body></html>"""
 
 
+def _buscar_funcionario_nome_whatsapp(func_id: str):
+    """Retorna (nome, whatsapp_normalizado) de um Funcionário. whatsapp_normalizado
+    é None se o campo estiver vazio ou em formato inválido."""
+    _at_throttle()
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        timeout=30,
+    )
+    if not r.ok:
+        return None, None
+    fields = r.json().get('fields', {})
+    nome = fields.get('Nome Completo')
+    whatsapp = _normalizar_numero_evolution(fields.get('WhatsApp'))
+    return nome, whatsapp
+
+
+def _montar_mensagem_assinatura(nome: str, tipo_documento: str, link: str) -> str:
+    return (
+        f'Olá{(" " + nome) if nome else ""}! Você tem um documento pendente de confirmação '
+        f'({tipo_documento}).\n\nPara confirmar o recebimento, acesse o link abaixo e informe '
+        f'os 4 últimos números do seu CPF:\n{link}\n\nMagnata Portaria e Serviços.'
+    )
+
+
 @app.route('/assinatura/gerar', methods=['POST', 'OPTIONS'])
 def assinatura_gerar():
     """
-    Cria um novo registro de Assinatura Nativa pendente e devolve o link.
+    Cria um novo registro de Assinatura Nativa pendente, devolve o link e —
+    por padrão — já dispara automaticamente via WhatsApp (Evolution API).
+
+    Cenário preventivo 1 (Validação de Telefone): se o Funcionário não tiver
+    WhatsApp cadastrado em Funcionários, o disparo é BLOQUEADO e nenhum
+    registro é criado — devolve erro 400 explicando o motivo, para que quem
+    chamou (ex.: handler de Rescisão) possa criar uma Pendência manual.
 
     Protegido por X-API-KEY (EMAIL_WEBHOOK_KEY).
 
@@ -5501,6 +5549,7 @@ def assinatura_gerar():
         "tipo_documento": "Rescisão",      [obrigatório]
         "processar_id": "rec...",          [opcional — Processar Arquivos a marcar como Assinado depois]
         "nome_documento": "Rescisão - João Silva",  [opcional — usado no Nome do registro e na página]
+        "disparar_whatsapp": true,         [opcional — default true]
         "dry_run": false
       }
     """
@@ -5523,15 +5572,27 @@ def assinatura_gerar():
 
     processar_id = data.get('processar_id', '') or ''
     nome_documento = data.get('nome_documento') or tipo_documento
+    disparar_whatsapp = str(data.get('disparar_whatsapp', True)).strip().lower() in ('1', 'true', 'yes', 'sim')
     dry_run = str(data.get('dry_run', False)).strip().lower() in ('1', 'true', 'yes', 'sim')
+
+    nome_func, whatsapp = _buscar_funcionario_nome_whatsapp(funcionario_id)
+
+    # Cenário preventivo 1 — bloqueia se for disparar e não houver WhatsApp.
+    if disparar_whatsapp and not whatsapp:
+        return jsonify({
+            'status': 'erro', 'erro': 'whatsapp_ausente',
+            'mensagem': f'Funcionário "{nome_func or funcionario_id}" não tem WhatsApp cadastrado '
+                        f'em Funcionários. Disparo bloqueado — nenhum registro foi criado.',
+            'funcionario_id': funcionario_id,
+        }), 400
 
     hash_token = _gerar_hash_assinatura()
     link = f'{RECIBO_BASE_URL}/assinatura/{hash_token}'
 
     if dry_run:
         return jsonify({
-            'status': 'ok', 'dry_run': True, 'acao': 'criaria_assinatura',
-            'link': link, 'funcionario_id': funcionario_id,
+            'status': 'ok', 'dry_run': True, 'acao': 'criaria_assinatura_e_dispararia' if disparar_whatsapp else 'criaria_assinatura',
+            'link': link, 'funcionario_id': funcionario_id, 'whatsapp': whatsapp,
             'tipo_documento': tipo_documento, 'processar_id': processar_id,
         })
 
@@ -5543,13 +5604,121 @@ def assinatura_gerar():
         F_ASS_FUNCIONARIO:    [funcionario_id],
         F_ASS_PROCESSAR_ID:   processar_id,
         F_ASS_DATA_GERACAO:   datetime.now().isoformat(),
+        F_ASS_TENTATIVAS:     0,
     }
     assinatura_id = _criar_registro(TABLE_ASSINATURAS, campos)
+
+    disparo_resultado = None
+    if disparar_whatsapp:
+        try:
+            mensagem = _montar_mensagem_assinatura(nome_func, tipo_documento, link)
+            _evolution_enviar_texto(whatsapp, mensagem)
+            disparo_resultado = 'enviado'
+        except Exception as exc:
+            logger.error(f'[ASSINATURA] falha ao disparar WhatsApp ({assinatura_id}): {exc}')
+            disparo_resultado = f'falha: {exc}'
 
     return jsonify({
         'status': 'ok', 'dry_run': False, 'acao': 'assinatura_criada',
         'assinatura_id': assinatura_id, 'link': link, 'hash_token': hash_token,
+        'whatsapp_disparo': disparo_resultado,
     })
+
+
+@app.route('/assinatura/processar-reenvios', methods=['POST', 'OPTIONS'])
+def assinatura_processar_reenvios():
+    """
+    Cenário preventivo 2 (Lógica de Reenvio): varre "Assinaturas Digitais"
+    procurando registros com Status="Reenviar" (definido manualmente por um
+    humano direto no Airtable) e, para cada um: zera o contador de
+    tentativas, gera um NOVO Hash Token (o anterior pode ter sido o que
+    esgotou as tentativas — por segurança não se reaproveita), volta o
+    Status para "Pendente" e dispara um novo link via WhatsApp.
+
+    Reaplica a mesma validação de telefone do cenário 1 — se o WhatsApp
+    estiver vazio, marca erro e não tenta enviar.
+
+    Protegido por X-API-KEY (EMAIL_WEBHOOK_KEY). Suporta dry_run e limit.
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    data = request.get_json(force=True, silent=True) or {}
+    dry_run = str(data.get('dry_run', True)).strip().lower() in ('1', 'true', 'yes', 'sim')
+    limit = data.get('limit')
+
+    _at_throttle()
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={'filterByFormula': '{Status}="Reenviar"'},
+        timeout=30,
+    )
+    r.raise_for_status()
+    registros = r.json().get('records', [])
+    if limit:
+        registros = registros[:int(limit)]
+
+    resultado = {'status': 'ok', 'dry_run': dry_run, 'encontrados': len(registros), 'processados': []}
+
+    for rec in registros:
+        fields = rec.get('fields', {})
+        item = {'assinatura_id': rec['id'], 'nome': fields.get('Nome')}
+
+        func_links = fields.get('Funcionário') or []
+        func_id = func_links[0]['id'] if func_links and isinstance(func_links[0], dict) else (func_links[0] if func_links else None)
+        if not func_id:
+            item['erro'] = 'sem_funcionario_vinculado'
+            resultado['processados'].append(item)
+            continue
+
+        nome_func, whatsapp = _buscar_funcionario_nome_whatsapp(func_id)
+        if not whatsapp:
+            item['erro'] = 'whatsapp_ausente'
+            if not dry_run:
+                requests.patch(
+                    f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{rec["id"]}',
+                    headers=_at_headers(), json={'fields': {F_ASS_STATUS: 'Pendente'}, 'typecast': True}, timeout=15,
+                )
+            resultado['processados'].append(item)
+            continue
+
+        novo_hash = _gerar_hash_assinatura()
+        link = f'{RECIBO_BASE_URL}/assinatura/{novo_hash}'
+        item['novo_hash'] = novo_hash
+        item['link'] = link
+
+        if dry_run:
+            item['acao'] = 'reenviaria'
+            resultado['processados'].append(item)
+            continue
+
+        try:
+            mensagem = _montar_mensagem_assinatura(nome_func, fields.get('Tipo de Documento', 'documento'), link)
+            _evolution_enviar_texto(whatsapp, mensagem)
+            requests.patch(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{rec["id"]}',
+                headers=_at_headers(),
+                json={'fields': {
+                    F_ASS_HASH: novo_hash, F_ASS_STATUS: 'Pendente', F_ASS_TENTATIVAS: 0,
+                }, 'typecast': True}, timeout=15,
+            )
+            item['acao'] = 'reenviado'
+            logger.info(f'[ASSINATURA] Reenvio OK — {rec["id"]} novo_hash={novo_hash}')
+        except Exception as exc:
+            item['erro'] = str(exc)
+            logger.error(f'[ASSINATURA] falha no reenvio {rec["id"]}: {exc}')
+
+        resultado['processados'].append(item)
+
+    return jsonify(resultado)
 
 
 @app.route('/assinatura/<hash_token>', methods=['GET', 'POST'])
