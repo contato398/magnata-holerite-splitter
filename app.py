@@ -1655,6 +1655,7 @@ CAMPOS_FUNC_PRE_CADASTRO = {
     'Status':           F_FUNC_STATUS,
     'Cargo':            F_FUNC_CARGO,
     'Data de Admissão': F_FUNC_ADMISSAO,
+    'WhatsApp':         'WhatsApp',
 }
 
 # Termos cujo aparecimento no nome extraído indicam resíduo de texto do
@@ -1760,6 +1761,10 @@ def _montar_campos_pre_cadastro(dados: dict, status: str) -> dict:
     data_iso = _data_br_para_iso(dados.get('data_admissao'))
     if data_iso:
         campos['Data de Admissão'] = data_iso
+    if dados.get('telefone'):
+        whatsapp_normalizado = _normalizar_numero_evolution(dados['telefone'])
+        if whatsapp_normalizado:
+            campos['WhatsApp'] = whatsapp_normalizado
     return campos
 
 
@@ -1771,6 +1776,189 @@ def _criar_pre_cadastro_funcionario(campos_legiveis: dict) -> str:
         if nome in CAMPOS_FUNC_PRE_CADASTRO
     }
     return _criar_registro(TABLE_FUNC, campos_at)
+
+
+CAMPOS_FICHA_REGISTRO_OBRIGATORIOS = ['nome_funcionario', 'cpf', 'data_admissao']
+CAMPOS_FICHA_REGISTRO_PARA_CONFIANCA = [
+    'nome_funcionario', 'cpf', 'data_admissao', 'cargo_funcao', 'data_nascimento',
+]
+
+
+def extrair_dados_ficha_registro(texto: str):
+    """
+    Extrai dados de uma Ficha/Registro de Empregado (formulário eSocial —
+    "REGISTRO DE EMPREGADO"). Esse documento costuma trazer mais campos que
+    o Contrato de Experiência (data de nascimento, endereço, telefone), por
+    isso ganha extrator próprio em vez de reaproveitar extrair_dados_contrato.
+
+    Retorna (dados, avisos_qualidade) no mesmo formato de extrair_dados_contrato,
+    para reaproveitar decidir_acao_documento / _montar_campos_pre_cadastro.
+    """
+    resultado = {
+        'nome_funcionario': None, 'cpf': None, 'data_nascimento': None,
+        'data_admissao': None, 'cargo_funcao': None, 'telefone': None,
+    }
+    avisos_qualidade = []
+    if not texto:
+        return resultado, avisos_qualidade
+
+    resultado['cpf'] = extrair_cpf(texto)
+
+    m = re.search(
+        r'Empregado\s+Benefici[áa]rios\s*\n\s*([A-ZÀ-Ú][A-ZÀ-Ú ]{3,59})',
+        texto, re.IGNORECASE
+    )
+    if m:
+        nome = m.group(1).strip()
+        if len(nome.split()) >= 2:
+            resultado['nome_funcionario'] = nome
+
+    m = re.search(
+        r'Data\s+de\s+nascimento\s+Local.*?\n\s*(\d{2}/\d{2}/\d{4})',
+        texto, re.IGNORECASE
+    )
+    if m:
+        resultado['data_nascimento'] = m.group(1)
+
+    m = re.search(
+        r'Data\s+de\s+Admiss[ãa]o[^\n]*\n\s*(\d{2}/\d{2}/\d{4})',
+        texto, re.IGNORECASE
+    )
+    if m:
+        resultado['data_admissao'] = m.group(1)
+
+    m = re.search(
+        r'Cargo\s+Fun[çc][ãa]o\s+C\.B\.O\.\s*\n\s*([A-ZÀ-Ú][A-ZÀ-Ú /]+?)\s+\d{5,7}',
+        texto, re.IGNORECASE
+    )
+    if m:
+        resultado['cargo_funcao'] = re.sub(r'\s+', ' ', m.group(1)).strip()
+
+    # Telefone — quando a ficha vem com o campo preenchido (nem sempre vem).
+    m = re.search(
+        r'Telefone\s+Celular\D{0,10}(\(?\d{2}\)?\s?9?\s?\d{4}-?\s?\d{4})',
+        texto, re.IGNORECASE
+    )
+    if m:
+        resultado['telefone'] = m.group(1)
+
+    return resultado, avisos_qualidade
+
+
+def _processar_ficha_registro_stub(ctx, dry_run):
+    """
+    Handler de Ficha de Registro de Empregado (Fase 5C — mesmo vocabulário de
+    decisão usado em Contrato de Experiência/Trabalho).
+
+    Extrai dados, consulta (somente leitura) se o CPF já existe em
+    Funcionários, e decide entre cadastrar_ativo_automaticamente /
+    criar_pre_cadastro_seguro / funcionario_ja_existente / enviar_para_revisao.
+    Se a ficha trouxer telefone preenchido, ele já entra como WhatsApp no
+    pré-cadastro (ver _montar_campos_pre_cadastro) — economiza o passo manual
+    de preencher o telefone depois.
+    """
+    dados, avisos_qualidade = extrair_dados_ficha_registro(ctx['texto'])
+
+    cpf_num = re.sub(r'\D', '', dados['cpf'] or '')
+
+    campos_faltantes = [
+        campo for campo in CAMPOS_FICHA_REGISTRO_OBRIGATORIOS if not dados.get(campo)
+    ]
+
+    total_campos = len(CAMPOS_FICHA_REGISTRO_PARA_CONFIANCA)
+    preenchidos = sum(1 for c in CAMPOS_FICHA_REGISTRO_PARA_CONFIANCA if dados.get(c) is not None)
+    confianca = round(preenchidos / total_campos, 2) if total_campos else 0.0
+    confianca = round(max(0.0, confianca - 0.1 * len(avisos_qualidade)), 2)
+
+    funcionario_existe = None
+    nome_existente = None
+    if dados['cpf']:
+        func_id, nome_existente = buscar_funcionario_por_cpf(dados['cpf'])
+        funcionario_existe = func_id is not None
+
+    divergencia = None
+    if funcionario_existe and dados['nome_funcionario'] and nome_existente:
+        if dados['nome_funcionario'].strip().upper() != nome_existente.strip().upper():
+            divergencia = (
+                f'Nome da ficha ("{dados["nome_funcionario"]}") difere do '
+                f'cadastro existente em Funcionários ("{nome_existente}") para o mesmo CPF.'
+            )
+
+    nome_suspeito = _nome_suspeito(dados['nome_funcionario'])
+
+    erros_bloqueantes = []
+    if campos_faltantes:
+        erros_bloqueantes.append(f'Campos obrigatórios faltando: {", ".join(campos_faltantes)}.')
+    if not (bool(cpf_num) and _cpf_digitos_validos(cpf_num)):
+        erros_bloqueantes.append('CPF inválido (dígitos verificadores não conferem).')
+    if nome_suspeito:
+        erros_bloqueantes.append(f'Nome do funcionário ausente ou suspeito: "{dados["nome_funcionario"]}".')
+
+    categoria_generica, motivo_decisao = decidir_acao_documento(
+        erros_bloqueantes=erros_bloqueantes,
+        avisos_qualidade=avisos_qualidade,
+        confianca=confianca,
+        confianca_minima=CONFIANCA_MINIMA_PRE_CADASTRO,
+        confianca_ativo=CONFIANCA_ATIVO_AUTOMATICO,
+        registro_existente=funcionario_existe,
+        divergencia=divergencia,
+    )
+
+    _MAPA_CATEGORIA_PARA_DECISAO_5C = {
+        'executar_automaticamente': 'cadastrar_ativo_automaticamente',
+        'executar_com_status_intermediario': 'criar_pre_cadastro_seguro',
+        'funcionario_ou_registro_ja_existente': 'funcionario_ja_existente',
+        'enviar_para_revisao': 'enviar_para_revisao',
+    }
+    decisao_5c = _MAPA_CATEGORIA_PARA_DECISAO_5C[categoria_generica]
+
+    pre_cadastro_simulado = None
+    pre_cadastro_id = None
+    pendencia_simulada = None
+
+    if decisao_5c in ('cadastrar_ativo_automaticamente', 'criar_pre_cadastro_seguro'):
+        status_destino = 'Ativo' if decisao_5c == 'cadastrar_ativo_automaticamente' else 'Pré-cadastro'
+        campos_pre_cadastro = _montar_campos_pre_cadastro(dados, status_destino)
+        pre_cadastro_simulado = {'campos': campos_pre_cadastro}
+        if not dry_run:
+            func_id_recheck, _ = buscar_funcionario_por_cpf(dados['cpf'])
+            if func_id_recheck:
+                decisao_5c = 'funcionario_ja_existente'
+                motivo_decisao = (
+                    f'CPF já existe em Funcionários (ID={func_id_recheck}), detectado na '
+                    f'rechecagem imediatamente antes da criação — criação abortada.'
+                )
+                pre_cadastro_simulado = None
+            else:
+                pre_cadastro_id = _criar_pre_cadastro_funcionario(campos_pre_cadastro)
+    elif decisao_5c == 'enviar_para_revisao':
+        pendencia_simulada = {
+            'tipo': 'Ficha de Registro — revisão Fase 5C',
+            'observacao': f'{motivo_decisao} (Arquivo: {ctx["nome_arquivo"]}, Processar: {ctx["proc_id"]}).',
+        }
+
+    detalhes = {
+        'tipo_documento': ctx['tipo_documento'],
+        'arquivo_id': ctx['arquivo_id'],
+        'nome_arquivo': ctx['nome_arquivo'],
+        'dados_extraidos': dados,
+        'confianca': confianca,
+        'funcionario_existe_em_funcionarios': funcionario_existe,
+        'decisao_5c': decisao_5c,
+        'pre_cadastro_simulado': pre_cadastro_simulado,
+        'pre_cadastro_id': pre_cadastro_id,
+        'pendencia_simulada': pendencia_simulada,
+        'proxima_acao_sugerida': motivo_decisao,
+    }
+
+    pendencia_retorno = pendencia_simulada if decisao_5c == 'enviar_para_revisao' else None
+
+    return {
+        'acao': 'ficha_registro_extraida_sem_gravar',
+        'status_final': ctx['status_atual'],
+        'detalhes': detalhes,
+        'pendencia': pendencia_retorno,
+    }
 
 
 def _processar_contrato_stub(ctx, dry_run):
@@ -2282,7 +2470,7 @@ PROCESSADORES_DOCUMENTO = {
     'Contrato de Trabalho': _processar_contrato_stub,
     'Rescisão': _processar_rescisao_stub,
     'EPI': _processar_documento_sem_automacao,
-    'Ficha de Registro de Empregado': _processar_documento_sem_automacao,
+    'Ficha de Registro de Empregado': _processar_ficha_registro_stub,
     'Termo de Prorrogação de Contrato de Experiência': _processar_documento_sem_automacao,
     'Férias': _processar_documento_sem_automacao,
     'FGTS': _processar_documento_sem_automacao,
@@ -2295,7 +2483,7 @@ PROCESSADORES_DOCUMENTO = {
 # Tipos de documento para os quais o vocabulário de decisão 'decisao_5c'
 # (Fase 5C) se aplica e que, portanto, exigem as restrições extras de
 # dry_run=false abaixo (record_id específico + limit=1).
-TIPOS_CONTRATO_5C = ('Contrato de Experiência', 'Contrato de Trabalho')
+TIPOS_CONTRATO_5C = ('Contrato de Experiência', 'Contrato de Trabalho', 'Ficha de Registro de Empregado')
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -2318,7 +2506,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.42',
+        'versao': '2.43',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
