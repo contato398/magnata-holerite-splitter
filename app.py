@@ -89,6 +89,7 @@ F_FUNC_PDF_FOLHA = 'fldgBhXpEFmy20yxd'   # PDF Folha Ponto (prontuário)
 F_FUNC_RECIBOS   = 'fldFA03LEJ3wk3UmG'   # Recibos Pagamento (fatiados por colaborador) — v2.33
 F_FUNC_RESUMO_PONTO = 'fldI6soHhol2CdQpP'  # Resumo Cartão Ponto (extraído)
 F_FUNC_DOCS_ADMISSAO = 'fldV0KcIqK8ly8PKl'  # Documentos Admissionais (Kit Admissão agrupado)
+F_FUNC_KIT_CONSOLIDADO = 'fld2aVtOjvJkOXn5P'  # Kit Admissão - PDF Consolidado (fundido)
 
 # ── Tabelas/Campos Fase 2 — Caixa de Entrada ─────────────────────────────────
 TABLE_EMAILS     = 'tblljRRrraXSipJd1'   # Emails Savian
@@ -150,6 +151,7 @@ F_ASS_PROCESSAR_ID    = 'fldEw0a0UOEH6O4DZ'   # Processar Arquivos ID (texto —
 F_ASS_FUNCIONARIO     = 'fldG4sjQ0QkFVakAu'   # Funcionário (link)
 F_ASS_TENTATIVAS      = 'fldXk0fVbrBH4xJnf'   # Tentativas (proteção contra força bruta nos 4 dígitos)
 F_ASS_EVIDENCIAS      = 'fldbfJnLF82YAhe96'   # Evidencias_Assinatura (texto consolidado: IP+Timestamp+User-Agent)
+F_ASS_DOCUMENTO_PDF   = 'fldJXYMo9JFcfc2yt'   # Documento PDF (cópia do Kit Admissão consolidado)
 
 MAX_TENTATIVAS_ASSINATURA = 5   # após isso, marca Status="Expirado"
 
@@ -1880,12 +1882,13 @@ def _vincular_documento_ao_funcionario(func_id: str, arquivo_id: str):
     r_arq = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ARQUIVOS}/{arquivo_id}',
         headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={'returnFieldsByFieldId': 'true'},
         timeout=15,
     )
     if not r_arq.ok:
         return False
     arquivo_fields = r_arq.json().get('fields', {})
-    attachments = arquivo_fields.get('Arquivo') or []
+    attachments = arquivo_fields.get(F_ARQ_ATTACH) or []
     if not attachments:
         return False
     pdf_info = attachments[0]
@@ -1895,16 +1898,138 @@ def _vincular_documento_ao_funcionario(func_id: str, arquivo_id: str):
     r_func = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
         headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={'returnFieldsByFieldId': 'true'},
         timeout=15,
     )
     if r_func.ok:
-        ja_anexados = r_func.json().get('fields', {}).get('Documentos Admissionais') or []
+        ja_anexados = r_func.json().get('fields', {}).get(F_FUNC_DOCS_ADMISSAO) or []
         if any(a.get('filename') == nome_arquivo for a in ja_anexados):
             return False  # já vinculado — não duplica
 
     pdf_bytes = requests.get(pdf_info['url'], timeout=60).content
     _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_DOCS_ADMISSAO, pdf_bytes, nome_arquivo)
     return True
+
+
+def _baixar_pdf_arquivo(arquivo_id: str):
+    """Retorna (conteudo_bytes, filename) do PDF anexado a um registro de
+    Arquivos, ou (None, None) se não existir/falhar."""
+    if not arquivo_id:
+        return None, None
+    _at_throttle()
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ARQUIVOS}/{arquivo_id}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={'returnFieldsByFieldId': 'true'},
+        timeout=15,
+    )
+    if not r.ok:
+        return None, None
+    attachments = r.json().get('fields', {}).get(F_ARQ_ATTACH) or []
+    if not attachments:
+        return None, None
+    pdf_info = attachments[0]
+    conteudo = requests.get(pdf_info['url'], timeout=60).content
+    return conteudo, pdf_info.get('filename', 'documento.pdf')
+
+
+def _vale_transporte_preenchido(arquivo_id: str, cpf_funcionario: str) -> bool:
+    """
+    Verifica se um documento de Vale-Transporte (tipo "Outro") já vem
+    preenchido com o CPF do funcionário — se sim, é o documento real da
+    contabilidade e deve ser usado como está. Se vier em branco/sem CPF
+    correspondente (ou não existir), o robô gera a declaração nativamente
+    (ver _gerar_pdf_declaracao_renuncia_vt).
+    """
+    conteudo, _ = _baixar_pdf_arquivo(arquivo_id)
+    if not conteudo:
+        return False
+    try:
+        with pdfplumber.open(io.BytesIO(conteudo)) as pdf:
+            texto = '\n'.join((p.extract_text() or '') for p in pdf.pages)
+    except Exception:
+        return False
+    cpf_doc = extrair_cpf(texto)
+    cpf_doc_num = re.sub(r'\D', '', cpf_doc or '')
+    cpf_func_num = re.sub(r'\D', '', cpf_funcionario or '')
+    return bool(cpf_doc_num) and cpf_doc_num == cpf_func_num
+
+
+def _gerar_pdf_declaracao_renuncia_vt(nome: str, cpf: str, data_admissao_br: str = None) -> bytes:
+    """
+    Gera nativamente (fpdf2 — já é dependência do projeto, sem custo extra)
+    a Declaração de Renúncia de Vale-Transporte, no mesmo padrão de texto
+    usado pela contabilidade (ver "Modelo 1.pdf" real, calibrado em
+    2026-06-22), preenchendo Nome e CPF extraídos da Ficha de Registro.
+    """
+    from fpdf import FPDF
+
+    _TZ = timezone(timedelta(hours=-3))
+    data_admissao_br = data_admissao_br or datetime.now(tz=_TZ).strftime('%d/%m/%Y')
+    agora = datetime.now(tz=_TZ)
+    data_extenso = agora.strftime('%d de %m de %Y')
+
+    pdf = FPDF()
+    pdf.add_page()
+    largura = pdf.w - pdf.l_margin - pdf.r_margin
+
+    pdf.set_font('Helvetica', 'B', 12)
+    pdf.cell(largura, 8, 'DECLARACAO DE RENUNCIA DO VALE TRANSPORTE', align='C', ln=True)
+    pdf.ln(4)
+
+    pdf.set_font('Helvetica', '', 11)
+    pdf.cell(largura, 6, 'A', ln=True)
+    pdf.set_font('Helvetica', 'B', 11)
+    pdf.cell(largura, 6, 'MAGNATA PORTARIA E SERVICOS LTDA', ln=True)
+    pdf.set_font('Helvetica', '', 11)
+    pdf.cell(largura, 6, 'RUA R FERMINO JOSE DE ARAUJO, VILA NOVA, ITAPETININGA - SP', ln=True)
+    pdf.cell(largura, 6, 'CNPJ: 17.987.187/0001-61', ln=True)
+    pdf.ln(4)
+
+    texto_declaracao = (
+        f'Eu, {nome}, portador(a) do CPF no {cpf}, empregado(a) de MAGNATA PORTARIA '
+        f'E SERVICOS LTDA, admitido(a) em {data_admissao_br}, declaro que nao vou '
+        f'utilizar o beneficio do "Vale Transporte", desde ja isentando esta empresa '
+        f'do pagamento deste beneficio.'
+    )
+    pdf.multi_cell(largura, 6, texto_declaracao)
+    pdf.ln(8)
+    pdf.cell(largura, 6, f'ITAPETININGA, {data_extenso}.', ln=True)
+    pdf.ln(10)
+    pdf.cell(largura, 6, '_' * 50, ln=True)
+    pdf.set_font('Helvetica', 'B', 11)
+    pdf.cell(largura, 6, nome, ln=True)
+    pdf.set_font('Helvetica', '', 11)
+    pdf.cell(largura, 6, f'CPF: {cpf}', ln=True)
+    pdf.ln(6)
+    pdf.set_font('Helvetica', 'I', 8)
+    pdf.multi_cell(
+        largura, 5,
+        'Documento gerado automaticamente pelo sistema de processamento de admissoes '
+        '(robo Magnata) por ausencia de declaracao preenchida da contabilidade.'
+    )
+
+    return bytes(pdf.output())
+
+
+def _montar_pdf_consolidado_kit_admissao(pdf_ficha: bytes, pdf_contrato: bytes = None,
+                                          pdf_vt: bytes = None) -> bytes:
+    """
+    Funde, na ordem Ficha de Registro + Contrato + Termo de Renúncia de VT,
+    os PDFs do Kit de Admissão num único arquivo (via pypdf — nativo, sem
+    custo). Documentos ausentes (None) são simplesmente pulados, mantendo
+    a ordem dos demais.
+    """
+    writer = PdfWriter()
+    for conteudo in (pdf_ficha, pdf_contrato, pdf_vt):
+        if not conteudo:
+            continue
+        reader = PdfReader(io.BytesIO(conteudo))
+        for page in reader.pages:
+            writer.add_page(page)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
 
 
 CAMPOS_FICHA_REGISTRO_OBRIGATORIOS = ['nome_funcionario', 'cpf', 'data_admissao']
@@ -2071,13 +2196,47 @@ def _processar_ficha_registro_stub(ctx, dry_run):
 
     # Kit de Admissão — Ficha de Registro é a fonte primária; agrupa o
     # Contrato e a Declaração de Vale-Transporte (mesmo e-mail) no campo
-    # "Documentos Admissionais" do funcionário recém-criado/encontrado.
+    # "Documentos Admissionais" do funcionário recém-criado/encontrado, E
+    # monta o PDF único consolidado (Ficha + Contrato + Termo de VT) que
+    # vai ser o documento oficial enviado para assinatura.
     documentos_vinculados = []
+    pdf_consolidado_gerado = False
+    vt_gerado_nativamente = False
     if not dry_run and func_id:
         _vincular_documento_ao_funcionario(func_id, ctx['arquivo_id'])
-        for irmao in _buscar_documentos_irmaos_kit_admissao(ctx):
+        irmaos = _buscar_documentos_irmaos_kit_admissao(ctx)
+        for irmao in irmaos:
             if irmao['arquivo_id'] and _vincular_documento_ao_funcionario(func_id, irmao['arquivo_id']):
                 documentos_vinculados.append(irmao)
+
+        irmao_contrato = next(
+            (i for i in irmaos if i['tipo_documento'] in ('Contrato de Experiência', 'Contrato de Trabalho')),
+            None
+        )
+        irmao_vt = next((i for i in irmaos if i['tipo_documento'] == 'Outro'), None)
+
+        pdf_ficha_bytes, _ = _baixar_pdf_arquivo(ctx['arquivo_id'])
+        pdf_contrato_bytes, _ = _baixar_pdf_arquivo(irmao_contrato['arquivo_id']) if irmao_contrato else (None, None)
+
+        pdf_vt_bytes = None
+        if irmao_vt and irmao_vt['arquivo_id'] and _vale_transporte_preenchido(irmao_vt['arquivo_id'], dados['cpf']):
+            pdf_vt_bytes, _ = _baixar_pdf_arquivo(irmao_vt['arquivo_id'])
+        else:
+            # Vale-Transporte ausente ou em branco/não correspondente —
+            # gera a declaração nativamente (regra de negócio 2026-06-22:
+            # nenhum colaborador quer o benefício).
+            pdf_vt_bytes = _gerar_pdf_declaracao_renuncia_vt(
+                dados['nome_funcionario'], dados['cpf'], dados.get('data_admissao')
+            )
+            vt_gerado_nativamente = True
+
+        if pdf_ficha_bytes:
+            pdf_consolidado = _montar_pdf_consolidado_kit_admissao(
+                pdf_ficha_bytes, pdf_contrato_bytes, pdf_vt_bytes
+            )
+            nome_pdf_consolidado = f'Kit Admissao - {dados["nome_funcionario"]}.pdf'
+            _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_KIT_CONSOLIDADO, pdf_consolidado, nome_pdf_consolidado)
+            pdf_consolidado_gerado = True
 
     detalhes = {
         'tipo_documento': ctx['tipo_documento'],
@@ -2091,6 +2250,8 @@ def _processar_ficha_registro_stub(ctx, dry_run):
         'pre_cadastro_id': pre_cadastro_id,
         'funcionario_id': func_id,
         'documentos_kit_admissao_vinculados': documentos_vinculados,
+        'pdf_consolidado_gerado': pdf_consolidado_gerado,
+        'vale_transporte_gerado_nativamente': vt_gerado_nativamente,
         'pendencia_simulada': pendencia_simulada,
         'proxima_acao_sugerida': motivo_decisao,
     }
@@ -2708,7 +2869,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.44',
+        'versao': '2.45',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -6010,11 +6171,46 @@ def assinatura_gerar():
     }
     assinatura_id = _criar_registro(TABLE_ASSINATURAS, campos)
 
+    # Se o funcionário tiver o Kit de Admissão consolidado (Ficha + Contrato
+    # + Termo de VT fundidos), esse PDF é o documento oficial: copia para o
+    # registro de Assinatura (auditoria) e envia como mídia no WhatsApp em
+    # vez de só texto — o colaborador abre o PDF e assina na sequência.
+    pdf_kit_bytes, pdf_kit_filename = None, None
+    _at_throttle()
+    r_func_kit = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{funcionario_id}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={'returnFieldsByFieldId': 'true'},
+        timeout=15,
+    )
+    if r_func_kit.ok:
+        kit_anexos = r_func_kit.json().get('fields', {}).get(F_FUNC_KIT_CONSOLIDADO) or []
+        if kit_anexos:
+            pdf_kit_filename = kit_anexos[0].get('filename', 'Kit Admissao.pdf')
+            pdf_kit_bytes = requests.get(kit_anexos[0]['url'], timeout=60).content
+            _anexar_attachment(TABLE_ASSINATURAS, assinatura_id, F_ASS_DOCUMENTO_PDF, pdf_kit_bytes, pdf_kit_filename)
+
     disparo_resultado = None
     if disparar_whatsapp:
         try:
             mensagem = _montar_mensagem_assinatura(nome_func, tipo_documento, link)
-            _evolution_enviar_texto(whatsapp, mensagem)
+            if pdf_kit_bytes:
+                # Sobe o Kit consolidado para a própria Airtable e usa a URL pública
+                # do anexo recém-criado como mídia da Evolution API (sendMedia exige
+                # uma URL acessível, não aceita bytes diretos).
+                _at_throttle()
+                r_ass_check = requests.get(
+                    f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{assinatura_id}',
+                    headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                    params={'returnFieldsByFieldId': 'true'}, timeout=15,
+                )
+                anexo_url = (r_ass_check.json().get('fields', {}).get(F_ASS_DOCUMENTO_PDF) or [{}])[0].get('url')
+                if anexo_url:
+                    _evolution_enviar_documento(whatsapp, anexo_url, pdf_kit_filename, caption=mensagem)
+                else:
+                    _evolution_enviar_texto(whatsapp, mensagem)
+            else:
+                _evolution_enviar_texto(whatsapp, mensagem)
             disparo_resultado = 'enviado'
         except Exception as exc:
             logger.error(f'[ASSINATURA] falha ao disparar WhatsApp ({assinatura_id}): {exc}')
@@ -6024,6 +6220,7 @@ def assinatura_gerar():
         'status': 'ok', 'dry_run': False, 'acao': 'assinatura_criada',
         'assinatura_id': assinatura_id, 'link': link, 'hash_token': hash_token,
         'whatsapp_disparo': disparo_resultado,
+        'kit_admissao_pdf_enviado': bool(pdf_kit_bytes),
     })
 
 
