@@ -219,6 +219,30 @@ TIPO_DOC_REGRAS = [
     ('Folha de Ponto', [r'Folha\s+de\s+Ponto', r'Espelho\s+de\s+Ponto',
                          r'Cart[ãa]o\s+(?:de\s+)?Ponto', r'Secullum',
                          r'Ponto\s+Web']),
+    # EPI — checado antes dos tipos de contrato; padrão de Ficha de EPI não
+    # colide com "Ficha de Registro de Empregado" (regras distintas abaixo).
+    ('EPI', [r'Ficha\s+de\s+(?:Controle\s+de\s+)?EPI\b',
+              r'Equipamento\s+de\s+Prote[çc][ãa]o\s+Individual',
+              r'Ficha\s+de\s+EPI[\'’]?s']),
+    # Rescisão — precisa vir ANTES de Contrato de Trabalho/Experiência,
+    # porque o texto de uma rescisão quase sempre cita "contrato de
+    # trabalho" ("rescisão do contrato de trabalho..."), o que faria essas
+    # regras genéricas capturarem o documento errado se viessem primeiro.
+    ('Rescisão', [r'Termo\s+de\s+Rescis[ãa]o', r'Aviso\s+de\s+Rescis[ãa]o',
+                   r'\bTRCT\b', r'Rescis[ãa]o\s+(?:do\s+)?Contrato\s+de\s+Trabalho',
+                   r'Homologa[çc][ãa]o\s+(?:de\s+)?Rescis[ãa]o']),
+    # Termo de Prorrogação de Contrato de Experiência — precisa vir ANTES de
+    # "Contrato de Experiência" pela mesma razão (o termo de prorrogação
+    # sempre menciona "contrato de experiência" no corpo do texto).
+    ('Termo de Prorrogação de Contrato de Experiência',
+        [r'Prorroga[çc][ãa]o\s+(?:do\s+)?Contrato\s+de\s+Experi[êe]ncia',
+          r'Termo\s+(?:Aditivo\s+)?de\s+Prorroga[çc][ãa]o']),
+    # Ficha de Registro de Empregado — precisa vir ANTES de "Contrato de
+    # Trabalho", pois a ficha de registro cita o número da CTPS (que também
+    # casaria com a regra \bCTPS\b de Contrato de Trabalho abaixo).
+    ('Ficha de Registro de Empregado',
+        [r'Ficha\s+de\s+Registro\s+de\s+Empregados?', r'Registro\s+de\s+Empregados?\b.{0,40}Ficha',
+          r'Livro\s+(?:de\s+)?Registro\s+de\s+Empregados?']),
     ('Contrato de Experiência', [r'Contrato\s+de\s+Experi[êe]ncia']),
     ('Contrato de Trabalho', [r'Contrato\s+de\s+Trabalho', r'\bCTPS\b']),
     ('Férias', [r'Aviso\s+de\s+F[ée]rias', r'Recibo\s+de\s+F[ée]rias', r'Per[íi]odo\s+de\s+Gozo']),
@@ -722,6 +746,89 @@ def extrair_dados_contrato(texto: str):
         resultado['jornada_escala'] = m.group(1).strip()
 
     return resultado, avisos_qualidade
+
+
+def extrair_nome_documento_dp(texto: str):
+    """
+    Extrator genérico (leve) de nome de funcionário para documentos de DP
+    que não são holerite/contrato — Rescisão, EPI, Ficha de Registro de
+    Empregado, Termo de Prorrogação. Reaproveita os mesmos padrões de rótulo
+    ("Empregado:", "Funcionário:", "Nome:") usados em extrair_dados_contrato,
+    sem repetir toda a extração de cargo/salário/local (irrelevantes aqui).
+    Retorna None se não encontrar.
+    """
+    if not texto:
+        return None
+    _stop_nome = (
+        r'(?:\n|,|\.|portador|portadora|carteira\s+de\s+trabalho|CTPS|'
+        r'CPF|RG|residente|doravante)'
+    )
+    padroes_nome = [
+        rf'(?:EMPREGAD[OA]|CONTRATAD[OA]|FUNCION[ÁA]RI[OA]|COLABORADOR[A]?)\s*:?\s*\n?\s*'
+        rf'([A-ZÀ-Ú][A-ZÀ-Ú ]{{3,59}}?)(?=\s*{_stop_nome}|$)',
+        rf'Nome\s*:?\s*([A-ZÀ-Ú][A-ZÀ-Ú ]{{3,59}}?)(?=\s*{_stop_nome}|$)',
+    ]
+    for p in padroes_nome:
+        m = re.search(p, texto, re.IGNORECASE)
+        if m:
+            nome = m.group(1).strip()
+            if len(nome.split()) >= 2:
+                return nome
+    return None
+
+
+def extrair_dados_rescisao(texto: str):
+    """
+    Extrai dados de um Termo/Aviso de Rescisão de Contrato de Trabalho (TRCT).
+
+    Heurísticas por regex, tolerantes — qualquer campo não encontrado retorna
+    None. Não levanta exceção.
+
+    Retorna dict com chaves (todas opcionais):
+      nome_funcionario, cpf, data_rescisao, tipo_aviso, motivo_rescisao
+    """
+    resultado = {
+        'nome_funcionario': None,
+        'cpf': None,
+        'data_rescisao': None,
+        'tipo_aviso': None,
+        'motivo_rescisao': None,
+    }
+    if not texto:
+        return resultado
+
+    resultado['cpf'] = extrair_cpf(texto)
+    resultado['nome_funcionario'] = extrair_nome_documento_dp(texto)
+
+    # Data de rescisão / desligamento / saída
+    padroes_data = [
+        r'(?:data\s+(?:do\s+)?(?:afastamento|desligamento|rescis[ãa]o|aviso))\D{0,20}(\d{2}/\d{2}/\d{4})',
+        r'(?:rescis[ãa]o|desligamento)\D{0,20}(?:em|de)?\s*(\d{2}/\d{2}/\d{4})',
+        r'Data\s*:?\s*(\d{2}/\d{2}/\d{4})',
+    ]
+    for p in padroes_data:
+        m = re.search(p, texto, re.IGNORECASE)
+        if m:
+            resultado['data_rescisao'] = m.group(1)
+            break
+
+    # Tipo de aviso — indenizado vs. trabalhado, ou pedido de demissão
+    if re.search(r'aviso\s+pr[ée]vio\s+indenizado', texto, re.IGNORECASE):
+        resultado['tipo_aviso'] = 'Aviso Prévio Indenizado'
+    elif re.search(r'aviso\s+pr[ée]vio\s+trabalhado', texto, re.IGNORECASE):
+        resultado['tipo_aviso'] = 'Aviso Prévio Trabalhado'
+    elif re.search(r'pedido\s+de\s+demiss[ãa]o', texto, re.IGNORECASE):
+        resultado['tipo_aviso'] = 'Pedido de Demissão'
+
+    # Motivo — sem justa causa / com justa causa / acordo (art. 484-A CLT)
+    if re.search(r'sem\s+justa\s+causa', texto, re.IGNORECASE):
+        resultado['motivo_rescisao'] = 'Dispensa sem justa causa'
+    elif re.search(r'com\s+justa\s+causa', texto, re.IGNORECASE):
+        resultado['motivo_rescisao'] = 'Dispensa com justa causa'
+    elif re.search(r'acordo\s+(?:entre\s+as\s+partes|mútuo|m[úu]tuo)|484-?A', texto, re.IGNORECASE):
+        resultado['motivo_rescisao'] = 'Acordo (Art. 484-A CLT)'
+
+    return resultado
 
 
 def construir_mapa_cpf(caminho_pdf: str) -> tuple[dict, int]:
@@ -1830,6 +1937,103 @@ def _processar_contrato_stub(ctx, dry_run):
     }
 
 
+def _processar_rescisao_stub(ctx: dict, dry_run: bool) -> dict:
+    """
+    Handler de Termo/Aviso de Rescisão de Contrato de Trabalho (TRCT).
+
+    Extrai nome, CPF, data de rescisão, tipo de aviso e motivo. Consulta
+    (somente leitura) se o CPF corresponde a um funcionário cadastrado.
+
+    Por segurança, este handler NUNCA altera o Status do funcionário
+    automaticamente (não existe campo "Data de Desligamento" em
+    Funcionários, e inativar alguém por engano tem custo alto — folha de
+    pagamento, FGTS, benefícios). Em vez disso, sempre cria uma Pendência
+    rica (com todos os dados extraídos prontos para 1 clique de confirmação
+    humana), igual ao padrão de segurança já usado em Contrato (Fase 5C):
+    "funcionário existente nunca é sobrescrito automaticamente".
+
+    Mesmo em dry_run=true, nada é gravado — apenas simula o que seria criado.
+    """
+    dados = extrair_dados_rescisao(ctx['texto'])
+
+    cpf_num = re.sub(r'\D', '', dados['cpf'] or '')
+    cpf_valido = bool(cpf_num) and _cpf_digitos_validos(cpf_num)
+
+    func_id, nome_cadastrado = (None, None)
+    if dados['cpf']:
+        func_id, nome_cadastrado = buscar_funcionario_por_cpf(dados['cpf'])
+
+    campos_faltantes = [
+        campo for campo in ('nome_funcionario', 'cpf', 'data_rescisao')
+        if not dados.get(campo)
+    ]
+
+    partes_obs = [
+        f'RESCISÃO — dados extraídos automaticamente do documento '
+        f'"{ctx["nome_arquivo"]}" (Processar Arquivos: {ctx["proc_id"]}, '
+        f'Arquivo: {ctx["arquivo_id"]}).',
+        f'Nome: {dados["nome_funcionario"] or "(não identificado)"}',
+        f'CPF: {dados["cpf"] or "(não identificado)"}'
+        + (' [inválido]' if dados['cpf'] and not cpf_valido else ''),
+        f'Data da rescisão: {dados["data_rescisao"] or "(não identificada)"}',
+        f'Tipo de aviso: {dados["tipo_aviso"] or "(não identificado)"}',
+        f'Motivo: {dados["motivo_rescisao"] or "(não identificado)"}',
+    ]
+    if func_id:
+        partes_obs.append(
+            f'Funcionário ENCONTRADO em Funcionários: "{nome_cadastrado}" (ID={func_id}). '
+            f'AÇÃO SUGERIDA: confirmar dados e alterar Status para "Inativo" manualmente '
+            f'(este robô não altera Status automaticamente por segurança).'
+        )
+    elif dados['cpf']:
+        partes_obs.append(
+            'CPF extraído NÃO encontrado em Funcionários — confirmar se é '
+            'erro de leitura do PDF ou se o colaborador nunca foi cadastrado.'
+        )
+    if campos_faltantes:
+        partes_obs.append(f'Campos não identificados automaticamente: {", ".join(campos_faltantes)}.')
+
+    observacao = ' '.join(partes_obs)
+
+    detalhes = {
+        'tipo_documento': ctx['tipo_documento'],
+        'record_id': ctx['proc_id'],
+        'arquivo_id': ctx['arquivo_id'],
+        'nome_arquivo': ctx['nome_arquivo'],
+        'dados_extraidos': dados,
+        'cpf_valido': cpf_valido,
+        'funcionario_encontrado': func_id is not None,
+        'funcionario_id': func_id,
+        'funcionario_nome_cadastrado': nome_cadastrado,
+        'campos_faltantes': campos_faltantes,
+        'observacao': (
+            'Fase 6 — Rescisão. Nunca altera Status de Funcionários '
+            'automaticamente; sempre cria Pendência com os dados extraídos '
+            'para confirmação humana de 1 clique.'
+        ),
+    }
+
+    pendencia = {
+        'tipo': 'Rescisão — confirmar e inativar funcionário',
+        'observacao': observacao,
+    }
+
+    if dry_run:
+        return {
+            'acao': 'rescisao_extraida_simulada',
+            'status_final': ctx['status_atual'],
+            'detalhes': detalhes,
+            'pendencia': None,
+        }
+
+    return {
+        'acao': 'rescisao_extraida_pendencia_criada',
+        'status_final': 'Revisão Manual',
+        'detalhes': detalhes,
+        'pendencia': pendencia,
+    }
+
+
 def _processar_folha_ponto(ctx: dict, dry_run: bool) -> dict:
     """
     Handler de Folha de Ponto para /processar-fila (Fase 1 — anexação ao
@@ -1979,18 +2183,44 @@ def _processar_documento_sem_automacao(ctx: dict, dry_run: bool) -> dict:
     Manual" e uma Pendência é criada apontando o Arquivo/PDF original, para
     que um humano trate o documento — em vez de o item ficar invisível
     indefinidamente.
+
+    Também usado para EPI, Ficha de Registro de Empregado e Termo de
+    Prorrogação de Contrato de Experiência (Fase 6b) — para esses três tipos
+    não existe campo dedicado em Funcionários para anexar automaticamente
+    (ex.: não há campo "Ficha de EPI"), então a automação segura possível é
+    extrair nome/CPF e deixá-los prontos na Pendência, sem gravar nada em
+    Funcionários.
     """
     tipo = ctx['tipo_documento']
-    observacao = (
+    nome_extraido = extrair_nome_documento_dp(ctx['texto'])
+    cpf_extraido = extrair_cpf(ctx['texto'])
+
+    func_id, nome_cadastrado = (None, None)
+    if cpf_extraido:
+        func_id, nome_cadastrado = buscar_funcionario_por_cpf(cpf_extraido)
+
+    partes_obs = [
         f'Processamento automático de "{tipo}" ainda não implementado. '
         f'Arquivo "{ctx["nome_arquivo"]}" requer tratamento manual '
-        f'(Processar Arquivos: {ctx["proc_id"]}, Arquivo: {ctx["arquivo_id"]}).'
-    )
+        f'(Processar Arquivos: {ctx["proc_id"]}, Arquivo: {ctx["arquivo_id"]}).',
+        f'Nome identificado: {nome_extraido or "(não identificado)"}',
+        f'CPF identificado: {cpf_extraido or "(não identificado)"}',
+    ]
+    if func_id:
+        partes_obs.append(f'Funcionário correspondente em Funcionários: "{nome_cadastrado}" (ID={func_id}).')
+    elif cpf_extraido:
+        partes_obs.append('CPF identificado não corresponde a nenhum funcionário cadastrado.')
+
+    observacao = ' '.join(partes_obs)
+
     detalhes = {
         'tipo_documento': tipo,
         'arquivo_id': ctx['arquivo_id'],
         'nome_arquivo': ctx['nome_arquivo'],
         'motivo': observacao,
+        'nome_extraido': nome_extraido,
+        'cpf_extraido': cpf_extraido,
+        'funcionario_id': func_id,
     }
 
     if dry_run:
@@ -2023,6 +2253,10 @@ PROCESSADORES_DOCUMENTO = {
     'Folha de Ponto': _processar_folha_ponto,
     'Contrato de Experiência': _processar_contrato_stub,
     'Contrato de Trabalho': _processar_contrato_stub,
+    'Rescisão': _processar_rescisao_stub,
+    'EPI': _processar_documento_sem_automacao,
+    'Ficha de Registro de Empregado': _processar_documento_sem_automacao,
+    'Termo de Prorrogação de Contrato de Experiência': _processar_documento_sem_automacao,
     'Férias': _processar_documento_sem_automacao,
     'FGTS': _processar_documento_sem_automacao,
     'Guia': _processar_documento_sem_automacao,
@@ -4367,6 +4601,10 @@ def _gerar_fila_envios_email(folha_mensal=None, folha_mensal_d2=None,
     certidoes_ids = certidoes_ids or []
     folhas_alvo = [f for f in (folha_mensal, folha_mensal_d2) if f]
 
+    # Recibos de Pagamento e Folha de Ponto por cliente (via funcionários)
+    recibos_por_cli = _recibos_pdfs_por_cliente((clientes_ctx, locais, funcionarios))
+    ponto_por_cli   = _ponto_pdfs_por_cliente((clientes_ctx, locais, funcionarios))
+
     # Holerites por folha → por cliente: {folha: {cliente_id: [holerite_ids]}}
     holerites_idx = {}
     for folha in folhas_alvo:
@@ -4466,6 +4704,13 @@ def _gerar_fila_envios_email(folha_mensal=None, folha_mensal_d2=None,
                 campos[F_ENVIO_GUIAS] = guias_ids
             if certidoes_ids:
                 campos[F_ENVIO_CERTIDOES] = certidoes_ids
+            # Recibos de Pagamento + Folha de Ponto (URLs diretas via F_ENVIO_ARQUIVOS)
+            arquivos_extras = (
+                [{'url': u, 'filename': fn} for fn, u in recibos_por_cli.get(cid, [])] +
+                [{'url': u, 'filename': fn} for fn, u in ponto_por_cli.get(cid, [])]
+            )
+            if arquivos_extras:
+                campos[F_ENVIO_ARQUIVOS] = arquivos_extras
             envio_id, _ = _criar_envio_documento(campos)
             item['acao'] = 'envio_criado'
             item['envio_id'] = envio_id
