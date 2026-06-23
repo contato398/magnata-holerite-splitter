@@ -972,13 +972,32 @@ def extrair_competencia_holerite(texto: str):
     """
     if not texto:
         return None, None
+
+    # Formato 1 — holerite: mês por extenso ("Mensalista Abril de 2026",
+    # "Março de 2026"). É o formato real dos holerites desta folha.
+    m = re.search(
+        r'\b(Janeiro|Fevereiro|Mar[çc]o|Abril|Maio|Junho|Julho|Agosto|'
+        r'Setembro|Outubro|Novembro|Dezembro)\s+de\s+(\d{4})',
+        texto, re.IGNORECASE,
+    )
+    if m:
+        nome_norm = m.group(1).lower().replace('ç', 'c')
+        nomes = ['janeiro', 'fevereiro', 'marco', 'abril', 'maio', 'junho',
+                 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro']
+        if nome_norm in nomes:
+            mes = nomes.index(nome_norm) + 1
+            ano = int(m.group(2))
+            return f'{MESES_PT[mes - 1]} {ano}', f'{ano}-{mes:02d}-01'
+
+    # Formato 2 — fallback numérico ("Competência: 04/2026"), usado por
+    # extratos e alguns layouts.
     m = re.search(r'Compet[êe]ncia[:\s]+(\d{2})\s*/\s*(\d{4})', texto, re.IGNORECASE)
-    if not m:
-        return None, None
-    mes, ano = int(m.group(1)), int(m.group(2))
-    if not (1 <= mes <= 12):
-        return None, None
-    return f'{MESES_PT[mes - 1]} {ano}', f'{ano}-{mes:02d}-01'
+    if m:
+        mes, ano = int(m.group(1)), int(m.group(2))
+        if 1 <= mes <= 12:
+            return f'{MESES_PT[mes - 1]} {ano}', f'{ano}-{mes:02d}-01'
+
+    return None, None
 
 
 def buscar_mes_contabilidade_atual():
@@ -2904,7 +2923,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.46',
+        'versao': '2.47',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
