@@ -1414,6 +1414,30 @@ def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
         mes_cont_id = _buscar_contabilidade_mensal_por_nome(comp_folha) or mes_cont_id
         competencia_pdf_usada = True
 
+    # 0b. Guarda de segurança: holerite SEMPRE traz a competência (mês por
+    #     extenso). Se não detectamos NENHUMA, este PDF provavelmente não é um
+    #     holerite de fato — no backlog de 15/06 há rescisões mal classificadas
+    #     como "Holerite". Em vez de criar um holerite-fantasma no mês errado
+    #     (default Maio), sinalizamos para revisão e NÃO gravamos nada.
+    if not comp_folha:
+        return {
+            'acao': 'competencia_nao_detectada',
+            'status_final': 'Erro',
+            'detalhes': {
+                'folha_mensal_default': ctx['folha_mensal'],
+                'nome_arquivo': ctx.get('nome_arquivo'),
+            },
+            'pendencia': {
+                'tipo': 'Holerite sem competência detectada',
+                'observacao': (
+                    'Não foi possível ler a competência (mês/ano) no PDF. Pode ser '
+                    'documento mal classificado como Holerite (ex.: Rescisão) ou PDF '
+                    'ilegível. NÃO arquivado, para não cair no mês errado — revisar '
+                    'classificação/legibilidade manualmente.'
+                ),
+            },
+        }
+
     # 1. Localizar funcionário por CPF, com fallback por nome extraído do PDF
     cpf = extrair_cpf(texto)
     func_id, nome = (None, None)
@@ -2923,7 +2947,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.47',
+        'versao': '2.48',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
