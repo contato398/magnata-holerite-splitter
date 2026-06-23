@@ -960,6 +960,27 @@ def mes_anterior_info():
     return MESES_PT[hoje.month - 2], hoje.year, hoje.month - 1
 
 
+def extrair_competencia_holerite(texto: str):
+    """Lê a competência impressa no holerite ("Competência: MM/AAAA") e
+    devolve (folha_mensal, data_str), ex.: ('Abril 2026', '2026-04-01').
+
+    Usado para arquivar cada holerite no mês contábil CORRETO em vez de
+    confiar no default "mês anterior" — essencial para o backlog retroativo
+    de 15/06, que traz holerites de competências antigas importados de uma vez.
+
+    Retorna (None, None) se não encontrar a competência no texto.
+    """
+    if not texto:
+        return None, None
+    m = re.search(r'Compet[êe]ncia[:\s]+(\d{2})\s*/\s*(\d{4})', texto, re.IGNORECASE)
+    if not m:
+        return None, None
+    mes, ano = int(m.group(1)), int(m.group(2))
+    if not (1 <= mes <= 12):
+        return None, None
+    return f'{MESES_PT[mes - 1]} {ano}', f'{ano}-{mes:02d}-01'
+
+
 def buscar_mes_contabilidade_atual():
     hoje = datetime.now()
     nome = f'{MESES_PT[hoje.month - 1]} {hoje.year}'
@@ -1360,6 +1381,19 @@ def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
     texto = ctx['texto']
     folha_mensal = ctx['folha_mensal']
     mes_cont_id = ctx['mes_cont_id']
+    data_holerite = ctx['data_holerite']
+
+    # 0. Competência manda. O default folha_mensal vem do "mês anterior"
+    #    (Maio, hoje), mas o backlog de 15/06 traz holerites de competências
+    #    antigas (Jan-Abr/2026). Quando o PDF traz "Competência: MM/AAAA",
+    #    usamos ela para arquivar no mês contábil correto (e não bagunçar Maio).
+    comp_folha, comp_data = extrair_competencia_holerite(texto)
+    competencia_pdf_usada = False
+    if comp_folha and comp_folha != folha_mensal:
+        folha_mensal = comp_folha
+        data_holerite = comp_data
+        mes_cont_id = _buscar_contabilidade_mensal_por_nome(comp_folha) or mes_cont_id
+        competencia_pdf_usada = True
 
     # 1. Localizar funcionário por CPF, com fallback por nome extraído do PDF
     cpf = extrair_cpf(texto)
@@ -1470,6 +1504,7 @@ def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
                 'funcionario_nome': nome,
                 'cpf_extraido': cpf,
                 'folha_mensal': folha_mensal,
+                'competencia_pdf_usada': competencia_pdf_usada,
                 'valores': valores,
                 'holerite_existente_id': existente['id'] if existente else None,
                 'pdf_anexado': False,
@@ -1524,7 +1559,7 @@ def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
     else:
         try:
             holerite_id = criar_registro_holerite(
-                nome, func_id, folha_mensal, ctx['data_holerite'], mes_cont_id, valores=valores,
+                nome, func_id, folha_mensal, data_holerite, mes_cont_id, valores=valores,
             )
             anexar_pdf_holerite(holerite_id, ctx['pdf_bytes'], ctx['nome_arquivo'])
             acao = 'holerite_criado'
@@ -1537,7 +1572,7 @@ def _processar_holerite(ctx: dict, dry_run: bool) -> dict:
             logger.error(f'[FILA] {ctx["proc_id"]}: Airtable rejeitou criação do holerite (payload completo): {exc}')
             try:
                 holerite_id = criar_registro_holerite(
-                    nome, func_id, folha_mensal, ctx['data_holerite'], mes_cont_id,
+                    nome, func_id, folha_mensal, data_holerite, mes_cont_id,
                     valores=None, status='Revisão Manual',
                 )
                 anexar_pdf_holerite(holerite_id, ctx['pdf_bytes'], ctx['nome_arquivo'])
@@ -2869,7 +2904,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.45',
+        'versao': '2.46',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
