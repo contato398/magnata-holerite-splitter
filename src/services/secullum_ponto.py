@@ -62,10 +62,11 @@ SECULLUM_COL_FALTAS = os.environ.get('SECULLUM_COL_FALTAS', 'Faltas')
 SECULLUM_COL_EXTRAS = os.environ.get('SECULLUM_COL_EXTRAS', 'Extras')
 
 # Base do "desvio de carga horária":
+#   faltas → só horas faltantes (anomalias reais de jornada; default — evita ruído 12x36)
 #   ambos  → |Extras - Faltas| (literal; em escalas 12x36 gera muitos falsos positivos)
-#   faltas → só horas faltantes (anomalias reais de jornada; recomendado p/ 12x36)
 #   extras → só horas extras
-SECULLUM_DESVIO_BASE = os.environ.get('SECULLUM_DESVIO_BASE', 'ambos').lower()
+# Decisão de produto (24/06/2026): focar em faltas para não inundar com extras de escala.
+SECULLUM_DESVIO_BASE = os.environ.get('SECULLUM_DESVIO_BASE', 'faltas').lower()
 
 # Limite do desvio: 02:00 = 120 minutos. Alerta dispara para desvios > este valor.
 THRESHOLD_DESVIO_MIN = 120
@@ -167,18 +168,42 @@ def _secullum_headers() -> dict:
     }
 
 
+SECULLUM_RETRIES = int(os.environ.get('SECULLUM_RETRIES', '3'))
+
+
 def _secullum_request(metodo: str, caminho: str, **kwargs):
-    """Wrapper com refresh automático de token em caso de 401."""
+    """Wrapper resiliente: refresh de token em 401 e retry com backoff.
+
+    Repete em falhas transitórias (timeout, conexão, 502/503/504) até
+    SECULLUM_RETRIES vezes. Erros 4xx (exceto 401) propagam de imediato.
+    """
     url = f'{API_BASE}/{caminho.lstrip("/")}'
-    r = requests.request(metodo, url, headers=_secullum_headers(), timeout=60, **kwargs)
-    if r.status_code == 401:
-        logger.info('[SECULLUM] 401 — renovando token e repetindo.')
-        get_token(forcar=True)
-        r = requests.request(metodo, url, headers=_secullum_headers(), timeout=60, **kwargs)
-    if not r.ok:
-        logger.error(f'[SECULLUM] {metodo} {caminho} → HTTP {r.status_code}: {r.text[:400]}')
-    r.raise_for_status()
-    return r.json() if r.text else None
+    kwargs.setdefault('timeout', 60)
+    ultimo = None
+    for tentativa in range(1, SECULLUM_RETRIES + 1):
+        try:
+            r = requests.request(metodo, url, headers=_secullum_headers(), **kwargs)
+            if r.status_code == 401:
+                logger.info('[SECULLUM] 401 — renovando token e repetindo.')
+                get_token(forcar=True)
+                r = requests.request(metodo, url, headers=_secullum_headers(), **kwargs)
+            if r.status_code in (502, 503, 504):
+                ultimo = f'HTTP {r.status_code}'
+                logger.warning('[SECULLUM] %s %s → %s (tentativa %s/%s)',
+                               metodo, caminho, ultimo, tentativa, SECULLUM_RETRIES)
+                time.sleep(1.5 * tentativa)
+                continue
+            if not r.ok:
+                logger.error(f'[SECULLUM] {metodo} {caminho} → HTTP {r.status_code}: {r.text[:400]}')
+            r.raise_for_status()
+            return r.json() if r.text else None
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            ultimo = exc
+            logger.warning('[SECULLUM] %s %s falhou (tentativa %s/%s): %s',
+                           metodo, caminho, tentativa, SECULLUM_RETRIES, exc)
+            time.sleep(1.5 * tentativa)
+    raise requests.exceptions.RequestException(
+        f'Secullum {metodo} {caminho} falhou após {SECULLUM_RETRIES} tentativas: {ultimo}')
 
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
@@ -369,19 +394,27 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
     alertas = []
     criados = 0
     pulados_existentes = 0
+    inativos = 0
+    sem_cpf = 0
+    calculados = 0
+    com_erro = []   # nomes dos funcionários cujo cálculo falhou (mesmo após retries)
 
     for f in funcionarios:
         fid = f.get('Id')
         nome = f.get('Nome', '')
         cpf = _so_digitos(str(f.get('Cpf', '')))
         if f.get('Demissao'):   # data de demissão preenchida = inativo
+            inativos += 1
             continue
         if not cpf:
+            sem_cpf += 1
             continue
 
         try:
             calc = obter_calculos(cpf, data_inicio, data_fim)
+            calculados += 1
         except Exception as exc:
+            com_erro.append(nome)
             logger.warning('[SECULLUM] Cálculos falharam p/ %s (Id=%s): %s', nome, fid, exc)
             continue
 
@@ -421,7 +454,12 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
     resumo = {
         'periodo': f'{data_inicio}..{data_fim}',
         'desvio_base': desvio_base or SECULLUM_DESVIO_BASE,
-        'funcionarios_processados': len(funcionarios),
+        'funcionarios_total': len(funcionarios),
+        'funcionarios_calculados': calculados,
+        'funcionarios_inativos': inativos,
+        'funcionarios_sem_cpf': sem_cpf,
+        'funcionarios_com_erro': len(com_erro),
+        'nomes_com_erro': com_erro,
         'alertas_detectados': len(alertas),
         'alertas_criados': criados,
         'alertas_ja_existentes': pulados_existentes,
