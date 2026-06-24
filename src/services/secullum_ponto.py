@@ -327,17 +327,18 @@ def _contar_batidas(mapa: dict) -> int:
     return n
 
 
-def _desvio_minutos(mapa: dict) -> int | None:
+def _desvio_minutos(mapa: dict, base: str = None) -> int | None:
     """Desvio de carga horária do dia, em minutos (abs).
 
-    Base definida por SECULLUM_DESVIO_BASE (ambos|faltas|extras).
+    Base = SECULLUM_DESVIO_BASE (ambos|faltas|extras), com override opcional.
     None quando não há desvio na base escolhida.
     """
+    base = base or SECULLUM_DESVIO_BASE
     extras = _hhmm_para_minutos(mapa.get(SECULLUM_COL_EXTRAS)) or 0
     faltas = _hhmm_para_minutos(mapa.get(SECULLUM_COL_FALTAS)) or 0
-    if SECULLUM_DESVIO_BASE == 'faltas':
+    if base == 'faltas':
         val = faltas
-    elif SECULLUM_DESVIO_BASE == 'extras':
+    elif base == 'extras':
         val = extras
     else:
         val = abs(extras - faltas)
@@ -345,7 +346,8 @@ def _desvio_minutos(mapa: dict) -> int | None:
 
 
 def varrer_pendencias(data_inicio: str, data_fim: str,
-                      dry_run: bool = False, limit: int = None) -> dict:
+                      dry_run: bool = False, limit: int = None,
+                      desvio_base: str = None) -> dict:
     """Varre o período e gera alertas de Batidas Ímpares e Desvios > 02:00.
 
     Para cada funcionário ativo no Ponto Web, busca os cálculos diários e
@@ -385,7 +387,7 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
 
         for data_dia, mapa in _linhas_calculo(calc):
             n_batidas = _contar_batidas(mapa)
-            desvio = _desvio_minutos(mapa)
+            desvio = _desvio_minutos(mapa, base=desvio_base)
 
             # — Batidas ímpares —
             if n_batidas and n_batidas % 2 != 0:
@@ -418,6 +420,7 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
 
     resumo = {
         'periodo': f'{data_inicio}..{data_fim}',
+        'desvio_base': desvio_base or SECULLUM_DESVIO_BASE,
         'funcionarios_processados': len(funcionarios),
         'alertas_detectados': len(alertas),
         'alertas_criados': criados,
@@ -569,6 +572,7 @@ def rota_varrer():
         resumo = varrer_pendencias(
             data_inicio=data_inicio, data_fim=data_fim,
             dry_run=bool(body.get('dry_run', False)), limit=body.get('limit'),
+            desvio_base=body.get('desvio_base'),
         )
         return jsonify(resumo), 200
     except requests.exceptions.HTTPError as exc:
