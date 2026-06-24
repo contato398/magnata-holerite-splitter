@@ -94,6 +94,10 @@ F_PEND_DATA   = 'fldRolmP0rSbJevUZ'   # Data (dateTime)
 ALERTA_STATUS = os.environ.get('SECULLUM_ALERTA_STATUS', 'Aberta')
 TIPO_BATIDA_IMPAR = 'Batida Ímpar (Ponto)'
 TIPO_DESVIO_CARGA = 'Desvio de Carga Horária (Ponto)'
+TIPO_TROCA_PLANTAO = 'Troca de Plantão a Confirmar'
+
+# Plantão noturno: entrada a partir desta hora indica jornada que vira o dia.
+HORA_INICIO_NOTURNO = int(os.environ.get('SECULLUM_HORA_NOTURNO', '18'))
 
 # ── Rate limiter Airtable (espelha _at_throttle do app.py) ──────────────────────
 _last_at_call = 0.0
@@ -400,6 +404,117 @@ def _desvio_minutos(mapa: dict, base: str = None) -> int | None:
     return val if val else None
 
 
+def _faltas_minutos(mapa: dict) -> int:
+    return _hhmm_para_minutos(mapa.get(SECULLUM_COL_FALTAS)) or 0
+
+
+def _trabalhou(mapa: dict) -> bool:
+    """True se houve presença real no dia (alguma batida ou horas normais > 0)."""
+    if _contar_batidas(mapa) > 0:
+        return True
+    return (_hhmm_para_minutos(mapa.get('Normais')) or 0) > 0
+
+
+def _horario_noturno(func: dict) -> bool:
+    """Heurística: plantão noturno (vira o dia) se a 1ª hora do horário é >= 18h.
+
+    Ex.: "12x36 19h - 07h IMPAR" → entrada 19h → noturno.
+    """
+    desc = ((func.get('Horario') or {}).get('Descricao') or '')
+    m = re.search(r'(\d{1,2})\s*[hH:]', desc)
+    return bool(m and int(m.group(1)) >= HORA_INICIO_NOTURNO)
+
+
+def _analisar_batidas(mapa: dict) -> dict:
+    """Analisa as batidas do dia (Regra #1: a jornada já vem agrupada na linha).
+
+    Retorna {'n', 'impar', 'lado_faltante'}: lado_faltante='entrada' ou 'saida'
+    indica qual marcação ficou faltando quando o nº de batidas é ímpar.
+    Como o /Calcular já agrega as marcações pós-meia-noite na linha do dia em que
+    o plantão começou, NÃO há risco de tratar a batida do dia seguinte como isolada.
+    """
+    cols = []
+    for col, val in mapa.items():
+        m = _RE_COL_BATIDA.match(col)
+        if not m:
+            continue
+        num_match = re.search(r'\d+', col)
+        num = int(num_match.group()) if num_match else 0
+        is_entrada = col.strip().lower().startswith('entrada')
+        v = val.strip() if isinstance(val, str) else val
+        hora = v if (isinstance(v, str) and _RE_HORA.match(v)) else None
+        cols.append((num, 0 if is_entrada else 1, is_entrada, hora))
+    cols.sort(key=lambda x: (x[0], x[1]))   # Entrada N antes de Saída N
+
+    preenchidas = [(is_ent, hora) for (_, _, is_ent, hora) in cols if hora]
+    n = len(preenchidas)
+    impar = n % 2 != 0
+    lado = None
+    if impar:
+        # Se a última marcação registrada é uma ENTRADA, faltou a SAÍDA; senão, a ENTRADA.
+        lado = 'saida' if preenchidas[-1][0] else 'entrada'
+    return {'n': n, 'impar': impar, 'lado_faltante': lado}
+
+
+def _descricao_batida_impar(ab: dict, noturno: bool, data_dia: str) -> str:
+    """Texto da pendência de batida ímpar (Regra #3: distingue entrada x saída)."""
+    if ab['lado_faltante'] == 'entrada':
+        falta = ('ENTRADA (início do plantão, na noite do dia anterior)' if noturno
+                 else 'ENTRADA')
+    else:
+        falta = ('SAÍDA (na manhã do dia seguinte ao início do plantão)' if noturno
+                 else 'SAÍDA')
+    escala = 'plantão noturno' if noturno else 'jornada'
+    return (f'{ab["n"]} batida(s) no dia {data_dia} — número ímpar. '
+            f'Em {escala}, provável esquecimento da {falta}. Verificar e ajustar.')
+
+
+def _mapa_locais_airtable() -> tuple:
+    """Lê Funcionários do Airtable e retorna (cpf_locais, local_cpfs, cpf_nome).
+
+    Usado pela Regra #2 (troca/substituição): saber quais colegas dividem o
+    mesmo local de trabalho. Não consome cota da Secullum.
+    """
+    cpf_locais, local_cpfs, cpf_nome = {}, {}, {}
+    url = f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}'
+    params = {
+        'fields[]': ['CPF', 'Locais de trabalho', 'Nome Completo'],
+        'pageSize': 100,
+    }
+    offset = None
+    while True:
+        if offset:
+            params['offset'] = offset
+        _at_throttle()
+        r = requests.get(url, headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                         params=params, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        for rec in data.get('records', []):
+            fl = rec.get('fields', {})
+            cpf = _so_digitos(str(fl.get('CPF', '')))
+            if not cpf:
+                continue
+            locais = set(fl.get('Locais de trabalho') or [])
+            cpf_locais[cpf] = locais
+            cpf_nome[cpf] = fl.get('Nome Completo', '')
+            for loc in locais:
+                local_cpfs.setdefault(loc, set()).add(cpf)
+        offset = data.get('offset')
+        if not offset:
+            break
+    return cpf_locais, local_cpfs, cpf_nome
+
+
+def _colegas_de_local(cpf: str, cpf_locais: dict, local_cpfs: dict) -> set:
+    """CPFs que compartilham ao menos um local de trabalho com `cpf` (exclui ele)."""
+    colegas = set()
+    for loc in cpf_locais.get(cpf, set()):
+        colegas |= local_cpfs.get(loc, set())
+    colegas.discard(cpf)
+    return colegas
+
+
 def varrer_pendencias(data_inicio: str, data_fim: str,
                       dry_run: bool = False, limit: int = None,
                       desvio_base: str = None) -> dict:
@@ -421,6 +536,9 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
     if limit:
         funcionarios = funcionarios[:limit]
 
+    # Mapa funcionário↔local (Regra #2) — Airtable, fora da cota Secullum.
+    cpf_locais, local_cpfs, cpf_nome = _mapa_locais_airtable()
+
     alertas = []
     criados = 0
     pulados_existentes = 0
@@ -429,6 +547,9 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
     calculados = 0
     com_erro = []   # nomes dos funcionários cujo cálculo falhou (mesmo após retries)
 
+    # ── Passada 1: coleta cálculos + mapa de presença por dia ──────────────────
+    dados_func = {}            # cpf -> {'nome', 'noturno', 'dias': {data: mapa}}
+    presenca = {}              # data -> set(cpf que trabalhou no dia)
     for f in funcionarios:
         fid = f.get('Id')
         nome = f.get('Nome', '')
@@ -448,20 +569,52 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
             logger.warning('[SECULLUM] Cálculos falharam p/ %s (Id=%s): %s', nome, fid, exc)
             continue
 
-        for data_dia, mapa in _linhas_calculo(calc):
-            n_batidas = _contar_batidas(mapa)
-            desvio = _desvio_minutos(mapa, base=desvio_base)
+        dias = {data: mapa for data, mapa in _linhas_calculo(calc)}
+        dados_func[cpf] = {'nome': nome, 'noturno': _horario_noturno(f), 'dias': dias}
+        for data_dia, mapa in dias.items():
+            if _trabalhou(mapa):
+                presenca.setdefault(data_dia, set()).add(cpf)
 
-            # — Batidas ímpares —
-            if n_batidas and n_batidas % 2 != 0:
+    # ── Passada 2: detecção de alertas (com as travas) ─────────────────────────
+    for cpf, info in dados_func.items():
+        nome = info['nome']
+        noturno = info['noturno']
+        for data_dia, mapa in info['dias'].items():
+
+            # — Regra #3: batida ímpar (distingue entrada x saída; ciente do noturno) —
+            ab = _analisar_batidas(mapa)
+            if ab['impar']:
                 alertas.append(_montar_alerta(
                     tipo=TIPO_BATIDA_IMPAR, nome=nome, cpf=cpf, data_dia=data_dia,
-                    obs=f'{n_batidas} batidas registradas no dia {data_dia} '
-                        f'(número ímpar — provável batida faltante).',
+                    obs=_descricao_batida_impar(ab, noturno, data_dia),
                 ))
 
             # — Desvio de carga horária > 02:00 —
-            if desvio is not None and desvio > THRESHOLD_DESVIO_MIN:
+            desvio = _desvio_minutos(mapa, base=desvio_base)
+            if desvio is None or desvio <= THRESHOLD_DESVIO_MIN:
+                continue
+            faltas_min = _faltas_minutos(mapa)
+
+            # — Regra #2: a falta foi coberta por colega do mesmo local? —
+            if faltas_min > THRESHOLD_DESVIO_MIN:
+                colegas = _colegas_de_local(cpf, cpf_locais, local_cpfs)
+                cobriram = colegas & presenca.get(data_dia, set())
+                if cobriram:
+                    nomes = ', '.join(sorted(cpf_nome.get(c) or c for c in cobriram))
+                    alertas.append(_montar_alerta(
+                        tipo=TIPO_TROCA_PLANTAO, nome=nome, cpf=cpf, data_dia=data_dia,
+                        obs=f'Falta na escala teórica em {data_dia} '
+                            f'({_minutos_para_hhmm(faltas_min)}), porém colega(s) do mesmo '
+                            f'local com presença no dia: {nomes}. Confirmar troca/substituição '
+                            f'de plantão antes de tratar como falta.',
+                    ))
+                    continue
+                alertas.append(_montar_alerta(
+                    tipo=TIPO_DESVIO_CARGA, nome=nome, cpf=cpf, data_dia=data_dia,
+                    obs=f'Falta de carga horária de {_minutos_para_hhmm(faltas_min)} em '
+                        f'{data_dia} (limite 02:00), sem cobertura de colega do mesmo local.',
+                ))
+            else:
                 alertas.append(_montar_alerta(
                     tipo=TIPO_DESVIO_CARGA, nome=nome, cpf=cpf, data_dia=data_dia,
                     obs=f'Desvio de carga horária de {_minutos_para_hhmm(desvio)} '
@@ -481,6 +634,10 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
         except Exception as exc:
             logger.error('[SECULLUM] Falha ao gravar alerta "%s": %s', alerta['titulo'], exc)
 
+    por_tipo = {}
+    for a in alertas:
+        por_tipo[a['tipo']] = por_tipo.get(a['tipo'], 0) + 1
+
     resumo = {
         'periodo': f'{data_inicio}..{data_fim}',
         'desvio_base': desvio_base or SECULLUM_DESVIO_BASE,
@@ -491,6 +648,7 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
         'funcionarios_com_erro': len(com_erro),
         'nomes_com_erro': com_erro,
         'alertas_detectados': len(alertas),
+        'alertas_por_tipo': por_tipo,
         'alertas_criados': criados,
         'alertas_ja_existentes': pulados_existentes,
         'dry_run': dry_run,
