@@ -174,7 +174,7 @@ def _secullum_headers() -> dict:
 
 SECULLUM_RETRIES = int(os.environ.get('SECULLUM_RETRIES', '4'))
 # Intervalo mínimo entre chamadas à API Secullum (evita 429 Too Many Requests).
-SECULLUM_MIN_INTERVAL = float(os.environ.get('SECULLUM_MIN_INTERVAL', '1.2'))
+SECULLUM_MIN_INTERVAL = float(os.environ.get('SECULLUM_MIN_INTERVAL', '1.0'))
 _last_secullum_call = 0.0
 
 
@@ -517,27 +517,44 @@ def _colegas_de_local(cpf: str, cpf_locais: dict, local_cpfs: dict) -> set:
 
 def varrer_pendencias(data_inicio: str, data_fim: str,
                       dry_run: bool = False, limit: int = None,
-                      desvio_base: str = None) -> dict:
+                      desvio_base: str = None, offset: int = 0) -> dict:
     """Varre o período e gera alertas de Batidas Ímpares e Desvios > 02:00.
 
     Para cada funcionário ativo no Ponto Web, busca os cálculos diários e
     cria pendências no Airtable (tabela Pendências/Revisar). Idempotente: não
     recria uma pendência cujo título determinístico já exista.
 
+    Suporta fatiamento por (offset, limit): no Render free, 88 chamadas numa
+    única requisição estouram o timeout, então o scan é feito em lotes. Os
+    funcionários são ordenados por LOCAL antes de fatiar, mantendo colegas do
+    mesmo local no mesmo lote para preservar a Regra #2 (troca de plantão).
+
     Args:
         data_inicio, data_fim: 'YYYY-MM-DD'.
         dry_run: se True, só relata o que faria (não grava no Airtable).
-        limit: nº máximo de funcionários a processar (debug).
+        offset, limit: recorte de funcionários a processar neste lote.
+        desvio_base: override da base do desvio (faltas|extras|ambos).
 
     Returns:
         Resumo com contadores e a lista de alertas detectados.
     """
     funcionarios = listar_funcionarios_secullum()
-    if limit:
-        funcionarios = funcionarios[:limit]
 
     # Mapa funcionário↔local (Regra #2) — Airtable, fora da cota Secullum.
     cpf_locais, local_cpfs, cpf_nome = _mapa_locais_airtable()
+
+    # Ordena por local p/ manter colegas do mesmo local no mesmo lote (Regra #2).
+    def _chave_local(f):
+        cpf = _so_digitos(str(f.get('Cpf', '')))
+        return (sorted(cpf_locais.get(cpf, set())) or ['~sem-local'], f.get('Nome', ''))
+    funcionarios.sort(key=_chave_local)
+
+    total_funcionarios = len(funcionarios)
+    offset = offset or 0
+    if limit:
+        funcionarios = funcionarios[offset:offset + limit]
+    elif offset:
+        funcionarios = funcionarios[offset:]
 
     alertas = []
     criados = 0
@@ -638,10 +655,16 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
     for a in alertas:
         por_tipo[a['tipo']] = por_tipo.get(a['tipo'], 0) + 1
 
+    proc_fim = offset + len(funcionarios)
+    proximo_offset = proc_fim if proc_fim < total_funcionarios else None
+
     resumo = {
         'periodo': f'{data_inicio}..{data_fim}',
         'desvio_base': desvio_base or SECULLUM_DESVIO_BASE,
-        'funcionarios_total': len(funcionarios),
+        'offset': offset,
+        'lote_tamanho': len(funcionarios),
+        'funcionarios_total': total_funcionarios,
+        'proximo_offset': proximo_offset,
         'funcionarios_calculados': calculados,
         'funcionarios_inativos': inativos,
         'funcionarios_sem_cpf': sem_cpf,
@@ -798,7 +821,7 @@ def rota_varrer():
         resumo = varrer_pendencias(
             data_inicio=data_inicio, data_fim=data_fim,
             dry_run=bool(body.get('dry_run', False)), limit=body.get('limit'),
-            desvio_base=body.get('desvio_base'),
+            desvio_base=body.get('desvio_base'), offset=int(body.get('offset') or 0),
         )
         return jsonify(resumo), 200
     except requests.exceptions.HTTPError as exc:
