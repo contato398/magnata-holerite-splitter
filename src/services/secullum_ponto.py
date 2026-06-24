@@ -54,7 +54,8 @@ SECULLUM_BANCO_ID  = os.environ.get('SECULLUM_BANCO_ID', '149582')
 SECULLUM_CLIENT_ID = os.environ.get('SECULLUM_CLIENT_ID', '3')
 
 AUTH_URL = 'https://autenticador.secullum.com.br/Token'
-API_BASE = 'https://pontowebapi.secullum.com.br/IntegracaoExterna'
+# Base oficial da Integração Externa do Ponto Web (confirmada na doc/exemplo Secullum).
+API_BASE = 'https://pontowebintegracaoexterna.secullum.com.br/IntegracaoExterna'
 
 # Nomes das colunas de cálculo (configuráveis caso o banco use rótulos diferentes).
 # O "desvio de carga horária" é lido como o saldo do dia (extras - faltas).
