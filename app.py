@@ -1,6 +1,13 @@
 """
-magnata-holerite-splitter — app.py v2.6
-Novidades vs v2.5:
+magnata-holerite-splitter — app.py v2.49
+Novidades vs v2.48:
+  - Integração Secullum Ponto Web (Banco ID 149582) via blueprint isolado
+    src/services/secullum_ponto.py (prefixo /secullum): autenticação Bearer,
+    sincronização de funcionários (POST, CPF obrigatório) e varredura de
+    Batidas Ímpares / Desvios de Carga Horária > 02:00, gerando alertas na
+    tabela Pendências/Revisar do Airtable.
+
+Histórico anterior (v2.6):
   - Novo endpoint /email/webhook (Fase 2 - Caixa de Entrada):
     recebe e-mails/anexos via Google Apps Script, registra em
     Emails Savian / Arquivos / Processar Arquivos, classifica o tipo de
@@ -52,6 +59,10 @@ def _mem_mb():
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB máx upload
+
+# ── Integração Secullum Ponto Web (módulo isolado) ──────────────────────────────
+from src.services.secullum_ponto import secullum_bp
+app.register_blueprint(secullum_bp)
 
 @app.after_request
 def _add_cors(response):
@@ -2947,7 +2958,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.48',
+        'versao': '2.49',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
