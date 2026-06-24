@@ -168,25 +168,55 @@ def _secullum_headers() -> dict:
     }
 
 
-SECULLUM_RETRIES = int(os.environ.get('SECULLUM_RETRIES', '3'))
+SECULLUM_RETRIES = int(os.environ.get('SECULLUM_RETRIES', '4'))
+# Intervalo mínimo entre chamadas à API Secullum (evita 429 Too Many Requests).
+SECULLUM_MIN_INTERVAL = float(os.environ.get('SECULLUM_MIN_INTERVAL', '1.2'))
+_last_secullum_call = 0.0
+
+
+def _secullum_throttle():
+    """Espaça as chamadas à API Secullum para não estourar o rate limit (429)."""
+    global _last_secullum_call
+    gap = time.monotonic() - _last_secullum_call
+    if gap < SECULLUM_MIN_INTERVAL:
+        time.sleep(SECULLUM_MIN_INTERVAL - gap)
+    _last_secullum_call = time.monotonic()
+
+
+def _espera_429(resp, tentativa: int) -> float:
+    """Quanto esperar após um 429: respeita Retry-After, senão backoff (cap 30s)."""
+    ra = resp.headers.get('Retry-After', '')
+    if ra.strip().isdigit():
+        return min(float(ra), 30.0)
+    return min(3.0 * tentativa, 30.0)
 
 
 def _secullum_request(metodo: str, caminho: str, **kwargs):
-    """Wrapper resiliente: refresh de token em 401 e retry com backoff.
+    """Wrapper resiliente: throttle + refresh de token em 401 + retry com backoff.
 
-    Repete em falhas transitórias (timeout, conexão, 502/503/504) até
-    SECULLUM_RETRIES vezes. Erros 4xx (exceto 401) propagam de imediato.
+    Faz throttle client-side antes de cada chamada. Repete em falhas transitórias
+    (timeout, conexão, 429, 502/503/504) até SECULLUM_RETRIES vezes, respeitando
+    Retry-After no 429. Erros 4xx (exceto 401/429) propagam de imediato.
     """
     url = f'{API_BASE}/{caminho.lstrip("/")}'
     kwargs.setdefault('timeout', 60)
     ultimo = None
     for tentativa in range(1, SECULLUM_RETRIES + 1):
         try:
+            _secullum_throttle()
             r = requests.request(metodo, url, headers=_secullum_headers(), **kwargs)
             if r.status_code == 401:
                 logger.info('[SECULLUM] 401 — renovando token e repetindo.')
                 get_token(forcar=True)
+                _secullum_throttle()
                 r = requests.request(metodo, url, headers=_secullum_headers(), **kwargs)
+            if r.status_code == 429:
+                espera = _espera_429(r, tentativa)
+                ultimo = 'HTTP 429'
+                logger.warning('[SECULLUM] 429 em %s — aguardando %.1fs (tentativa %s/%s)',
+                               caminho, espera, tentativa, SECULLUM_RETRIES)
+                time.sleep(espera)
+                continue
             if r.status_code in (502, 503, 504):
                 ultimo = f'HTTP {r.status_code}'
                 logger.warning('[SECULLUM] %s %s → %s (tentativa %s/%s)',
