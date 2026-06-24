@@ -39,6 +39,7 @@ import os
 import re
 import time
 import logging
+import traceback
 from datetime import datetime, date, timedelta
 
 import requests
@@ -565,3 +566,52 @@ def rota_varrer():
         return jsonify(resumo), 200
     except requests.exceptions.HTTPError as exc:
         return jsonify({'erro': 'Falha na API Secullum', 'detalhe': str(exc)}), 502
+    except Exception as exc:
+        logger.exception('[SECULLUM] Erro na varredura')
+        return jsonify({
+            'erro': type(exc).__name__,
+            'detalhe': str(exc),
+            'traceback': traceback.format_exc().splitlines()[-8:],
+        }), 500
+
+
+@secullum_bp.route('/debug', methods=['GET'])
+def rota_debug():
+    """Diagnóstico: mostra os shapes crus retornados pela Secullum.
+
+    Faz auth → lista funcionários → cálculos do 1º funcionário no período,
+    devolvendo amostras para validar nomes de campo/coluna. Uso temporário.
+    """
+    out = {}
+    try:
+        out['token_ok'] = bool(get_token())
+    except Exception as exc:
+        out['token_ok'] = False
+        out['token_erro'] = f'{type(exc).__name__}: {exc}'
+        return jsonify(out), 200
+
+    try:
+        funcs = listar_funcionarios_secullum()
+        out['funcionarios_tipo'] = type(funcs).__name__
+        out['funcionarios_qtd'] = len(funcs) if isinstance(funcs, list) else None
+        amostra = (funcs[0] if isinstance(funcs, list) and funcs else None)
+        out['funcionario_amostra'] = amostra
+    except Exception as exc:
+        out['funcionarios_erro'] = f'{type(exc).__name__}: {exc}'
+        out['funcionarios_traceback'] = traceback.format_exc().splitlines()[-6:]
+        return jsonify(out), 200
+
+    try:
+        if amostra:
+            hoje = date.today()
+            di = hoje.replace(day=1).isoformat()
+            df = hoje.isoformat()
+            calc = obter_calculos(amostra.get('Id'), di, df)
+            out['calculos_tipo'] = type(calc).__name__
+            out['calculos_qtd'] = len(calc) if isinstance(calc, list) else None
+            out['calculo_dia_amostra'] = (calc[0] if isinstance(calc, list) and calc else calc)
+    except Exception as exc:
+        out['calculos_erro'] = f'{type(exc).__name__}: {exc}'
+        out['calculos_traceback'] = traceback.format_exc().splitlines()[-6:]
+
+    return jsonify(out), 200
