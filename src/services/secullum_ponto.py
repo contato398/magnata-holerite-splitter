@@ -58,10 +58,14 @@ AUTH_URL = 'https://autenticador.secullum.com.br/Token'
 API_BASE = 'https://pontowebintegracaoexterna.secullum.com.br/IntegracaoExterna'
 
 # Nomes das colunas de cálculo (configuráveis caso o banco use rótulos diferentes).
-# O "desvio de carga horária" é lido como o saldo do dia (extras - faltas).
-SECULLUM_COL_SALDO  = os.environ.get('SECULLUM_COL_SALDO', 'Saldo')
 SECULLUM_COL_FALTAS = os.environ.get('SECULLUM_COL_FALTAS', 'Faltas')
 SECULLUM_COL_EXTRAS = os.environ.get('SECULLUM_COL_EXTRAS', 'Extras')
+
+# Base do "desvio de carga horária":
+#   ambos  → |Extras - Faltas| (literal; em escalas 12x36 gera muitos falsos positivos)
+#   faltas → só horas faltantes (anomalias reais de jornada; recomendado p/ 12x36)
+#   extras → só horas extras
+SECULLUM_DESVIO_BASE = os.environ.get('SECULLUM_DESVIO_BASE', 'ambos').lower()
 
 # Limite do desvio: 02:00 = 120 minutos. Alerta dispara para desvios > este valor.
 THRESHOLD_DESVIO_MIN = 120
@@ -285,11 +289,17 @@ def _minutos_para_hhmm(minutos: int) -> str:
     return f'{sinal}{minutos // 60:02d}:{minutos % 60:02d}'
 
 
-def obter_calculos(cpf: str, data_inicio: str, data_fim: str) -> list:
-    """Retorna os cálculos diários de um funcionário no período (lista de dias).
+# Resposta do /Calcular é colunar: {'Colunas': [...], 'Linhas': [{'Key':data,'Value':[...]}]}.
+# Colunas de batida = "Entrada N" / "Saída N"; valor é "HH:MM" (ou "FOLGA"/vazio).
+_RE_COL_BATIDA = re.compile(r'^(Entrada|Sa[íi]da)\s*\d+$', re.IGNORECASE)
+_RE_HORA = re.compile(r'^\d{1,2}:\d{2}$')
 
-    Endpoint oficial: POST /IntegracaoExterna/Calcular. Filtra por CPF (ou PIS),
-    com dataInicial/dataFinal (date-time).
+
+def obter_calculos(cpf: str, data_inicio: str, data_fim: str) -> dict:
+    """Retorna o cálculo do período no formato colunar do Ponto Web.
+
+    Endpoint oficial: POST /IntegracaoExterna/Calcular. Filtra por CPF,
+    com dataInicial/dataFinal (date-time). Retorna {'Colunas':[...], 'Linhas':[...]}.
     """
     payload = {
         'funcionarioCpf': _so_digitos(cpf),
@@ -297,51 +307,41 @@ def obter_calculos(cpf: str, data_inicio: str, data_fim: str) -> list:
         'dataFinal': f'{data_fim}T00:00:00',
     }
     dados = _secullum_request('POST', 'Calcular', json=payload)
-    if isinstance(dados, list):
-        return dados
-    if isinstance(dados, dict):
-        return dados.get('Dias') or dados.get('Calculos') or dados.get('Calculo') or []
-    return []
+    return dados if isinstance(dados, dict) else {}
 
 
-def _coluna(dia: dict, nome: str):
-    """Lê uma coluna de cálculo de forma tolerante a formato.
-
-    Suporta tanto {'Colunas': {'Saldo': '02:00'}} quanto chave direta no dia.
-    """
-    colunas = dia.get('Colunas') or dia.get('colunas') or {}
-    if nome in colunas:
-        return colunas[nome]
-    # fallback: chave direta no objeto-dia
-    return dia.get(nome)
+def _linhas_calculo(calc: dict):
+    """Itera (data_iso, {coluna: valor}) sobre cada dia da resposta do /Calcular."""
+    colunas = calc.get('Colunas') or []
+    for linha in calc.get('Linhas') or []:
+        valores = linha.get('Value') or []
+        yield str(linha.get('Key', ''))[:10], dict(zip(colunas, valores))
 
 
-def _contar_batidas(dia: dict) -> int:
-    batidas = dia.get('Batidas') or dia.get('batidas') or []
-    if isinstance(batidas, list):
-        return len([b for b in batidas if b not in (None, '', '00:00')])
-    return 0
+def _contar_batidas(mapa: dict) -> int:
+    """Conta os horários de batida (Entrada/Saída N) efetivamente preenchidos no dia."""
+    n = 0
+    for col, val in mapa.items():
+        if _RE_COL_BATIDA.match(col) and isinstance(val, str) and _RE_HORA.match(val.strip()):
+            n += 1
+    return n
 
 
-def _desvio_minutos(dia: dict) -> int | None:
+def _desvio_minutos(mapa: dict) -> int | None:
     """Desvio de carga horária do dia, em minutos (abs).
 
-    Prioriza a coluna de Saldo; se ausente, deriva de Extras - Faltas.
+    Base definida por SECULLUM_DESVIO_BASE (ambos|faltas|extras).
+    None quando não há desvio na base escolhida.
     """
-    saldo = _hhmm_para_minutos(_coluna(dia, SECULLUM_COL_SALDO))
-    if saldo is not None:
-        return abs(saldo)
-    extras = _hhmm_para_minutos(_coluna(dia, SECULLUM_COL_EXTRAS)) or 0
-    faltas = _hhmm_para_minutos(_coluna(dia, SECULLUM_COL_FALTAS)) or 0
-    if extras == 0 and faltas == 0:
-        return None
-    return abs(extras - faltas)
-
-
-def _data_do_dia(dia: dict) -> str:
-    raw = dia.get('Data') or dia.get('data') or ''
-    # normaliza ISO 'YYYY-MM-DDTHH:MM:SS' → 'YYYY-MM-DD'
-    return str(raw)[:10]
+    extras = _hhmm_para_minutos(mapa.get(SECULLUM_COL_EXTRAS)) or 0
+    faltas = _hhmm_para_minutos(mapa.get(SECULLUM_COL_FALTAS)) or 0
+    if SECULLUM_DESVIO_BASE == 'faltas':
+        val = faltas
+    elif SECULLUM_DESVIO_BASE == 'extras':
+        val = extras
+    else:
+        val = abs(extras - faltas)
+    return val if val else None
 
 
 def varrer_pendencias(data_inicio: str, data_fim: str,
@@ -378,15 +378,14 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
             continue
 
         try:
-            dias = obter_calculos(cpf, data_inicio, data_fim)
+            calc = obter_calculos(cpf, data_inicio, data_fim)
         except Exception as exc:
             logger.warning('[SECULLUM] Cálculos falharam p/ %s (Id=%s): %s', nome, fid, exc)
             continue
 
-        for dia in dias:
-            data_dia = _data_do_dia(dia)
-            n_batidas = _contar_batidas(dia)
-            desvio = _desvio_minutos(dia)
+        for data_dia, mapa in _linhas_calculo(calc):
+            n_batidas = _contar_batidas(mapa)
+            desvio = _desvio_minutos(mapa)
 
             # — Batidas ímpares —
             if n_batidas and n_batidas % 2 != 0:
