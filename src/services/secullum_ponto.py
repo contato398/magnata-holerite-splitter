@@ -610,14 +610,26 @@ def rota_debug():
         return jsonify(out), 200
 
     try:
-        if amostra:
-            hoje = date.today()
-            di = hoje.replace(day=1).isoformat()
-            df = hoje.isoformat()
-            calc = obter_calculos(amostra.get('Cpf'), di, df)
-            out['calculos_tipo'] = type(calc).__name__
-            out['calculos_qtd'] = len(calc) if isinstance(calc, list) else None
-            out['calculo_dia_amostra'] = (calc[0] if isinstance(calc, list) and calc else calc)
+        cpf = request.args.get('cpf') or (amostra.get('Cpf') if amostra else None)
+        # default: mês passado (mais provável de estar fechado/calculado)
+        ref = date.today().replace(day=1) - timedelta(days=1)
+        di = request.args.get('di') or ref.replace(day=1).isoformat()
+        df = request.args.get('df') or ref.isoformat()
+        out['calc_cpf'] = cpf
+        out['calc_periodo'] = f'{di}..{df}'
+
+        payload = {
+            'funcionarioCpf': _so_digitos(cpf or ''),
+            'dataInicial': f'{di}T00:00:00',
+            'dataFinal': f'{df}T00:00:00',
+        }
+        bruto = _secullum_request('POST', 'Calcular', json=payload)
+        out['calculos_raw_tipo'] = type(bruto).__name__
+        if isinstance(bruto, list):
+            out['calculos_raw_qtd'] = len(bruto)
+            out['calculos_raw_amostra'] = bruto[:2]
+        else:
+            out['calculos_raw_amostra'] = bruto
     except Exception as exc:
         out['calculos_erro'] = f'{type(exc).__name__}: {exc}'
         out['calculos_traceback'] = traceback.format_exc().splitlines()[-6:]
