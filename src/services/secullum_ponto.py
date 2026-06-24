@@ -285,18 +285,23 @@ def _minutos_para_hhmm(minutos: int) -> str:
     return f'{sinal}{minutos // 60:02d}:{minutos % 60:02d}'
 
 
-def obter_calculos(funcionario_id, data_inicio: str, data_fim: str) -> list:
-    """Retorna os cálculos diários de um funcionário no período (lista de dias)."""
+def obter_calculos(cpf: str, data_inicio: str, data_fim: str) -> list:
+    """Retorna os cálculos diários de um funcionário no período (lista de dias).
+
+    Endpoint oficial: POST /IntegracaoExterna/Calcular. Filtra por CPF (ou PIS),
+    com dataInicial/dataFinal (date-time).
+    """
     payload = {
-        'FuncionarioId': funcionario_id,
-        'DataInicio': data_inicio,
-        'DataFim': data_fim,
+        'funcionarioCpf': _so_digitos(cpf),
+        'dataInicial': f'{data_inicio}T00:00:00',
+        'dataFinal': f'{data_fim}T00:00:00',
     }
-    dados = _secullum_request('POST', 'Calculos', json=payload)
+    dados = _secullum_request('POST', 'Calcular', json=payload)
     if isinstance(dados, list):
         return dados
-    # Algumas versões retornam {'Dias': [...]} ou {'Calculos': [...]}
-    return dados.get('Dias') or dados.get('Calculos') or []
+    if isinstance(dados, dict):
+        return dados.get('Dias') or dados.get('Calculos') or dados.get('Calculo') or []
+    return []
 
 
 def _coluna(dia: dict, nome: str):
@@ -367,11 +372,13 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
         fid = f.get('Id')
         nome = f.get('Nome', '')
         cpf = _so_digitos(str(f.get('Cpf', '')))
-        if f.get('Demitido'):
+        if f.get('Demissao'):   # data de demissão preenchida = inativo
+            continue
+        if not cpf:
             continue
 
         try:
-            dias = obter_calculos(fid, data_inicio, data_fim)
+            dias = obter_calculos(cpf, data_inicio, data_fim)
         except Exception as exc:
             logger.warning('[SECULLUM] Cálculos falharam p/ %s (Id=%s): %s', nome, fid, exc)
             continue
@@ -607,7 +614,7 @@ def rota_debug():
             hoje = date.today()
             di = hoje.replace(day=1).isoformat()
             df = hoje.isoformat()
-            calc = obter_calculos(amostra.get('Id'), di, df)
+            calc = obter_calculos(amostra.get('Cpf'), di, df)
             out['calculos_tipo'] = type(calc).__name__
             out['calculos_qtd'] = len(calc) if isinstance(calc, list) else None
             out['calculo_dia_amostra'] = (calc[0] if isinstance(calc, list) and calc else calc)
