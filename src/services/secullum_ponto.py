@@ -10,11 +10,15 @@ Responsabilidades:
   3. Varredura: lê os cálculos do período e gera alertas para
         - Batidas Ímpares (nº de batidas no dia é ímpar)
         - Desvios de Carga Horária maiores que 02:00
-        - Folga Trabalhada (jornada real em dia de FOLGA da escala teórica
-          PAR/ÍMPAR) e Troca de Plantão cruzada (falta de um colega no dia de
-          TRABALHO casada com a Folga Trabalhada de outro no mesmo local) —
-          não depende do Ponto Web conhecer o local de serviço.
-  4. Alertas: gravados na estrutura atual do Airtable, na tabela "Pendências/Revisar",
+        - Folga Trabalhada (jornada real em dia de FOLGA/Feriado real da
+          escala, marcado pelo próprio /Calcular) e Troca de Plantão cruzada
+          (falta de zero batidas casada com a Folga Trabalhada de outro
+          colaborador no mesmo dia) — 100% baseado na escala, sem depender de
+          local de trabalho cadastrado no Airtable.
+  4. Bônus de Assiduidade: avalia por CPF se houve falta, atraso na entrada
+     ou saída antecipada (> tolerância) no período, comparando a jornada real
+     contra o horário programado (Horario.Descricao).
+  5. Alertas: gravados na estrutura atual do Airtable, na tabela "Pendências/Revisar",
      vinculados ao Funcionário correspondente (casamento por CPF).
 
 Exposto como Blueprint Flask (`secullum_bp`). Para integrar ao app principal:
@@ -98,14 +102,18 @@ F_PEND_DATA   = 'fldRolmP0rSbJevUZ'   # Data (dateTime)
 ALERTA_STATUS = os.environ.get('SECULLUM_ALERTA_STATUS', 'Aberta')
 TIPO_BATIDA_IMPAR = 'Batida Ímpar (Ponto)'
 TIPO_DESVIO_CARGA = 'Desvio de Carga Horária (Ponto)'
-TIPO_TROCA_PLANTAO = 'Troca de Plantão a Confirmar'
-# Cruzamento jornada real x escala teórica (PAR/ÍMPAR) — não depende de local de trabalho.
+# Cruzamento jornada real x escala teórica (FOLGA/Feriado real) — não depende de
+# local de trabalho (Airtable); só da própria escala resolvida pela Secullum.
 TIPO_FOLGA_TRABALHADA = 'Folga Trabalhada (Banco de Horas / Extra)'
 TIPO_TROCA_FALTOU = 'Troca de Plantão (Faltou / Cedido)'
 TIPO_TROCA_COBRIU = 'Troca de Plantão (Cobriu / Dobrou)'
 
 # Plantão noturno: entrada a partir desta hora indica jornada que vira o dia.
 HORA_INICIO_NOTURNO = int(os.environ.get('SECULLUM_HORA_NOTURNO', '18'))
+
+# Bônus de Assiduidade: perde com qualquer falta/atraso/saída antecipada > tolerância.
+BONUS_ASSIDUIDADE_VALOR = os.environ.get('SECULLUM_BONUS_ASSIDUIDADE', '100,00')
+BONUS_TOLERANCIA_MIN = int(os.environ.get('SECULLUM_BONUS_TOLERANCIA_MIN', '5'))
 
 # ── Rate limiter Airtable (espelha _at_throttle do app.py) ──────────────────────
 _last_at_call = 0.0
@@ -452,6 +460,23 @@ def _dia_e_folga_teorica(mapa: dict) -> bool:
     return False
 
 
+def _dia_e_folga_trabalhada(mapa: dict) -> bool:
+    """True se houve trabalho real num dia SEM carga normal programada.
+
+    O marcador literal "FOLGA" só aparece quando NÃO há batida nenhuma
+    (`_dia_e_folga_teorica`); no dia em que a pessoa efetivamente bate o
+    ponto na folga, a Secullum substitui o marcador pelos horários reais e
+    classifica todas as horas como Extras (sem Normais), em vez de manter o
+    texto "FOLGA". Por isso o sinal aqui é: bateu ponto, mas "Normais" = 0
+    e "Extras" > 0 — não há jornada normal programada para aquele dia.
+    """
+    if not _trabalhou(mapa):
+        return False
+    normais = _hhmm_para_minutos(mapa.get('Normais')) or 0
+    extras = _hhmm_para_minutos(mapa.get(SECULLUM_COL_EXTRAS)) or 0
+    return normais == 0 and extras > 0
+
+
 def _analisar_batidas(mapa: dict) -> dict:
     """Analisa as batidas do dia (Regra #1: a jornada já vem agrupada na linha).
 
@@ -496,50 +521,99 @@ def _descricao_batida_impar(ab: dict, noturno: bool, data_dia: str) -> str:
             f'Em {escala}, provável esquecimento da {falta}. Verificar e ajustar.')
 
 
-def _mapa_locais_airtable() -> tuple:
-    """Lê Funcionários do Airtable e retorna (cpf_locais, local_cpfs, cpf_nome).
+# ── Mapeamento dinâmico de jornada (Hora de Saída programada) ──────────────────
+# "Fechamento" do plantão (Saída + 3h) é resolvido pelo próprio /Calcular: ele já
+# devolve a jornada inteira (incl. virada de dia) numa única linha por plantão —
+# confirmado contra dados reais (ex.: plantão 19h-07h aparece todo na linha do dia
+# de início, sem quebra no dia civil seguinte). Por isso não recalculamos esse
+# agrupamento aqui; só extraímos os horários PROGRAMADOS de entrada/saída do
+# Horario.Descricao para comparar contra a jornada real (atraso/saída antecipada).
+_RE_HORARIO_FAIXA = re.compile(r'(\d{1,2})\s*h?\s*(?:as|-|–|à|ás)\s*(\d{1,2})\s*h?', re.IGNORECASE)
 
-    Usado pela Regra #2 (troca/substituição): saber quais colegas dividem o
-    mesmo local de trabalho. Não consome cota da Secullum.
+
+def _horarios_programados(func: dict) -> list:
+    """Lista de faixas (entrada_min, saida_min) programadas no Horario.Descricao.
+
+    Pode haver mais de uma faixa (ex.: "08h as 17h e 08h as 12h sabado").
     """
-    cpf_locais, local_cpfs, cpf_nome = {}, {}, {}
-    url = f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}'
-    params = {
-        'fields[]': ['CPF', 'Locais de trabalho', 'Nome Completo'],
-        'pageSize': 100,
+    desc = ((func.get('Horario') or {}).get('Descricao') or '')
+    return [(int(h1) * 60, int(h2) * 60) for h1, h2 in _RE_HORARIO_FAIXA.findall(desc)]
+
+
+def _horario_entrada_saida_do_dia(func: dict, data_dia: str) -> tuple:
+    """(entrada_prog_min, saida_prog_min) do dia, ou (None, None) se não der p/ parsear."""
+    faixas = _horarios_programados(func)
+    if not faixas:
+        return None, None
+    desc = ((func.get('Horario') or {}).get('Descricao') or '').lower()
+    if len(faixas) > 1 and 'sabado' in desc and date.fromisoformat(data_dia).weekday() == 5:
+        return faixas[1]
+    return faixas[0]
+
+
+def _primeira_entrada_ultima_saida(mapa: dict) -> tuple:
+    """(1ª entrada, última saída) do dia em minutos, ou (None, None) se não houver."""
+    entradas, saidas = [], []
+    for col, val in mapa.items():
+        if not _RE_COL_BATIDA.match(col):
+            continue
+        v = val.strip() if isinstance(val, str) else val
+        if not (isinstance(v, str) and _RE_HORA.match(v)):
+            continue
+        minutos = _hhmm_para_minutos(v)
+        (entradas if col.strip().lower().startswith('entrada') else saidas).append(minutos)
+    return (min(entradas) if entradas else None), (max(saidas) if saidas else None)
+
+
+def _normalizar_apos(minutos: int, referencia: int) -> int:
+    """+24h se `minutos` for anterior a `referencia` (plantão que vira a noite)."""
+    return minutos if minutos >= referencia else minutos + 24 * 60
+
+
+def _atraso_minutos(entrada_prog, primeira_real) -> int:
+    """Minutos de atraso na entrada (0 se chegou no horário ou adiantado)."""
+    if entrada_prog is None or primeira_real is None:
+        return 0
+    return max(0, primeira_real - entrada_prog)
+
+
+def _saida_antecipada_minutos(entrada_prog, saida_prog, ultima_real) -> int:
+    """Minutos de saída antecipada (0 se saiu no horário ou depois)."""
+    if entrada_prog is None or saida_prog is None or ultima_real is None:
+        return 0
+    saida_prog_n = _normalizar_apos(saida_prog, entrada_prog)
+    ultima_n = _normalizar_apos(ultima_real, entrada_prog)
+    return max(0, saida_prog_n - ultima_n)
+
+
+def _avaliar_bonus_assiduidade(func: dict, dias_status: dict, dias: dict) -> dict:
+    """Bônus de Assiduidade: 100% assíduo no período = sem nenhum dos 3 motivos.
+
+    Perde com >=1: falta não justificada, atraso na entrada > tolerância,
+    saída antecipada > tolerância. Dias de FOLGA/Feriado não contam (Regra das
+    Travas Humanas: zero batidas em dia de folga nunca é falta).
+    """
+    motivos = []
+    for data_dia, mapa in sorted(dias.items()):
+        if dias_status.get(data_dia) == 'folga':
+            continue
+        if not _trabalhou(mapa) and _faltas_minutos(mapa) > 0:
+            motivos.append(f'Falta em {data_dia}')
+            continue
+        entrada_prog, saida_prog = _horario_entrada_saida_do_dia(func, data_dia)
+        primeira, ultima = _primeira_entrada_ultima_saida(mapa)
+        atraso = _atraso_minutos(entrada_prog, primeira)
+        antecipada = _saida_antecipada_minutos(entrada_prog, saida_prog, ultima)
+        if atraso > BONUS_TOLERANCIA_MIN:
+            motivos.append(f'Atraso de {_minutos_para_hhmm(atraso)} em {data_dia}')
+        if antecipada > BONUS_TOLERANCIA_MIN:
+            motivos.append(f'Saída antecipada de {_minutos_para_hhmm(antecipada)} em {data_dia}')
+    elegivel = not motivos
+    return {
+        'elegivel': elegivel,
+        'bonus': f'Sim (R$ {BONUS_ASSIDUIDADE_VALOR})' if elegivel else 'Não (R$ 0,00)',
+        'motivos': motivos,
     }
-    offset = None
-    while True:
-        if offset:
-            params['offset'] = offset
-        _at_throttle()
-        r = requests.get(url, headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
-                         params=params, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        for rec in data.get('records', []):
-            fl = rec.get('fields', {})
-            cpf = _so_digitos(str(fl.get('CPF', '')))
-            if not cpf:
-                continue
-            locais = set(fl.get('Locais de trabalho') or [])
-            cpf_locais[cpf] = locais
-            cpf_nome[cpf] = fl.get('Nome Completo', '')
-            for loc in locais:
-                local_cpfs.setdefault(loc, set()).add(cpf)
-        offset = data.get('offset')
-        if not offset:
-            break
-    return cpf_locais, local_cpfs, cpf_nome
-
-
-def _colegas_de_local(cpf: str, cpf_locais: dict, local_cpfs: dict) -> set:
-    """CPFs que compartilham ao menos um local de trabalho com `cpf` (exclui ele)."""
-    colegas = set()
-    for loc in cpf_locais.get(cpf, set()):
-        colegas |= local_cpfs.get(loc, set())
-    colegas.discard(cpf)
-    return colegas
 
 
 def varrer_pendencias(data_inicio: str, data_fim: str,
@@ -552,18 +626,23 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
     recria uma pendência cujo título determinístico já exista.
 
     Suporta fatiamento por (offset, limit): no Render free, 88 chamadas numa
-    única requisição estouram o timeout, então o scan é feito em lotes. Os
-    funcionários são ordenados por LOCAL antes de fatiar, mantendo colegas do
-    mesmo local no mesmo lote para preservar a Regra #2 (troca de plantão).
+    única requisição estouram o timeout, então o scan é feito em lotes.
 
-    Cruzamento jornada real x escala teórica (calibração mais recente):
+    Cruzamento jornada real x escala teórica ("Travas Humanas", 100% na
+    escala — não depende de local de trabalho do Airtable):
     o próprio /Calcular já resolve a escala e marca FOLGA/Feriado nas colunas
-    de batida — não dependemos de interpretar rótulo de horário nem de local.
+    de batida (ground truth; rótulo PAR/ÍMPAR do horário NÃO é confiável).
+    - Folga teórica + zero batidas → ignorado (não é falta).
     - Folga teórica + trabalhou → "Folga Trabalhada" (DP valida banco de horas).
-    - Trabalho teórico + zero batidas → cruza com colegas do mesmo local que
-      tiveram Folga Trabalhada no mesmo dia; se achar, gera o par "Troca de
-      Plantão (Faltou/Cedido)" + "Troca de Plantão (Cobriu/Dobrou)". Sem par,
-      cai na Regra #2 antiga (colega presente no local, sem distinguir folga).
+    - Trabalho teórico + zero batidas → cruza, em toda a empresa (sem filtro de
+      local), com quem teve Folga Trabalhada no mesmo dia; se achar, gera o par
+      "Troca de Plantão (Faltou/Cedido)" + "(Cobriu/Dobrou)". Sem par, vira
+      Desvio de Carga Horária simples (falta sem cobertura identificada).
+
+    Também avalia o Bônus de Assiduidade (R$) de cada funcionário no período:
+    perde com qualquer falta, atraso na entrada ou saída antecipada (> 5 min,
+    `BONUS_TOLERANCIA_MIN`), comparando a jornada real contra o horário
+    programado (Horario.Descricao). Resultado em `resumo['bonus_assiduidade']`.
 
     Args:
         data_inicio, data_fim: 'YYYY-MM-DD'.
@@ -572,18 +651,10 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
         desvio_base: override da base do desvio (faltas|extras|ambos).
 
     Returns:
-        Resumo com contadores e a lista de alertas detectados.
+        Resumo com contadores, alertas e o bônus de assiduidade por CPF.
     """
     funcionarios = listar_funcionarios_secullum()
-
-    # Mapa funcionário↔local (Regra #2) — Airtable, fora da cota Secullum.
-    cpf_locais, local_cpfs, cpf_nome = _mapa_locais_airtable()
-
-    # Ordena por local p/ manter colegas do mesmo local no mesmo lote (Regra #2).
-    def _chave_local(f):
-        cpf = _so_digitos(str(f.get('Cpf', '')))
-        return (sorted(cpf_locais.get(cpf, set())) or ['~sem-local'], f.get('Nome', ''))
-    funcionarios.sort(key=_chave_local)
+    funcionarios.sort(key=lambda f: f.get('Nome', ''))
 
     total_funcionarios = len(funcionarios)
     offset = offset or 0
@@ -600,9 +671,8 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
     calculados = 0
     com_erro = []   # nomes dos funcionários cujo cálculo falhou (mesmo após retries)
 
-    # ── Passada 1: coleta cálculos + mapa de presença por dia ──────────────────
-    dados_func = {}            # cpf -> {'nome', 'noturno', 'dias': {data: mapa}}
-    presenca = {}              # data -> set(cpf que trabalhou no dia)
+    # ── Passada 1: coleta cálculos por funcionário ──────────────────────────────
+    dados_func = {}   # cpf -> {'nome', 'noturno', 'func', 'dias': {data: mapa}}
     for f in funcionarios:
         fid = f.get('Id')
         nome = f.get('Nome', '')
@@ -623,22 +693,19 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
             continue
 
         dias = {data: mapa for data, mapa in _linhas_calculo(calc)}
-        dados_func[cpf] = {'nome': nome, 'noturno': _horario_noturno(f), 'dias': dias}
-        for data_dia, mapa in dias.items():
-            if _trabalhou(mapa):
-                presenca.setdefault(data_dia, set()).add(cpf)
+        dados_func[cpf] = {'nome': nome, 'noturno': _horario_noturno(f), 'func': f, 'dias': dias}
 
     # ── Passada 1.5: status da escala teórica por dia (trabalho/folga) ─────────
     # Ground truth do próprio /Calcular (marcador "FOLGA"/"Feriado" nas colunas
-    # de batida) — não depende de local nem de interpretar rótulo de horário.
-    # folga_trabalhada / falta_critica são a base do cruzamento "jornada real
-    # x escala teórica" pedido pelo usuário.
+    # de batida). folga_trabalhada / falta_critica são a base do cruzamento
+    # "jornada real x escala teórica", sem nenhum filtro de local de trabalho.
     folga_trabalhada = {}   # data -> set(cpf) que trabalhou na folga teórica
     falta_critica = {}      # data -> set(cpf) com zero batidas em dia de trabalho teórico
     for cpf, info in dados_func.items():
         dias_status = {}
         for data_dia, mapa in info['dias'].items():
-            status = 'folga' if _dia_e_folga_teorica(mapa) else 'trabalho'
+            folga = _dia_e_folga_teorica(mapa) or _dia_e_folga_trabalhada(mapa)
+            status = 'folga' if folga else 'trabalho'
             dias_status[data_dia] = status
             if status == 'folga' and _trabalhou(mapa):
                 folga_trabalhada.setdefault(data_dia, set()).add(cpf)
@@ -647,8 +714,7 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
         info['dias_status'] = dias_status
 
     # ── Passada 1.6: pareamento — falta crítica (A) x folga trabalhada (B) ──────
-    # B precisa dividir local de trabalho com A (Airtable) e ter trabalhado em
-    # SUA folga teórica no mesmo dia em que A faltou na escala dele.
+    # Sem filtro de local: qualquer Folga Trabalhada no mesmo dia é candidata.
     pareamento_a = {}   # (data, cpf_a) -> set(cpf_b)
     pareados_b = {}     # data -> set(cpf_b já usados como cobertura)
     for data_dia, cpfs_a in falta_critica.items():
@@ -656,11 +722,8 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
         if not candidatos_dia:
             continue
         for cpf_a in cpfs_a:
-            colegas = _colegas_de_local(cpf_a, cpf_locais, local_cpfs)
-            candidatos = colegas & candidatos_dia
-            if candidatos:
-                pareamento_a[(data_dia, cpf_a)] = candidatos
-                pareados_b.setdefault(data_dia, set()).update(candidatos)
+            pareamento_a[(data_dia, cpf_a)] = candidatos_dia
+            pareados_b.setdefault(data_dia, set()).update(candidatos_dia)
 
     # ── Passada 2: detecção de alertas (com as travas) ─────────────────────────
     for cpf, info in dados_func.items():
@@ -677,7 +740,7 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
                     obs=_descricao_batida_impar(ab, noturno, data_dia),
                 ))
 
-            # — Dia de FOLGA na escala teórica: nunca há desvio/falta a apurar aqui —
+            # — Dia de FOLGA na escala teórica: zero batidas é ignorado (não é falta) —
             if status == 'folga':
                 if _trabalhou(mapa):
                     if cpf in pareados_b.get(data_dia, set()):
@@ -688,9 +751,8 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
                         alertas.append(_montar_alerta(
                             tipo=TIPO_TROCA_COBRIU, nome=nome, cpf=cpf, data_dia=data_dia,
                             obs=f'Trabalhou no dia de FOLGA da escala teórica ({data_dia}), '
-                                f'cobrindo {nomes_a or "colega"}, que faltou no mesmo local '
-                                f'nesse dia. Confirmar troca de plantão e lançar banco de '
-                                f'horas/extra.',
+                                f'cobrindo {nomes_a or "colega"}, que faltou nesse dia. '
+                                f'Confirmar troca de plantão e lançar banco de horas/extra.',
                         ))
                     else:
                         alertas.append(_montar_alerta(
@@ -709,35 +771,22 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
                 alertas.append(_montar_alerta(
                     tipo=TIPO_TROCA_FALTOU, nome=nome, cpf=cpf, data_dia=data_dia,
                     obs=f'Ausência total (zero batidas) no dia de TRABALHO da escala teórica '
-                        f'({data_dia}), porém {nomes_b} trabalhou no mesmo local em sua folga '
-                        f'teórica nesse dia. Confirmar troca de plantão (cedeu o turno).',
+                        f'({data_dia}), porém {nomes_b} trabalhou em sua folga teórica nesse '
+                        f'dia. Confirmar troca de plantão (cedeu o turno).',
                 ))
                 continue
 
-            # — Desvio de carga horária > 02:00 (lógica original, preservada) —
+            # — Desvio de carga horária > 02:00 (sem cruzamento de local) —
             desvio = _desvio_minutos(mapa, base=desvio_base)
             if desvio is None or desvio <= THRESHOLD_DESVIO_MIN:
                 continue
             faltas_min = _faltas_minutos(mapa)
-
-            # — Regra #2 (genérica/fallback): a falta foi coberta por colega do local? —
             if faltas_min > THRESHOLD_DESVIO_MIN:
-                colegas = _colegas_de_local(cpf, cpf_locais, local_cpfs)
-                cobriram = colegas & presenca.get(data_dia, set())
-                if cobriram:
-                    nomes = ', '.join(sorted(cpf_nome.get(c) or c for c in cobriram))
-                    alertas.append(_montar_alerta(
-                        tipo=TIPO_TROCA_PLANTAO, nome=nome, cpf=cpf, data_dia=data_dia,
-                        obs=f'Falta na escala teórica em {data_dia} '
-                            f'({_minutos_para_hhmm(faltas_min)}), porém colega(s) do mesmo '
-                            f'local com presença no dia: {nomes}. Confirmar troca/substituição '
-                            f'de plantão antes de tratar como falta.',
-                    ))
-                    continue
                 alertas.append(_montar_alerta(
                     tipo=TIPO_DESVIO_CARGA, nome=nome, cpf=cpf, data_dia=data_dia,
                     obs=f'Falta de carga horária de {_minutos_para_hhmm(faltas_min)} em '
-                        f'{data_dia} (limite 02:00), sem cobertura de colega do mesmo local.',
+                        f'{data_dia} (limite 02:00), sem par de Folga Trabalhada '
+                        f'encontrado nesse dia.',
                 ))
             else:
                 alertas.append(_montar_alerta(
@@ -745,6 +794,12 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
                     obs=f'Desvio de carga horária de {_minutos_para_hhmm(desvio)} '
                         f'no dia {data_dia} (limite: 02:00).',
                 ))
+
+    # ── Bônus de Assiduidade por CPF (não grava no Airtable; informativo) ──────
+    bonus_assiduidade = {}
+    for cpf, info in dados_func.items():
+        avaliacao = _avaliar_bonus_assiduidade(info['func'], info['dias_status'], info['dias'])
+        bonus_assiduidade[cpf] = {'nome': info['nome'], **avaliacao}
 
     # Persiste no Airtable.
     for alerta in alertas:
@@ -783,10 +838,13 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
         'trocas_cruzadas_pareadas': len(pareamento_a),
         'alertas_criados': criados,
         'alertas_ja_existentes': pulados_existentes,
+        'bonus_assiduidade': bonus_assiduidade,
+        'elegiveis_bonus': sum(1 for v in bonus_assiduidade.values() if v['elegivel']),
         'dry_run': dry_run,
         'alertas': alertas,
     }
-    logger.info('[SECULLUM] Varredura: %s', {k: v for k, v in resumo.items() if k != 'alertas'})
+    logger.info('[SECULLUM] Varredura: %s',
+                {k: v for k, v in resumo.items() if k not in ('alertas', 'bonus_assiduidade')})
     return resumo
 
 
