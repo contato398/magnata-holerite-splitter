@@ -989,6 +989,13 @@ def rota_debug():
         funcs = listar_funcionarios_secullum()
         out['funcionarios_tipo'] = type(funcs).__name__
         out['funcionarios_qtd'] = len(funcs) if isinstance(funcs, list) else None
+        if request.args.get('listar_horarios'):
+            out['horarios'] = [
+                {'cpf': f.get('Cpf'), 'nome': f.get('Nome'),
+                 'descricao': ((f.get('Horario') or {}).get('Descricao'))}
+                for f in (funcs if isinstance(funcs, list) else [])
+            ]
+            return jsonify(out), 200
         cpf_query = request.args.get('cpf')
         amostra = (funcs[0] if isinstance(funcs, list) and funcs else None)
         if cpf_query and isinstance(funcs, list):
