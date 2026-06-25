@@ -48,6 +48,7 @@ import re
 import time
 import logging
 import traceback
+import unicodedata
 from datetime import datetime, date, timedelta
 
 import requests
@@ -98,6 +99,7 @@ F_FUNC_STATUS   = 'fld5T04dlg1Yt6Xj8'
 F_FUNC_CODIGO   = 'fldCtZHUjJBi7JQXb'
 F_FUNC_PIS      = 'fldNNWb5BLgdBdsJO'
 F_FUNC_ADMISSAO = 'fld5L1djmJugvLe8c'
+F_FUNC_BONUS_JUN2026 = 'fldPMJrQP5IAAEMxL'   # "Bônus Assiduidade Jun/2026" (criado v2.55)
 
 F_PEND_NOME   = 'fldovcs6bySCshoXI'   # Pendência (primary, texto)
 F_PEND_STATUS = 'fldf1an8HCV2DxEwk'   # Status (singleSelect)
@@ -112,8 +114,13 @@ TIPO_DESVIO_CARGA = 'Desvio de Carga Horária (Ponto)'
 # Cruzamento jornada real x escala teórica (FOLGA/Feriado real) — não depende de
 # local de trabalho (Airtable); só da própria escala resolvida pela Secullum.
 TIPO_FOLGA_TRABALHADA = 'Folga Trabalhada (Banco de Horas / Extra)'
+# Fallback ambíguo: pareamento achado mas saldo de plantões não decide o motivo
+# (v2.55 normalmente resolve para TIPO_TROCA_INFORMAL ou TIPO_COBERTURA_EMERGENCIA).
 TIPO_TROCA_FALTOU = 'Troca de Plantão (Faltou / Cedido)'
 TIPO_TROCA_COBRIU = 'Troca de Plantão (Cobriu / Dobrou)'
+# v2.55 — distinção jurídica via saldo de plantões do mês (diretriz da diretoria).
+TIPO_TROCA_INFORMAL = 'Troca de Plantão (Informal)'
+TIPO_COBERTURA_EMERGENCIA = 'Dobra / Cobertura de Emergência (FT)'
 
 # Plantão noturno: entrada a partir desta hora indica jornada que vira o dia.
 HORA_INICIO_NOTURNO = int(os.environ.get('SECULLUM_HORA_NOTURNO', '18'))
@@ -121,6 +128,25 @@ HORA_INICIO_NOTURNO = int(os.environ.get('SECULLUM_HORA_NOTURNO', '18'))
 # Bônus de Assiduidade: perde com qualquer falta/atraso/saída antecipada > tolerância.
 BONUS_ASSIDUIDADE_VALOR = os.environ.get('SECULLUM_BONUS_ASSIDUIDADE', '100,00')
 BONUS_TOLERANCIA_MIN = int(os.environ.get('SECULLUM_BONUS_TOLERANCIA_MIN', '5'))
+
+# ── v2.55: Arquitetura de intervalos por posto e função (diretriz da diretoria) ─
+# IDs (não texto!) dos 5 postos de exceção — "100% com intervalo" independente da
+# função. Resolvidos contra a tabela Locais do Airtable (confirmados em sessão
+# anterior); usar ID em vez de nome evita o mesmo tipo de erro de texto não
+# confiável já visto 3x com Horario.Descricao.
+EXCEPTION_POSTO_IDS = {
+    'rec7sjIAiKZd0ermb',  # MORADAS DO SOL
+    'rechZpE1xGvFXUNyL',  # CASTROLANDA
+    'recd8OPca3z9dk2fq',  # LAGO DOS IPES
+    'reclQfhuQSPVLZgB3',  # UNIMED - VIRGILIO
+    'recZKE9y6Hn1Hl1Kg',  # UNIMED - SHOPPING
+}
+# Palavras (texto normalizado) que indicam função SOLO (turno 12x36 sem intervalo,
+# expectativa de só 2 batidas: Entrada/Saída). Tudo que não bater aqui (Limpeza,
+# Zeladoria, Jardinagem, Administrativo, Serviços Gerais etc.) tem intervalo.
+_PALAVRAS_FUNCAO_SOLO = ('CONTROLADOR', 'PORTARIA', 'PORTEIRO', 'PERIMETRO')
+N_BATIDAS_COM_INTERVALO = 4
+N_BATIDAS_SOLO = 2
 
 # ── Rate limiter Airtable (espelha _at_throttle do app.py) ──────────────────────
 _last_at_call = 0.0
@@ -448,6 +474,59 @@ def _horario_noturno(func: dict) -> bool:
     return bool(m and int(m.group(1)) >= HORA_INICIO_NOTURNO)
 
 
+def _normalizar_texto(s: str) -> str:
+    """Maiúsculas, sem acento, espaços/hífens colapsados — p/ matching de função."""
+    s = unicodedata.normalize('NFKD', s or '').encode('ascii', 'ignore').decode('ascii')
+    return re.sub(r'[\s\-_/]+', ' ', s).strip().upper()
+
+
+def _funcao_e_solo(cargo_texto: str) -> bool:
+    """True se o cargo/função é turno solo 12x36 (Controlador de Acesso/Portaria)."""
+    t = _normalizar_texto(cargo_texto)
+    return any(p in t for p in _PALAVRAS_FUNCAO_SOLO)
+
+
+def _tem_intervalo(postos_ids: set, cargo_texto: str) -> bool:
+    """Regra de exceção por posto (100% intervalo, qualquer função) > regra geral
+    por função (Limpeza/Zeladoria/Jardinagem/Administrativo = intervalo;
+    Controlador de Acesso/Portaria = turno solo, sem intervalo)."""
+    if postos_ids & EXCEPTION_POSTO_IDS:
+        return True
+    return not _funcao_e_solo(cargo_texto)
+
+
+def _mapa_posto_cargo_airtable() -> dict:
+    """cpf -> {'postos': set(record IDs), 'cargo': str} do Funcionários (Airtable).
+
+    Usado só para decidir tem_intervalo (v2.55). Não consome cota da Secullum.
+    """
+    info_cpf = {}
+    url = f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}'
+    params = {'fields[]': ['CPF', 'Locais de trabalho', 'Cargo'], 'pageSize': 100}
+    offset = None
+    while True:
+        if offset:
+            params['offset'] = offset
+        _at_throttle()
+        r = requests.get(url, headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                         params=params, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        for rec in data.get('records', []):
+            fl = rec.get('fields', {})
+            cpf = _so_digitos(str(fl.get('CPF', '')))
+            if not cpf:
+                continue
+            info_cpf[cpf] = {
+                'postos': set(fl.get('Locais de trabalho') or []),
+                'cargo': fl.get('Cargo', ''),
+            }
+        offset = data.get('offset')
+        if not offset:
+            break
+    return info_cpf
+
+
 _RE_NAO_ESCALA = re.compile(r'^(FOLGA|FERIADO)$', re.IGNORECASE)
 
 
@@ -535,19 +614,28 @@ def _descricao_batida_impar(ab: dict, noturno: bool, data_dia: str) -> str:
 # que a própria Secullum já calcula: "Atras." (testado contra dado real: bateu
 # 18:46 num horário "rotulado" 07h-19h e a Secullum corretamente não acusou
 # atraso) e "Adian." (par natural de "Atraso" — adiantamento da saída).
-def _avaliar_bonus_assiduidade(dias_status: dict, dias: dict) -> dict:
-    """Bônus de Assiduidade: 100% assíduo no período = sem nenhum dos 3 motivos.
+def _avaliar_bonus_assiduidade(dias_status: dict, dias: dict,
+                               perdoados: set = None, zelo_perdido: set = None) -> dict:
+    """Bônus de Assiduidade: 100% assíduo no período = sem nenhum motivo de corte.
 
     Perde com >=1: falta não justificada, atraso na entrada > tolerância,
-    saída antecipada > tolerância (colunas "Atras."/"Adian." da Secullum).
-    Dias de FOLGA/Feriado não contam (zero batidas em folga nunca é falta).
+    saída antecipada > tolerância (colunas "Atras."/"Adian." da Secullum), ou
+    intervalo não registrado (falta de zelo, v2.55). Dias de FOLGA/Feriado não
+    contam. `perdoados`: datas de falta perdoadas (Troca de Plantão Informal
+    confirmada por saldo de plantões — quem cedeu o turno preserva o bônus).
     """
+    perdoados = perdoados or set()
+    zelo_perdido = zelo_perdido or set()
     motivos = []
     for data_dia, mapa in sorted(dias.items()):
         if dias_status.get(data_dia) == 'folga':
             continue
         if not _trabalhou(mapa) and _faltas_minutos(mapa) > 0:
-            motivos.append(f'Falta em {data_dia}')
+            if data_dia not in perdoados:
+                motivos.append(f'Falta em {data_dia}')
+            continue
+        if data_dia in zelo_perdido:
+            motivos.append(f'Intervalo não registrado (falta de zelo) em {data_dia}')
             continue
         atraso = _hhmm_para_minutos(mapa.get(SECULLUM_COL_ATRASO)) or 0
         antecipada = _hhmm_para_minutos(mapa.get(SECULLUM_COL_ADIANTAMENTO)) or 0
@@ -575,21 +663,36 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
     Suporta fatiamento por (offset, limit): no Render free, 88 chamadas numa
     única requisição estouram o timeout, então o scan é feito em lotes.
 
-    Cruzamento jornada real x escala teórica ("Travas Humanas", 100% na
-    escala — não depende de local de trabalho do Airtable):
+    Cruzamento jornada real x escala teórica ("Travas Humanas"):
     o próprio /Calcular já resolve a escala e marca FOLGA/Feriado nas colunas
     de batida (ground truth; rótulo PAR/ÍMPAR do horário NÃO é confiável).
     - Folga teórica + zero batidas → ignorado (não é falta).
     - Folga teórica + trabalhou → "Folga Trabalhada" (DP valida banco de horas).
-    - Trabalho teórico + zero batidas → cruza, em toda a empresa (sem filtro de
-      local), com quem teve Folga Trabalhada no mesmo dia; se achar, gera o par
-      "Troca de Plantão (Faltou/Cedido)" + "(Cobriu/Dobrou)". Sem par, vira
-      Desvio de Carga Horária simples (falta sem cobertura identificada).
+    - Trabalho teórico + zero batidas → cruza, em toda a empresa, com quem teve
+      Folga Trabalhada no mesmo dia. O pareamento é classificado pelo SALDO DE
+      PLANTÕES do mês (v2.55): saldo neutro para os dois → "Troca de Plantão
+      (Informal)" (preserva o bônus de quem cedeu); B acima da escala e A
+      abaixo → "Dobra/Cobertura de Emergência (FT)" (hora extra legítima p/ B,
+      falta de A mantida p/ averiguação de atestado); senão, fallback ambíguo
+      "Faltou/Cedido"+"Cobriu/Dobrou" p/ revisão manual. Sem par, vira Desvio
+      de Carga Horária simples.
+
+    Arquitetura de intervalos por posto/função (v2.55, "fim dos falsos-
+    positivos"): nos 5 postos de exceção (`EXCEPTION_POSTO_IDS`), todo mundo
+    tem intervalo (espera 4 batidas) independente da função. Nos demais
+    postos, depende do Cargo (Airtable, com fallback no Funcao da Secullum):
+    Controlador de Acesso/Portaria/Supervisor de Perímetro = turno solo (só
+    2 batidas; dia com exatamente 2 batidas conta hora extra Art. 71 CLT, sem
+    afetar o bônus); os demais cargos têm intervalo (dia com exatamente 2
+    batidas, faltando o par do intervalo, aplica o Intervalo Pré-Assinalado da
+    CLT — não gera Desvio de Carga — mas corta o bônus por falta de zelo).
 
     Também avalia o Bônus de Assiduidade (R$) de cada funcionário no período:
-    perde com qualquer falta, atraso na entrada ou saída antecipada (> 5 min,
-    `BONUS_TOLERANCIA_MIN`), comparando a jornada real contra o horário
-    programado (Horario.Descricao). Resultado em `resumo['bonus_assiduidade']`.
+    perde com qualquer falta não perdoada, atraso na entrada ou saída
+    antecipada (> 5 min, `BONUS_TOLERANCIA_MIN`, colunas nativas "Atras."/
+    "Adian." da Secullum) ou intervalo não registrado. Resultado em
+    `resumo['bonus_assiduidade']`; grava no Airtable (campo
+    F_FUNC_BONUS_JUN2026) quando `dry_run=False`.
 
     Args:
         data_inicio, data_fim: 'YYYY-MM-DD'.
@@ -602,6 +705,9 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
     """
     funcionarios = listar_funcionarios_secullum()
     funcionarios.sort(key=lambda f: f.get('Nome', ''))
+
+    # Posto/cargo (Airtable) — só para a Regra de Intervalo (v2.55). Fora da cota Secullum.
+    posto_cargo = _mapa_posto_cargo_airtable()
 
     total_funcionarios = len(funcionarios)
     offset = offset or 0
@@ -619,7 +725,7 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
     com_erro = []   # nomes dos funcionários cujo cálculo falhou (mesmo após retries)
 
     # ── Passada 1: coleta cálculos por funcionário ──────────────────────────────
-    dados_func = {}   # cpf -> {'nome', 'noturno', 'func', 'dias': {data: mapa}}
+    dados_func = {}   # cpf -> {'nome', 'noturno', 'tem_intervalo', 'dias': {data: mapa}}
     for f in funcionarios:
         fid = f.get('Id')
         nome = f.get('Nome', '')
@@ -640,7 +746,12 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
             continue
 
         dias = {data: mapa for data, mapa in _linhas_calculo(calc)}
-        dados_func[cpf] = {'nome': nome, 'noturno': _horario_noturno(f), 'dias': dias}
+        pc = posto_cargo.get(cpf, {})
+        cargo_texto = pc.get('cargo') or (f.get('Funcao') or {}).get('Descricao') or ''
+        dados_func[cpf] = {
+            'nome': nome, 'noturno': _horario_noturno(f), 'dias': dias,
+            'tem_intervalo': _tem_intervalo(pc.get('postos', set()), cargo_texto),
+        }
 
     # ── Passada 1.5: status da escala teórica por dia (trabalho/folga) ─────────
     # Ground truth do próprio /Calcular (marcador "FOLGA"/"Feriado" nas colunas
@@ -662,16 +773,69 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
     # ── Passada 1.6: pareamento — falta crítica (A) x folga trabalhada (B) ──────
     # Sem filtro de local: qualquer Folga Trabalhada no mesmo dia é candidata.
     pareamento_a = {}   # (data, cpf_a) -> set(cpf_b)
-    pareados_b = {}     # data -> set(cpf_b já usados como cobertura)
     for data_dia, cpfs_a in falta_critica.items():
         candidatos_dia = folga_trabalhada.get(data_dia, set())
         if not candidatos_dia:
             continue
         for cpf_a in cpfs_a:
             pareamento_a[(data_dia, cpf_a)] = candidatos_dia
-            pareados_b.setdefault(data_dia, set()).update(candidatos_dia)
+
+    # ── Passada 1.7: saldo de plantões do mês (trabalhados reais − teórico) ────
+    saldo_plantoes = {}
+    for cpf, info in dados_func.items():
+        dias_total = len(info['dias'])
+        dias_folga_marcador = sum(1 for m in info['dias'].values() if _dia_e_folga_teorica(m))
+        dias_trabalhados_reais = sum(1 for m in info['dias'].values() if _trabalhou(m))
+        saldo_plantoes[cpf] = dias_trabalhados_reais - (dias_total - dias_folga_marcador)
+
+    # ── Passada 1.8: classifica os pareamentos por saldo (distinção jurídica) ──
+    # Saldo neutro p/ ambos → Troca Informal (preserva bônus de quem cedeu).
+    # B acima da escala / A abaixo → Cobertura de Emergência (FT), falta de A
+    # mantida p/ averiguação de atestado. Senão, fallback ambíguo p/ revisão.
+    perdoados = {}        # cpf_a -> set(datas) com falta perdoada (Troca Informal)
+    dias_pareados_a = set()
+    dias_pareados_b = set()
+    for (data_dia, cpf_a), candidatos in pareamento_a.items():
+        nome_a = dados_func.get(cpf_a, {}).get('nome', cpf_a)
+        saldo_a = saldo_plantoes.get(cpf_a, 0)
+        dias_pareados_a.add((data_dia, cpf_a))
+        for cpf_b in candidatos:
+            nome_b = dados_func.get(cpf_b, {}).get('nome', cpf_b)
+            saldo_b = saldo_plantoes.get(cpf_b, 0)
+            dias_pareados_b.add((data_dia, cpf_b))
+            if saldo_a == 0 and saldo_b == 0:
+                tipo_a, tipo_b = TIPO_TROCA_INFORMAL, TIPO_TROCA_INFORMAL
+                obs_a = (f'Ausência (zero batidas) no dia de TRABALHO ({data_dia}); '
+                         f'{nome_b} cobriu na folga teórica dele. Saldo de plantões do mês '
+                         f'neutro para ambos — troca informal 1 por 1. Bônus preservado.')
+                obs_b = (f'Trabalhou na FOLGA teórica ({data_dia}) cobrindo {nome_a}. Saldo '
+                         f'de plantões do mês neutro para ambos — troca informal 1 por 1.')
+                perdoados.setdefault(cpf_a, set()).add(data_dia)
+            elif saldo_b > 0 and saldo_a < 0:
+                tipo_a, tipo_b = TIPO_DESVIO_CARGA, TIPO_COBERTURA_EMERGENCIA
+                obs_a = (f'Ausência (zero batidas) no dia de TRABALHO ({data_dia}). Saldo de '
+                         f'plantões do mês ABAIXO da escala (coberto por {nome_b}, que está '
+                         f'acima). Falta mantida para averiguação de atestado/justificativa.')
+                obs_b = (f'Trabalhou na FOLGA teórica ({data_dia}) cobrindo {nome_a}. Saldo '
+                         f'de plantões do mês ACIMA da escala — Dobra/Cobertura de '
+                         f'Emergência, hora extra legítima.')
+            else:
+                tipo_a, tipo_b = TIPO_TROCA_FALTOU, TIPO_TROCA_COBRIU
+                obs_a = (f'Ausência total (zero batidas) no dia de TRABALHO da escala '
+                         f'teórica ({data_dia}); {nome_b} trabalhou em sua folga teórica '
+                         f'nesse dia. Saldo de plantões do mês inconclusivo — confirmar '
+                         f'manualmente o motivo.')
+                obs_b = (f'Trabalhou na FOLGA teórica ({data_dia}), cobrindo {nome_a}, que '
+                         f'faltou nesse dia. Saldo de plantões do mês inconclusivo — '
+                         f'confirmar manualmente.')
+            alertas.append(_montar_alerta(tipo=tipo_a, nome=nome_a, cpf=cpf_a,
+                                          data_dia=data_dia, obs=obs_a))
+            alertas.append(_montar_alerta(tipo=tipo_b, nome=nome_b, cpf=cpf_b,
+                                          data_dia=data_dia, obs=obs_b))
 
     # ── Passada 2: detecção de alertas (com as travas) ─────────────────────────
+    zelo_perdido = {}        # cpf -> set(datas) sem intervalo registrado (corta bônus)
+    horas_extra_art71 = {}   # cpf -> nº de plantões solo (12x36) com direito ao Art. 71 CLT
     for cpf, info in dados_func.items():
         nome = info['nome']
         noturno = info['noturno']
@@ -686,43 +850,34 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
                     obs=_descricao_batida_impar(ab, noturno, data_dia),
                 ))
 
+            # — Arquitetura de Intervalos (v2.55): só em dia de TRABALHO com batidas —
+            if status == 'trabalho' and not ab['impar'] and ab['n'] == N_BATIDAS_SOLO \
+                    and _trabalhou(mapa):
+                if info['tem_intervalo']:
+                    # Intervalo Pré-Assinalado da CLT: computa como trabalhado (sem
+                    # Desvio de Carga), mas corta o bônus por falta de zelo.
+                    zelo_perdido.setdefault(cpf, set()).add(data_dia)
+                else:
+                    # Turno solo 12x36: 12h cheias + 1h extra Art. 71 CLT, bônus preservado.
+                    horas_extra_art71[cpf] = horas_extra_art71.get(cpf, 0) + 1
+                continue
+
             # — Dia de FOLGA na escala teórica: zero batidas é ignorado (não é falta) —
             if status == 'folga':
-                if _trabalhou(mapa):
-                    if cpf in pareados_b.get(data_dia, set()):
-                        a_cpfs = [a for (d, a), bs in pareamento_a.items()
-                                  if d == data_dia and cpf in bs]
-                        nomes_a = ', '.join(sorted(
-                            dados_func[a]['nome'] for a in a_cpfs if a in dados_func))
-                        alertas.append(_montar_alerta(
-                            tipo=TIPO_TROCA_COBRIU, nome=nome, cpf=cpf, data_dia=data_dia,
-                            obs=f'Trabalhou no dia de FOLGA da escala teórica ({data_dia}), '
-                                f'cobrindo {nomes_a or "colega"}, que faltou nesse dia. '
-                                f'Confirmar troca de plantão e lançar banco de horas/extra.',
-                        ))
-                    else:
-                        alertas.append(_montar_alerta(
-                            tipo=TIPO_FOLGA_TRABALHADA, nome=nome, cpf=cpf, data_dia=data_dia,
-                            obs=f'Trabalhou no dia de FOLGA da escala teórica ({data_dia}) com '
-                                f'batidas e carga normal. Validar pagamento de extra ou '
-                                f'lançamento em banco de horas.',
-                        ))
+                if _trabalhou(mapa) and (data_dia, cpf) not in dias_pareados_b:
+                    alertas.append(_montar_alerta(
+                        tipo=TIPO_FOLGA_TRABALHADA, nome=nome, cpf=cpf, data_dia=data_dia,
+                        obs=f'Trabalhou no dia de FOLGA da escala teórica ({data_dia}) com '
+                            f'batidas e carga normal. Validar pagamento de extra ou '
+                            f'lançamento em banco de horas.',
+                    ))
                 continue
 
-            # — Dia de TRABALHO na escala, zero batidas, com par de cobertura achado —
-            if (data_dia, cpf) in pareamento_a:
-                candidatos = pareamento_a[(data_dia, cpf)]
-                nomes_b = ', '.join(sorted(
-                    dados_func[b]['nome'] for b in candidatos if b in dados_func))
-                alertas.append(_montar_alerta(
-                    tipo=TIPO_TROCA_FALTOU, nome=nome, cpf=cpf, data_dia=data_dia,
-                    obs=f'Ausência total (zero batidas) no dia de TRABALHO da escala teórica '
-                        f'({data_dia}), porém {nomes_b} trabalhou em sua folga teórica nesse '
-                        f'dia. Confirmar troca de plantão (cedeu o turno).',
-                ))
+            # — Dia de TRABALHO, zero batidas, já classificado na Passada 1.8 —
+            if (data_dia, cpf) in dias_pareados_a:
                 continue
 
-            # — Desvio de carga horária > 02:00 (sem cruzamento de local) —
+            # — Desvio de carga horária > 02:00 (sem pareamento encontrado) —
             desvio = _desvio_minutos(mapa, base=desvio_base)
             if desvio is None or desvio <= THRESHOLD_DESVIO_MIN:
                 continue
@@ -741,13 +896,17 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
                         f'no dia {data_dia} (limite: 02:00).',
                 ))
 
-    # ── Bônus de Assiduidade por CPF (não grava no Airtable; informativo) ──────
+    # ── Bônus de Assiduidade por CPF ────────────────────────────────────────────
     bonus_assiduidade = {}
     for cpf, info in dados_func.items():
-        avaliacao = _avaliar_bonus_assiduidade(info['dias_status'], info['dias'])
+        avaliacao = _avaliar_bonus_assiduidade(
+            info['dias_status'], info['dias'],
+            perdoados=perdoados.get(cpf, set()), zelo_perdido=zelo_perdido.get(cpf, set()),
+        )
+        avaliacao['horas_extra_art71_clt'] = f'{horas_extra_art71.get(cpf, 0):02d}:00'
         bonus_assiduidade[cpf] = {'nome': info['nome'], **avaliacao}
 
-    # Persiste no Airtable.
+    # Persiste no Airtable: alertas (Pendências/Revisar) + Bônus (Funcionários).
     for alerta in alertas:
         if dry_run:
             continue
@@ -759,6 +918,15 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
             criados += 1
         except Exception as exc:
             logger.error('[SECULLUM] Falha ao gravar alerta "%s": %s', alerta['titulo'], exc)
+
+    bonus_gravados = 0
+    if not dry_run:
+        for cpf, b in bonus_assiduidade.items():
+            try:
+                if gravar_bonus_assiduidade(cpf, b['bonus']):
+                    bonus_gravados += 1
+            except Exception as exc:
+                logger.error('[SECULLUM] Falha gravando bônus de %s (CPF %s): %s', b['nome'], cpf, exc)
 
     por_tipo = {}
     for a in alertas:
@@ -786,6 +954,7 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
         'alertas_ja_existentes': pulados_existentes,
         'bonus_assiduidade': bonus_assiduidade,
         'elegiveis_bonus': sum(1 for v in bonus_assiduidade.values() if v['elegivel']),
+        'bonus_gravados_airtable': bonus_gravados,
         'dry_run': dry_run,
         'alertas': alertas,
     }
@@ -872,6 +1041,28 @@ def criar_alerta_pendencia(alerta: dict) -> str:
         logger.error('[AT] Falha criando pendência HTTP %s: %s', r.status_code, r.text[:400])
     r.raise_for_status()
     return r.json()['id']
+
+
+def gravar_bonus_assiduidade(cpf: str, valor_texto: str) -> bool:
+    """Grava a elegibilidade do Bônus de Assiduidade no Funcionário (Airtable).
+
+    Campo F_FUNC_BONUS_JUN2026 ("Bônus Assiduidade Jun/2026", singleSelect,
+    criado v2.55). Retorna False se o funcionário não for encontrado por CPF.
+    """
+    func = _buscar_funcionario_airtable_por_cpf(cpf)
+    if not func:
+        return False
+    _at_throttle()
+    r = requests.patch(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func["id"]}',
+        headers=_at_headers(),
+        json={'fields': {F_FUNC_BONUS_JUN2026: valor_texto}, 'typecast': True},
+        timeout=30,
+    )
+    if not r.ok:
+        logger.error('[AT] Falha gravando bônus CPF %s HTTP %s: %s', cpf, r.status_code, r.text[:400])
+    r.raise_for_status()
+    return True
 
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
