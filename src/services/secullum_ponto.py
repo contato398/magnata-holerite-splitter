@@ -433,39 +433,23 @@ def _horario_noturno(func: dict) -> bool:
     return bool(m and int(m.group(1)) >= HORA_INICIO_NOTURNO)
 
 
-def _escala_par_impar(func: dict) -> str | None:
-    """Lê a tag PAR/ÍMPAR da escala teórica (ex.: "12x36 19h - 07h IMPAR").
+_RE_NAO_ESCALA = re.compile(r'^(FOLGA|FERIADO)$', re.IGNORECASE)
 
-    Em escalas 12x36, o rótulo indica se o colaborador trabalha nos dias
-    ÍMPARES (1, 3, 5...) ou PARES (2, 4, 6...) do calendário — é a escala
-    teórica oficial da Secullum, não depende de cadastro de local. Retorna
-    None quando o horário não tem esse rótulo (ex.: escala 5x2 comum).
+
+def _dia_e_folga_teorica(mapa: dict) -> bool:
+    """True se a escala teórica do dia for FOLGA/Feriado (ground truth Secullum).
+
+    Testado contra dados reais: o rótulo PAR/ÍMPAR do Horario.Descricao NÃO é
+    confiável (ex.: funcionário rotulado "PAR" trabalha de fato nos dias
+    ÍMPARES — é só o nome de um grupo/turma interno, não a paridade real).
+    A fonte de verdade é o próprio /Calcular: ele já resolve a escala
+    internamente (12x36, 5x2 etc.) e escreve "FOLGA" ou "Feriado" nas colunas
+    de batida nos dias sem expediente, em vez de deixá-las vazias/nulas.
     """
-    desc = ((func.get('Horario') or {}).get('Descricao') or '').upper()
-    if 'IMPAR' in desc or 'ÍMPAR' in desc:
-        return 'IMPAR'
-    if re.search(r'\bPAR\b', desc):
-        return 'PAR'
-    return None
-
-
-def _is_escala_12x36(func: dict) -> bool:
-    desc = ((func.get('Horario') or {}).get('Descricao') or '')
-    return '12x36' in desc.lower().replace(' ', '')
-
-
-def _status_escala_teorica(tag: str | None, data_dia: str) -> str | None:
-    """'trabalho' ou 'folga' na escala teórica do dia, a partir da tag PAR/ÍMPAR.
-
-    None quando a tag não existe (escala sem rótulo PAR/ÍMPAR conhecido).
-    """
-    if not tag:
-        return None
-    dia = int(data_dia[8:10])
-    par = dia % 2 == 0
-    if tag == 'IMPAR':
-        return 'folga' if par else 'trabalho'
-    return 'trabalho' if par else 'folga'
+    for col, val in mapa.items():
+        if _RE_COL_BATIDA.match(col) and isinstance(val, str) and _RE_NAO_ESCALA.match(val.strip()):
+            return True
+    return False
 
 
 def _analisar_batidas(mapa: dict) -> dict:
@@ -573,8 +557,8 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
     mesmo local no mesmo lote para preservar a Regra #2 (troca de plantão).
 
     Cruzamento jornada real x escala teórica (calibração mais recente):
-    a tag PAR/ÍMPAR do horário (ex. "12x36 19h - 07h IMPAR") diz se o dia é
-    de TRABALHO ou FOLGA teórica para o funcionário, sem depender de local.
+    o próprio /Calcular já resolve a escala e marca FOLGA/Feriado nas colunas
+    de batida — não dependemos de interpretar rótulo de horário nem de local.
     - Folga teórica + trabalhou → "Folga Trabalhada" (DP valida banco de horas).
     - Trabalho teórico + zero batidas → cruza com colegas do mesmo local que
       tiveram Folga Trabalhada no mesmo dia; se achar, gera o par "Troca de
@@ -639,32 +623,22 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
             continue
 
         dias = {data: mapa for data, mapa in _linhas_calculo(calc)}
-        dados_func[cpf] = {
-            'nome': nome, 'noturno': _horario_noturno(f), 'dias': dias,
-            'escala_tag': _escala_par_impar(f), 'e_12x36': _is_escala_12x36(f),
-        }
+        dados_func[cpf] = {'nome': nome, 'noturno': _horario_noturno(f), 'dias': dias}
         for data_dia, mapa in dias.items():
             if _trabalhou(mapa):
                 presenca.setdefault(data_dia, set()).add(cpf)
 
-    # ── Passada 1.5: status da escala teórica por dia (trabalho/folga/None) ────
-    # Tag PAR/ÍMPAR é a fonte primária. Sem tag, mas em escala 12x36, usa
-    # fallback: 2º dia consecutivo trabalhado é tratado como folga "comida".
-    # folga_trabalhada / falta_critica não dependem de local — são a base do
-    # cruzamento "jornada real x escala teórica" pedido pelo usuário.
+    # ── Passada 1.5: status da escala teórica por dia (trabalho/folga) ─────────
+    # Ground truth do próprio /Calcular (marcador "FOLGA"/"Feriado" nas colunas
+    # de batida) — não depende de local nem de interpretar rótulo de horário.
+    # folga_trabalhada / falta_critica são a base do cruzamento "jornada real
+    # x escala teórica" pedido pelo usuário.
     folga_trabalhada = {}   # data -> set(cpf) que trabalhou na folga teórica
     falta_critica = {}      # data -> set(cpf) com zero batidas em dia de trabalho teórico
     for cpf, info in dados_func.items():
-        tag = info['escala_tag']
         dias_status = {}
-        for data_dia in sorted(info['dias'].keys()):
-            mapa = info['dias'][data_dia]
-            status = _status_escala_teorica(tag, data_dia)
-            if status is None and info['e_12x36']:
-                data_ant = (date.fromisoformat(data_dia) - timedelta(days=1)).isoformat()
-                mapa_ant = info['dias'].get(data_ant)
-                if mapa_ant is not None and _trabalhou(mapa) and _trabalhou(mapa_ant):
-                    status = 'folga'
+        for data_dia, mapa in info['dias'].items():
+            status = 'folga' if _dia_e_folga_teorica(mapa) else 'trabalho'
             dias_status[data_dia] = status
             if status == 'folga' and _trabalhou(mapa):
                 folga_trabalhada.setdefault(data_dia, set()).add(cpf)
