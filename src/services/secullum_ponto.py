@@ -68,6 +68,13 @@ API_BASE = 'https://pontowebintegracaoexterna.secullum.com.br/IntegracaoExterna'
 # Nomes das colunas de cálculo (configuráveis caso o banco use rótulos diferentes).
 SECULLUM_COL_FALTAS = os.environ.get('SECULLUM_COL_FALTAS', 'Faltas')
 SECULLUM_COL_EXTRAS = os.environ.get('SECULLUM_COL_EXTRAS', 'Extras')
+# Atraso na entrada / saída antecipada — usar o que a própria Secullum já
+# calcula (testado contra dado real), em vez de derivar do Horario.Descricao:
+# esse texto se provou não confiável 3x nesta integração (tag PAR/ÍMPAR
+# invertida, "Normais" sempre vazio em vários horários, e a faixa "07h-19h"
+# de um colaborador cujas batidas reais são todas no período 19h-07h).
+SECULLUM_COL_ATRASO = os.environ.get('SECULLUM_COL_ATRASO', 'Atras.')
+SECULLUM_COL_ADIANTAMENTO = os.environ.get('SECULLUM_COL_ADIANTAMENTO', 'Adian.')
 
 # Base do "desvio de carga horária":
 #   faltas → só horas faltantes (anomalias reais de jornada; default — evita ruído 12x36)
@@ -460,21 +467,16 @@ def _dia_e_folga_teorica(mapa: dict) -> bool:
     return False
 
 
-def _dia_e_folga_trabalhada(mapa: dict) -> bool:
-    """True se houve trabalho real num dia SEM carga normal programada.
-
-    O marcador literal "FOLGA" só aparece quando NÃO há batida nenhuma
-    (`_dia_e_folga_teorica`); no dia em que a pessoa efetivamente bate o
-    ponto na folga, a Secullum substitui o marcador pelos horários reais e
-    classifica todas as horas como Extras (sem Normais), em vez de manter o
-    texto "FOLGA". Por isso o sinal aqui é: bateu ponto, mas "Normais" = 0
-    e "Extras" > 0 — não há jornada normal programada para aquele dia.
-    """
-    if not _trabalhou(mapa):
-        return False
-    normais = _hhmm_para_minutos(mapa.get('Normais')) or 0
-    extras = _hhmm_para_minutos(mapa.get(SECULLUM_COL_EXTRAS)) or 0
-    return normais == 0 and extras > 0
+# NOTA: tentamos um sinal "Normais=0 e Extras>0" pra achar Folga Trabalhada
+# quando a pessoa bate ponto na folga (já que o marcador "FOLGA" só aparece
+# com zero batidas). Descartado: confirmado em dados reais que vários
+# funcionários (ex.: ANDRE LUIZ, ARTHUR SOARES — config "12x36 ... PAR/ÍMPAR"
+# bem comum, 27/88 contas) têm "Normais" SEMPRE vazio mesmo no dia normal de
+# trabalho, com tudo creditado em Extras — não é um sinal de dia fora da
+# escala, é só a config de horário daquela conta. Sem essa coluna confiável,
+# "Folga Trabalhada" só é detectável quando a Secullum mantém o literal
+# "FOLGA"/"Feriado" (ou seja, quando NÃO houve batida) — então essa varredura
+# não tenta mais distinguir "folga trabalhada com sucesso" via heurística.
 
 
 def _analisar_batidas(mapa: dict) -> dict:
@@ -521,77 +523,24 @@ def _descricao_batida_impar(ab: dict, noturno: bool, data_dia: str) -> str:
             f'Em {escala}, provável esquecimento da {falta}. Verificar e ajustar.')
 
 
-# ── Mapeamento dinâmico de jornada (Hora de Saída programada) ──────────────────
+# ── Bônus de Assiduidade: atraso/saída antecipada já calculados pela Secullum ──
 # "Fechamento" do plantão (Saída + 3h) é resolvido pelo próprio /Calcular: ele já
 # devolve a jornada inteira (incl. virada de dia) numa única linha por plantão —
-# confirmado contra dados reais (ex.: plantão 19h-07h aparece todo na linha do dia
-# de início, sem quebra no dia civil seguinte). Por isso não recalculamos esse
-# agrupamento aqui; só extraímos os horários PROGRAMADOS de entrada/saída do
-# Horario.Descricao para comparar contra a jornada real (atraso/saída antecipada).
-_RE_HORARIO_FAIXA = re.compile(r'(\d{1,2})\s*h?\s*(?:as|-|–|à|ás)\s*(\d{1,2})\s*h?', re.IGNORECASE)
-
-
-def _horarios_programados(func: dict) -> list:
-    """Lista de faixas (entrada_min, saida_min) programadas no Horario.Descricao.
-
-    Pode haver mais de uma faixa (ex.: "08h as 17h e 08h as 12h sabado").
-    """
-    desc = ((func.get('Horario') or {}).get('Descricao') or '')
-    return [(int(h1) * 60, int(h2) * 60) for h1, h2 in _RE_HORARIO_FAIXA.findall(desc)]
-
-
-def _horario_entrada_saida_do_dia(func: dict, data_dia: str) -> tuple:
-    """(entrada_prog_min, saida_prog_min) do dia, ou (None, None) se não der p/ parsear."""
-    faixas = _horarios_programados(func)
-    if not faixas:
-        return None, None
-    desc = ((func.get('Horario') or {}).get('Descricao') or '').lower()
-    if len(faixas) > 1 and 'sabado' in desc and date.fromisoformat(data_dia).weekday() == 5:
-        return faixas[1]
-    return faixas[0]
-
-
-def _primeira_entrada_ultima_saida(mapa: dict) -> tuple:
-    """(1ª entrada, última saída) do dia em minutos, ou (None, None) se não houver."""
-    entradas, saidas = [], []
-    for col, val in mapa.items():
-        if not _RE_COL_BATIDA.match(col):
-            continue
-        v = val.strip() if isinstance(val, str) else val
-        if not (isinstance(v, str) and _RE_HORA.match(v)):
-            continue
-        minutos = _hhmm_para_minutos(v)
-        (entradas if col.strip().lower().startswith('entrada') else saidas).append(minutos)
-    return (min(entradas) if entradas else None), (max(saidas) if saidas else None)
-
-
-def _normalizar_apos(minutos: int, referencia: int) -> int:
-    """+24h se `minutos` for anterior a `referencia` (plantão que vira a noite)."""
-    return minutos if minutos >= referencia else minutos + 24 * 60
-
-
-def _atraso_minutos(entrada_prog, primeira_real) -> int:
-    """Minutos de atraso na entrada (0 se chegou no horário ou adiantado)."""
-    if entrada_prog is None or primeira_real is None:
-        return 0
-    return max(0, primeira_real - entrada_prog)
-
-
-def _saida_antecipada_minutos(entrada_prog, saida_prog, ultima_real) -> int:
-    """Minutos de saída antecipada (0 se saiu no horário ou depois)."""
-    if entrada_prog is None or saida_prog is None or ultima_real is None:
-        return 0
-    saida_prog_n = _normalizar_apos(saida_prog, entrada_prog)
-    ultima_n = _normalizar_apos(ultima_real, entrada_prog)
-    return max(0, saida_prog_n - ultima_n)
-
-
-def _avaliar_bonus_assiduidade(func: dict, dias_status: dict, dias: dict) -> dict:
+# confirmado contra dados reais (plantão 19h-07h aparece todo na linha do dia de
+# início, sem quebra no dia civil seguinte). Por isso não há janela pra recalcular.
+#
+# Para atraso/saída antecipada, NÃO derivamos do Horario.Descricao: esse texto se
+# provou não confiável (rótulo PAR/ÍMPAR invertido; faixa "07h-19h" de um
+# colaborador cujas batidas reais são todas 19h-07h). Usamos direto as colunas
+# que a própria Secullum já calcula: "Atras." (testado contra dado real: bateu
+# 18:46 num horário "rotulado" 07h-19h e a Secullum corretamente não acusou
+# atraso) e "Adian." (par natural de "Atraso" — adiantamento da saída).
+def _avaliar_bonus_assiduidade(dias_status: dict, dias: dict) -> dict:
     """Bônus de Assiduidade: 100% assíduo no período = sem nenhum dos 3 motivos.
 
     Perde com >=1: falta não justificada, atraso na entrada > tolerância,
-    saída antecipada > tolerância. Dias de FOLGA/Feriado não contam (Regra das
-    Travas Humanas: zero batidas em dia de folga nunca é falta).
+    saída antecipada > tolerância (colunas "Atras."/"Adian." da Secullum).
+    Dias de FOLGA/Feriado não contam (zero batidas em folga nunca é falta).
     """
     motivos = []
     for data_dia, mapa in sorted(dias.items()):
@@ -600,10 +549,8 @@ def _avaliar_bonus_assiduidade(func: dict, dias_status: dict, dias: dict) -> dic
         if not _trabalhou(mapa) and _faltas_minutos(mapa) > 0:
             motivos.append(f'Falta em {data_dia}')
             continue
-        entrada_prog, saida_prog = _horario_entrada_saida_do_dia(func, data_dia)
-        primeira, ultima = _primeira_entrada_ultima_saida(mapa)
-        atraso = _atraso_minutos(entrada_prog, primeira)
-        antecipada = _saida_antecipada_minutos(entrada_prog, saida_prog, ultima)
+        atraso = _hhmm_para_minutos(mapa.get(SECULLUM_COL_ATRASO)) or 0
+        antecipada = _hhmm_para_minutos(mapa.get(SECULLUM_COL_ADIANTAMENTO)) or 0
         if atraso > BONUS_TOLERANCIA_MIN:
             motivos.append(f'Atraso de {_minutos_para_hhmm(atraso)} em {data_dia}')
         if antecipada > BONUS_TOLERANCIA_MIN:
@@ -693,7 +640,7 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
             continue
 
         dias = {data: mapa for data, mapa in _linhas_calculo(calc)}
-        dados_func[cpf] = {'nome': nome, 'noturno': _horario_noturno(f), 'func': f, 'dias': dias}
+        dados_func[cpf] = {'nome': nome, 'noturno': _horario_noturno(f), 'dias': dias}
 
     # ── Passada 1.5: status da escala teórica por dia (trabalho/folga) ─────────
     # Ground truth do próprio /Calcular (marcador "FOLGA"/"Feriado" nas colunas
@@ -704,8 +651,7 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
     for cpf, info in dados_func.items():
         dias_status = {}
         for data_dia, mapa in info['dias'].items():
-            folga = _dia_e_folga_teorica(mapa) or _dia_e_folga_trabalhada(mapa)
-            status = 'folga' if folga else 'trabalho'
+            status = 'folga' if _dia_e_folga_teorica(mapa) else 'trabalho'
             dias_status[data_dia] = status
             if status == 'folga' and _trabalhou(mapa):
                 folga_trabalhada.setdefault(data_dia, set()).add(cpf)
@@ -798,7 +744,7 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
     # ── Bônus de Assiduidade por CPF (não grava no Airtable; informativo) ──────
     bonus_assiduidade = {}
     for cpf, info in dados_func.items():
-        avaliacao = _avaliar_bonus_assiduidade(info['func'], info['dias_status'], info['dias'])
+        avaliacao = _avaliar_bonus_assiduidade(info['dias_status'], info['dias'])
         bonus_assiduidade[cpf] = {'nome': info['nome'], **avaliacao}
 
     # Persiste no Airtable.
