@@ -989,7 +989,14 @@ def rota_debug():
         funcs = listar_funcionarios_secullum()
         out['funcionarios_tipo'] = type(funcs).__name__
         out['funcionarios_qtd'] = len(funcs) if isinstance(funcs, list) else None
+        cpf_query = request.args.get('cpf')
         amostra = (funcs[0] if isinstance(funcs, list) and funcs else None)
+        if cpf_query and isinstance(funcs, list):
+            alvo = _so_digitos(cpf_query)
+            achado = next((f for f in funcs if _so_digitos(str(f.get('Cpf', ''))) == alvo), None)
+            if achado:
+                amostra = achado
+                out['funcionario_amostra_e_do_cpf_pedido'] = True
         out['funcionario_amostra'] = amostra
     except Exception as exc:
         out['funcionarios_erro'] = f'{type(exc).__name__}: {exc}'
