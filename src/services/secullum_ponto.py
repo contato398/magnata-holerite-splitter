@@ -367,6 +367,21 @@ def sincronizar_funcionario(cpf: str, nome: str = None, numero: str = None,
 # ║ 3. VARREDURA — batidas ímpares e desvios de carga horária > 02:00          ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 
+def periodo_folha(ano: int, mes: int) -> tuple:
+    """Janela oficial de apuração da folha (v2.56, decisão da diretoria).
+
+    A Magnata NÃO fecha o ponto no mês comercial cheio (01 a 30/31). O corte
+    oficial é do dia 28 do mês anterior ao dia 28 do mês de competência — ex.:
+    competência Junho/2026 → 28/05/2026 a 28/06/2026. Retorna (inicio, fim) ISO.
+    """
+    fim = date(ano, mes, 28)
+    if mes == 1:
+        inicio = date(ano - 1, 12, 28)
+    else:
+        inicio = date(ano, mes - 1, 28)
+    return inicio.isoformat(), fim.isoformat()
+
+
 def _hhmm_para_minutos(valor) -> int | None:
     """Converte 'HH:MM' (com sinal) ou número de minutos em inteiro de minutos.
 
@@ -1111,22 +1126,47 @@ def rota_sincronizar():
 def rota_varrer():
     """Varre o período e gera alertas (batidas ímpares / desvios > 02:00).
 
-    Body JSON: {"data_inicio": "YYYY-MM-DD", "data_fim": "YYYY-MM-DD",
-                "dry_run": false, "limit": null}
-    Sem datas → mês corrente até hoje.
+    Body JSON: {"competencia": "YYYY-MM", "data_inicio": "YYYY-MM-DD",
+                "data_fim": "YYYY-MM-DD", "dry_run": false, "limit": null}
+
+    `competencia` (recomendado, v2.56) calcula automaticamente a janela
+    oficial de apuração da folha — 28 do mês anterior a 28 do mês de
+    competência (ver `periodo_folha`), não o mês comercial cheio. Tem
+    prioridade sobre data_inicio/data_fim explícitos. Sem nenhum dos dois,
+    usa a competência vigente (a que contém hoje). A data final nunca
+    ultrapassa hoje (não há como buscar batidas do futuro); quando isso
+    ocorre, `periodo_incompleto=true` no resumo — reprocessar depois que o
+    período fechar de verdade.
     """
     if request.method == 'OPTIONS':
         return ('', 204)
     body = request.get_json(silent=True) or {}
     hoje = date.today()
-    data_inicio = body.get('data_inicio') or hoje.replace(day=1).isoformat()
-    data_fim = body.get('data_fim') or hoje.isoformat()
+    competencia = body.get('competencia')
+    if competencia:
+        ano_c, mes_c = (int(p) for p in competencia.split('-')[:2])
+        data_inicio, data_fim = periodo_folha(ano_c, mes_c)
+    else:
+        data_inicio = body.get('data_inicio')
+        data_fim = body.get('data_fim')
+        if not data_inicio or not data_fim:
+            ano_ref, mes_ref = hoje.year, hoje.month
+            if hoje.day >= 28:   # já viramos pro período de apuração seguinte
+                mes_ref += 1
+                if mes_ref > 12:
+                    mes_ref, ano_ref = 1, ano_ref + 1
+            data_inicio_calc, data_fim_calc = periodo_folha(ano_ref, mes_ref)
+            data_inicio = data_inicio or data_inicio_calc
+            data_fim = data_fim or data_fim_calc
+    data_fim_efetivo = min(data_fim, hoje.isoformat())
     try:
         resumo = varrer_pendencias(
-            data_inicio=data_inicio, data_fim=data_fim,
+            data_inicio=data_inicio, data_fim=data_fim_efetivo,
             dry_run=bool(body.get('dry_run', False)), limit=body.get('limit'),
             desvio_base=body.get('desvio_base'), offset=int(body.get('offset') or 0),
         )
+        resumo['periodo_solicitado'] = f'{data_inicio}..{data_fim}'
+        resumo['periodo_incompleto'] = data_fim_efetivo < data_fim
         return jsonify(resumo), 200
     except requests.exceptions.HTTPError as exc:
         return jsonify({'erro': 'Falha na API Secullum', 'detalhe': str(exc)}), 502
