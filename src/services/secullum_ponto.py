@@ -49,6 +49,7 @@ import time
 import logging
 import traceback
 import unicodedata
+import collections
 from datetime import datetime, date, timedelta
 
 import requests
@@ -611,6 +612,92 @@ def _dia_e_folga_teorica(mapa: dict) -> bool:
 # não tenta mais distinguir "folga trabalhada com sucesso" via heurística.
 
 
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║ DIAGNÓSTICO: escala PROGRAMADA (rótulo) x escala REAL (ground truth)      ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+# Uso puramente diagnóstico — NUNCA usar o rótulo PAR/ÍMPAR/faixa de horário
+# pra decisão de negócio (já provado não confiável, ver v2.52/v2.55). Aqui é
+# o oposto: comparamos o rótulo contra o ground truth (marcador FOLGA real)
+# justamente pra ACHAR quem está com a escala mal programada/vinculada.
+_RE_TAG_PAR_IMPAR = re.compile(r'\bPAR\b', re.IGNORECASE)
+_RE_FAIXA_HORARIO = re.compile(r'(\d{1,2})\s*h\w*\s*(?:-|–|as|à)\s*(\d{1,2})', re.IGNORECASE)
+
+
+def _tag_declarada(desc: str) -> str | None:
+    desc_up = (desc or '').upper()
+    if 'IMPAR' in desc_up or 'ÍMPAR' in desc_up:
+        return 'IMPAR'
+    if _RE_TAG_PAR_IMPAR.search(desc_up):
+        return 'PAR'
+    return None
+
+
+def _faixa_declarada(desc: str) -> tuple:
+    m = _RE_FAIXA_HORARIO.search(desc or '')
+    if not m:
+        return None, None
+    return int(m.group(1)), int(m.group(2))
+
+
+def _primeira_entrada_minutos(mapa: dict) -> int | None:
+    horas = []
+    for col, val in mapa.items():
+        if _RE_COL_BATIDA.match(col) and col.strip().lower().startswith('entrada'):
+            v = val.strip() if isinstance(val, str) else val
+            if isinstance(v, str) and _RE_HORA.match(v):
+                horas.append(_hhmm_para_minutos(v))
+    return min(horas) if horas else None
+
+
+def detectar_inconsistencia_escala(horario_raw: str, dias_status: dict, dias: dict) -> dict:
+    """Compara o rótulo da escala (Horario.Descricao) contra o que a própria
+    Secullum aplica de fato (ground truth: marcador FOLGA real + horário das
+    batidas reais). Aponta colaboradores cuja escala parece estar programada
+    ou vinculada errado — paridade (par/ímpar) invertida e/ou turno (faixa de
+    horário) muito diferente do declarado (ex.: rótulo diz manhã, mas a
+    pessoa só bate ponto de noite).
+    """
+    inconsistencias = []
+    dias_trabalho = sorted(d for d, status in dias_status.items() if status == 'trabalho')
+
+    tag = _tag_declarada(horario_raw)
+    if tag and len(dias_trabalho) >= 4:
+        pares = sum(1 for d in dias_trabalho if int(d[8:10]) % 2 == 0)
+        impares = len(dias_trabalho) - pares
+        maioria_par = pares > impares
+        esperado_par = (tag == 'PAR')
+        if maioria_par != esperado_par:
+            inconsistencias.append(
+                f'Rótulo da escala diz "{tag}", mas os dias reais de trabalho no '
+                f'período são majoritariamente {"PARES" if maioria_par else "ÍMPARES"} '
+                f'({pares} pares / {impares} ímpares) — paridade da escala provavelmente '
+                f'invertida ou vinculada ao colaborador errado.'
+            )
+
+    h_decl_ini, _h_decl_fim = _faixa_declarada(horario_raw)
+    if h_decl_ini is not None and dias_trabalho:
+        horas_reais = []
+        for d in dias_trabalho:
+            primeira = _primeira_entrada_minutos(dias.get(d, {}))
+            if primeira is not None:
+                horas_reais.append(primeira // 60)
+        if horas_reais:
+            hora_moda = collections.Counter(horas_reais).most_common(1)[0][0]
+            diff = min(abs(hora_moda - h_decl_ini), 24 - abs(hora_moda - h_decl_ini))
+            if diff >= 4:
+                inconsistencias.append(
+                    f'Rótulo declara entrada às {h_decl_ini}h, mas a entrada real mais '
+                    f'comum no período é às {hora_moda}h (diferença de {diff}h) — '
+                    f'possível turno (dia/noite) ou horário errado vinculado ao colaborador.'
+                )
+
+    return {
+        'tag_declarada': tag,
+        'faixa_declarada_inicio': h_decl_ini,
+        'inconsistencias': inconsistencias,
+    }
+
+
 def _analisar_batidas(mapa: dict) -> dict:
     """Analisa as batidas do dia (Regra #1: a jornada já vem agrupada na linha).
 
@@ -809,6 +896,7 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
         dados_func[cpf] = {
             'nome': nome, 'noturno': _horario_noturno(f), 'dias': dias,
             'tem_intervalo': _tem_intervalo(pc.get('postos', set()), cargo_texto),
+            'horario_raw': (f.get('Horario') or {}).get('Descricao') or '',
         }
 
     # ── Passada 1.5: status da escala teórica por dia (trabalho/folga) ─────────
@@ -990,6 +1078,16 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
 
         bonus_assiduidade[cpf] = {'nome': info['nome'], **avaliacao}
 
+    # ── Diagnóstico de inconsistência de escala (v2.61) ─────────────────────────
+    # Compara o rótulo da escala (Horario.Descricao) contra o ground truth real
+    # (marcador FOLGA + horário das batidas) — acha cadastro de escala provavelmente
+    # programado/vinculado errado (paridade invertida, turno dia/noite trocado etc).
+    inconsistencias_escala = {}
+    for cpf, info in dados_func.items():
+        diag = detectar_inconsistencia_escala(info['horario_raw'], info['dias_status'], info['dias'])
+        if diag['inconsistencias']:
+            inconsistencias_escala[cpf] = {'nome': info['nome'], **diag}
+
     # Persiste no Airtable: alertas (Pendências/Revisar) + Bônus (Funcionários).
     for alerta in alertas:
         if dry_run:
@@ -1039,6 +1137,8 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
         'bonus_assiduidade': bonus_assiduidade,
         'elegiveis_bonus': sum(1 for v in bonus_assiduidade.values() if v['elegivel']),
         'bonus_gravados_airtable': bonus_gravados,
+        'inconsistencias_escala': inconsistencias_escala,
+        'colaboradores_com_inconsistencia_escala': len(inconsistencias_escala),
         'dry_run': dry_run,
         'alertas': alertas,
     }
