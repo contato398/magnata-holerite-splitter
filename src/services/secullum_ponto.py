@@ -652,6 +652,11 @@ def _avaliar_bonus_assiduidade(dias_status: dict, dias: dict,
         if data_dia in zelo_perdido:
             motivos.append(f'Intervalo não registrado (falta de zelo) em {data_dia}')
             continue
+        ab = _analisar_batidas(mapa)
+        if ab['impar']:
+            motivos.append(f'Ocorrência de Batida Ímpar/Esquecimento '
+                           f'({"faltou a entrada" if ab["lado_faltante"] == "entrada" else "faltou a saída"}) '
+                           f'no dia {data_dia}')
         atraso = _hhmm_para_minutos(mapa.get(SECULLUM_COL_ATRASO)) or 0
         antecipada = _hhmm_para_minutos(mapa.get(SECULLUM_COL_ADIANTAMENTO)) or 0
         if atraso > BONUS_TOLERANCIA_MIN:
@@ -911,14 +916,40 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
                         f'no dia {data_dia} (limite: 02:00).',
                 ))
 
-    # ── Bônus de Assiduidade por CPF ────────────────────────────────────────────
+    # ── Bônus de Assiduidade + Auditoria (v2.57) por CPF ────────────────────────
     bonus_assiduidade = {}
     for cpf, info in dados_func.items():
         avaliacao = _avaliar_bonus_assiduidade(
             info['dias_status'], info['dias'],
             perdoados=perdoados.get(cpf, set()), zelo_perdido=zelo_perdido.get(cpf, set()),
         )
-        avaliacao['horas_extra_art71_clt'] = f'{horas_extra_art71.get(cpf, 0):02d}:00'
+        plantoes_solo = horas_extra_art71.get(cpf, 0)
+        avaliacao['horas_extra_art71_clt'] = f'{plantoes_solo:02d}:00'
+        avaliacao['plantoes_solo_art71'] = plantoes_solo
+        avaliacao['tem_intervalo'] = info['tem_intervalo']
+
+        total_min = 0
+        total_batidas_periodo = 0
+        for mapa in info['dias'].values():
+            total_min += (_hhmm_para_minutos(mapa.get('Normais')) or 0)
+            total_min += (_hhmm_para_minutos(mapa.get(SECULLUM_COL_EXTRAS)) or 0)
+            total_batidas_periodo += _contar_batidas(mapa)
+        avaliacao['horas_trabalhadas_total'] = _minutos_para_hhmm(total_min)
+
+        # Glosa Crítica (v2.57): zero batidas em TODO o período é risco/parametrização
+        # não-resolvida, não uma falta pontual — sobrescreve o motivo padrão para não
+        # diluir o alerta numa lista de "Falta em {data}" repetida dia a dia.
+        if total_batidas_periodo == 0:
+            avaliacao['glosa_critica'] = True
+            avaliacao['motivos'] = [
+                'Glosa Crítica: Ausência total de registros no Ponto Web. Risco '
+                'operacional ou afastamento/licença/demissão não parametrizada.'
+            ]
+            avaliacao['elegivel'] = False
+            avaliacao['bonus'] = 'Não (R$ 0,00)'
+        else:
+            avaliacao['glosa_critica'] = False
+
         bonus_assiduidade[cpf] = {'nome': info['nome'], **avaliacao}
 
     # Persiste no Airtable: alertas (Pendências/Revisar) + Bônus (Funcionários).
