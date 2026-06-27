@@ -184,9 +184,16 @@ def processar_holerite_record(rec: dict) -> dict:
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 
 def buscar_funcionario_por_cpf(cpf: str):
-    """Retorna o registro do Funcionário (ou None) casando por CPF."""
+    """Retorna o registro do Funcionário (ou None) casando por CPF.
+
+    O campo CPF no Airtable às vezes guarda com máscara ("397.529.068-42"),
+    às vezes só dígitos — por isso tenta também o campo fórmula "num-cpf"
+    (sempre normalizado), igual ao padrão já usado em secullum_ponto.py.
+    Bug real encontrado em 27/06/2026: passar só dígitos sem esse terceiro
+    formato fazia 16/20 CPFs "não encontrados" mesmo existindo no Airtable.
+    """
     cpf_num = _so_digitos(cpf)
-    for formula in (f'{{CPF}}="{cpf}"', f'{{CPF}}="{cpf_num}"'):
+    for formula in (f'{{CPF}}="{cpf}"', f'{{CPF}}="{cpf_num}"', f'{{num-cpf}}={cpf_num}'):
         r = requests.get(
             f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}',
             headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
