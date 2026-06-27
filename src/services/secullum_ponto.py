@@ -376,9 +376,13 @@ def sincronizar_funcionario(cpf: str, nome: str = None, numero: str = None,
     if horario_id is not None:
         payload['HorarioId'] = horario_id
 
-    criado = _secullum_request('POST', 'Funcionarios', json=payload)
+    logger.info('[SECULLUM] Payload de criação p/ CPF %s: %s', cpf, payload)
+    try:
+        criado = _secullum_request('POST', 'Funcionarios', json=payload)
+    except Exception as exc:
+        raise RuntimeError(f'{exc} | payload_enviado={payload}') from exc
     logger.info('[SECULLUM] Funcionário %s (CPF %s) sincronizado.', nome, cpf)
-    return {'status': 'criado', 'funcionario': criado}
+    return {'status': 'criado', 'funcionario': criado, 'payload_enviado': payload}
 
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
