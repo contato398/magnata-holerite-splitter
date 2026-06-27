@@ -278,7 +278,8 @@ def _secullum_request(metodo: str, caminho: str, **kwargs):
                 continue
             if not r.ok:
                 logger.error(f'[SECULLUM] {metodo} {caminho} → HTTP {r.status_code}: {r.text[:400]}')
-            r.raise_for_status()
+                raise requests.exceptions.HTTPError(
+                    f'{r.status_code} em {metodo} {caminho}: {r.text[:500]}', response=r)
             return r.json() if r.text else None
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
             ultimo = exc
