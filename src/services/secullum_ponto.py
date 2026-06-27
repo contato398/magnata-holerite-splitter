@@ -313,6 +313,9 @@ def buscar_funcionario_secullum_por_cpf(cpf: str):
     return None
 
 
+SECULLUM_EMPRESA_CNPJ = os.environ.get('SECULLUM_EMPRESA_CNPJ', '17987187000161')
+
+
 def sincronizar_funcionario(cpf: str, nome: str = None, numero: str = None,
                             pis: str = None, admissao: str = None,
                             empresa_id: int = None, funcao_descricao: str = None,
@@ -376,6 +379,7 @@ def sincronizar_funcionario(cpf: str, nome: str = None, numero: str = None,
         payload['admissao'] = admissao
     if empresa_id is not None:
         payload['empresaId'] = empresa_id
+        payload['empresaCnpjCpf'] = SECULLUM_EMPRESA_CNPJ
     if funcao_descricao:
         payload['funcaoDescricao'] = funcao_descricao
     if departamento_descricao:
