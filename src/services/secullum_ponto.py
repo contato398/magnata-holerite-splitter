@@ -315,17 +315,24 @@ def buscar_funcionario_secullum_por_cpf(cpf: str):
 
 def sincronizar_funcionario(cpf: str, nome: str = None, numero: str = None,
                             pis: str = None, admissao: str = None,
-                            empresa_id: int = None, funcao_id: int = None,
-                            departamento_id: int = None, horario_id: int = None) -> dict:
+                            empresa_id: int = None, funcao_descricao: str = None,
+                            departamento_descricao: str = None, horario_numero: int = None) -> dict:
     """Cadastra (ou retorna o existente) um funcionário no Ponto Web via POST.
 
     CPF é obrigatório. Se o funcionário já existe no Secullum (mesmo CPF), não
     duplica — retorna {'status': 'existente', ...}.
 
-    IMPORTANTE (achado real, 27/06/2026): a Secullum exige EmpresaId,
-    FuncaoId, DepartamentoId e HorarioId para CRIAR um funcionário — nenhum
-    é opcional (erro 400 "campo X é obrigatório" se faltar). Sem eles, a
-    chamada falha sempre, mesmo com Nome/Cpf corretos.
+    IMPORTANTE (achado real, 27/06/2026, confirmado no Swagger oficial —
+    schema `FuncionarioIntegracaoExternaPost`, endpoint POST
+    /IntegracaoExterna/Funcionarios): essa rota usa um DTO em camelCase,
+    DIFERENTE do shape PascalCase devolvido pelo GET /Funcionarios (que só
+    serve pra leitura). Função e Departamento são por TEXTO da descrição
+    (`funcaoDescricao`/`departamentoDescricao`), não por Id; Horário é por
+    `horarioNumero` (o campo "Numero", não "Id" — embora sempre tenham
+    coincidido nos dados reais checados). Sem esses 4 campos (+ `admissao`),
+    a Secullum responde 400 "campo X é obrigatório" — não é opcional. Os 18
+    primeiros cadastros do saneamento de 27/06/2026 falharam por terem sido
+    enviados com o shape errado (PascalCase + IDs) antes dessa correção.
 
     Args:
         cpf: CPF (com ou sem máscara). Obrigatório.
@@ -333,8 +340,10 @@ def sincronizar_funcionario(cpf: str, nome: str = None, numero: str = None,
         numero: matrícula/folha; default = Código do Airtable, senão dígitos do CPF.
         pis: PIS/NIS.
         admissao: data de admissão 'YYYY-MM-DD'.
-        empresa_id, funcao_id, departamento_id, horario_id: obrigatórios pela
-            Secullum para CRIAR um funcionário novo (irrelevantes se já existir).
+        empresa_id: EmpresaId (obrigatório pra criar; irrelevante se já existir).
+        funcao_descricao, departamento_descricao: texto exato da Função/
+            Departamento já usado por outros funcionários na Secullum.
+        horario_numero: o campo "Numero" do Horário (não o "Id").
     """
     cpf_num = _so_digitos(cpf)
     if not cpf_num:
@@ -357,24 +366,22 @@ def sincronizar_funcionario(cpf: str, nome: str = None, numero: str = None,
         return {'status': 'existente', 'funcionario': existente}
 
     payload = {
-        'Id': 0,
-        'Nome': nome,
-        'NumeroFolha': str(numero),
-        'Cpf': cpf_num,
-        'Demitido': False,
+        'nome': nome,
+        'numeroFolha': str(numero),
+        'cpf': cpf_num,
     }
     if pis:
-        payload['Pis'] = _so_digitos(pis)
+        payload['numeroPis'] = _so_digitos(pis)
     if admissao:
-        payload['DataAdmissao'] = admissao
+        payload['admissao'] = admissao
     if empresa_id is not None:
-        payload['EmpresaId'] = empresa_id
-    if funcao_id is not None:
-        payload['FuncaoId'] = funcao_id
-    if departamento_id is not None:
-        payload['DepartamentoId'] = departamento_id
-    if horario_id is not None:
-        payload['HorarioId'] = horario_id
+        payload['empresaId'] = empresa_id
+    if funcao_descricao:
+        payload['funcaoDescricao'] = funcao_descricao
+    if departamento_descricao:
+        payload['departamentoDescricao'] = departamento_descricao
+    if horario_numero is not None:
+        payload['horarioNumero'] = horario_numero
 
     logger.info('[SECULLUM] Payload de criação p/ CPF %s: %s', cpf, payload)
     try:
