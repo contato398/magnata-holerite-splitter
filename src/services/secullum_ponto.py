@@ -392,6 +392,11 @@ def sincronizar_funcionario(cpf: str, nome: str = None, numero: str = None,
         criado = _secullum_request('POST', 'Funcionarios', json=payload)
     except Exception as exc:
         raise RuntimeError(f'{exc} | payload_enviado={payload}') from exc
+    if not criado:
+        # POST bem-sucedido pode devolver corpo vazio (sem o Id) — confirmado
+        # em 27/06/2026: a criação funciona, só não retorna o objeto criado.
+        # Busca de novo por CPF pra ter o Id real de forma confiável.
+        criado = buscar_funcionario_secullum_por_cpf(cpf_num)
     logger.info('[SECULLUM] Funcionário %s (CPF %s) sincronizado.', nome, cpf)
     return {'status': 'criado', 'funcionario': criado, 'payload_enviado': payload}
 
