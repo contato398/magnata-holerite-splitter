@@ -1237,6 +1237,19 @@ def rota_debug():
                 for f in (funcs if isinstance(funcs, list) else [])
             ]
             return jsonify(out), 200
+        if request.args.get('listar_referencias'):
+            out['referencias'] = [
+                {'cpf': f.get('Cpf'), 'nome': f.get('Nome'),
+                 'empresa_id': f.get('EmpresaId'),
+                 'funcao': (f.get('Funcao') or {}).get('Descricao'),
+                 'funcao_id': f.get('FuncaoId'),
+                 'departamento': (f.get('Departamento') or {}).get('Descricao'),
+                 'departamento_id': f.get('DepartamentoId'),
+                 'horario_id': f.get('HorarioId'),
+                 'horario_descricao': (f.get('Horario') or {}).get('Descricao')}
+                for f in (funcs if isinstance(funcs, list) else [])
+            ]
+            return jsonify(out), 200
         cpf_query = request.args.get('cpf')
         amostra = (funcs[0] if isinstance(funcs, list) and funcs else None)
         if cpf_query and isinstance(funcs, list):
