@@ -640,13 +640,23 @@ def _faixa_declarada(desc: str) -> tuple:
 
 
 def _primeira_entrada_minutos(mapa: dict) -> int | None:
-    horas = []
+    """Horário da Entrada1 (início real do turno) — NÃO o min() de todas as
+    colunas de entrada do dia. Num turno noturno (ex.: 19h-07h), a Entrada2
+    (volta de intervalo, ex.: 01h) é numericamente menor que a Entrada1
+    (19h) sem ser o início do turno — usar min() inverteria a leitura.
+    """
+    candidatos = []
     for col, val in mapa.items():
-        if _RE_COL_BATIDA.match(col) and col.strip().lower().startswith('entrada'):
+        m = _RE_COL_BATIDA.match(col)
+        if m and col.strip().lower().startswith('entrada'):
             v = val.strip() if isinstance(val, str) else val
             if isinstance(v, str) and _RE_HORA.match(v):
-                horas.append(_hhmm_para_minutos(v))
-    return min(horas) if horas else None
+                num = int(re.search(r'\d+', col).group())
+                candidatos.append((num, _hhmm_para_minutos(v)))
+    if not candidatos:
+        return None
+    candidatos.sort(key=lambda t: t[0])
+    return candidatos[0][1]
 
 
 def detectar_inconsistencia_escala(horario_raw: str, dias_status: dict, dias: dict) -> dict:
@@ -660,13 +670,23 @@ def detectar_inconsistencia_escala(horario_raw: str, dias_status: dict, dias: di
     inconsistencias = []
     dias_trabalho = sorted(d for d, status in dias_status.items() if status == 'trabalho')
 
+    # Paridade só faz sentido em escala que de fato ALTERNA dia sim/dia não
+    # (ex.: 12x36). Em escala sem folga (5x2/6x1 cheio), trabalho cai quase
+    # 50/50 em par/ímpar só pela distribuição do calendário — isso não é sinal
+    # de erro, então exige folga relevante (>=20% do período) + maioria clara
+    # (>=65%) antes de apontar inconsistência de paridade.
+    total_dias = len(dias_status)
+    dias_folga_n = total_dias - len(dias_trabalho)
+    tem_padrao_alternado = total_dias > 0 and (dias_folga_n / total_dias) >= 0.2
+
     tag = _tag_declarada(horario_raw)
-    if tag and len(dias_trabalho) >= 4:
+    if tag and tem_padrao_alternado and len(dias_trabalho) >= 4:
         pares = sum(1 for d in dias_trabalho if int(d[8:10]) % 2 == 0)
         impares = len(dias_trabalho) - pares
         maioria_par = pares > impares
+        maioria_pct = max(pares, impares) / len(dias_trabalho)
         esperado_par = (tag == 'PAR')
-        if maioria_par != esperado_par:
+        if maioria_par != esperado_par and maioria_pct >= 0.65:
             inconsistencias.append(
                 f'Rótulo da escala diz "{tag}", mas os dias reais de trabalho no '
                 f'período são majoritariamente {"PARES" if maioria_par else "ÍMPARES"} '
