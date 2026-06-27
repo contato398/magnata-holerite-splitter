@@ -48,8 +48,10 @@ import io
 import sys
 import logging
 import argparse
+import traceback
 
 import requests
+from flask import Blueprint, request, jsonify
 
 try:
     import pdfplumber
@@ -272,6 +274,56 @@ def listar_pendentes_sincronizacao() -> list:
     return r.json().get('records', [])
 
 
+def sincronizar_lista_cpfs(cpfs: list, dry_run: bool = True) -> list:
+    """Sincroniza uma lista explícita de CPFs com a Secullum, sem exigir
+    Status de Sincronização="Pendente" nem Grupo de Escala preenchido.
+
+    Uso: saneamento em massa de "invisíveis" (ativos no Airtable, ausentes
+    no Ponto Web) — diretriz da diretoria de 27/06/2026. Cadastra com o
+    horário padrão da Secullum (não envia HorarioId nenhum); o ajuste fino
+    de escala/Grupo de Escala é uma etapa posterior, deliberadamente
+    separada. Busca o registro do Airtable na hora (dados sempre atuais),
+    grava o Id retornado em "Secullum ID" e marca "Sincronizado".
+    """
+    from src.services.secullum_ponto import sincronizar_funcionario
+
+    resultados = []
+    for cpf in cpfs:
+        rec = buscar_funcionario_por_cpf(cpf)
+        if not rec:
+            resultados.append({'cpf': cpf, 'erro': 'CPF não encontrado no Airtable'})
+            continue
+        fl = rec.get('fields', {})
+        nome = fl.get('Nome Completo')
+        if dry_run:
+            resultados.append({
+                'id': rec['id'], 'nome': nome, 'cpf': cpf, 'status': 'dry_run',
+                'pis': fl.get('PIS'), 'admissao': fl.get('Data de Admissão'),
+            })
+            continue
+        try:
+            resultado = sincronizar_funcionario(
+                cpf=cpf, nome=nome, numero=fl.get('Código'),
+                pis=fl.get('PIS'), admissao=fl.get('Data de Admissão'),
+            )
+            secullum_id = resultado.get('funcionario', {}).get('Id')
+            r = requests.patch(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{rec["id"]}',
+                headers=_at_throttle_headers(),
+                json={'fields': {
+                    F_FUNC_SECULLUM_ID: str(secullum_id) if secullum_id is not None else '',
+                    F_FUNC_STATUS_SYNC: STATUS_SINCRONIZADO,
+                }, 'typecast': True}, timeout=30,
+            )
+            r.raise_for_status()
+            resultados.append({'id': rec['id'], 'nome': nome, 'cpf': cpf,
+                               'status': resultado.get('status'), 'secullum_id': secullum_id})
+        except Exception as exc:
+            logger.error('[SYNC] Falha sincronizando %s (CPF %s): %s', nome, cpf, exc)
+            resultados.append({'id': rec['id'], 'nome': nome, 'cpf': cpf, 'erro': str(exc)})
+    return resultados
+
+
 def sincronizar_pendentes(dry_run: bool = True, limit: int = None) -> list:
     """Envia os Funcionários pendentes (com escala definida) para a Secullum.
 
@@ -319,6 +371,38 @@ def sincronizar_pendentes(dry_run: bool = True, limit: int = None) -> list:
 # ╔═══════════════════════════════════════════════════════════════════════════╗
 # ║ CLI                                                                        ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
+
+sync_bp = Blueprint('sync_new_employees', __name__, url_prefix='/sync-funcionarios')
+
+
+@sync_bp.route('/importar-cpfs', methods=['POST', 'OPTIONS'])
+def rota_importar_cpfs():
+    """Sincroniza uma lista explícita de CPFs com a Secullum (saneamento de
+    cadastros "invisíveis" — diretriz da diretoria, 27/06/2026).
+
+    Body JSON: {"cpfs": ["12345678900", ...], "dry_run": true}
+    """
+    if request.method == 'OPTIONS':
+        return ('', 204)
+    body = request.get_json(silent=True) or {}
+    cpfs = body.get('cpfs') or []
+    if not cpfs:
+        return jsonify({'erro': 'Informe "cpfs": [lista de CPFs].'}), 400
+    try:
+        resultados = sincronizar_lista_cpfs(cpfs, dry_run=bool(body.get('dry_run', True)))
+        sucesso = [r for r in resultados if not r.get('erro')]
+        erro = [r for r in resultados if r.get('erro')]
+        return jsonify({
+            'total': len(resultados), 'sucesso': len(sucesso), 'erro': len(erro),
+            'resultados': resultados,
+        }), 200
+    except Exception as exc:
+        logger.exception('[SYNC] Erro na importação em massa')
+        return jsonify({
+            'erro': type(exc).__name__, 'detalhe': str(exc),
+            'traceback': traceback.format_exc().splitlines()[-8:],
+        }), 500
+
 
 def main():
     logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')

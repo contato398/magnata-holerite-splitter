@@ -63,6 +63,8 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB máx upload
 # ── Integração Secullum Ponto Web (módulo isolado) ──────────────────────────────
 from src.services.secullum_ponto import secullum_bp
 app.register_blueprint(secullum_bp)
+from src.sync_new_employees import sync_bp
+app.register_blueprint(sync_bp)
 
 @app.after_request
 def _add_cors(response):
@@ -2958,7 +2960,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.57',
+        'versao': '2.58',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
