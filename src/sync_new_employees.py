@@ -49,6 +49,7 @@ import sys
 import logging
 import argparse
 import traceback
+import unicodedata
 
 import requests
 from flask import Blueprint, request, jsonify
@@ -84,6 +85,31 @@ GRUPO_ESCALA_A = 'Escala A - Dias Pares'
 GRUPO_ESCALA_B = 'Escala B - Dias Ímpares'
 STATUS_PENDENTE      = 'Pendente'
 STATUS_SINCRONIZADO  = 'Sincronizado'
+
+# Cargo (Airtable) -> (FuncaoId, DepartamentoId) na Secullum. Levantado em
+# 27/06/2026 a partir dos 88 funcionários já cadastrados (GET /Funcionarios,
+# ver /secullum/debug?listar_referencias=1) — a Secullum exige esses 2 campos
+# para CRIAR um funcionário (erro 400 sem eles), não há como deixar em branco.
+_MAPA_CARGO_SECULLUM = {
+    'CONTROLADOR DE ACESSO': (3, 92),
+    'AUXILIAR DE LIMPEZA': (5, 94),
+    'SUPERVISOR DE PERIMETRO': (4, 93),
+    'JARDINEIRO': (6, 95),
+    'SERVICOS GERAIS': (8, 97),
+    'ZELADOR': (7, 96),
+    'SUPERVISOR': (2, 2),
+}
+SECULLUM_EMPRESA_ID = 1   # única empresa cadastrada na Secullum (confirmado 27/06/2026)
+# Horário placeholder neutro (comercial, não 12x36) para cadastro inicial —
+# decisão da diretoria 27/06/2026: cadastro primeiro, ajuste fino de escala
+# numa etapa seguinte separada. Evita gerar alerta de ponto por escala errada
+# enquanto isso não é decidido.
+SECULLUM_HORARIO_ID_PADRAO = int(os.environ.get('SECULLUM_HORARIO_ID_PADRAO', '6'))
+
+
+def _normalizar_cargo(s: str) -> str:
+    s = unicodedata.normalize('NFKD', s or '').encode('ascii', 'ignore').decode('ascii')
+    return re.sub(r'\s+', ' ', s).strip().upper()
 
 
 def _at_throttle_headers() -> dict:
@@ -286,11 +312,16 @@ def sincronizar_lista_cpfs(cpfs: list, dry_run: bool = True) -> list:
     Status de Sincronização="Pendente" nem Grupo de Escala preenchido.
 
     Uso: saneamento em massa de "invisíveis" (ativos no Airtable, ausentes
-    no Ponto Web) — diretriz da diretoria de 27/06/2026. Cadastra com o
-    horário padrão da Secullum (não envia HorarioId nenhum); o ajuste fino
-    de escala/Grupo de Escala é uma etapa posterior, deliberadamente
-    separada. Busca o registro do Airtable na hora (dados sempre atuais),
-    grava o Id retornado em "Secullum ID" e marca "Sincronizado".
+    no Ponto Web) — diretriz da diretoria de 27/06/2026. A Secullum exige
+    EmpresaId/FuncaoId/DepartamentoId/HorarioId para criar (erro 400 sem
+    eles); Função/Departamento vêm do Cargo do Airtable via
+    `_MAPA_CARGO_SECULLUM`, Horário usa o placeholder `SECULLUM_HORARIO_ID_PADRAO`
+    (ajuste fino de escala é etapa posterior, deliberadamente separada).
+    Admissão ausente usa a data de criação do registro no Airtable como
+    aproximação (decisão da diretoria 27/06/2026 — não inventa uma data
+    arbitrária, usa a melhor referência disponível). Busca o registro do
+    Airtable na hora (dados sempre atuais), grava o Id retornado em
+    "Secullum ID" e marca "Sincronizado".
     """
     from src.services.secullum_ponto import sincronizar_funcionario
 
@@ -302,16 +333,33 @@ def sincronizar_lista_cpfs(cpfs: list, dry_run: bool = True) -> list:
             continue
         fl = rec.get('fields', {})
         nome = fl.get('Nome Completo')
+        cargo_norm = _normalizar_cargo(fl.get('Cargo'))
+        funcao_id, departamento_id = _MAPA_CARGO_SECULLUM.get(cargo_norm, (None, None))
+        admissao = fl.get('Data de Admissão') or (rec.get('createdTime') or '')[:10] or None
+        admissao_e_proxy = not fl.get('Data de Admissão') and bool(admissao)
+
+        if funcao_id is None:
+            resultados.append({
+                'id': rec['id'], 'nome': nome, 'cpf': cpf,
+                'erro': f'Cargo "{fl.get("Cargo")}" sem mapeamento conhecido p/ '
+                        f'FuncaoId/DepartamentoId (ver _MAPA_CARGO_SECULLUM).',
+            })
+            continue
+
         if dry_run:
             resultados.append({
                 'id': rec['id'], 'nome': nome, 'cpf': cpf, 'status': 'dry_run',
-                'pis': fl.get('PIS'), 'admissao': fl.get('Data de Admissão'),
+                'cargo': fl.get('Cargo'), 'funcao_id': funcao_id, 'departamento_id': departamento_id,
+                'horario_id': SECULLUM_HORARIO_ID_PADRAO,
+                'pis': fl.get('PIS'), 'admissao': admissao, 'admissao_e_proxy': admissao_e_proxy,
             })
             continue
         try:
             resultado = sincronizar_funcionario(
                 cpf=cpf, nome=nome, numero=fl.get('Código'),
-                pis=fl.get('PIS'), admissao=fl.get('Data de Admissão'),
+                pis=fl.get('PIS'), admissao=admissao,
+                empresa_id=SECULLUM_EMPRESA_ID, funcao_id=funcao_id,
+                departamento_id=departamento_id, horario_id=SECULLUM_HORARIO_ID_PADRAO,
             )
             secullum_id = resultado.get('funcionario', {}).get('Id')
             r = requests.patch(
@@ -324,7 +372,8 @@ def sincronizar_lista_cpfs(cpfs: list, dry_run: bool = True) -> list:
             )
             r.raise_for_status()
             resultados.append({'id': rec['id'], 'nome': nome, 'cpf': cpf,
-                               'status': resultado.get('status'), 'secullum_id': secullum_id})
+                               'status': resultado.get('status'), 'secullum_id': secullum_id,
+                               'admissao_e_proxy': admissao_e_proxy})
         except Exception as exc:
             logger.error('[SYNC] Falha sincronizando %s (CPF %s): %s', nome, cpf, exc)
             resultados.append({'id': rec['id'], 'nome': nome, 'cpf': cpf, 'erro': str(exc)})

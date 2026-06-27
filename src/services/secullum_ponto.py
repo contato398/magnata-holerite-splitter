@@ -314,11 +314,18 @@ def buscar_funcionario_secullum_por_cpf(cpf: str):
 
 
 def sincronizar_funcionario(cpf: str, nome: str = None, numero: str = None,
-                            pis: str = None, admissao: str = None) -> dict:
+                            pis: str = None, admissao: str = None,
+                            empresa_id: int = None, funcao_id: int = None,
+                            departamento_id: int = None, horario_id: int = None) -> dict:
     """Cadastra (ou retorna o existente) um funcionário no Ponto Web via POST.
 
     CPF é obrigatório. Se o funcionário já existe no Secullum (mesmo CPF), não
     duplica — retorna {'status': 'existente', ...}.
+
+    IMPORTANTE (achado real, 27/06/2026): a Secullum exige EmpresaId,
+    FuncaoId, DepartamentoId e HorarioId para CRIAR um funcionário — nenhum
+    é opcional (erro 400 "campo X é obrigatório" se faltar). Sem eles, a
+    chamada falha sempre, mesmo com Nome/Cpf corretos.
 
     Args:
         cpf: CPF (com ou sem máscara). Obrigatório.
@@ -326,6 +333,8 @@ def sincronizar_funcionario(cpf: str, nome: str = None, numero: str = None,
         numero: matrícula/folha; default = Código do Airtable, senão dígitos do CPF.
         pis: PIS/NIS.
         admissao: data de admissão 'YYYY-MM-DD'.
+        empresa_id, funcao_id, departamento_id, horario_id: obrigatórios pela
+            Secullum para CRIAR um funcionário novo (irrelevantes se já existir).
     """
     cpf_num = _so_digitos(cpf)
     if not cpf_num:
@@ -358,6 +367,14 @@ def sincronizar_funcionario(cpf: str, nome: str = None, numero: str = None,
         payload['Pis'] = _so_digitos(pis)
     if admissao:
         payload['DataAdmissao'] = admissao
+    if empresa_id is not None:
+        payload['EmpresaId'] = empresa_id
+    if funcao_id is not None:
+        payload['FuncaoId'] = funcao_id
+    if departamento_id is not None:
+        payload['DepartamentoId'] = departamento_id
+    if horario_id is not None:
+        payload['HorarioId'] = horario_id
 
     criado = _secullum_request('POST', 'Funcionarios', json=payload)
     logger.info('[SECULLUM] Funcionário %s (CPF %s) sincronizado.', nome, cpf)
