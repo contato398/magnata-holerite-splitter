@@ -1394,6 +1394,19 @@ def rota_debug():
                 for f in (funcs if isinstance(funcs, list) else [])
             ]
             return jsonify(out), 200
+        if request.args.get('listar_horarios_catalogo'):
+            # Catálogo REAL de Horários (GET /IntegracaoExterna/Horarios) — ao
+            # contrário de 'listar_horarios' acima, não depende de nenhum
+            # funcionário já estar vinculado. É a única forma de confirmar a
+            # existência de um Horário recém-criado e ainda não atribuído.
+            try:
+                catalogo = _secullum_request('GET', 'Horarios')
+                out['horarios_catalogo_tipo'] = type(catalogo).__name__
+                out['horarios_catalogo'] = catalogo
+            except Exception as exc:
+                out['horarios_catalogo_erro'] = f'{type(exc).__name__}: {exc}'
+                out['horarios_catalogo_traceback'] = traceback.format_exc().splitlines()[-6:]
+            return jsonify(out), 200
         if request.args.get('listar_referencias'):
             out['referencias'] = [
                 {'cpf': f.get('Cpf'), 'nome': f.get('Nome'),
