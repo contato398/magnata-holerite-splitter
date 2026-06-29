@@ -131,15 +131,21 @@ BONUS_ASSIDUIDADE_VALOR = os.environ.get('SECULLUM_BONUS_ASSIDUIDADE', '100,00')
 BONUS_TOLERANCIA_MIN = int(os.environ.get('SECULLUM_BONUS_TOLERANCIA_MIN', '5'))
 
 # ── v2.55: Arquitetura de intervalos por posto e função (diretriz da diretoria) ─
-# IDs (não texto!) dos 5 postos de exceção — "100% com intervalo" independente da
+# IDs (não texto!) dos postos de exceção — "100% com intervalo" independente da
 # função. Resolvidos contra a tabela Locais do Airtable (confirmados em sessão
 # anterior); usar ID em vez de nome evita o mesmo tipo de erro de texto não
 # confiável já visto 3x com Horario.Descricao.
+#
+# v2.62 (28/06/2026): UNIMED - VIRGILIO removida da exceção. Confirmado pela
+# diretoria — só tem 2 colaboradores lá (João Batista Sales Junior, Teodolino
+# Munis Fernandes Junior), turno solo noturno 18h-06h em dias alternados
+# (PAR/ÍMPAR), sem rendição (fim de semana é horista ou folga trabalhada). Dado
+# real bate: João já migrado p/ horário SEM INTERVALO tem 0 falta; Teodolino
+# (ainda no horário antigo) mostra o mesmo bug de virada de dia do Lucídio.
 EXCEPTION_POSTO_IDS = {
     'rec7sjIAiKZd0ermb',  # MORADAS DO SOL
     'rechZpE1xGvFXUNyL',  # CASTROLANDA
     'recd8OPca3z9dk2fq',  # LAGO DOS IPES
-    'reclQfhuQSPVLZgB3',  # UNIMED - VIRGILIO
     'recZKE9y6Hn1Hl1Kg',  # UNIMED - SHOPPING
 }
 # Palavras (texto normalizado) que indicam função SOLO (turno 12x36 sem intervalo,
