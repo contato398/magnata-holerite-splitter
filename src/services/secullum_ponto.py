@@ -1081,12 +1081,20 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
         avaliacao['tem_intervalo'] = info['tem_intervalo']
 
         total_min = 0
+        total_faltas_min = 0
+        total_extras_min = 0
         total_batidas_periodo = 0
         for mapa in info['dias'].values():
             total_min += (_hhmm_para_minutos(mapa.get('Normais')) or 0)
             total_min += (_hhmm_para_minutos(mapa.get(SECULLUM_COL_EXTRAS)) or 0)
+            total_faltas_min += _faltas_minutos(mapa)
+            total_extras_min += (_hhmm_para_minutos(mapa.get(SECULLUM_COL_EXTRAS)) or 0)
             total_batidas_periodo += _contar_batidas(mapa)
         avaliacao['horas_trabalhadas_total'] = _minutos_para_hhmm(total_min)
+        avaliacao['total_faltas_min'] = total_faltas_min
+        avaliacao['total_extras_min'] = total_extras_min
+        avaliacao['total_faltas_hhmm'] = _minutos_para_hhmm(total_faltas_min)
+        avaliacao['total_extras_hhmm'] = _minutos_para_hhmm(total_extras_min)
 
         # Glosa Crítica (v2.57): zero batidas em TODO o período é risco/parametrização
         # não-resolvida, não uma falta pontual — sobrescreve o motivo padrão para não
