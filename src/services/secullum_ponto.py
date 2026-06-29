@@ -1083,16 +1083,28 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
         total_min = 0
         total_faltas_min = 0
         total_extras_min = 0
+        total_noturno_min = 0
+        total_folga_trabalhada_extras_min = 0
         total_batidas_periodo = 0
-        for mapa in info['dias'].values():
+        for data_dia, mapa in info['dias'].items():
             total_min += (_hhmm_para_minutos(mapa.get('Normais')) or 0)
             total_min += (_hhmm_para_minutos(mapa.get(SECULLUM_COL_EXTRAS)) or 0)
             total_faltas_min += _faltas_minutos(mapa)
-            total_extras_min += (_hhmm_para_minutos(mapa.get(SECULLUM_COL_EXTRAS)) or 0)
+            extras_dia = _hhmm_para_minutos(mapa.get(SECULLUM_COL_EXTRAS)) or 0
+            total_extras_min += extras_dia
+            # "Not.Tot." já vem da própria Secullum com a hora noturna reduzida
+            # (52min30s) aplicada — não recalculamos essa fórmula por conta própria.
+            total_noturno_min += (_hhmm_para_minutos(mapa.get('Not.Tot.')) or 0)
+            if info['dias_status'].get(data_dia) == 'folga' and _trabalhou(mapa):
+                total_folga_trabalhada_extras_min += extras_dia
             total_batidas_periodo += _contar_batidas(mapa)
         avaliacao['horas_trabalhadas_total'] = _minutos_para_hhmm(total_min)
         avaliacao['total_faltas_min'] = total_faltas_min
         avaliacao['total_extras_min'] = total_extras_min
+        avaliacao['total_extras_100_min'] = total_folga_trabalhada_extras_min
+        avaliacao['total_extras_50_min'] = total_extras_min - total_folga_trabalhada_extras_min
+        avaliacao['total_noturno_min'] = total_noturno_min
+        avaliacao['total_noturno_hhmm'] = _minutos_para_hhmm(total_noturno_min)
         avaliacao['total_faltas_hhmm'] = _minutos_para_hhmm(total_faltas_min)
         avaliacao['total_extras_hhmm'] = _minutos_para_hhmm(total_extras_min)
 
