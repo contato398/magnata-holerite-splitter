@@ -1808,12 +1808,17 @@ def decidir_acao_documento(*, erros_bloqueantes, avisos_qualidade, confianca,
     """
     if erros_bloqueantes:
         return 'enviar_para_revisao', '; '.join(erros_bloqueantes)
+    # Aprovação por exceção (v2.66): avisos de qualidade e confiança baixa NÃO
+    # retêm mais o documento — o cadastro é criado imediatamente com status
+    # intermediário ("Validação Pendente") para o humano revisar/ajustar depois.
+    # Só erros verdadeiramente bloqueantes (CPF inválido, nome ausente) e
+    # divergência com registro já existente continuam indo para revisão sem criar.
     if avisos_qualidade:
-        return 'enviar_para_revisao', 'Avisos de qualidade na extração: ' + '; '.join(avisos_qualidade)
+        return 'executar_com_status_intermediario', 'Avisos de qualidade na extração: ' + '; '.join(avisos_qualidade)
     if confianca < confianca_minima:
-        return 'enviar_para_revisao', (
+        return 'executar_com_status_intermediario', (
             f'Confiança da extração ({confianca}) abaixo do mínimo '
-            f'({confianca_minima}) para automação.'
+            f'({confianca_minima}) — criado como Validação Pendente (aprovação por exceção).'
         )
     if registro_existente:
         if divergencia:
@@ -2263,7 +2268,7 @@ def _processar_ficha_registro_stub(ctx, dry_run):
     pendencia_simulada = None
 
     if decisao_5c in ('cadastrar_ativo_automaticamente', 'criar_pre_cadastro_seguro'):
-        status_destino = 'Ativo' if decisao_5c == 'cadastrar_ativo_automaticamente' else 'Pré-cadastro'
+        status_destino = 'Validação Pendente'  # aprovação por exceção (v2.66): sempre entra pendente de validação manual
         campos_pre_cadastro = _montar_campos_pre_cadastro(dados, status_destino)
         pre_cadastro_simulado = {'campos': campos_pre_cadastro}
         if not dry_run:
@@ -2493,7 +2498,7 @@ def _processar_contrato_stub(ctx, dry_run):
     pendencia_simulada = None
 
     if decisao_5c in ('cadastrar_ativo_automaticamente', 'criar_pre_cadastro_seguro'):
-        status_destino = 'Ativo' if decisao_5c == 'cadastrar_ativo_automaticamente' else 'Pré-cadastro'
+        status_destino = 'Validação Pendente'  # aprovação por exceção (v2.66): sempre entra pendente de validação manual
         campos_pre_cadastro = _montar_campos_pre_cadastro(dados, status_destino)
         observacoes = []
         if dados['local_posto']:
@@ -2960,7 +2965,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.64',
+        'versao': '2.66',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -3851,20 +3856,14 @@ def processar_fila():
         limit = 1
     record_id = data.get('record_id')
 
-    # Regras de segurança 8 e 9 (Fase 5C): para Contrato de Experiência e
-    # Contrato de Trabalho, dry_run=false só é aceito com um record_id
-    # específico e limit=1 — nunca processando a fila geral. Não afeta
-    # Holerite nem outros tipos.
-    if tipo_documento in TIPOS_CONTRATO_5C and not dry_run:
-        if not record_id or limit != 1:
-            return jsonify({
-                'status': 'erro',
-                'erro': (
-                    f'Para "{tipo_documento}" com dry_run=false é obrigatório '
-                    'informar "record_id" de um registro específico e "limit"=1 '
-                    '(processamento da fila geral não é permitido nesta fase).'
-                ),
-            }), 400
+    # Aprovação por exceção (v2.66): a trava antiga que exigia record_id+limit=1
+    # para Contrato de Experiência/Trabalho foi removida — agora a fila de
+    # contratos pode ser processada em lote. Cada admissão cria o cadastro
+    # imediatamente com Status="Validação Pendente" (revisão manual posterior),
+    # em vez de reter o arquivo. Cap de segurança para evitar lote gigante
+    # acidental num único request.
+    if tipo_documento in TIPOS_CONTRATO_5C and not dry_run and not record_id:
+        limit = min(limit, 25)
 
     # Resolver folha_mensal / mes_cont_id / data_holerite
     folha_mensal = data.get('folha_mensal')
