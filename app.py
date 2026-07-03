@@ -103,6 +103,7 @@ F_FUNC_RECIBOS   = 'fldFA03LEJ3wk3UmG'   # Recibos Pagamento (fatiados por colab
 F_FUNC_RESUMO_PONTO = 'fldI6soHhol2CdQpP'  # Resumo Cartão Ponto (extraído)
 F_FUNC_DOCS_ADMISSAO = 'fldV0KcIqK8ly8PKl'  # Documentos Admissionais (Kit Admissão agrupado)
 F_FUNC_KIT_CONSOLIDADO = 'fld2aVtOjvJkOXn5P'  # Kit Admissão - PDF Consolidado (fundido)
+F_FUNC_DOCUMENTOS = 'fldCWscgMwOT3Ej72'  # Documentos (campo genérico, visível na Interface por padrão)
 
 # ── Tabelas/Campos Fase 2 — Caixa de Entrada ─────────────────────────────────
 TABLE_EMAILS     = 'tblljRRrraXSipJd1'   # Emails Savian
@@ -2965,7 +2966,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.67',
+        'versao': '2.68',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -6224,6 +6225,76 @@ def _carimbar_pdf_assinado(pdf_bytes: bytes, nome: str, cpf4: str, dt_str: str) 
     return buf.getvalue()
 
 
+def _gerar_comprovante_assinatura_pdf(nome_documento: str, func_nome: str, ip: str, user_agent: str,
+                                       dt_str: str, cpf4: str, doc_bytes: bytes, doc_nome: str) -> bytes:
+    """Gera o PDF 'Comprovante de Assinatura Eletrônica' — documento autônomo
+    (não é merge de PDFs, então fpdf2 é seguro aqui) consolidando as
+    evidências capturadas na confirmação da assinatura, incluindo hash
+    SHA-256 do documento original para prova de integridade."""
+    from fpdf import FPDF
+
+    sha256 = hashlib.sha256(doc_bytes).hexdigest() if doc_bytes else '(indisponível)'
+
+    def s(t):
+        return str(t).encode('latin-1', 'replace').decode('latin-1')
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    larg = pdf.w - pdf.l_margin - pdf.r_margin
+
+    pdf.set_font('Helvetica', 'B', 14)
+    pdf.cell(larg, 8, s('COMPROVANTE DE ASSINATURA ELETRÔNICA'), new_x='LMARGIN', new_y='NEXT', align='C')
+    pdf.set_font('Helvetica', '', 10)
+    pdf.cell(larg, 6, s('MAGNATA PORTARIA E SERVIÇOS LTDA — CNPJ 17.987.187/0001-61'), new_x='LMARGIN', new_y='NEXT', align='C')
+    pdf.ln(6)
+
+    pdf.set_font('Helvetica', 'B', 11)
+    pdf.cell(larg, 7, s('1. Identificação'), new_x='LMARGIN', new_y='NEXT')
+    pdf.set_font('Helvetica', '', 10)
+    for ln in [f'Colaborador: {func_nome}', f'Documento assinado: {nome_documento}',
+               f'Nome do arquivo: {doc_nome}', 'Status: Assinado']:
+        pdf.cell(larg, 6, s(ln), new_x='LMARGIN', new_y='NEXT')
+    pdf.ln(3)
+
+    pdf.set_font('Helvetica', 'B', 11)
+    pdf.cell(larg, 7, s('2. Evidências da Assinatura'), new_x='LMARGIN', new_y='NEXT')
+    pdf.set_font('Helvetica', '', 10)
+    for ln in [f'Data/Hora da confirmação: {dt_str} (horário de Brasília)', f'Endereço IP de origem: {ip}',
+               f'CPF confirmado pelo colaborador (4 últimos dígitos): {cpf4}',
+               f'Dispositivo/Navegador (User-Agent): {user_agent}']:
+        pdf.multi_cell(larg, 6, s(ln))
+    pdf.ln(2)
+    pdf.set_font('Helvetica', 'I', 9)
+    pdf.multi_cell(larg, 5, s(
+        'Declaração aceita eletronicamente pelo colaborador no momento da confirmação: '
+        '"Ao clicar, concordo eletronicamente com o recebimento e os termos do documento, '
+        'sob as penas da lei."'
+    ))
+    pdf.ln(3)
+
+    pdf.set_font('Helvetica', 'B', 11)
+    pdf.cell(larg, 7, s('3. Integridade do Documento'), new_x='LMARGIN', new_y='NEXT')
+    pdf.set_font('Helvetica', '', 9)
+    pdf.multi_cell(larg, 5, s(f'Hash SHA-256 do arquivo assinado (identificador único de integridade): {sha256}'))
+    pdf.ln(3)
+
+    pdf.set_font('Helvetica', 'B', 11)
+    pdf.cell(larg, 7, s('4. Base Legal'), new_x='LMARGIN', new_y='NEXT')
+    pdf.set_font('Helvetica', '', 9)
+    pdf.multi_cell(larg, 5, s(
+        'Este comprovante registra a manifestação de vontade eletrônica do colaborador, '
+        'nos termos do art. 10, §2º da Medida Provisória 2.200-2/2001 e da Lei 14.063/2020, '
+        'mediante confirmação de identidade por CPF e captura de metadados de sessão '
+        '(IP, timestamp e dispositivo), constituindo prova de aceite do documento anexo.'
+    ))
+    pdf.ln(8)
+    pdf.set_font('Helvetica', 'I', 8)
+    pdf.cell(larg, 5, s(f'Comprovante gerado automaticamente em {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}.'), new_x='LMARGIN', new_y='NEXT', align='C')
+
+    return bytes(pdf.output())
+
+
 @app.route('/assinatura/gerar', methods=['POST', 'OPTIONS'])
 def assinatura_gerar():
     """
@@ -6560,9 +6631,12 @@ def assinatura_pagina(hash_token):
         logger.error(f'[ASSINATURA] falha ao gravar assinatura {registro["id"]}: {r_patch.text[:300]}')
         return _pagina_assinatura_html(hash_token, nome_doc, erro='Erro ao registrar assinatura. Tente novamente em alguns instantes.')
 
-    # Carimbar cada página do documento original ("Assinado digitalmente por...")
-    # e substituir a cópia em Documento PDF pela versão carimbada — deixa o
-    # próprio Kit auto-explicativo, além do Comprovante gerado à parte.
+    # Regra universal (v2.68): para QUALQUER documento assinado pelo sistema —
+    # (1) carimbar todas as páginas do original ("Assinado digitalmente por..."),
+    # (2) gerar o Comprovante de Assinatura Eletrônica em separado,
+    # (3) substituir o anexo original pelos dois em Documento PDF (Assinaturas
+    #     Digitais), e (4) copiar ambos para o campo "Documentos" do
+    #     Funcionário — automático, sem depender de script manual.
     try:
         doc_atual = fields.get('Documento PDF') or []
         original_att = next(
@@ -6572,21 +6646,31 @@ def assinatura_pagina(hash_token):
             nome_func = r_func.json().get('fields', {}).get('Nome Completo', '')
             r_doc = requests.get(original_att['url'], timeout=60)
             if r_doc.ok:
-                pdf_carimbado = _carimbar_pdf_assinado(
-                    r_doc.content, nome_func, cpf_informado, agora_brt_dt.strftime('%d/%m/%Y %H:%M'),
+                doc_bytes_original = r_doc.content
+                dt_fmt = agora_brt_dt.strftime('%d/%m/%Y %H:%M')
+
+                pdf_carimbado = _carimbar_pdf_assinado(doc_bytes_original, nome_func, cpf_informado, dt_fmt)
+                nome_carimbado = original_att['filename']
+                nome_carimbado = (
+                    nome_carimbado[:-4] + ' - ASSINADO.pdf'
+                    if nome_carimbado.lower().endswith('.pdf') else nome_carimbado + ' - ASSINADO'
                 )
-                nome_arquivo = original_att['filename']
-                nome_arquivo = (
-                    nome_arquivo[:-4] + ' - ASSINADO.pdf'
-                    if nome_arquivo.lower().endswith('.pdf') else nome_arquivo + ' - ASSINADO'
+
+                pdf_comprovante = _gerar_comprovante_assinatura_pdf(
+                    nome_documento=nome_doc, func_nome=nome_func, ip=ip_captura, user_agent=user_agent,
+                    dt_str=dt_fmt, cpf4=cpf_informado, doc_bytes=doc_bytes_original,
+                    doc_nome=original_att['filename'],
                 )
-                upload_resp = _anexar_attachment(
-                    TABLE_ASSINATURAS, registro['id'], F_ASS_DOCUMENTO_PDF, pdf_carimbado, nome_arquivo,
+                nome_comprovante = f'Comprovante Assinatura - {(nome_func or "Colaborador").title()}.pdf'
+
+                _anexar_attachment(TABLE_ASSINATURAS, registro['id'], F_ASS_DOCUMENTO_PDF, pdf_carimbado, nome_carimbado)
+                upload_comprovante = _anexar_attachment(
+                    TABLE_ASSINATURAS, registro['id'], F_ASS_DOCUMENTO_PDF, pdf_comprovante, nome_comprovante,
                 )
-                lista_pos_upload = (upload_resp.get('fields', {}) or {}).get(F_ASS_DOCUMENTO_PDF) or []
-                novo_att_id = lista_pos_upload[-1]['id'] if lista_pos_upload else None
-                if novo_att_id:
-                    manter = [novo_att_id] + [a['id'] for a in doc_atual if a['id'] != original_att['id']]
+                lista_pos_upload = (upload_comprovante.get('fields', {}) or {}).get(F_ASS_DOCUMENTO_PDF) or []
+                ids_novos = [a['id'] for a in lista_pos_upload if a['filename'] in (nome_carimbado, nome_comprovante)]
+                if ids_novos:
+                    manter = ids_novos + [a['id'] for a in doc_atual if a['id'] != original_att['id']]
                     _at_throttle()
                     requests.patch(
                         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{registro["id"]}',
@@ -6594,8 +6678,12 @@ def assinatura_pagina(hash_token):
                         json={'fields': {F_ASS_DOCUMENTO_PDF: [{'id': i} for i in manter]}, 'typecast': True},
                         timeout=30,
                     )
+
+                # Copiar Kit carimbado + Comprovante para "Documentos" do Funcionário (visível/fácil acesso)
+                _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_DOCUMENTOS, pdf_carimbado, nome_carimbado)
+                _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_DOCUMENTOS, pdf_comprovante, nome_comprovante)
     except Exception as exc:
-        logger.warning(f'[ASSINATURA] falha ao carimbar documento {registro["id"]}: {exc}')
+        logger.warning(f'[ASSINATURA] falha ao carimbar/gerar comprovante/salvar no funcionário {registro["id"]}: {exc}')
 
     # Atualizar Status do documento de origem em Processar Arquivos, se vinculado
     processar_id = fields.get('Processar Arquivos ID')
