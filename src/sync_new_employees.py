@@ -103,6 +103,7 @@ _MAPA_CARGO_SECULLUM = {
     'JARDINEIRO': ('JARDINEIRO', 'JARDINEIRO'),
     'ZELADOR': ('ZELADOR', 'ZELADOR'),
     'SUPERVISOR': ('SUPERVISOR', 'SUPERVISOR'),
+    'SERVICOS GERAIS': ('SERVIÇOS GERAIS', 'SERVIÇOS GERAIS'),
 }
 SECULLUM_EMPRESA_ID = 1   # única empresa cadastrada na Secullum (confirmado 27/06/2026)
 # Horário placeholder neutro (comercial, não 12x36) para cadastro inicial —
