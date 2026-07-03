@@ -2965,7 +2965,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.66',
+        'versao': '2.67',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -6183,6 +6183,47 @@ def _montar_mensagem_assinatura(nome: str, tipo_documento: str, link: str) -> st
     )
 
 
+def _carimbar_pdf_assinado(pdf_bytes: bytes, nome: str, cpf4: str, dt_str: str) -> bytes:
+    """Sobrepõe um rodapé discreto ("Assinado digitalmente por...") em todas
+    as páginas do PDF, via pypdf merge_page + uma página de overlay gerada
+    com reportlab (mesmo tamanho de cada página original). Usa reportlab (e
+    não fpdf2) especificamente aqui porque overlays fpdf2+pypdf sofrem de
+    colisão de nome de recurso de fonte entre PDFs de origens diferentes,
+    fazendo o texto do carimbo "sumir" silenciosamente (bug conhecido do
+    merge_page). Não usa marca d'água diagonal nem cobre o conteúdo
+    original — só uma faixa fina no rodapé.
+    """
+    from reportlab.pdfgen import canvas
+
+    texto = f'Assinado digitalmente por {nome} | CPF final {cpf4} | {dt_str} | Magnata Portaria e Serviços'
+
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    writer = PdfWriter()
+    carimbo_cache = {}
+
+    for page in reader.pages:
+        box = page.mediabox
+        largura_pt, altura_pt = float(box.width), float(box.height)
+        chave = (round(largura_pt), round(altura_pt))
+        if chave not in carimbo_cache:
+            buf_stamp = io.BytesIO()
+            c = canvas.Canvas(buf_stamp, pagesize=(largura_pt, altura_pt))
+            c.setFillColorRGB(0.92, 0.92, 0.92)
+            c.rect(0, 0, largura_pt, 28, fill=1, stroke=0)
+            c.setFillColorRGB(0, 0, 0)
+            c.setFont('Helvetica', 7)
+            c.drawString(10, 10, texto[:180])
+            c.save()
+            buf_stamp.seek(0)
+            carimbo_cache[chave] = PdfReader(buf_stamp).pages[0]
+        page.merge_page(carimbo_cache[chave])
+        writer.add_page(page)
+
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
 @app.route('/assinatura/gerar', methods=['POST', 'OPTIONS'])
 def assinatura_gerar():
     """
@@ -6518,6 +6559,43 @@ def assinatura_pagina(hash_token):
     if not r_patch.ok:
         logger.error(f'[ASSINATURA] falha ao gravar assinatura {registro["id"]}: {r_patch.text[:300]}')
         return _pagina_assinatura_html(hash_token, nome_doc, erro='Erro ao registrar assinatura. Tente novamente em alguns instantes.')
+
+    # Carimbar cada página do documento original ("Assinado digitalmente por...")
+    # e substituir a cópia em Documento PDF pela versão carimbada — deixa o
+    # próprio Kit auto-explicativo, além do Comprovante gerado à parte.
+    try:
+        doc_atual = fields.get('Documento PDF') or []
+        original_att = next(
+            (a for a in doc_atual if not a['filename'].startswith('Comprovante Assinatura')), None
+        )
+        if original_att:
+            nome_func = r_func.json().get('fields', {}).get('Nome Completo', '')
+            r_doc = requests.get(original_att['url'], timeout=60)
+            if r_doc.ok:
+                pdf_carimbado = _carimbar_pdf_assinado(
+                    r_doc.content, nome_func, cpf_informado, agora_brt_dt.strftime('%d/%m/%Y %H:%M'),
+                )
+                nome_arquivo = original_att['filename']
+                nome_arquivo = (
+                    nome_arquivo[:-4] + ' - ASSINADO.pdf'
+                    if nome_arquivo.lower().endswith('.pdf') else nome_arquivo + ' - ASSINADO'
+                )
+                upload_resp = _anexar_attachment(
+                    TABLE_ASSINATURAS, registro['id'], F_ASS_DOCUMENTO_PDF, pdf_carimbado, nome_arquivo,
+                )
+                lista_pos_upload = (upload_resp.get('fields', {}) or {}).get(F_ASS_DOCUMENTO_PDF) or []
+                novo_att_id = lista_pos_upload[-1]['id'] if lista_pos_upload else None
+                if novo_att_id:
+                    manter = [novo_att_id] + [a['id'] for a in doc_atual if a['id'] != original_att['id']]
+                    _at_throttle()
+                    requests.patch(
+                        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{registro["id"]}',
+                        headers=_at_headers(),
+                        json={'fields': {F_ASS_DOCUMENTO_PDF: [{'id': i} for i in manter]}, 'typecast': True},
+                        timeout=30,
+                    )
+    except Exception as exc:
+        logger.warning(f'[ASSINATURA] falha ao carimbar documento {registro["id"]}: {exc}')
 
     # Atualizar Status do documento de origem em Processar Arquivos, se vinculado
     processar_id = fields.get('Processar Arquivos ID')
