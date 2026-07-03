@@ -1295,6 +1295,31 @@ def gravar_bonus_assiduidade(cpf: str, valor_texto: str) -> bool:
     return True
 
 
+def atualizar_numero_folha(cpf: str, numero: str) -> dict:
+    """Atualiza o NumeroFolha de um funcionário já cadastrado na Secullum via PUT.
+
+    Faz GET para obter o objeto completo, substitui NumeroFolha e reenvia com PUT.
+    """
+    cpf_num = _so_digitos(cpf)
+    func = buscar_funcionario_secullum_por_cpf(cpf_num)
+    if not func:
+        raise ValueError(f'Funcionário CPF {cpf} não encontrado na Secullum.')
+    func_id = func['Id']
+    # Constrói payload com os campos aceitos pelo PUT (remove objetos aninhados)
+    campos_remover = ('Empresa', 'Departamento', 'Funcao', 'Horario',
+                      'ListaCentroDeCustos', 'RespostasPerguntasAdicionais',
+                      'CidadeId', 'Cidade')
+    payload = {k: v for k, v in func.items() if k not in campos_remover}
+    payload['NumeroFolha'] = str(numero)
+    # Mantém os IDs de relacionamento que o PUT precisa
+    payload.setdefault('EmpresaId', func.get('EmpresaId') or 1)
+    logger.info('[SECULLUM] PUT Funcionarios/%s — NumeroFolha: %s → %s',
+                func_id, func.get('NumeroFolha'), numero)
+    resultado = _secullum_request('PUT', f'Funcionarios/{func_id}', json=payload)
+    return {'status': 'atualizado', 'id': func_id, 'numero_folha': numero,
+            'resposta': resultado}
+
+
 # ╔═══════════════════════════════════════════════════════════════════════════╗
 # ║ Blueprint Flask — rotas de integração                                      ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
@@ -1333,6 +1358,28 @@ def rota_sincronizar():
         return jsonify(resultado), (201 if resultado.get('status') == 'criado' else 200)
     except (ValueError, RuntimeError) as exc:
         return jsonify({'erro': str(exc)}), 400
+    except requests.exceptions.HTTPError as exc:
+        return jsonify({'erro': 'Falha na API Secullum', 'detalhe': str(exc)}), 502
+
+
+@secullum_bp.route('/atualizar-numero-folha', methods=['POST', 'OPTIONS'])
+def rota_atualizar_numero_folha():
+    """Atualiza o NumeroFolha de um funcionário já cadastrado na Secullum.
+
+    Body JSON: {"cpf": "...", "numero": "403"}
+    """
+    if request.method == 'OPTIONS':
+        return ('', 204)
+    body = request.get_json(silent=True) or {}
+    cpf = body.get('cpf')
+    numero = body.get('numero')
+    if not cpf or not numero:
+        return jsonify({'erro': 'cpf e numero são obrigatórios.'}), 400
+    try:
+        resultado = atualizar_numero_folha(cpf=cpf, numero=str(numero))
+        return jsonify(resultado), 200
+    except ValueError as exc:
+        return jsonify({'erro': str(exc)}), 404
     except requests.exceptions.HTTPError as exc:
         return jsonify({'erro': 'Falha na API Secullum', 'detalhe': str(exc)}), 502
 
