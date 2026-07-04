@@ -106,10 +106,24 @@ _MAPA_CARGO_SECULLUM = {
     'SERVICOS GERAIS': ('SERVIÇOS GERAIS', 'SERVIÇOS GERAIS'),
 }
 SECULLUM_EMPRESA_ID = 1   # única empresa cadastrada na Secullum (confirmado 27/06/2026)
-# Horário placeholder neutro (comercial, não 12x36) para cadastro inicial —
-# decisão da diretoria 27/06/2026: cadastro primeiro, ajuste fino de escala
-# numa etapa seguinte separada. horarioNumero, não horarioId (ver acima).
+# Horário padrão (fallback) — use GET /ingestao/secullum/horarios para listar
+# os números disponíveis e preencha MAPA_CARGO_HORARIO em ingestao_secullum.py.
 SECULLUM_HORARIO_NUMERO_PADRAO = int(os.environ.get('SECULLUM_HORARIO_NUMERO_PADRAO', '6'))
+
+
+def _horario_para_cargo(cargo: str) -> int:
+    """
+    Escala Automática: retorna o horarioNumero correto para uso no POST
+    de criação do funcionário na Secullum (funciona desde o 1º dia).
+
+    Importa o mapa do módulo de ingestão para manter uma única fonte de verdade.
+    Valores None no mapa indicam horários ainda a preencher — usa o padrão.
+    """
+    try:
+        from src.ingestao_secullum import horario_para_cargo
+        return horario_para_cargo(cargo)
+    except Exception:
+        return SECULLUM_HORARIO_NUMERO_PADRAO
 
 
 def _normalizar_cargo(s: str) -> str:
@@ -351,12 +365,14 @@ def sincronizar_lista_cpfs(cpfs: list, dry_run: bool = True) -> list:
             })
             continue
 
+        horario_num = _horario_para_cargo(fl.get('Cargo', ''))
+
         if dry_run:
             resultados.append({
                 'id': rec['id'], 'nome': nome, 'cpf': cpf, 'status': 'dry_run',
                 'cargo': fl.get('Cargo'), 'funcao_descricao': funcao_desc,
                 'departamento_descricao': departamento_desc,
-                'horario_numero': SECULLUM_HORARIO_NUMERO_PADRAO,
+                'horario_numero': horario_num,
                 'pis': fl.get('PIS'), 'admissao': admissao, 'admissao_e_proxy': admissao_e_proxy,
             })
             continue
@@ -366,7 +382,7 @@ def sincronizar_lista_cpfs(cpfs: list, dry_run: bool = True) -> list:
                 pis=fl.get('PIS'), admissao=admissao,
                 empresa_id=SECULLUM_EMPRESA_ID, funcao_descricao=funcao_desc,
                 departamento_descricao=departamento_desc,
-                horario_numero=SECULLUM_HORARIO_NUMERO_PADRAO,
+                horario_numero=horario_num,
             )
             secullum_id = resultado.get('funcionario', {}).get('Id')
             r = requests.patch(
