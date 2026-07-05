@@ -859,19 +859,43 @@ def extrair_dados_rescisao(texto: str):
         return resultado
 
     resultado['cpf'] = extrair_cpf(texto)
-    resultado['nome_funcionario'] = extrair_nome_documento_dp(texto)
+
+    # Nome — TRCT oficial do eSocial (layout numerado "10 PIS/PASEP 11 Nome")
+    # tentado primeiro: o documento tem DOIS campos "Nome" — o primeiro é do
+    # EMPREGADOR ("Razão Social/Nome"), só o segundo (após "PIS/PASEP") é do
+    # trabalhador. O extrator genérico extrair_nome_documento_dp pega o
+    # primeiro "Nome" que encontrar (o do empregador, errado) — por isso
+    # este padrão específico tem prioridade aqui.
+    m_nome_trct = re.search(
+        r'PIS/PASEP.{0,20}?Nome\s*\n\s*([A-ZÀ-Ú][A-ZÀ-Ú ]{3,59}?)(?=\s*\n|$)',
+        texto,
+    )
+    if m_nome_trct and len(m_nome_trct.group(1).split()) >= 2:
+        resultado['nome_funcionario'] = m_nome_trct.group(1).strip()
+    else:
+        resultado['nome_funcionario'] = extrair_nome_documento_dp(texto)
 
     # Data de rescisão / desligamento / saída
-    padroes_data = [
-        r'(?:data\s+(?:do\s+)?(?:afastamento|desligamento|rescis[ãa]o|aviso))\D{0,20}(\d{2}/\d{2}/\d{4})',
-        r'(?:rescis[ãa]o|desligamento)\D{0,20}(?:em|de)?\s*(\d{2}/\d{2}/\d{4})',
-        r'Data\s*:?\s*(\d{2}/\d{2}/\d{4})',
-    ]
-    for p in padroes_data:
-        m = re.search(p, texto, re.IGNORECASE)
-        if m:
-            resultado['data_rescisao'] = m.group(1)
-            break
+    # TRCT oficial do eSocial: rótulos numa linha ("... Data de Admissão ...
+    # Data de Afastamento ...") e os valores na linha seguinte — a data de
+    # afastamento (a que nos interessa) é a ÚLTIMA data da linha de valores.
+    m_datas_trct = re.search(r'Data\s+de\s+Admiss[ãa]o.*\n(.*)\n', texto, re.IGNORECASE)
+    if m_datas_trct:
+        datas = re.findall(r'\d{2}/\d{2}/\d{4}', m_datas_trct.group(1))
+        if datas:
+            resultado['data_rescisao'] = datas[-1]
+
+    if not resultado['data_rescisao']:
+        padroes_data = [
+            r'(?:data\s+(?:do\s+)?(?:afastamento|desligamento|rescis[ãa]o|aviso))\D{0,20}(\d{2}/\d{2}/\d{4})',
+            r'(?:rescis[ãa]o|desligamento)\D{0,20}(?:em|de)?\s*(\d{2}/\d{2}/\d{4})',
+            r'Data\s*:?\s*(\d{2}/\d{2}/\d{4})',
+        ]
+        for p in padroes_data:
+            m = re.search(p, texto, re.IGNORECASE)
+            if m:
+                resultado['data_rescisao'] = m.group(1)
+                break
 
     # Tipo de aviso — indenizado vs. trabalhado, ou pedido de demissão
     if re.search(r'aviso\s+pr[ée]vio\s+indenizado', texto, re.IGNORECASE):
@@ -2983,7 +3007,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.74',
+        'versao': '2.75',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
