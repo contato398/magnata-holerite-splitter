@@ -1112,12 +1112,26 @@ def buscar_funcionario_por_cpf(cpf: str):
     return None, None
 
 
+def _normalizar_nome(s: str) -> str:
+    """Maiúsculas, sem acento, espaços colapsados — para casar nomes 'sujos'
+    (cadastro tem acentos/espaços duplos/faltantes inconsistentes)."""
+    if not s:
+        return ''
+    s = unicodedata.normalize('NFKD', s)
+    s = ''.join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s.upper()
+
+
 def buscar_funcionario_por_nome(nome: str):
     """
     Fallback para layouts de holerite que não imprimem CPF na página (ex.:
     layout "Mensalista" identificado em 05/07/2026 — só tem Nome do
     Funcionário, sem CPF). Casa por igualdade exata (case-insensitive) com
-    Nome Completo no Airtable.
+    Nome Completo no Airtable e, se não achar, por igualdade normalizada
+    (sem acento, espaços colapsados) — o cadastro tem inconsistências desse
+    tipo (ex.: "Celso Conceição Lima " com espaço sobrando, "GABRIEL
+    GONÇALVES..." vs. PDF sem cedilha).
     """
     if not nome:
         return None, None
@@ -1144,6 +1158,33 @@ def buscar_funcionario_por_nome(nome: str):
                 return records[0]['id'], nome_at
     except Exception as exc:
         logger.warning(f'[AT] Erro busca por nome "{nome}": {exc}')
+
+    # Fallback — igualdade normalizada. Restringe candidatos pela primeira
+    # palavra do nome (SEARCH em UPPER) para não baixar a tabela inteira.
+    primeira_palavra = nome_escapado.split()[0] if nome_escapado.split() else nome_escapado
+    formula_ampla = f'SEARCH(UPPER("{primeira_palavra}"), UPPER({{Nome Completo}}))'
+    alvo_norm = _normalizar_nome(nome)
+    _at_throttle()
+    try:
+        r = requests.get(
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}',
+            headers=headers,
+            params={
+                'filterByFormula': formula_ampla,
+                'maxRecords': 20,
+                'fields[]': ['Nome Completo', 'CPF'],
+            },
+            timeout=30,
+        )
+        if r.ok:
+            for rec in r.json().get('records', []):
+                nome_at = rec.get('fields', {}).get('Nome Completo', '')
+                if _normalizar_nome(nome_at) == alvo_norm:
+                    logger.info(f'[AT] Funcionário encontrado por nome normalizado: "{nome}" -> "{nome_at}"')
+                    return rec['id'], nome_at
+    except Exception as exc:
+        logger.warning(f'[AT] Erro busca por nome normalizado "{nome}": {exc}')
+
     return None, None
 
 
@@ -3042,7 +3083,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.76',
+        'versao': '2.77',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
