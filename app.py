@@ -1112,6 +1112,41 @@ def buscar_funcionario_por_cpf(cpf: str):
     return None, None
 
 
+def buscar_funcionario_por_nome(nome: str):
+    """
+    Fallback para layouts de holerite que não imprimem CPF na página (ex.:
+    layout "Mensalista" identificado em 05/07/2026 — só tem Nome do
+    Funcionário, sem CPF). Casa por igualdade exata (case-insensitive) com
+    Nome Completo no Airtable.
+    """
+    if not nome:
+        return None, None
+    headers = {'Authorization': f'Bearer {AIRTABLE_API_KEY}'}
+    nome_escapado = nome.replace('"', '\\"')
+    formula = f'UPPER({{Nome Completo}})=UPPER("{nome_escapado}")'
+    _at_throttle()
+    try:
+        r = requests.get(
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}',
+            headers=headers,
+            params={
+                'filterByFormula': formula,
+                'maxRecords': 1,
+                'fields[]': ['Nome Completo', 'CPF'],
+            },
+            timeout=30,
+        )
+        if r.ok:
+            records = r.json().get('records', [])
+            if records:
+                nome_at = records[0].get('fields', {}).get('Nome Completo', '')
+                logger.info(f'[AT] Funcionário encontrado por nome: "{nome}"')
+                return records[0]['id'], nome_at
+    except Exception as exc:
+        logger.warning(f'[AT] Erro busca por nome "{nome}": {exc}')
+    return None, None
+
+
 def criar_registro_holerite(nome, func_id, folha_mensal, data_str, mes_cont_id, valores=None, status='Concluído'):
     """Cria registro de holerite no Airtable, incluindo valores financeiros se disponíveis.
 
@@ -3007,7 +3042,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.75',
+        'versao': '2.76',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -3179,18 +3214,25 @@ def processar_holerites():
             tag      = f'[P2 {contador:02d}/{total_colab}]'
 
             if cpf.startswith('sem_cpf'):
-                logger.warning(f'{tag} CPF não extraído | págs: {paginas}')
-                erros.append({'cpf': 'N/A', 'nome': nome_pdf,
-                              'motivo': 'CPF não extraído', 'paginas': paginas})
-                continue
-
-            etapa = f'buscar_funcionario:{cpf}'
-            func_id, nome_at = buscar_funcionario_por_cpf(cpf)
-            if not func_id:
-                logger.warning(f'{tag} Funcionário não encontrado | CPF: {cpf}')
-                erros.append({'cpf': cpf, 'nome': nome_pdf,
-                              'motivo': 'Funcionário não encontrado no Airtable'})
-                continue
+                # Layout sem CPF impresso na página (ex.: "Mensalista" 06/2026) —
+                # cai para casamento por nome, já extraído em construir_mapa_cpf.
+                etapa = f'buscar_funcionario_por_nome:{nome_pdf}'
+                func_id, nome_at = buscar_funcionario_por_nome(nome_pdf)
+                if not func_id:
+                    logger.warning(f'{tag} CPF não extraído e nome não casou | nome: {nome_pdf} | págs: {paginas}')
+                    erros.append({'cpf': 'N/A', 'nome': nome_pdf,
+                                  'motivo': 'CPF não extraído e nome não encontrado no Airtable',
+                                  'paginas': paginas})
+                    continue
+                logger.info(f'{tag} Casado por nome: "{nome_pdf}" -> {nome_at}')
+            else:
+                etapa = f'buscar_funcionario:{cpf}'
+                func_id, nome_at = buscar_funcionario_por_cpf(cpf)
+                if not func_id:
+                    logger.warning(f'{tag} Funcionário não encontrado | CPF: {cpf}')
+                    erros.append({'cpf': cpf, 'nome': nome_pdf,
+                                  'motivo': 'Funcionário não encontrado no Airtable'})
+                    continue
 
             nome_final = nome_at or nome_pdf
             filename   = f'Holerite {folha_mensal} - {nome_final}.pdf'
