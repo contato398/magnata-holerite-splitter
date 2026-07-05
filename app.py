@@ -252,6 +252,33 @@ EVOLUTION_API_KEY  = os.environ.get('EVOLUTION_API_KEY', '')
 # Regras de classificação de documento (Fase 2)
 # Lista de (tipo_documento, [regex de palavras-chave]) — primeira que casar vence
 TIPO_DOC_REGRAS = [
+    # Rescisão — precisa vir ANTES de Holerite e de Contrato de Trabalho/
+    # Experiência. Achado real em produção (05/07/2026): um TERMO DE
+    # RESCISÃO DO CONTRATO DE TRABALHO (TRCT) genuíno contém "Valor
+    # Líquido" (discriminação das verbas rescisórias), que também bate com
+    # o padrão genérico de Holerite. Como Holerite vinha ANTES nesta lista
+    # e o classificador para no primeiro tipo com hit, o TRCT foi
+    # classificado como Holerite — mesmo tendo "TRCT" e "Termo de Rescisão"
+    # no texto, esses padrões nunca chegaram a ser testados. Rescisão
+    # também precisa vir antes de Contrato de Trabalho/Experiência pelo
+    # mesmo motivo (o texto de uma rescisão quase sempre cita "contrato de
+    # trabalho").
+    # NOTA: 'Líquido rescisão' e 'Férias Rescisão' foram REMOVIDOS destes
+    # padrões (estavam aqui como "variações reais observadas em produção").
+    # Achado real em produção (05/07/2026): são apenas rubricas de linha
+    # dentro de holerites (ex.: "1/3 FERIAS RESCISAO", "LIQUIDO RESCISAO"),
+    # que aparecem normalmente em lotes de holerite mensal de colaboradores
+    # desligados no período — um lote de 110 páginas de holerites reais foi
+    # classificado erroneamente como Rescisão por causa desses 2 padrões.
+    # Os padrões restantes (TRCT, Termo/Aviso/Homologação/Cálculo de
+    # Rescisão, Motivo/Data demissão) são específicos o suficiente de um
+    # documento de rescisão de verdade e não geram esse falso positivo.
+    ('Rescisão', [r'Termo\s+de\s+Rescis[ãa]o', r'Aviso\s+de\s+Rescis[ãa]o',
+                   r'\bTRCT\b', r'Rescis[ãa]o\s+(?:do\s+)?Contrato\s+de\s+Trabalho',
+                   r'Homologa[çc][ãa]o\s+(?:de\s+)?Rescis[ãa]o',
+                   r'C[áa]lculo\s+de\s+Rescis[ãa]o',
+                   r'Motivo\s+demiss[ãa]o', r'Data\s+demiss[ãa]o',
+                   r'Data\s+de\s+demiss[ãa]o']),
     ('Holerite', [r'Recibo\s+de\s+Pagamento', r'Total\s+de\s+Vencimentos', r'Valor\s+L[íi]quido']),
     ('Folha de Ponto', [r'Folha\s+de\s+Ponto', r'Espelho\s+de\s+Ponto',
                          r'Cart[ãa]o\s+(?:de\s+)?Ponto', r'Secullum',
@@ -262,18 +289,6 @@ TIPO_DOC_REGRAS = [
               r'Equipamento\s+de\s+Prote[çc][ãa]o\s+Individual',
               r'Ficha\s+de\s+EPI[\'’]?s', r'\bEPI\b',
               r'Recebi\s+(?:o|os|do|dos)\s+(?:seguintes\s+)?equipamentos?']),
-    # Rescisão — precisa vir ANTES de Contrato de Trabalho/Experiência,
-    # porque o texto de uma rescisão quase sempre cita "contrato de
-    # trabalho" ("rescisão do contrato de trabalho..."), o que faria essas
-    # regras genéricas capturarem o documento errado se viessem primeiro.
-    ('Rescisão', [r'Termo\s+de\s+Rescis[ãa]o', r'Aviso\s+de\s+Rescis[ãa]o',
-                   r'\bTRCT\b', r'Rescis[ãa]o\s+(?:do\s+)?Contrato\s+de\s+Trabalho',
-                   r'Homologa[çc][ãa]o\s+(?:de\s+)?Rescis[ãa]o',
-                   # Variações reais observadas em produção (relatório de
-                   # cálculo de rescisão do sistema de folha — Secullum/SAVIAN):
-                   r'C[áa]lculo\s+de\s+Rescis[ãa]o', r'L[íi]quido\s+rescis[ãa]o',
-                   r'Motivo\s+demiss[ãa]o', r'Data\s+demiss[ãa]o',
-                   r'Data\s+de\s+demiss[ãa]o', r'F[ée]rias\s+Rescis[ãa]o']),
     # Termo de Prorrogação de Contrato de Experiência — precisa vir ANTES de
     # "Contrato de Experiência" pela mesma razão (o termo de prorrogação
     # sempre menciona "contrato de experiência" no corpo do texto).
@@ -2968,7 +2983,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.73',
+        'versao': '2.74',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
