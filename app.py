@@ -1159,29 +1159,37 @@ def buscar_funcionario_por_nome(nome: str):
     except Exception as exc:
         logger.warning(f'[AT] Erro busca por nome "{nome}": {exc}')
 
-    # Fallback — igualdade normalizada. Restringe candidatos pela primeira
-    # palavra do nome (SEARCH em UPPER) para não baixar a tabela inteira.
-    primeira_palavra = nome_escapado.split()[0] if nome_escapado.split() else nome_escapado
-    formula_ampla = f'SEARCH(UPPER("{primeira_palavra}"), UPPER({{Nome Completo}}))'
+    # Fallback — igualdade normalizada contra a tabela inteira. Não dá para
+    # restringir via SEARCH()/filterByFormula porque a própria inconsistência
+    # de acento (ex.: "JOAO" no PDF vs. "JOÃO" no cadastro) faz o SEARCH do
+    # Airtable falhar — a formula não remove acento, então a pré-seleção
+    # excluiria justamente os casos que este fallback existe para resolver.
     alvo_norm = _normalizar_nome(nome)
-    _at_throttle()
+    offset = None
     try:
-        r = requests.get(
-            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}',
-            headers=headers,
-            params={
-                'filterByFormula': formula_ampla,
-                'maxRecords': 20,
+        while True:
+            params = {
                 'fields[]': ['Nome Completo', 'CPF'],
-            },
-            timeout=30,
-        )
-        if r.ok:
-            for rec in r.json().get('records', []):
+                'pageSize': 100,
+            }
+            if offset:
+                params['offset'] = offset
+            _at_throttle()
+            r = requests.get(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}',
+                headers=headers, params=params, timeout=30,
+            )
+            if not r.ok:
+                break
+            data = r.json()
+            for rec in data.get('records', []):
                 nome_at = rec.get('fields', {}).get('Nome Completo', '')
                 if _normalizar_nome(nome_at) == alvo_norm:
                     logger.info(f'[AT] Funcionário encontrado por nome normalizado: "{nome}" -> "{nome_at}"')
                     return rec['id'], nome_at
+            offset = data.get('offset')
+            if not offset:
+                break
     except Exception as exc:
         logger.warning(f'[AT] Erro busca por nome normalizado "{nome}": {exc}')
 
@@ -3083,7 +3091,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.77',
+        'versao': '2.78',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
