@@ -874,11 +874,22 @@ def varrer_pendencias(data_inicio: str, data_fim: str,
     Returns:
         Resumo com contadores, alertas e o bônus de assiduidade por CPF.
     """
-    funcionarios = listar_funcionarios_secullum()
-    funcionarios.sort(key=lambda f: f.get('Nome', ''))
-
-    # Posto/cargo (Airtable) — só para a Regra de Intervalo (v2.55). Fora da cota Secullum.
-    posto_cargo = _mapa_posto_cargo_airtable()
+    # v2.73 — Cálculo próprio desabilitado (arquitetura de espelhamento puro).
+    # Para ler dados do Ponto Web e espelhar no Airtable, use:
+    #   POST /ingestao/espelho-ponto  (PDF Espelho de Ponto)
+    #   POST /ingestao/relatorio-secullum  (arquivo AFD/TXT)
+    return {
+        'status': 'desabilitado',
+        'mensagem': (
+            'Cálculo próprio desabilitado (v2.73). '
+            'Use POST /ingestao/espelho-ponto (PDF) ou '
+            'POST /ingestao/relatorio-secullum (AFD/TXT) para '
+            'espelhamento puro dos dados da Secullum no Airtable.'
+        ),
+        'dry_run': dry_run,
+        'data_inicio': data_inicio,
+        'data_fim': data_fim,
+    }
 
     total_funcionarios = len(funcionarios)
     offset = offset or 0
