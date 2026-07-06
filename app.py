@@ -3091,7 +3091,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.86',
+        'versao': '2.87',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -6668,8 +6668,13 @@ def assinatura_gerar_lote():
     dry_run = str(data.get('dry_run', False)).strip().lower() in ('1', 'true', 'yes', 'sim')
     itens = data.get('itens') or []
 
-    if not tipo_documento or not documento_url or not itens:
-        return jsonify({'status': 'erro', 'erro': 'tipo_documento, documento_url e itens são obrigatórios'}), 400
+    if not tipo_documento or not itens:
+        return jsonify({'status': 'erro', 'erro': 'tipo_documento e itens são obrigatórios'}), 400
+    # documento_url é opcional aqui: se ausente (no lote inteiro ou por item),
+    # _gerar_assinatura_core cai no Kit de Admissão individual do próprio
+    # funcionário (mesmo comportamento do /assinatura/gerar de item único) —
+    # útil quando cada pessoa tem seu próprio documento, não um comunicado
+    # igual para todos.
 
     resultados = []
     for item in itens:
@@ -6682,8 +6687,8 @@ def assinatura_gerar_lote():
                 funcionario_id=funcionario_id,
                 tipo_documento=tipo_documento,
                 nome_documento=tipo_documento,
-                documento_url=documento_url,
-                documento_filename=documento_filename,
+                documento_url=item.get('documento_url') or documento_url,
+                documento_filename=item.get('documento_filename') or documento_filename,
                 mensagem_extra=item.get('mensagem_extra') or '',
                 disparar_whatsapp=True,
                 dry_run=dry_run,
@@ -6698,6 +6703,72 @@ def assinatura_gerar_lote():
         'status': 'ok', 'dry_run': dry_run,
         'total': len(itens),
         'resultados': resultados,
+    })
+
+
+@app.route('/admissao/consolidar-kit', methods=['POST', 'OPTIONS'])
+def admissao_consolidar_kit():
+    """
+    Funde manualmente um Kit de Admissão a partir de anexos já recebidos por
+    e-mail (tabela Arquivos), quando o agrupamento automático por janela de
+    tempo (_buscar_documentos_irmaos_kit_admissao) não rodou — caso real
+    encontrado em auditoria (05/07/2026): 3 admissões (08/06) tiveram os 3
+    documentos capturados em "Arquivos" (status Recebido) mas nunca
+    passaram por "Processar Arquivos", então o agrupamento automático nunca
+    disparou e o Kit ficou parado sem sequer virar Pendência.
+
+    Sem X-API-KEY (uso administrativo manual, mesmo padrão de
+    /processar-holerites).
+
+    Body JSON:
+      {
+        "funcionario_id": "rec...",
+        "ficha_url": "https://...",      [opcional]
+        "contrato_url": "https://...",   [opcional]
+        "vt_url": "https://...",         [opcional]
+        "nome_arquivo": "Kit Admissao - Fulano.pdf"  [opcional]
+      }
+    Anexa o PDF fundido em Kit Admissão - PDF Consolidado (F_FUNC_KIT_CONSOLIDADO)
+    e em Documentos Admissionais (F_FUNC_DOCS_ADMISSAO) do Funcionário.
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    data = request.get_json(force=True, silent=True) or {}
+    funcionario_id = data.get('funcionario_id')
+    if not funcionario_id:
+        return jsonify({'status': 'erro', 'erro': 'funcionario_id é obrigatório'}), 400
+
+    ficha_url = data.get('ficha_url') or ''
+    contrato_url = data.get('contrato_url') or ''
+    vt_url = data.get('vt_url') or ''
+    if not (ficha_url or contrato_url or vt_url):
+        return jsonify({'status': 'erro', 'erro': 'informe ao menos uma URL (ficha_url/contrato_url/vt_url)'}), 400
+
+    pdf_ficha = requests.get(ficha_url, timeout=60).content if ficha_url else None
+    pdf_contrato = requests.get(contrato_url, timeout=60).content if contrato_url else None
+    pdf_vt = requests.get(vt_url, timeout=60).content if vt_url else None
+
+    pdf_consolidado = _montar_pdf_consolidado_kit_admissao(pdf_ficha, pdf_contrato, pdf_vt)
+
+    _at_throttle()
+    r_func = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{funcionario_id}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={'returnFieldsByFieldId': 'true'}, timeout=15,
+    )
+    nome_func = (r_func.json().get('fields', {}).get(F_FUNC_NOME) if r_func.ok else None) or funcionario_id
+    nome_arquivo = data.get('nome_arquivo') or f'Kit Admissao - {nome_func}.pdf'
+
+    _anexar_attachment(TABLE_FUNC, funcionario_id, F_FUNC_KIT_CONSOLIDADO, pdf_consolidado, nome_arquivo)
+    _anexar_attachment(TABLE_FUNC, funcionario_id, F_FUNC_DOCS_ADMISSAO, pdf_consolidado, nome_arquivo)
+
+    return jsonify({
+        'status': 'ok', 'funcionario_id': funcionario_id, 'nome_funcionario': nome_func,
+        'paginas_incluidas': sum(1 for p in (pdf_ficha, pdf_contrato, pdf_vt) if p),
+        'tamanho_bytes': len(pdf_consolidado),
     })
 
 
