@@ -2254,6 +2254,145 @@ def _montar_pdf_consolidado_kit_admissao(pdf_ficha: bytes, pdf_contrato: bytes =
     return buffer.getvalue()
 
 
+def _classificar_papel_kit_por_conteudo(texto: str) -> str:
+    """
+    Determina o PAPEL de um documento dentro do Kit de Admissão (ficha /
+    contrato / vt) pelo CONTEÚDO real do PDF — nunca pelo campo "Tipo de
+    Documento" salvo em Processar Arquivos, que pode estar desatualizado
+    (achado real, 22/06/2026: 3 Fichas de Registro foram classificadas
+    como "Contrato de Trabalho" por uma corrida de deploy do classificador
+    geral, e como o agrupamento do Kit confiava nesse campo, o Kit nunca
+    foi montado). Ao reclassificar aqui, o agrupamento fica imune a esse
+    tipo de erro passado ou futuro, seja qual for a causa.
+    """
+    if not texto:
+        return 'contrato'  # fallback conservador — sobra só esse papel
+    if (re.search(r'Ficha\s+de\s+Registro\s+de\s+Empregados?', texto, re.IGNORECASE)
+            or re.search(r'Registro\s+de\s+Empregados?\b', texto, re.IGNORECASE)
+            or re.search(r'Matr[íi]cula\s+eSocial', texto, re.IGNORECASE)
+            or re.search(r'Livro\s+(?:de\s+)?Registro\s+de\s+Empregados?', texto, re.IGNORECASE)):
+        return 'ficha'
+    if (re.search(r'Vale[\s-]+Transporte', texto, re.IGNORECASE)
+            and re.search(r'Ren[úu]ncia', texto, re.IGNORECASE)):
+        return 'vt'
+    return 'contrato'
+
+
+def _baixar_e_classificar_papel_kit(arquivo_id: str):
+    """Baixa o PDF de um Arquivo e devolve (papel, conteudo_bytes) — papel
+    via _classificar_papel_kit_por_conteudo. (None, None) se falhar."""
+    conteudo, _ = _baixar_pdf_arquivo(arquivo_id)
+    if not conteudo:
+        return None, None
+    try:
+        with pdfplumber.open(io.BytesIO(conteudo)) as pdf:
+            texto = '\n'.join((p.extract_text() or '') for p in pdf.pages)
+    except Exception:
+        texto = ''
+    return _classificar_papel_kit_por_conteudo(texto), conteudo
+
+
+def _montar_e_disparar_kit_admissao(ctx: dict, func_id: str, dry_run: bool,
+                                     dados_para_vt: dict = None) -> dict:
+    """
+    Automação real (v3.3, 06/07/2026) de montagem + disparo do Kit de
+    Admissão — substitui o processo que antes exigia auditoria manual
+    periódica para achar Kits parados.
+
+    Reúne o documento atual + os irmãos (mesmo e-mail, ver
+    _buscar_documentos_irmaos_kit_admissao), reclassifica CADA UM pelo
+    conteúdo real (não pelo "Tipo de Documento" salvo — ver
+    _classificar_papel_kit_por_conteudo), monta o PDF consolidado assim
+    que a Ficha de Registro é identificada (gera a Declaração de
+    Renúncia de VT nativamente se não houver uma irmã preenchida) e
+    dispara a Assinatura Nativa via WhatsApp automaticamente.
+
+    Idempotente: não repete nada se o Funcionário já tiver Kit Admissão
+    Consolidado. Chamado tanto por _processar_ficha_registro_stub quanto
+    por _processar_contrato_stub — qualquer um dos documentos do Kit que
+    for processado primeiro pelo /processar-fila completa o trabalho.
+    """
+    resultado = {'kit_montado': False, 'assinatura_disparada': False, 'motivo': None}
+    if dry_run or not func_id:
+        resultado['motivo'] = 'dry_run ou funcionario_id ausente'
+        return resultado
+
+    _at_throttle()
+    r_func = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={'returnFieldsByFieldId': 'true'}, timeout=15,
+    )
+    if r_func.ok and (r_func.json().get('fields', {}).get(F_FUNC_KIT_CONSOLIDADO) or []):
+        resultado['motivo'] = 'Kit já existente — nada a fazer (idempotente)'
+        return resultado
+
+    docs = {}
+    papel_atual = _classificar_papel_kit_por_conteudo(ctx.get('texto', ''))
+    if ctx.get('pdf_bytes'):
+        docs[papel_atual] = (ctx['arquivo_id'], ctx['pdf_bytes'], ctx['proc_id'])
+
+    _vincular_documento_ao_funcionario(func_id, ctx['arquivo_id'])
+
+    for irmao in _buscar_documentos_irmaos_kit_admissao(ctx):
+        if not irmao.get('arquivo_id'):
+            continue
+        _vincular_documento_ao_funcionario(func_id, irmao['arquivo_id'])
+        papel, conteudo = _baixar_e_classificar_papel_kit(irmao['arquivo_id'])
+        if papel and conteudo and papel not in docs:
+            docs[papel] = (irmao['arquivo_id'], conteudo, irmao['proc_id'])
+
+    if 'ficha' not in docs:
+        resultado['motivo'] = (
+            'Ficha de Registro de Empregado ainda não identificada entre os '
+            'documentos disponíveis — Kit aguarda.'
+        )
+        return resultado
+
+    pdf_ficha_bytes = docs['ficha'][1]
+    pdf_contrato_bytes = docs['contrato'][1] if 'contrato' in docs else None
+
+    if 'vt' in docs:
+        pdf_vt_bytes = docs['vt'][1]
+    else:
+        dados_para_vt = dados_para_vt or {}
+        pdf_vt_bytes = _gerar_pdf_declaracao_renuncia_vt(
+            dados_para_vt.get('nome_funcionario'), dados_para_vt.get('cpf'),
+            dados_para_vt.get('data_admissao'),
+        )
+
+    pdf_consolidado = _montar_pdf_consolidado_kit_admissao(pdf_ficha_bytes, pdf_contrato_bytes, pdf_vt_bytes)
+    nome_pessoa = (dados_para_vt or {}).get('nome_funcionario') or func_id
+    nome_kit = f'Kit Admissao - {nome_pessoa}.pdf'
+    _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_KIT_CONSOLIDADO, pdf_consolidado, nome_kit)
+    resultado['kit_montado'] = True
+
+    # O registro que disparou esta chamada tem seu Status atualizado pelo
+    # laço genérico de /processar-fila (via 'status_final' no retorno do
+    # handler) — aqui cuidamos apenas dos OUTROS documentos envolvidos.
+    for papel, (_arquivo_id, _conteudo, proc_id) in docs.items():
+        if proc_id and proc_id != ctx['proc_id']:
+            try:
+                _atualizar_status_processar(proc_id, 'Concluído')
+            except Exception:
+                logger.warning(f'[KIT] Falha ao marcar {proc_id} ({papel}) como Concluído — não bloqueante.')
+
+    try:
+        _gerar_assinatura_core(
+            funcionario_id=func_id,
+            tipo_documento='Kit de Admissão',
+            nome_documento=nome_kit,
+            disparar_whatsapp=True,
+            dry_run=False,
+        )
+        resultado['assinatura_disparada'] = True
+    except Exception as exc:
+        logger.error(f'[KIT] Kit montado mas falha ao disparar assinatura ({func_id}): {exc}')
+        resultado['motivo'] = f'Kit montado mas assinatura falhou: {exc}'
+
+    return resultado
+
+
 CAMPOS_FICHA_REGISTRO_OBRIGATORIOS = ['nome_funcionario', 'cpf', 'data_admissao']
 CAMPOS_FICHA_REGISTRO_PARA_CONFIANCA = [
     'nome_funcionario', 'cpf', 'data_admissao', 'cargo_funcao', 'data_nascimento',
@@ -2416,49 +2555,13 @@ def _processar_ficha_registro_stub(ctx, dry_run):
             'observacao': f'{motivo_decisao} (Arquivo: {ctx["nome_arquivo"]}, Processar: {ctx["proc_id"]}).',
         }
 
-    # Kit de Admissão — Ficha de Registro é a fonte primária; agrupa o
-    # Contrato e a Declaração de Vale-Transporte (mesmo e-mail) no campo
-    # "Documentos Admissionais" do funcionário recém-criado/encontrado, E
-    # monta o PDF único consolidado (Ficha + Contrato + Termo de VT) que
-    # vai ser o documento oficial enviado para assinatura.
-    documentos_vinculados = []
-    pdf_consolidado_gerado = False
-    vt_gerado_nativamente = False
+    # Kit de Admissão — monta (Ficha + Contrato + Termo de VT, reclassificando
+    # cada irmão pelo CONTEÚDO real, não pelo "Tipo de Documento" salvo — ver
+    # _montar_e_disparar_kit_admissao) e dispara a Assinatura Nativa via
+    # WhatsApp automaticamente assim que a Ficha estiver disponível.
+    kit_resultado = {'kit_montado': False, 'assinatura_disparada': False, 'motivo': None}
     if not dry_run and func_id:
-        _vincular_documento_ao_funcionario(func_id, ctx['arquivo_id'])
-        irmaos = _buscar_documentos_irmaos_kit_admissao(ctx)
-        for irmao in irmaos:
-            if irmao['arquivo_id'] and _vincular_documento_ao_funcionario(func_id, irmao['arquivo_id']):
-                documentos_vinculados.append(irmao)
-
-        irmao_contrato = next(
-            (i for i in irmaos if i['tipo_documento'] in ('Contrato de Experiência', 'Contrato de Trabalho')),
-            None
-        )
-        irmao_vt = next((i for i in irmaos if i['tipo_documento'] == 'Outro'), None)
-
-        pdf_ficha_bytes, _ = _baixar_pdf_arquivo(ctx['arquivo_id'])
-        pdf_contrato_bytes, _ = _baixar_pdf_arquivo(irmao_contrato['arquivo_id']) if irmao_contrato else (None, None)
-
-        pdf_vt_bytes = None
-        if irmao_vt and irmao_vt['arquivo_id'] and _vale_transporte_preenchido(irmao_vt['arquivo_id'], dados['cpf']):
-            pdf_vt_bytes, _ = _baixar_pdf_arquivo(irmao_vt['arquivo_id'])
-        else:
-            # Vale-Transporte ausente ou em branco/não correspondente —
-            # gera a declaração nativamente (regra de negócio 2026-06-22:
-            # nenhum colaborador quer o benefício).
-            pdf_vt_bytes = _gerar_pdf_declaracao_renuncia_vt(
-                dados['nome_funcionario'], dados['cpf'], dados.get('data_admissao')
-            )
-            vt_gerado_nativamente = True
-
-        if pdf_ficha_bytes:
-            pdf_consolidado = _montar_pdf_consolidado_kit_admissao(
-                pdf_ficha_bytes, pdf_contrato_bytes, pdf_vt_bytes
-            )
-            nome_pdf_consolidado = f'Kit Admissao - {dados["nome_funcionario"]}.pdf'
-            _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_KIT_CONSOLIDADO, pdf_consolidado, nome_pdf_consolidado)
-            pdf_consolidado_gerado = True
+        kit_resultado = _montar_e_disparar_kit_admissao(ctx, func_id, dry_run, dados_para_vt=dados)
 
     detalhes = {
         'tipo_documento': ctx['tipo_documento'],
@@ -2471,9 +2574,7 @@ def _processar_ficha_registro_stub(ctx, dry_run):
         'pre_cadastro_simulado': pre_cadastro_simulado,
         'pre_cadastro_id': pre_cadastro_id,
         'funcionario_id': func_id,
-        'documentos_kit_admissao_vinculados': documentos_vinculados,
-        'pdf_consolidado_gerado': pdf_consolidado_gerado,
-        'vale_transporte_gerado_nativamente': vt_gerado_nativamente,
+        'kit_admissao': kit_resultado,
         'pendencia_simulada': pendencia_simulada,
         'proxima_acao_sugerida': motivo_decisao,
     }
@@ -2482,7 +2583,7 @@ def _processar_ficha_registro_stub(ctx, dry_run):
 
     return {
         'acao': 'ficha_registro_extraida_sem_gravar',
-        'status_final': ctx['status_atual'],
+        'status_final': 'Concluído' if kit_resultado['kit_montado'] else ctx['status_atual'],
         'detalhes': detalhes,
         'pendencia': pendencia_retorno,
     }
@@ -2674,18 +2775,14 @@ def _processar_contrato_stub(ctx, dry_run):
 
     proxima_acao = motivo_decisao
 
-    # Kit de Admissão — vincula este Contrato (e qualquer Vale-Transporte
-    # irmão) ao funcionário, seja ele recém-criado aqui (caso raro: Ficha de
-    # Registro irmã ainda não chegou) ou já existente (caso normal: criado
-    # pela Ficha de Registro, que é a fonte primária — ver _processar_contrato_stub
-    # acima, bloco "cede a vez").
-    documentos_vinculados = []
+    # Kit de Admissão — mesma automação da Ficha de Registro (função
+    # compartilhada _montar_e_disparar_kit_admissao): se, reclassificando
+    # pelo conteúdo, os documentos disponíveis já incluem uma Ficha, monta
+    # o Kit e dispara a assinatura aqui mesmo — não depende de qual dos
+    # documentos irmãos o /processar-fila processa primeiro.
+    kit_resultado = {'kit_montado': False, 'assinatura_disparada': False, 'motivo': None}
     if not dry_run and func_id:
-        _vincular_documento_ao_funcionario(func_id, ctx['arquivo_id'])
-        for irmao in _buscar_documentos_irmaos_kit_admissao(ctx):
-            if irmao['tipo_documento'] == 'Outro' and irmao['arquivo_id']:
-                if _vincular_documento_ao_funcionario(func_id, irmao['arquivo_id']):
-                    documentos_vinculados.append(irmao)
+        kit_resultado = _montar_e_disparar_kit_admissao(ctx, func_id, dry_run, dados_para_vt=dados)
 
     detalhes = {
         'tipo_documento': ctx['tipo_documento'],
@@ -2704,7 +2801,7 @@ def _processar_contrato_stub(ctx, dry_run):
         'pre_cadastro_simulado': pre_cadastro_simulado,
         'pre_cadastro_id': pre_cadastro_id,
         'funcionario_id': func_id,
-        'documentos_kit_admissao_vinculados': documentos_vinculados,
+        'kit_admissao': kit_resultado,
         'pendencia_simulada': pendencia_simulada,
         'proxima_acao_sugerida': proxima_acao,
         'observacao': (
@@ -2731,7 +2828,7 @@ def _processar_contrato_stub(ctx, dry_run):
 
     return {
         'acao': 'contrato_extraido_sem_gravar',
-        'status_final': ctx['status_atual'],
+        'status_final': 'Concluído' if kit_resultado['kit_montado'] else ctx['status_atual'],
         'detalhes': detalhes,
         'pendencia': pendencia_retorno,
     }
@@ -3091,7 +3188,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.87',
+        'versao': '2.88',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
