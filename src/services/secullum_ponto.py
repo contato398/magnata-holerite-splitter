@@ -1378,9 +1378,12 @@ def rota_sincronizar():
 
 @secullum_bp.route('/excluir', methods=['POST', 'OPTIONS'])
 def rota_excluir():
-    """Exclui um funcionário do Ponto Web pelo CPF. Irreversível.
+    """Remove um funcionário do Ponto Web pelo CPF via PUT com Demissao.
 
-    Body JSON: {"cpf": "..."}
+    A API de integração externa não suporta DELETE — a remoção é feita
+    marcando o funcionário como demitido (Demissao = data informada ou hoje).
+
+    Body JSON: {"cpf": "...", "demissao": "YYYY-MM-DD"}  (demissao opcional)
     """
     if request.method == 'OPTIONS':
         return ('', 204)
@@ -1393,12 +1396,21 @@ def rota_excluir():
         return jsonify({'erro': f'Funcionário CPF {cpf} não encontrado na Secullum.'}), 404
     func_id = func['Id']
     nome = func.get('Nome', '')
+    demissao = body.get('demissao') or datetime.now().strftime('%Y-%m-%d')
+    campos_remover = ('Empresa', 'Departamento', 'Funcao', 'Horario',
+                      'ListaCentroDeCustos', 'RespostasPerguntasAdicionais',
+                      'CidadeId', 'Cidade')
+    payload = {k: v for k, v in func.items() if k not in campos_remover}
+    payload['Demissao'] = demissao
+    payload.setdefault('EmpresaId', func.get('EmpresaId') or 1)
     try:
-        _secullum_request('DELETE', f'Funcionarios/{func_id}')
+        _secullum_request('PUT', f'Funcionarios/{func_id}', json=payload)
     except requests.exceptions.HTTPError as exc:
         return jsonify({'erro': 'Falha na API Secullum', 'detalhe': str(exc)}), 502
-    logger.info('[SECULLUM] Funcionário %s (CPF %s, Id %s) excluído.', nome, cpf, func_id)
-    return jsonify({'status': 'excluido', 'id': func_id, 'nome': nome, 'cpf': cpf}), 200
+    logger.info('[SECULLUM] Funcionário %s (CPF %s, Id %s) marcado como demitido em %s.',
+                nome, cpf, func_id, demissao)
+    return jsonify({'status': 'demitido', 'id': func_id, 'nome': nome,
+                    'cpf': cpf, 'demissao': demissao}), 200
 
 
 @secullum_bp.route('/atualizar-numero-folha', methods=['POST', 'OPTIONS'])
