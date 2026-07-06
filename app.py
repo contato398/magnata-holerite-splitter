@@ -3091,7 +3091,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.78',
+        'versao': '2.79',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -3233,8 +3233,27 @@ def processar_holerites():
         ultimo_dia    = monthrange(ano, mes_num)[1]
         data_holerite = f'{ano}-{mes_num:02d}-{ultimo_dia:02d}'
 
+        # casamento_manual — override pontual para casos que passaram por
+        # revisão humana (divergência de grafia entre PDF e cadastro que não
+        # é seguro resolver automaticamente, ex.: nome incompleto/typo real).
+        # Formato: {"<índice da página no PDF enviado>": "<record_id do Funcionário>"}
+        casamento_manual_raw = (
+            request.form.get('casamento_manual')
+            or request.args.get('casamento_manual')
+            or (request.get_json(silent=True) or {}).get('casamento_manual')
+        )
+        casamento_manual = {}
+        if casamento_manual_raw:
+            try:
+                casamento_manual = {
+                    int(k): v for k, v in json.loads(casamento_manual_raw).items()
+                }
+            except Exception:
+                logger.warning(f'[CONFIG] casamento_manual inválido, ignorando: {casamento_manual_raw}')
+
         logger.info(
-            f'[CONFIG] folha_mensal={folha_mensal} | data={data_holerite} | mes_cont_id={mes_cont_id}'
+            f'[CONFIG] folha_mensal={folha_mensal} | data={data_holerite} | mes_cont_id={mes_cont_id} | '
+            f'casamento_manual={casamento_manual}'
         )
 
         etapa = 'pass1_mapear_cpf'
@@ -3267,6 +3286,10 @@ def processar_holerites():
                 # cai para casamento por nome, já extraído em construir_mapa_cpf.
                 etapa = f'buscar_funcionario_por_nome:{nome_pdf}'
                 func_id, nome_at = buscar_funcionario_por_nome(nome_pdf)
+                if not func_id and paginas[0] in casamento_manual:
+                    func_id = casamento_manual[paginas[0]]
+                    nome_at = nome_pdf
+                    logger.info(f'{tag} Casado por override manual (pág {paginas[0]}) -> {func_id}')
                 if not func_id:
                     logger.warning(f'{tag} CPF não extraído e nome não casou | nome: {nome_pdf} | págs: {paginas}')
                     erros.append({'cpf': 'N/A', 'nome': nome_pdf,
