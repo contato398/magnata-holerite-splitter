@@ -3091,7 +3091,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.84',
+        'versao': '2.85',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -6657,17 +6657,21 @@ def assinatura_gerar_lote():
         if not funcionario_id:
             resultados.append({'status': 'erro', 'erro': 'funcionario_id ausente no item', 'item': item})
             continue
-        resultado, _ = _gerar_assinatura_core(
-            funcionario_id=funcionario_id,
-            tipo_documento=tipo_documento,
-            nome_documento=tipo_documento,
-            documento_url=documento_url,
-            documento_filename=documento_filename,
-            mensagem_extra=item.get('mensagem_extra') or '',
-            disparar_whatsapp=True,
-            dry_run=dry_run,
-        )
-        resultado['funcionario_id'] = funcionario_id
+        try:
+            resultado, _ = _gerar_assinatura_core(
+                funcionario_id=funcionario_id,
+                tipo_documento=tipo_documento,
+                nome_documento=tipo_documento,
+                documento_url=documento_url,
+                documento_filename=documento_filename,
+                mensagem_extra=item.get('mensagem_extra') or '',
+                disparar_whatsapp=True,
+                dry_run=dry_run,
+            )
+            resultado['funcionario_id'] = funcionario_id
+        except Exception as exc:
+            logger.exception(f'[ASSINATURA LOTE] erro no item {funcionario_id}')
+            resultado = {'status': 'erro', 'erro': f'{type(exc).__name__}: {exc}', 'funcionario_id': funcionario_id}
         resultados.append(resultado)
 
     return jsonify({
