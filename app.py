@@ -3091,7 +3091,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.83',
+        'versao': '2.84',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -6469,6 +6469,13 @@ def assinatura_gerar():
         "tipo_documento": "Rescisão",      [obrigatório]
         "processar_id": "rec...",          [opcional — Processar Arquivos a marcar como Assinado depois]
         "nome_documento": "Rescisão - João Silva",  [opcional — usado no Nome do registro e na página]
+        "documento_url": "https://...",    [opcional — PDF a enviar; sobrepõe o Kit de Admissão do
+                                             funcionário quando o documento é o mesmo para vários
+                                             colaboradores (ex.: comunicado/manual geral, não é o kit
+                                             individual)]
+        "documento_filename": "Manual.pdf",  [opcional — nome do arquivo quando documento_url for usado]
+        "mensagem_extra": "texto",          [opcional — anexado ao final da mensagem padrão, ex.:
+                                              dados de acesso a um sistema]
         "disparar_whatsapp": true,         [opcional — default true]
         "dry_run": false
       }
@@ -6490,31 +6497,47 @@ def assinatura_gerar():
     if not funcionario_id or not tipo_documento:
         return jsonify({'status': 'erro', 'erro': 'funcionario_id e tipo_documento são obrigatórios'}), 400
 
-    processar_id = data.get('processar_id', '') or ''
-    nome_documento = data.get('nome_documento') or tipo_documento
-    disparar_whatsapp = str(data.get('disparar_whatsapp', True)).strip().lower() in ('1', 'true', 'yes', 'sim')
-    dry_run = str(data.get('dry_run', False)).strip().lower() in ('1', 'true', 'yes', 'sim')
+    resultado, status_code = _gerar_assinatura_core(
+        funcionario_id=funcionario_id,
+        tipo_documento=tipo_documento,
+        processar_id=data.get('processar_id', '') or '',
+        nome_documento=data.get('nome_documento') or tipo_documento,
+        documento_url=data.get('documento_url') or '',
+        documento_filename=data.get('documento_filename') or 'Documento.pdf',
+        mensagem_extra=data.get('mensagem_extra') or '',
+        disparar_whatsapp=str(data.get('disparar_whatsapp', True)).strip().lower() in ('1', 'true', 'yes', 'sim'),
+        dry_run=str(data.get('dry_run', False)).strip().lower() in ('1', 'true', 'yes', 'sim'),
+    )
+    return jsonify(resultado), status_code
 
+
+def _gerar_assinatura_core(funcionario_id, tipo_documento, processar_id='', nome_documento=None,
+                            documento_url='', documento_filename='Documento.pdf',
+                            mensagem_extra='', disparar_whatsapp=True, dry_run=False):
+    """Núcleo de /assinatura/gerar, extraído para reuso em disparos em lote
+    (ex.: /assinatura/gerar-lote) — mesma lógica, sem parsing de request nem
+    checagem de X-API-KEY (fica a cargo de cada rota chamadora)."""
+    nome_documento = nome_documento or tipo_documento
     nome_func, whatsapp = _buscar_funcionario_nome_whatsapp(funcionario_id)
 
     # Cenário preventivo 1 — bloqueia se for disparar e não houver WhatsApp.
     if disparar_whatsapp and not whatsapp:
-        return jsonify({
+        return {
             'status': 'erro', 'erro': 'whatsapp_ausente',
             'mensagem': f'Funcionário "{nome_func or funcionario_id}" não tem WhatsApp cadastrado '
                         f'em Funcionários. Disparo bloqueado — nenhum registro foi criado.',
             'funcionario_id': funcionario_id,
-        }), 400
+        }, 400
 
     hash_token = _gerar_hash_assinatura()
     link = f'{RECIBO_BASE_URL}/assinatura/{hash_token}'
 
     if dry_run:
-        return jsonify({
+        return {
             'status': 'ok', 'dry_run': True, 'acao': 'criaria_assinatura_e_dispararia' if disparar_whatsapp else 'criaria_assinatura',
-            'link': link, 'funcionario_id': funcionario_id, 'whatsapp': whatsapp,
+            'link': link, 'funcionario_id': funcionario_id, 'nome_funcionario': nome_func, 'whatsapp': whatsapp,
             'tipo_documento': tipo_documento, 'processar_id': processar_id,
-        })
+        }, 200
 
     campos = {
         F_ASS_NOME:           nome_documento,
@@ -6532,25 +6555,34 @@ def assinatura_gerar():
     # + Termo de VT fundidos), esse PDF é o documento oficial: copia para o
     # registro de Assinatura (auditoria) e envia como mídia no WhatsApp em
     # vez de só texto — o colaborador abre o PDF e assina na sequência.
+    # Quando documento_url é informado (ex.: comunicado/manual igual para
+    # vários colaboradores), ele tem prioridade sobre o Kit individual.
     pdf_kit_bytes, pdf_kit_filename = None, None
-    _at_throttle()
-    r_func_kit = requests.get(
-        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{funcionario_id}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
-        params={'returnFieldsByFieldId': 'true'},
-        timeout=15,
-    )
-    if r_func_kit.ok:
-        kit_anexos = r_func_kit.json().get('fields', {}).get(F_FUNC_KIT_CONSOLIDADO) or []
-        if kit_anexos:
-            pdf_kit_filename = kit_anexos[0].get('filename', 'Kit Admissao.pdf')
-            pdf_kit_bytes = requests.get(kit_anexos[0]['url'], timeout=60).content
-            _anexar_attachment(TABLE_ASSINATURAS, assinatura_id, F_ASS_DOCUMENTO_PDF, pdf_kit_bytes, pdf_kit_filename)
+    if documento_url:
+        pdf_kit_filename = documento_filename
+        pdf_kit_bytes = requests.get(documento_url, timeout=60).content
+        _anexar_attachment(TABLE_ASSINATURAS, assinatura_id, F_ASS_DOCUMENTO_PDF, pdf_kit_bytes, pdf_kit_filename)
+    else:
+        _at_throttle()
+        r_func_kit = requests.get(
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{funcionario_id}',
+            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            params={'returnFieldsByFieldId': 'true'},
+            timeout=15,
+        )
+        if r_func_kit.ok:
+            kit_anexos = r_func_kit.json().get('fields', {}).get(F_FUNC_KIT_CONSOLIDADO) or []
+            if kit_anexos:
+                pdf_kit_filename = kit_anexos[0].get('filename', 'Kit Admissao.pdf')
+                pdf_kit_bytes = requests.get(kit_anexos[0]['url'], timeout=60).content
+                _anexar_attachment(TABLE_ASSINATURAS, assinatura_id, F_ASS_DOCUMENTO_PDF, pdf_kit_bytes, pdf_kit_filename)
 
     disparo_resultado = None
     if disparar_whatsapp:
         try:
             mensagem = _montar_mensagem_assinatura(nome_func, tipo_documento, link)
+            if mensagem_extra:
+                mensagem = f'{mensagem}\n\n{mensagem_extra}'
             if pdf_kit_bytes:
                 # Sobe o Kit consolidado para a própria Airtable e usa a URL pública
                 # do anexo recém-criado como mídia da Evolution API (sendMedia exige
@@ -6573,11 +6605,75 @@ def assinatura_gerar():
             logger.error(f'[ASSINATURA] falha ao disparar WhatsApp ({assinatura_id}): {exc}')
             disparo_resultado = f'falha: {exc}'
 
-    return jsonify({
+    return {
         'status': 'ok', 'dry_run': False, 'acao': 'assinatura_criada',
         'assinatura_id': assinatura_id, 'link': link, 'hash_token': hash_token,
+        'nome_funcionario': nome_func, 'whatsapp': whatsapp,
         'whatsapp_disparo': disparo_resultado,
         'kit_admissao_pdf_enviado': bool(pdf_kit_bytes),
+    }, 200
+
+
+@app.route('/assinatura/gerar-lote', methods=['POST', 'OPTIONS'])
+def assinatura_gerar_lote():
+    """
+    Disparo em lote de um MESMO documento (ex.: comunicado/manual geral) para
+    vários funcionários, cada um com sua própria mensagem_extra personalizada
+    (ex.: dados de acesso individuais). Reaproveita _gerar_assinatura_core.
+
+    Sem X-API-KEY (mesmo padrão de /processar-holerites) — uso administrativo
+    manual, não é chamado por integrações externas (Apps Script/webhook).
+
+    Body JSON:
+      {
+        "tipo_documento": "Manual Secullum Ponto Web",
+        "documento_url": "https://.../static/arquivo.pdf",
+        "documento_filename": "Manual.pdf",
+        "dry_run": true,
+        "itens": [
+          {"funcionario_id": "rec...", "mensagem_extra": "texto..."},
+          ...
+        ]
+      }
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    data = request.get_json(force=True, silent=True) or {}
+    tipo_documento = data.get('tipo_documento')
+    documento_url = data.get('documento_url') or ''
+    documento_filename = data.get('documento_filename') or 'Documento.pdf'
+    dry_run = str(data.get('dry_run', False)).strip().lower() in ('1', 'true', 'yes', 'sim')
+    itens = data.get('itens') or []
+
+    if not tipo_documento or not documento_url or not itens:
+        return jsonify({'status': 'erro', 'erro': 'tipo_documento, documento_url e itens são obrigatórios'}), 400
+
+    resultados = []
+    for item in itens:
+        funcionario_id = item.get('funcionario_id')
+        if not funcionario_id:
+            resultados.append({'status': 'erro', 'erro': 'funcionario_id ausente no item', 'item': item})
+            continue
+        resultado, _ = _gerar_assinatura_core(
+            funcionario_id=funcionario_id,
+            tipo_documento=tipo_documento,
+            nome_documento=tipo_documento,
+            documento_url=documento_url,
+            documento_filename=documento_filename,
+            mensagem_extra=item.get('mensagem_extra') or '',
+            disparar_whatsapp=True,
+            dry_run=dry_run,
+        )
+        resultado['funcionario_id'] = funcionario_id
+        resultados.append(resultado)
+
+    return jsonify({
+        'status': 'ok', 'dry_run': dry_run,
+        'total': len(itens),
+        'resultados': resultados,
     })
 
 
