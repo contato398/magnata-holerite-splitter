@@ -379,14 +379,13 @@ def sincronizar_funcionario(cpf: str, nome: str = None, numero: str = None,
         'nome': nome,
         'numeroFolha': str(numero),
         'cpf': cpf_num,
+        'empresaCnpjCpf': SECULLUM_EMPRESA_CNPJ,
+        'empresaId': empresa_id if empresa_id is not None else 1,
     }
     if pis:
         payload['numeroPis'] = _so_digitos(pis)
     if admissao:
         payload['admissao'] = admissao
-    if empresa_id is not None:
-        payload['empresaId'] = empresa_id
-        payload['empresaCnpjCpf'] = SECULLUM_EMPRESA_CNPJ
     if funcao_descricao:
         payload['funcaoDescricao'] = funcao_descricao
     if departamento_descricao:
