@@ -3091,7 +3091,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.85',
+        'versao': '2.86',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -6511,6 +6511,26 @@ def assinatura_gerar():
     return jsonify(resultado), status_code
 
 
+def _carregar_documento_url(url: str) -> bytes:
+    """Carrega os bytes de documento_url — lê direto do disco quando a URL
+    aponta para o /static/ deste MESMO servidor, em vez de HTTP GET.
+
+    Necessário porque em Render free tier (1 worker síncrono) o processo
+    chamar a si mesmo via HTTPS público causa deadlock: o worker fica
+    esperando uma resposta que só um worker livre poderia servir, e não há
+    outro — trava até estourar o timeout (visto em produção: ReadTimeout
+    de 60s em TODO item de /assinatura/gerar-lote que usava documento_url
+    do próprio /static/).
+    """
+    prefixo_static = f'{RECIBO_BASE_URL}/static/'
+    if url.startswith(prefixo_static):
+        nome_arquivo = url[len(prefixo_static):].split('?')[0]
+        caminho = os.path.join(app.static_folder, nome_arquivo)
+        with open(caminho, 'rb') as f:
+            return f.read()
+    return requests.get(url, timeout=60).content
+
+
 def _gerar_assinatura_core(funcionario_id, tipo_documento, processar_id='', nome_documento=None,
                             documento_url='', documento_filename='Documento.pdf',
                             mensagem_extra='', disparar_whatsapp=True, dry_run=False):
@@ -6560,7 +6580,7 @@ def _gerar_assinatura_core(funcionario_id, tipo_documento, processar_id='', nome
     pdf_kit_bytes, pdf_kit_filename = None, None
     if documento_url:
         pdf_kit_filename = documento_filename
-        pdf_kit_bytes = requests.get(documento_url, timeout=60).content
+        pdf_kit_bytes = _carregar_documento_url(documento_url)
         _anexar_attachment(TABLE_ASSINATURAS, assinatura_id, F_ASS_DOCUMENTO_PDF, pdf_kit_bytes, pdf_kit_filename)
     else:
         _at_throttle()
