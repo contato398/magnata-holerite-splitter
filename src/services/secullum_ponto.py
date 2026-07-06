@@ -1353,7 +1353,8 @@ def rota_sincronizar():
     """Sincroniza um novo funcionário no Ponto Web. CPF obrigatório.
 
     Body JSON: {"cpf": "...", "nome": "...", "numero": "...", "pis": "...",
-                "admissao": "YYYY-MM-DD"}
+                "admissao": "YYYY-MM-DD", "funcao_descricao": "...",
+                "departamento_descricao": "...", "horario_numero": 4}
     """
     if request.method == 'OPTIONS':
         return ('', 204)
@@ -1365,6 +1366,9 @@ def rota_sincronizar():
         resultado = sincronizar_funcionario(
             cpf=cpf, nome=body.get('nome'), numero=body.get('numero'),
             pis=body.get('pis'), admissao=body.get('admissao'),
+            funcao_descricao=body.get('funcao_descricao'),
+            departamento_descricao=body.get('departamento_descricao'),
+            horario_numero=body.get('horario_numero'),
         )
         return jsonify(resultado), (201 if resultado.get('status') == 'criado' else 200)
     except (ValueError, RuntimeError) as exc:
