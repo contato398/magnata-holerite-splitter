@@ -1376,6 +1376,31 @@ def rota_sincronizar():
         return jsonify({'erro': 'Falha na API Secullum', 'detalhe': str(exc)}), 502
 
 
+@secullum_bp.route('/excluir', methods=['POST', 'OPTIONS'])
+def rota_excluir():
+    """Exclui um funcionário do Ponto Web pelo CPF. Irreversível.
+
+    Body JSON: {"cpf": "..."}
+    """
+    if request.method == 'OPTIONS':
+        return ('', 204)
+    body = request.get_json(silent=True) or {}
+    cpf = body.get('cpf')
+    if not cpf or not _so_digitos(cpf):
+        return jsonify({'erro': 'CPF é obrigatório.'}), 400
+    func = buscar_funcionario_secullum_por_cpf(_so_digitos(cpf))
+    if not func:
+        return jsonify({'erro': f'Funcionário CPF {cpf} não encontrado na Secullum.'}), 404
+    func_id = func['Id']
+    nome = func.get('Nome', '')
+    try:
+        _secullum_request('DELETE', f'Funcionarios/{func_id}')
+    except requests.exceptions.HTTPError as exc:
+        return jsonify({'erro': 'Falha na API Secullum', 'detalhe': str(exc)}), 502
+    logger.info('[SECULLUM] Funcionário %s (CPF %s, Id %s) excluído.', nome, cpf, func_id)
+    return jsonify({'status': 'excluido', 'id': func_id, 'nome': nome, 'cpf': cpf}), 200
+
+
 @secullum_bp.route('/atualizar-numero-folha', methods=['POST', 'OPTIONS'])
 def rota_atualizar_numero_folha():
     """Atualiza o NumeroFolha de um funcionário já cadastrado na Secullum.
