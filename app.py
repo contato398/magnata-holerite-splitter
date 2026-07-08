@@ -3188,7 +3188,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.88',
+        'versao': '2.89',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -5239,14 +5239,26 @@ def _evolution_enviar_texto(numero: str, texto: str):
     return r.json()
 
 
-def _evolution_enviar_documento(numero: str, media_url: str, filename: str, caption=None):
-    """Envia 1 documento (PDF) via Evolution API v2 (sendMedia)."""
+def _evolution_enviar_documento(numero: str, media_url: str, filename: str, caption=None,
+                                 media_bytes: bytes = None):
+    """
+    Envia 1 documento (PDF) via Evolution API v2 (sendMedia).
+
+    Por padrão manda 'media' como URL (Evolution busca o arquivo). Se
+    media_bytes for informado, manda em base64 embutido no payload —
+    mais confiável: elimina a etapa em que a própria Evolution API busca
+    a URL (CloudFront/S3 do Airtable) por conta própria, etapa em que já
+    foi observado em produção (08/07/2026) entrega de PDF corrompido/
+    incompleto para uma minoria dos destinatários ("Erro de formato de
+    arquivo" no WhatsApp), mesmo com o arquivo de origem íntegro
+    (confirmado por download e validação direta do mesmo PDF).
+    """
     endpoint = f'{EVOLUTION_API_URL}/message/sendMedia/{EVOLUTION_INSTANCE}'
     payload = {
         'number': numero,
         'mediatype': 'document',
         'mimetype': 'application/pdf',
-        'media': media_url,
+        'media': base64.b64encode(media_bytes).decode('utf-8') if media_bytes else media_url,
         'fileName': filename,
     }
     if caption:
@@ -6701,20 +6713,14 @@ def _gerar_assinatura_core(funcionario_id, tipo_documento, processar_id='', nome
             if mensagem_extra:
                 mensagem = f'{mensagem}\n\n{mensagem_extra}'
             if pdf_kit_bytes:
-                # Sobe o Kit consolidado para a própria Airtable e usa a URL pública
-                # do anexo recém-criado como mídia da Evolution API (sendMedia exige
-                # uma URL acessível, não aceita bytes diretos).
-                _at_throttle()
-                r_ass_check = requests.get(
-                    f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{assinatura_id}',
-                    headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
-                    params={'returnFieldsByFieldId': 'true'}, timeout=15,
-                )
-                anexo_url = (r_ass_check.json().get('fields', {}).get(F_ASS_DOCUMENTO_PDF) or [{}])[0].get('url')
-                if anexo_url:
-                    _evolution_enviar_documento(whatsapp, anexo_url, pdf_kit_filename, caption=mensagem)
-                else:
-                    _evolution_enviar_texto(whatsapp, mensagem)
+                # Manda os bytes já em mãos direto em base64 — não depende da
+                # Evolution API buscar a URL do Airtable por conta própria
+                # (ver comentário em _evolution_enviar_documento; achado real
+                # em produção 08/07/2026: PDF corrompido/incompleto entregue
+                # a uma minoria dos destinatários, mesmo com o arquivo de
+                # origem íntegro).
+                _evolution_enviar_documento(whatsapp, None, pdf_kit_filename, caption=mensagem,
+                                             media_bytes=pdf_kit_bytes)
             else:
                 _evolution_enviar_texto(whatsapp, mensagem)
             disparo_resultado = 'enviado'
