@@ -3188,7 +3188,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.90',
+        'versao': '2.91',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -5237,6 +5237,20 @@ def _evolution_enviar_texto(numero: str, texto: str):
     if not (200 <= r.status_code < 300):
         raise RuntimeError(f'Evolution HTTP {r.status_code}: {r.text[:300]}')
     return r.json()
+
+
+@app.route('/evolution/status', methods=['GET', 'OPTIONS'])
+def evolution_status():
+    """Consulta o estado real da conexão da instância Evolution API (o celular
+    vinculado está online/'open' ou caiu/'close')."""
+    if request.method == 'OPTIONS':
+        return '', 204
+    endpoint = f'{EVOLUTION_API_URL}/instance/connectionState/{EVOLUTION_INSTANCE}'
+    try:
+        r = requests.get(endpoint, headers={'apikey': EVOLUTION_API_KEY}, timeout=30)
+        return jsonify({'http_status': r.status_code, 'body': r.json() if r.content else None})
+    except Exception as e:
+        return jsonify({'erro': str(e)}), 500
 
 
 def _evolution_enviar_documento(numero: str, media_url: str, filename: str, caption=None,
