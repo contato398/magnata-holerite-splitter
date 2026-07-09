@@ -3188,7 +3188,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.89',
+        'versao': '2.90',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -6637,7 +6637,25 @@ def _carregar_documento_url(url: str) -> bytes:
         caminho = os.path.join(app.static_folder, nome_arquivo)
         with open(caminho, 'rb') as f:
             return f.read()
-    return requests.get(url, timeout=60).content
+
+    r = requests.get(url, timeout=60)
+    # Achado real em produção (08/07/2026): URLs assinadas do Airtable
+    # (v5.airtableusercontent.com) EXPIRAM — num lote grande (99 itens,
+    # processado em ~13 chamadas sequenciais ao longo de vários minutos),
+    # a URL de alguns itens do FIM do lote já tinha expirado quando
+    # chegou a vez de buscá-la. O código antigo aceitava r.content sem
+    # checar nada — a resposta de erro (corpo pequeno, ex.: 21 bytes) foi
+    # gravada como se fosse o PDF real, tanto no Airtable (anexo de 21
+    # bytes) quanto no envio por WhatsApp ("documento inválido" ao abrir).
+    # Agora falha alto e claro em vez de silenciosamente salvar lixo.
+    if not r.ok:
+        raise RuntimeError(f'documento_url retornou HTTP {r.status_code} (possível URL expirada): {url[:120]}')
+    if not r.content.startswith(b'%PDF'):
+        raise RuntimeError(
+            f'documento_url não retornou um PDF válido ({len(r.content)} bytes recebidos, '
+            f'possível URL expirada ou resposta de erro): {url[:120]}'
+        )
+    return r.content
 
 
 def _gerar_assinatura_core(funcionario_id, tipo_documento, processar_id='', nome_documento=None,
@@ -6703,7 +6721,7 @@ def _gerar_assinatura_core(funcionario_id, tipo_documento, processar_id='', nome
             kit_anexos = r_func_kit.json().get('fields', {}).get(F_FUNC_KIT_CONSOLIDADO) or []
             if kit_anexos:
                 pdf_kit_filename = kit_anexos[0].get('filename', 'Kit Admissao.pdf')
-                pdf_kit_bytes = requests.get(kit_anexos[0]['url'], timeout=60).content
+                pdf_kit_bytes = _carregar_documento_url(kit_anexos[0]['url'])
                 _anexar_attachment(TABLE_ASSINATURAS, assinatura_id, F_ASS_DOCUMENTO_PDF, pdf_kit_bytes, pdf_kit_filename)
 
     disparo_resultado = None
