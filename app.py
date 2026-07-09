@@ -1,5 +1,5 @@
 """
-magnata-holerite-splitter — app.py v2.49
+magnata-holerite-splitter — app.py v2.92
 Novidades vs v2.48:
   - Integração Secullum Ponto Web (Banco ID 149582) via blueprint isolado
     src/services/secullum_ponto.py (prefixo /secullum): autenticação Bearer,
@@ -3188,7 +3188,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.91',
+        'versao': '2.92',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -4306,6 +4306,22 @@ def _at_listar_todos(table_id, field_names=None, filter_formula=None):
         if not offset:
             break
     return registros
+
+
+def _at_obter_registro(table_id: str, record_id: str, field_names=None) -> dict:
+    """Lê um único registro do Airtable por ID."""
+    params = {}
+    if field_names:
+        params['fields[]'] = field_names
+    _at_throttle()
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{table_id}/{record_id}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params=params,
+        timeout=15,
+    )
+    r.raise_for_status()
+    return r.json()
 
 
 def _carregar_contexto_distribuicao():
@@ -5638,9 +5654,10 @@ def processar_doc_cliente():
 
 
 def _gerar_fila_envios_email(folha_mensal=None, folha_mensal_d2=None,
-                             guias_ids=None, certidoes_ids=None, limit=None, dry_run=True):
+                             guias_ids=None, certidoes_ids=None, limit=None, dry_run=True,
+                             cliente_id_filtro=None, force=False):
     """
-    v2.29 — Gera a fila de e-mail por CLIENTE. Para cada Cliente Ativo com
+    v2.29/v2.92 — Gera a fila de e-mail por CLIENTE. Para cada Cliente Ativo com
     e-mail (campo Email; fallback Email Contador do escritório), consolida num
     único envio Canal="E-mail":
       - Holerites do mês dos funcionários daquele cliente (link)
@@ -5653,8 +5670,11 @@ def _gerar_fila_envios_email(folha_mensal=None, folha_mensal_d2=None,
     `folha_mensal` (mês passado, ex.: Maio). Por isso buscamos os documentos de
     AMBAS as folhas e escolhemos a certa por cliente.
 
-    Ignora clientes já com envio do tipo pendente (não duplica). Os PDFs em si
-    são resolvidos na hora do disparo via os campos lookup da Envios.
+    cliente_id_filtro (v2.92): se informado, processa apenas esse cliente.
+    force (v2.92): se True, ignora a dedup de envio pendente (útil em webhooks).
+    Ignora clientes já com envio do tipo pendente (não duplica), a menos que
+    force=True. Os PDFs em si são resolvidos na hora do disparo via os campos
+    lookup da Envios.
 
     dry_run=True (padrão): não cria nada, só simula.
     """
@@ -5713,7 +5733,9 @@ def _gerar_fila_envios_email(folha_mensal=None, folha_mensal_d2=None,
         status_nome = status['name'] if isinstance(status, dict) else status
         if status_nome != 'Ativo':
             continue
-        if cid in cliente_pendentes:
+        if cliente_id_filtro and cid != cliente_id_filtro:
+            continue
+        if not force and cid in cliente_pendentes:
             ignorados.append({'cliente': nome, 'motivo': 'ja_possui_envio_email_pendente'})
             continue
 
@@ -7428,6 +7450,201 @@ def processar_vr_va():
 
     except Exception as exc:
         logger.exception(f'[VR/VA] erro: {exc}')
+        return jsonify({'status': 'erro', 'erro': str(exc)}), 500
+
+
+@app.route('/webhook/enviar-whatsapp', methods=['POST', 'OPTIONS'])
+def webhook_enviar_whatsapp():
+    """
+    v2.92 — Webhook Airtable: botão 'Enviar WhatsApp' em qualquer view de Funcionários.
+
+    Body JSON (configurado na Automação Airtable):
+      {
+        "funcionario_id": "recXXX",              // ID do Funcionário (obrigatório)
+        "documentos": ["Holerite", "Folha Ponto"],  // opcional; omitir = todos disponíveis
+        "folha_mensal": "Junho 2026",            // opcional; omitir = holerite mais recente
+        "dry_run": false
+      }
+
+    Envia cada PDF em base64 via Evolution API (mesmo fix da v2.89: evita
+    PDF corrompido quando a Evolution busca a URL por conta própria).
+    Cria registro em Envios de Documentos para rastreio.
+    Protegido por X-API-KEY (EMAIL_WEBHOOK_KEY).
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+
+    body = request.get_json(silent=True) or {}
+    func_id = body.get('funcionario_id') or body.get('record_id')
+    documentos = body.get('documentos')     # None = todos disponíveis
+    folha_mensal = body.get('folha_mensal')
+    dry_run = bool(body.get('dry_run', False))
+
+    if not func_id:
+        return jsonify({'status': 'erro', 'erro': 'funcionario_id ausente no body'}), 400
+
+    try:
+        func_rec = _at_obter_registro(TABLE_FUNC, func_id, [
+            'Nome Completo', 'WhatsApp', 'Holerites', 'PDF Folha Ponto',
+        ])
+        f = func_rec.get('fields', {})
+        nome = f.get('Nome Completo') or func_id
+        whatsapp = f.get('WhatsApp')
+        if not whatsapp:
+            return jsonify({'status': 'nenhum_envio', 'funcionario': nome,
+                            'motivo': 'whatsapp_ausente'}), 200
+        numero = _normalizar_numero_evolution(whatsapp)
+        if not numero:
+            return jsonify({'status': 'nenhum_envio', 'funcionario': nome,
+                            'motivo': f'numero_invalido ({whatsapp})'}), 200
+
+        enviar_holerite = documentos is None or 'Holerite' in documentos
+        enviar_ponto    = documentos is None or 'Folha Ponto' in documentos
+
+        docs_enviados, erros = [], []
+
+        # --- Holerite ---
+        if enviar_holerite:
+            hol_links = [
+                (h['id'] if isinstance(h, dict) else h)
+                for h in (f.get('Holerites') or [])
+            ]
+            if hol_links:
+                candidatos = []
+                for hid in hol_links[-5:]:   # últimos 5: evita scan desnecessário
+                    try:
+                        hr = _at_obter_registro(TABLE_HOL, hid, ['Folha Mensal', 'PDF HOLERITE'])
+                        hf = hr.get('fields', {})
+                        pdfs = hf.get('PDF HOLERITE') or []
+                        if pdfs:
+                            candidatos.append((hf.get('Folha Mensal', ''), pdfs[-1]))
+                    except Exception:
+                        pass
+                if candidatos:
+                    if folha_mensal:
+                        match = [c for c in candidatos if c[0] == folha_mensal]
+                        candidatos = match or candidatos
+                    candidatos.sort(key=lambda x: x[0], reverse=True)
+                    hol_folha, pdf_meta = candidatos[0]
+                    try:
+                        pdf_bytes = _carregar_documento_url(pdf_meta['url'])
+                        fname = pdf_meta.get('filename') or f'Holerite {hol_folha} - {nome}.pdf'
+                        if not dry_run:
+                            _evolution_enviar_documento(
+                                numero, pdf_meta['url'], fname,
+                                caption=f'Holerite {hol_folha} — Grupo Magnata',
+                                media_bytes=pdf_bytes,
+                            )
+                        docs_enviados.append({'tipo': 'Holerite', 'folha': hol_folha, 'arquivo': fname})
+                    except Exception as exc:
+                        erros.append({'tipo': 'Holerite', 'erro': str(exc)})
+
+        # --- Folha de Ponto ---
+        if enviar_ponto:
+            ponto_anexos = f.get('PDF Folha Ponto') or []
+            if ponto_anexos:
+                ponto_meta = ponto_anexos[-1]
+                try:
+                    pdf_bytes = _carregar_documento_url(ponto_meta['url'])
+                    fname = ponto_meta.get('filename') or f'Folha Ponto - {nome}.pdf'
+                    if not dry_run:
+                        _evolution_enviar_documento(
+                            numero, ponto_meta['url'], fname,
+                            caption='Cartão Ponto — Grupo Magnata',
+                            media_bytes=pdf_bytes,
+                        )
+                    docs_enviados.append({'tipo': 'Folha Ponto', 'arquivo': fname})
+                except Exception as exc:
+                    erros.append({'tipo': 'Folha Ponto', 'erro': str(exc)})
+
+        if not docs_enviados and not erros:
+            return jsonify({'status': 'nenhum_documento', 'funcionario': nome,
+                            'motivo': 'nenhum_pdf_disponivel'}), 200
+
+        if not dry_run and docs_enviados:
+            _criar_registro(TABLE_ENVIOS, {
+                F_ENVIO_TIPO:   'Envio via Webhook',
+                F_ENVIO_CANAL:  'WhatsApp',
+                F_ENVIO_DEST:   numero,
+                F_ENVIO_FUNC:   [func_id],
+                F_ENVIO_STATUS: 'Enviado' if not erros else 'Erro',
+                F_ENVIO_DATA:   datetime.now(timezone(timedelta(hours=-3))).strftime('%Y-%m-%d'),
+            })
+
+        status = 'dry_run' if dry_run else ('enviado' if not erros else 'parcial')
+        return jsonify({
+            'status': status, 'funcionario': nome, 'numero': numero,
+            'docs_enviados': docs_enviados, 'erros': erros,
+        })
+
+    except Exception as exc:
+        logger.exception(f'[WEBHOOK WA] {exc}')
+        return jsonify({'status': 'erro', 'erro': str(exc)}), 500
+
+
+@app.route('/webhook/enviar-email-cliente', methods=['POST', 'OPTIONS'])
+def webhook_enviar_email_cliente():
+    """
+    v2.92 — Webhook Airtable: botão 'Enviar E-mail' na view de Clientes.
+
+    Body JSON (configurado na Automação Airtable):
+      {
+        "cliente_id": "recXXX",          // ID do Cliente (obrigatório)
+        "folha_mensal": "Junho 2026",    // competência dos documentos (obrigatório)
+        "dry_run": false
+      }
+
+    Gera e dispara imediatamente 1 pacote de e-mail para o cliente especificado,
+    LGPD-compliant: apenas documentos dos colaboradores lotados nos Locais desse
+    cliente. Usa force=True (ignora dedup) pois o clique no botão é intencional.
+    Protegido por X-API-KEY (EMAIL_WEBHOOK_KEY).
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+
+    body = request.get_json(silent=True) or {}
+    cliente_id   = body.get('cliente_id') or body.get('record_id')
+    folha_mensal = body.get('folha_mensal')
+    dry_run      = bool(body.get('dry_run', False))
+
+    if not cliente_id:
+        return jsonify({'status': 'erro', 'erro': 'cliente_id ausente no body'}), 400
+    if not folha_mensal:
+        return jsonify({'status': 'erro', 'erro': 'folha_mensal ausente no body'}), 400
+
+    try:
+        resultado_fila = _gerar_fila_envios_email(
+            folha_mensal=folha_mensal,
+            dry_run=dry_run,
+            cliente_id_filtro=cliente_id,
+            force=True,
+        )
+
+        if dry_run or not resultado_fila.get('envios'):
+            return jsonify({
+                'status': 'dry_run' if dry_run else 'nenhum_documento',
+                'cliente_id': cliente_id,
+                'folha_mensal': folha_mensal,
+                'fila': resultado_fila,
+            })
+
+        resultado_disparo = _disparar_fila_email(dry_run=False)
+        return jsonify({
+            'status': 'enviado',
+            'cliente_id': cliente_id,
+            'folha_mensal': folha_mensal,
+            'fila': resultado_fila,
+            'disparo': resultado_disparo,
+        })
+
+    except Exception as exc:
+        logger.exception(f'[WEBHOOK EMAIL] {exc}')
         return jsonify({'status': 'erro', 'erro': str(exc)}), 500
 
 
