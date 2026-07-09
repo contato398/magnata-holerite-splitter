@@ -111,6 +111,25 @@ F_PEND_DATA   = 'fldRolmP0rSbJevUZ'   # Data (dateTime)
 
 ALERTA_STATUS = os.environ.get('SECULLUM_ALERTA_STATUS', 'Aberta')
 TIPO_BATIDA_IMPAR = 'Batida Ímpar (Ponto)'
+
+# ── Fechamento_Mai_Jun_2026 (tabela de diagnóstico, criada v2.93) ────────────
+TABLE_FECH          = 'tblwWoc3xhpRujZ6i'
+F_FECH_NOME_DIA     = 'fldZEl8c6RpQb5Mkl'   # primary — "{NOME} — {DATA}"
+F_FECH_FUNCIONARIO  = 'fldZIqgpwvN1ftzD2'   # link → Funcionários
+F_FECH_NOME         = 'fld7UIK8uVKkm6kz9'
+F_FECH_CPF          = 'fldivoPs20r8ij9a4'
+F_FECH_DATA         = 'fld2q8F3ptaPT8iVk'
+F_FECH_HORARIO      = 'fldx0r3evrGOiULUp'   # Horario.Descricao do Secullum
+F_FECH_STATUS_DIA   = 'fldpssbXWCvG1Kh08'   # singleSelect: trabalho/folga/feriado
+F_FECH_N_BATIDAS    = 'flddcoupg5l85xKkK'
+F_FECH_NORMAIS      = 'fldRpe4ISQEFpCiZ0'
+F_FECH_FALTAS       = 'fldOhkA7WPTp8BtO8'
+F_FECH_EXTRAS       = 'fldlwTgX93adss98R'
+F_FECH_ATRAS        = 'fldJXIeUmx2RLODNU'
+F_FECH_ADIAN        = 'fldB8RjUJs0zUywyk'
+F_FECH_NOT_TOT      = 'fldonx0x4ttkgFbuD'
+F_FECH_CLASSIFICACAO = 'fldEHoMYrQauaoLqk'  # singleSelect com as 5 categorias
+F_FECH_OBSERVACAO   = 'fldEWlhXRHAaQBHoG'
 TIPO_DESVIO_CARGA = 'Desvio de Carga Horária (Ponto)'
 # Cruzamento jornada real x escala teórica (FOLGA/Feriado real) — não depende de
 # local de trabalho (Airtable); só da própria escala resolvida pela Secullum.
@@ -1305,6 +1324,261 @@ def gravar_bonus_assiduidade(cpf: str, valor_texto: str) -> bool:
     return True
 
 
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║ 5. DIAGNÓSTICO DE FECHAMENTO 12x36 — read-only do Secullum (v2.93)         ║
+# ║    Escreve APENAS no Airtable (Fechamento_Mai_Jun_2026).                   ║
+# ║    GUARDRAIL: zero chamadas de escrita ao Secullum.                        ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+
+def _e_12x36(horario_desc: str) -> bool:
+    return '12X36' in (horario_desc or '').upper()
+
+
+_RE_FERIADO_MARCADOR = re.compile(r'^FERIADO$', re.IGNORECASE)
+
+
+def _status_dia_escala(mapa: dict) -> str:
+    """Retorna 'feriado', 'folga' ou 'trabalho' com base no marcador do /Calcular."""
+    for col, val in mapa.items():
+        if _RE_COL_BATIDA.match(col) and isinstance(val, str):
+            v = val.strip().upper()
+            if v == 'FERIADO':
+                return 'feriado'
+            if v == 'FOLGA':
+                return 'folga'
+    return 'trabalho'
+
+
+def _classificar_dia_12x36(data_dia: str, mapa: dict, prev_status: str) -> tuple:
+    """Classifica um dia de colaborador 12x36. Retorna (classificacao, status_dia, obs).
+
+    Ordem de prioridade (per instrução do usuário):
+    a) FERIADO_ESCALA_REVISAR  b) ATRASO_NORMAL_SEM_ACAO
+    c) ALTERNANCIA_QUEBRADA_URGENTE  d) BATIDA_FALTANTE  e) NORMAL
+    """
+    status = _status_dia_escala(mapa)
+    trabalhou = _trabalhou(mapa)
+    ab = _analisar_batidas(mapa)
+    atras_min = _hhmm_para_minutos(mapa.get(SECULLUM_COL_ATRASO)) or 0
+
+    # a) Feriado (sempre revisão humana)
+    if status == 'feriado':
+        sufixo = ' — com batidas registradas.' if trabalhou else ' — sem batidas.'
+        return ('FERIADO_ESCALA_REVISAR', status,
+                f'Feriado no calendário Secullum ({data_dia}){sufixo}')
+
+    # Folga da escala sem trabalho → NORMAL silencioso
+    if status == 'folga' and not trabalhou:
+        return 'NORMAL', status, ''
+
+    consecutivo = (status == 'trabalho' and prev_status == 'trabalho')
+
+    # b) Atraso presente sem batida ímpar (sem ação — apenas registrar)
+    if atras_min > 0 and not ab['impar']:
+        obs = f'Atraso de {_minutos_para_hhmm(atras_min)} em {data_dia}. Sem ação necessária.'
+        if consecutivo:
+            obs += ' ATENÇÃO: dia anterior também foi dia de TRABALHO na escala — checar alternância.'
+        return 'ATRASO_NORMAL_SEM_ACAO', status, obs
+
+    # c) Alternância quebrada (dois dias consecutivos de TRABALHO na escala teórica)
+    if consecutivo:
+        return ('ALTERNANCIA_QUEBRADA_URGENTE', status,
+                f'Dois dias consecutivos marcados como TRABALHO na escala Secullum '
+                f'({data_dia} e dia anterior). NUNCA corrigir automaticamente sem '
+                f'aprovação da diretoria. Verificar troca de plantão, cobertura ou '
+                f'erro de cadastro de escala.')
+
+    # d) Batida faltante (número ímpar de marcações)
+    if ab['impar']:
+        lado = 'SAÍDA' if ab['lado_faltante'] == 'saida' else 'ENTRADA'
+        return ('BATIDA_FALTANTE', status,
+                f'{ab["n"]} batida(s) em {data_dia} — número ímpar. '
+                f'Provável esquecimento da {lado}.')
+
+    # Folga trabalhada sem outro problema
+    if status == 'folga':
+        return 'NORMAL', status, f'Folga trabalhada ({data_dia}) — sem inconsistência adicional.'
+
+    return 'NORMAL', status, ''
+
+
+def _mapa_cpf_airtable_ids() -> dict:
+    """cpf (só dígitos) → record_id Airtable dos Funcionários (para link no Fechamento)."""
+    mapa = {}
+    url = f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}'
+    params: dict = {'fields[]': ['CPF'], 'pageSize': 100}
+    while True:
+        _at_throttle()
+        r = requests.get(url, headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                         params=params, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        for rec in data.get('records', []):
+            cpf = _so_digitos(str(rec.get('fields', {}).get('CPF', '')))
+            if cpf:
+                mapa[cpf] = rec['id']
+        offset = data.get('offset')
+        if not offset:
+            break
+        params['offset'] = offset
+    return mapa
+
+
+def _fech_linha_existe(nome_dia: str) -> bool:
+    _at_throttle()
+    esc = nome_dia.replace('"', '\\"')
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FECH}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={'filterByFormula': f'{{Nome_Dia}}="{esc}"', 'maxRecords': 1},
+        timeout=30,
+    )
+    return bool(r.ok and r.json().get('records'))
+
+
+def _fech_criar_linha(campos: dict) -> str:
+    _at_throttle()
+    r = requests.post(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FECH}',
+        headers=_at_headers(),
+        json={'fields': campos, 'typecast': True},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()['id']
+
+
+def diagnostico_fechamento(data_inicio: str, data_fim: str,
+                           dry_run: bool = True,
+                           offset: int = 0, limit: int = None) -> dict:
+    """Coleta cálculos 12x36 do Secullum e classifica por dia (read-only).
+
+    Grava em Airtable Fechamento_Mai_Jun_2026 quando dry_run=False.
+    GUARDRAIL: usa apenas GET /Funcionarios e POST /Calcular — zero escrita Secullum.
+    Suporta offset/limit para execução em lotes (Render free, evitar timeout).
+    """
+    todos = listar_funcionarios_secullum()
+    if not isinstance(todos, list):
+        todos = []
+
+    func_12x36 = [
+        f for f in todos
+        if not f.get('Demissao')
+        and _e_12x36((f.get('Horario') or {}).get('Descricao', ''))
+    ]
+    total_12x36 = len(func_12x36)
+
+    if limit is not None:
+        lote = func_12x36[offset: offset + limit]
+    elif offset:
+        lote = func_12x36[offset:]
+    else:
+        lote = func_12x36
+
+    mapa_at = _mapa_cpf_airtable_ids() if not dry_run else {}
+
+    linhas_criadas = 0
+    linhas_puladas = 0
+    erros_func = []
+    por_classe: dict = {
+        'ALTERNANCIA_QUEBRADA_URGENTE': [],
+        'BATIDA_FALTANTE': [],
+        'FERIADO_ESCALA_REVISAR': [],
+        'ATRASO_NORMAL_SEM_ACAO': [],
+    }
+    normais = 0
+
+    for f in lote:
+        cpf = _so_digitos(str(f.get('Cpf', '')))
+        nome = f.get('Nome', f'CPF_{cpf}')
+        horario_desc = (f.get('Horario') or {}).get('Descricao', '')
+        func_at_id = mapa_at.get(cpf)
+
+        if not cpf:
+            continue
+
+        try:
+            calc = obter_calculos(cpf, data_inicio, data_fim)
+        except Exception as exc:
+            erros_func.append({'nome': nome, 'cpf': cpf, 'erro': str(exc)})
+            continue
+
+        dias = dict(_linhas_calculo(calc))
+        prev_status = 'folga'
+
+        for data_dia, mapa in sorted(dias.items()):
+            classificacao, status_dia, obs = _classificar_dia_12x36(data_dia, mapa, prev_status)
+            prev_status = _status_dia_escala(mapa)
+
+            if classificacao != 'NORMAL':
+                por_classe[classificacao].append(
+                    {'nome': nome, 'cpf': cpf, 'data': data_dia, 'obs': obs})
+            else:
+                normais += 1
+
+            if dry_run:
+                continue
+
+            nome_dia = f'{nome} — {data_dia}'
+            if _fech_linha_existe(nome_dia):
+                linhas_puladas += 1
+                continue
+
+            campos: dict = {
+                F_FECH_NOME_DIA:      nome_dia,
+                F_FECH_NOME:          nome,
+                F_FECH_CPF:           cpf,
+                F_FECH_DATA:          data_dia,
+                F_FECH_HORARIO:       horario_desc,
+                F_FECH_STATUS_DIA:    status_dia,
+                F_FECH_N_BATIDAS:     _contar_batidas(mapa),
+                F_FECH_NORMAIS:       str(mapa.get('Normais') or ''),
+                F_FECH_FALTAS:        str(mapa.get(SECULLUM_COL_FALTAS) or ''),
+                F_FECH_EXTRAS:        str(mapa.get(SECULLUM_COL_EXTRAS) or ''),
+                F_FECH_ATRAS:         str(mapa.get(SECULLUM_COL_ATRASO) or ''),
+                F_FECH_ADIAN:         str(mapa.get(SECULLUM_COL_ADIANTAMENTO) or ''),
+                F_FECH_NOT_TOT:       str(mapa.get('Not.Tot.') or ''),
+                F_FECH_CLASSIFICACAO: classificacao,
+                F_FECH_OBSERVACAO:    obs,
+            }
+            if func_at_id:
+                campos[F_FECH_FUNCIONARIO] = [func_at_id]
+
+            try:
+                _fech_criar_linha(campos)
+                linhas_criadas += 1
+            except Exception as exc:
+                logger.error('[FECH] Falha ao gravar %s: %s', nome_dia, exc)
+
+    proximo_offset = (offset + len(lote)) if (offset + len(lote)) < total_12x36 else None
+
+    alertas = (por_classe['ALTERNANCIA_QUEBRADA_URGENTE']
+               + por_classe['BATIDA_FALTANTE']
+               + por_classe['FERIADO_ESCALA_REVISAR']
+               + por_classe['ATRASO_NORMAL_SEM_ACAO'])
+
+    return {
+        'periodo': f'{data_inicio}..{data_fim}',
+        'dry_run': dry_run,
+        'total_12x36_secullum': total_12x36,
+        'lote_processado': len(lote),
+        'offset': offset,
+        'proximo_offset': proximo_offset,
+        'linhas_criadas': linhas_criadas,
+        'linhas_puladas_existentes': linhas_puladas,
+        'erros_funcionarios': len(erros_func),
+        'erros_detalhe': erros_func,
+        'resumo_urgencia': {
+            'ALTERNANCIA_QUEBRADA_URGENTE': len(por_classe['ALTERNANCIA_QUEBRADA_URGENTE']),
+            'BATIDA_FALTANTE':             len(por_classe['BATIDA_FALTANTE']),
+            'FERIADO_ESCALA_REVISAR':      len(por_classe['FERIADO_ESCALA_REVISAR']),
+            'ATRASO_NORMAL_SEM_ACAO':      len(por_classe['ATRASO_NORMAL_SEM_ACAO']),
+            'NORMAL':                       normais,
+        },
+        'alertas_por_urgencia': alertas,
+    }
+
+
 def atualizar_numero_folha(cpf: str, numero: str) -> dict:
     """Atualiza o NumeroFolha de um funcionário já cadastrado na Secullum via PUT.
 
@@ -1485,6 +1759,50 @@ def rota_varrer():
         return jsonify({'erro': 'Falha na API Secullum', 'detalhe': str(exc)}), 502
     except Exception as exc:
         logger.exception('[SECULLUM] Erro na varredura')
+        return jsonify({
+            'erro': type(exc).__name__,
+            'detalhe': str(exc),
+            'traceback': traceback.format_exc().splitlines()[-8:],
+        }), 500
+
+
+@secullum_bp.route('/fechamento-diagnostico', methods=['POST', 'OPTIONS'])
+def rota_fechamento_diagnostico():
+    """Diagnóstico de fechamento 12x36 — 100% read-only do Secullum (v2.93).
+
+    Lê: GET /Funcionarios + POST /Calcular.
+    Escreve: Airtable "Fechamento_Mai_Jun_2026" (1 linha/colaborador/dia).
+    GUARDRAIL: zero escrita ao Secullum. Qualquer tentativa é bloqueada em nível
+    de código — este endpoint só chama listar_funcionarios_secullum() e
+    obter_calculos(), ambas operações de leitura.
+
+    Body JSON:
+        data_inicio  → "YYYY-MM-DD" (default "2026-05-28")
+        data_fim     → "YYYY-MM-DD" (default "2026-06-28")
+        dry_run      → true (default) / false
+        offset       → 0 (default) — paginação de funcionários
+        limit        → null (default = todos) ou int (lotes; ex: 10 p/ Render free)
+    """
+    if request.method == 'OPTIONS':
+        return ('', 204)
+    body = request.get_json(silent=True) or {}
+    data_inicio = body.get('data_inicio', '2026-05-28')
+    data_fim    = body.get('data_fim',    '2026-06-28')
+    dry_run     = bool(body.get('dry_run', True))
+    offset      = int(body.get('offset') or 0)
+    limit       = body.get('limit')
+    if limit is not None:
+        limit = int(limit)
+    try:
+        resultado = diagnostico_fechamento(
+            data_inicio=data_inicio, data_fim=data_fim,
+            dry_run=dry_run, offset=offset, limit=limit,
+        )
+        return jsonify(resultado), 200
+    except requests.exceptions.HTTPError as exc:
+        return jsonify({'erro': 'Falha na API Secullum', 'detalhe': str(exc)}), 502
+    except Exception as exc:
+        logger.exception('[FECH] Erro no diagnóstico de fechamento')
         return jsonify({
             'erro': type(exc).__name__,
             'detalhe': str(exc),
