@@ -243,6 +243,14 @@ F_PEND_DATA   = 'fldRolmP0rSbJevUZ'
 
 EMAIL_WEBHOOK_KEY = os.environ.get('EMAIL_WEBHOOK_KEY', '')
 
+# Caixa fiscal (v2.67) — Recibos/Guias/Extrato mensal de competência tributária.
+# Remetente adicionado à lista de confiança do Apps Script (REMETENTES_CONFIAVEIS)
+# sem alterar o e-mail já existente do Departamento Pessoal. Documentos vindos
+# deste remetente são roteados no /email/webhook para as tabelas de Extrato/
+# FGTS/Guias já usadas na distribuição a clientes, em vez do fluxo de
+# Processar Arquivos do DP (Kit Admissão etc.), que não se aplica a eles.
+REMETENTE_FISCAL = 'dpfiscal.contabilidade2@hotmail.com'
+
 # Evolution API (gateway WhatsApp) — v2.28. URL e instância não são segredo
 # (default embutido); a API KEY é secreta e DEVE vir por variável de ambiente.
 EVOLUTION_API_URL  = os.environ.get('EVOLUTION_API_URL', 'http://143.95.214.239:8080').rstrip('/')
@@ -279,6 +287,10 @@ TIPO_DOC_REGRAS = [
                    r'C[áa]lculo\s+de\s+Rescis[ãa]o',
                    r'Motivo\s+demiss[ãa]o', r'Data\s+demiss[ãa]o',
                    r'Data\s+de\s+demiss[ãa]o']),
+    # Extrato da Folha de Pagamento (caixa fiscal, v2.67) — precisa vir ANTES
+    # de Holerite: é um relatório-resumo da folha (não o holerite individual),
+    # mas costuma citar "Total de Vencimentos"/"Valor Líquido" também.
+    ('Extrato da Folha de Pagamento', [r'Extrato\s+(?:da\s+)?Folha\s+de\s+Pagamento']),
     ('Holerite', [r'Recibo\s+de\s+Pagamento', r'Total\s+de\s+Vencimentos', r'Valor\s+L[íi]quido']),
     ('Folha de Ponto', [r'Folha\s+de\s+Ponto', r'Espelho\s+de\s+Ponto',
                          r'Cart[ãa]o\s+(?:de\s+)?Ponto', r'Secullum',
@@ -307,6 +319,12 @@ TIPO_DOC_REGRAS = [
     ('Contrato de Experiência', [r'Contrato\s+de\s+Experi[êe]ncia']),
     ('Contrato de Trabalho', [r'Contrato\s+de\s+Trabalho', r'\bCTPS\b']),
     ('Férias', [r'Aviso\s+de\s+F[ée]rias', r'Recibo\s+de\s+F[ée]rias', r'Per[íi]odo\s+de\s+Gozo']),
+    # DCTFWeb (caixa fiscal, v2.67) — Recibo de Entrega precisa vir ANTES da
+    # Declaração genérica, senão o \bDCTFWeb\b da Declaração sempre vence
+    # primeiro e o recibo nunca é distinguido.
+    ('DCTFWeb - Recibo de Entrega',
+        [r'Recibo\s+de\s+Entrega.{0,60}DCTFWeb', r'DCTFWeb.{0,60}Recibo\s+de\s+Entrega']),
+    ('DCTFWeb - Declaração', [r'\bDCTFWeb\b']),
     ('FGTS', [r'FGTS\s+Digital', r'Guia\s+do\s+FGTS', r'\bGFD\b']),
     ('Guia', [r'Guia\s+de\s+Recolhimento', r'\bGPS\b', r'\bDARF\b']),
     ('Boleto', [r'\d{5}\.\d{5}\s+\d{5}\.\d{6}\s+\d{5}\.\d{6}\s+\d\s+\d{14}', r'Linha\s+Digit[áa]vel']),
@@ -3772,6 +3790,67 @@ def corrigir_valores():
     })
 
 
+def _detectar_competencia_fiscal(texto: str) -> str:
+    """v2.67 — Extrai a competência (mês/ano) de um documento fiscal a partir
+    de padrões 'Competência MM/AAAA' ou 'Período de Apuração MM/AAAA'. Se não
+    encontrar, assume o mês anterior ao recebimento — padrão real observado:
+    Extrato/FGTS/DCTFWeb de um mês sempre chegam no mês seguinte."""
+    m = re.search(r'(?:Compet[êe]ncia|Per[íi]odo\s+de\s+Apura[çc][ãa]o)\D{0,10}(\d{2})/(\d{4})',
+                  texto, re.IGNORECASE)
+    if m:
+        mes_num, ano = int(m.group(1)), m.group(2)
+        if 1 <= mes_num <= 12:
+            return f'{MESES_PT[mes_num - 1]} {ano}'
+    hoje = datetime.now()
+    mes_anterior = hoje.month - 1 or 12
+    ano_anterior = hoje.year if hoje.month > 1 else hoje.year - 1
+    return f'{MESES_PT[mes_anterior - 1]} {ano_anterior}'
+
+
+def _processar_anexo_fiscal(conteudo: bytes, nome_arquivo: str, tipo_doc: str, texto: str) -> dict:
+    """v2.67 — Roteia um anexo vindo da caixa fiscal (REMETENTE_FISCAL) para a
+    tabela correta, reaproveitando a mesma infraestrutura já usada para
+    Extrato/FGTS de clientes (fatiamento por CNPJ/Nome) e Guias broadcast
+    (DCTFWeb), em vez do fluxo de Processar Arquivos do Departamento Pessoal
+    (Kit Admissão etc.), que não se aplica a documentos fiscais da empresa."""
+    folha_mensal = _detectar_competencia_fiscal(texto)
+
+    if tipo_doc in ('Extrato da Folha de Pagamento', 'FGTS'):
+        tipo_fatiador = 'extrato' if tipo_doc == 'Extrato da Folha de Pagamento' else 'fgts'
+        tmp_path = f'/tmp/fiscal_{_uuid.uuid4().hex}.pdf'
+        try:
+            with open(tmp_path, 'wb') as f:
+                f.write(conteudo)
+            resultado_fatiamento = _processar_doc_cliente_master(tmp_path, tipo_fatiador, folha_mensal)
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+        return {'acao': 'fatiado_por_cliente', 'tipo_documento': tipo_doc,
+                'folha_mensal': folha_mensal, 'resultado_fatiamento': resultado_fatiamento}
+
+    if tipo_doc in ('DCTFWeb - Recibo de Entrega', 'DCTFWeb - Declaração'):
+        rec_id = _criar_registro(TABLE_GUIAS, {
+            F_GUIA_STATUS: 'Recebido', F_GUIA_TIPO: tipo_doc,
+            F_GUIA_NOME: f'{tipo_doc} - {folha_mensal}',
+        })
+        _anexar_attachment(TABLE_GUIAS, rec_id, F_GUIA_PDF, conteudo, nome_arquivo)
+        return {'acao': 'arquivado_guia_comprovante', 'tipo_documento': tipo_doc,
+                'folha_mensal': folha_mensal, 'guia_record_id': rec_id}
+
+    # Tipo não reconhecido — cria Pendência para revisão manual em vez de
+    # descartar (documento fiscal sem classificação clara é risco de
+    # compliance, não deve ficar perdido silenciosamente).
+    pendencia_id = _criar_registro(TABLE_PENDENCIAS, {
+        F_PEND_NOME:   f'Documento fiscal não reconhecido: {nome_arquivo}',
+        F_PEND_STATUS: 'Pendente',
+        F_PEND_TIPO:   'Documento fiscal não reconhecido',
+        F_PEND_OBS:    texto[:500] if texto.strip() else '(sem texto extraído do PDF)',
+        F_PEND_DATA:   datetime.now().isoformat(),
+    })
+    return {'acao': 'pendencia_documento_nao_reconhecido', 'tipo_documento': tipo_doc,
+            'pendencia_record_id': pendencia_id}
+
+
 @app.route('/email/webhook', methods=['POST', 'OPTIONS'])
 def email_webhook():
     """
@@ -3905,8 +3984,20 @@ def email_webhook():
         item['trecho_texto'] = texto[:500]
         item['pendencia'] = tipo_problema
 
+        eh_fiscal = REMETENTE_FISCAL.lower() in remetente.lower()
+
         if dry_run:
-            item['acao'] = 'criaria_arquivo_e_processar' + (f'_e_pendencia({tipo_problema})' if tipo_problema else '')
+            if eh_fiscal:
+                item['acao'] = f'roteamento_fiscal({tipo_doc})'
+            else:
+                item['acao'] = 'criaria_arquivo_e_processar' + (f'_e_pendencia({tipo_problema})' if tipo_problema else '')
+            resultado['anexos_processados'].append(item)
+            continue
+
+        # Caixa fiscal (v2.67) — não usa o fluxo de Processar Arquivos do DP
+        # (Kit Admissão etc.); vai direto para Extrato/FGTS/Guias.
+        if eh_fiscal:
+            item.update(_processar_anexo_fiscal(conteudo, nome_arquivo, tipo_doc, texto))
             resultado['anexos_processados'].append(item)
             continue
 

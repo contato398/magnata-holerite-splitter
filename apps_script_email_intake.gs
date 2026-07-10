@@ -36,6 +36,7 @@ var REMETENTES_CONFIAVEIS = [
   'contato@magnataservicos.com.br',          // nossa caixa (encaminhamentos)
   'dp.contabilidade1@hotmail.com',           // contador novo (Departamento Pessoal)
   'jaqueline@saviancontabilidade.com.br',    // contador Savian (legado — docs até Maio/2026)
+  'dpfiscal.contabilidade2@hotmail.com',     // contador novo (Fiscal/Tributário — v2.67)
 ];
 
 // Modo de teste: true = não grava nada no Airtable, apenas simula.
