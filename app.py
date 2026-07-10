@@ -251,6 +251,18 @@ EMAIL_WEBHOOK_KEY = os.environ.get('EMAIL_WEBHOOK_KEY', '')
 # Processar Arquivos do DP (Kit Admissão etc.), que não se aplica a eles.
 REMETENTE_FISCAL = 'dpfiscal.contabilidade2@hotmail.com'
 
+# Tipos fiscais/mensais roteados via _processar_anexo_fiscal — o roteamento
+# NÃO depende só do remetente ser REMETENTE_FISCAL: achado real em produção
+# (10/07/2026) mostrou uma Guia de FGTS chegando por outro remetente
+# confiável (não o fiscal dedicado), que teria caído no fluxo de Processar
+# Arquivos/Kit Admissão do DP se dependesse só do remetente. Documento
+# classificado como um destes tipos vai para a tabela certa não importa
+# de qual caixa monitorada ele veio.
+TIPOS_FISCAIS = {
+    'Extrato da Folha de Pagamento', 'FGTS',
+    'DCTFWeb - Recibo de Entrega', 'DCTFWeb - Declaração',
+}
+
 # Evolution API (gateway WhatsApp) — v2.28. URL e instância não são segredo
 # (default embutido); a API KEY é secreta e DEVE vir por variável de ambiente.
 EVOLUTION_API_URL  = os.environ.get('EVOLUTION_API_URL', 'http://143.95.214.239:8080').rstrip('/')
@@ -290,7 +302,30 @@ TIPO_DOC_REGRAS = [
     # Extrato da Folha de Pagamento (caixa fiscal, v2.96) — precisa vir ANTES
     # de Holerite: é um relatório-resumo da folha (não o holerite individual),
     # mas costuma citar "Total de Vencimentos"/"Valor Líquido" também.
-    ('Extrato da Folha de Pagamento', [r'Extrato\s+(?:da\s+)?Folha\s+de\s+Pagamento']),
+    # "Extrato Mensal" foi adicionado depois de um caso real (10/07/2026) em
+    # que o contador manda o documento com esse nome, sem a frase completa
+    # "Extrato da Folha de Pagamento" — caiu como "Outro"/Pendência.
+    ('Extrato da Folha de Pagamento',
+        [r'Extrato\s+(?:da\s+)?Folha\s+de\s+Pagamento', r'Extrato\s+Mensal\b']),
+    # FGTS/DCTFWeb (caixa fiscal, v2.96) — precisam vir ANTES de Holerite,
+    # EPI, Ficha de Registro, Contrato de Trabalho/Experiência e Férias.
+    # Achado real em produção (10/07/2026): a "Guia Emitida" do FGTS Digital
+    # (98 trabalhadores) trouxe no rodapé o glossário de categorias FGTS, que
+    # cita literalmente "Contrato de trabalho Verde e Amarelo" várias vezes —
+    # como "Contrato de Trabalho" vinha ANTES na lista, o documento (que é
+    # 100% FGTS: "Detalhe da Guia Emitida", "FGTS Mensal na Guia", "Qtd.
+    # Trabalhadores FGTS") foi classificado errado como Contrato de Trabalho,
+    # e as regras de FGTS (que exigiam "FGTS Digital"/"Guia do FGTS"/"GFD" —
+    # nenhuma dessas frases aparece nesse documento real) nunca chegaram a
+    # ser testadas. Recibo de Entrega do DCTFWeb precisa vir antes da
+    # Declaração genérica, senão o \bDCTFWeb\b da Declaração sempre vence
+    # primeiro e o recibo nunca é distinguido.
+    ('DCTFWeb - Recibo de Entrega',
+        [r'Recibo\s+de\s+Entrega.{0,60}DCTFWeb', r'DCTFWeb.{0,60}Recibo\s+de\s+Entrega']),
+    ('DCTFWeb - Declaração', [r'\bDCTFWeb\b']),
+    ('FGTS', [r'FGTS\s+Digital', r'Guia\s+do\s+FGTS', r'\bGFD\b',
+              r'Detalhe\s+da\s+Guia\s+Emitida', r'FGTS\s+Mensal\s+na\s+Guia',
+              r'Qtd\.?\s*Trabalhadores\s+FGTS', r'Total\s+FGTS\b']),
     ('Holerite', [r'Recibo\s+de\s+Pagamento', r'Total\s+de\s+Vencimentos', r'Valor\s+L[íi]quido']),
     ('Folha de Ponto', [r'Folha\s+de\s+Ponto', r'Espelho\s+de\s+Ponto',
                          r'Cart[ãa]o\s+(?:de\s+)?Ponto', r'Secullum',
@@ -317,15 +352,14 @@ TIPO_DOC_REGRAS = [
           # EMPREGADO" isolado (sem "Ficha de" antes), formulário de eSocial.
           r'Registro\s+de\s+Empregados?\b', r'Matr[íi]cula\s+eSocial']),
     ('Contrato de Experiência', [r'Contrato\s+de\s+Experi[êe]ncia']),
+    # "Contrato de Trabalho" e "Kit de Admissão" NÃO se misturam com
+    # fechamentos mensais de folha/extratos/FGTS: este tipo é exclusivamente
+    # o documento de admissão que o contador envia (nome dele mesmo,
+    # "Contrato de Trabalho"); "Kit de Admissão" é o nome interno do pacote
+    # consolidado (Ficha + Contrato + Termo de VT) — nenhum dos dois deve
+    # capturar documentos fiscais/mensais (ver nota de FGTS acima).
     ('Contrato de Trabalho', [r'Contrato\s+de\s+Trabalho', r'\bCTPS\b']),
     ('Férias', [r'Aviso\s+de\s+F[ée]rias', r'Recibo\s+de\s+F[ée]rias', r'Per[íi]odo\s+de\s+Gozo']),
-    # DCTFWeb (caixa fiscal, v2.96) — Recibo de Entrega precisa vir ANTES da
-    # Declaração genérica, senão o \bDCTFWeb\b da Declaração sempre vence
-    # primeiro e o recibo nunca é distinguido.
-    ('DCTFWeb - Recibo de Entrega',
-        [r'Recibo\s+de\s+Entrega.{0,60}DCTFWeb', r'DCTFWeb.{0,60}Recibo\s+de\s+Entrega']),
-    ('DCTFWeb - Declaração', [r'\bDCTFWeb\b']),
-    ('FGTS', [r'FGTS\s+Digital', r'Guia\s+do\s+FGTS', r'\bGFD\b']),
     ('Guia', [r'Guia\s+de\s+Recolhimento', r'\bGPS\b', r'\bDARF\b']),
     ('Boleto', [r'\d{5}\.\d{5}\s+\d{5}\.\d{6}\s+\d{5}\.\d{6}\s+\d\s+\d{14}', r'Linha\s+Digit[áa]vel']),
     ('Nota Fiscal', [r'NFS-?e', r'Nota\s+Fiscal\s+de\s+Servi[çc]o', r'DANFE']),
@@ -3206,7 +3240,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.96',
+        'versao': '2.97',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -3984,7 +4018,7 @@ def email_webhook():
         item['trecho_texto'] = texto[:500]
         item['pendencia'] = tipo_problema
 
-        eh_fiscal = REMETENTE_FISCAL.lower() in remetente.lower()
+        eh_fiscal = (REMETENTE_FISCAL.lower() in remetente.lower()) or (tipo_doc in TIPOS_FISCAIS)
 
         if dry_run:
             if eh_fiscal:
@@ -3995,7 +4029,10 @@ def email_webhook():
             continue
 
         # Caixa fiscal (v2.96) — não usa o fluxo de Processar Arquivos do DP
-        # (Kit Admissão etc.); vai direto para Extrato/FGTS/Guias.
+        # (Kit Admissão etc.); vai direto para Extrato/FGTS/Guias. Aplica-se
+        # tanto ao remetente fiscal dedicado quanto a qualquer documento já
+        # classificado como um tipo fiscal, venha de onde vier (ver nota em
+        # TIPOS_FISCAIS acima).
         if eh_fiscal:
             item.update(_processar_anexo_fiscal(conteudo, nome_arquivo, tipo_doc, texto))
             resultado['anexos_processados'].append(item)
