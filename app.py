@@ -1042,19 +1042,25 @@ def extrair_pdf_colaborador(caminho_pdf: str, indices: list) -> bytes:
     return resultado
 
 
-def extrair_pdf_do_request() -> str:
+def extrair_pdf_do_request(campo: str = 'pdf') -> str:
+    """campo (v3.00): nome do campo multipart a buscar. Com o padrão 'pdf',
+    mantém o comportamento antigo (cai para qualquer arquivo enviado, se
+    'pdf' não existir) — usado por quem já chama sem argumento. Com um
+    nome explícito diferente (ex.: 'pdf_manual'), busca só aquele campo,
+    sem fallback, para não pegar o arquivo errado quando há 2 PDFs no
+    mesmo request."""
     ct = request.content_type or ''
     if 'multipart/form-data' in ct:
-        arq = request.files.get('pdf') or (
-            next(iter(request.files.values()), None) if request.files else None
-        )
+        arq = request.files.get(campo)
+        if not arq and campo == 'pdf':
+            arq = next(iter(request.files.values()), None) if request.files else None
         if arq:
             caminho = f'/tmp/holerite_{_uuid.uuid4().hex}.pdf'
             arq.save(caminho)
             tamanho = os.path.getsize(caminho)
             logger.info(f'[PDF] Salvo em disco: {caminho} | {tamanho // 1024} KB')
             return caminho
-    elif 'application/json' in ct:
+    elif 'application/json' in ct and campo == 'pdf':
         data = request.get_json(force=True, silent=True) or {}
         if 'pdf_base64' in data:
             try:
@@ -1397,6 +1403,30 @@ def _anexar_attachment(table_id: str, record_id: str, field_id: str,
     return r.json()
 
 
+def _substituir_attachment(table_id: str, record_id: str, field_id: str,
+                            conteudo_bytes: bytes, filename: str,
+                            content_type: str = 'application/pdf'):
+    """Sobe um novo anexo e SUBSTITUI todo o conteúdo do campo por ele —
+    remove qualquer anexo anterior, em vez de acumular (comportamento padrão
+    de _anexar_attachment, que só adiciona). Usado no campo "PDF Folha
+    Ponto" (v3.00): a versão assinada substitui a provisória, nunca as duas
+    juntas no mesmo campo."""
+    resultado_upload = _anexar_attachment(table_id, record_id, field_id, conteudo_bytes, filename, content_type)
+    anexos_apos_upload = (resultado_upload.get('fields', {}) or {}).get(field_id) or []
+    if not anexos_apos_upload:
+        return resultado_upload
+    novo = anexos_apos_upload[-1]
+    _at_throttle()
+    r = requests.patch(
+        f'https://api.airtable.com/v0/{BASE_ID}/{table_id}/{record_id}',
+        headers=_at_headers(),
+        json={'fields': {field_id: [{'id': novo['id']}]}, 'typecast': True},
+        timeout=30,
+    )
+    _raise_for_airtable(r, f'substituir attachment {table_id}/{record_id}/{field_id}')
+    return r.json()
+
+
 def _formatar_resumo_cartao_ponto(dados: dict) -> str:
     """Formata o retorno de extrair_cartao_ponto em texto legível para o
     campo "Resumo Cartão Ponto (extraído)" em Funcionários."""
@@ -1512,6 +1542,54 @@ def _buscar_funcionario_por_nome(nome: str):
         if _normalizar_nome_busca(nome_cadastrado) == nome_normalizado:
             return rec['id'], nome_cadastrado
     return None, None
+
+
+_CONECTORES_NOME_RE = re.compile(r'\b(?:DA|DE|DO|DAS|DOS|E)\b')
+
+
+def _primeiro_ultimo_nome(nome_normalizado: str) -> tuple:
+    """Extrai (primeiro, último) token de um nome já normalizado (maiúsculas,
+    sem acento), ignorando conectores comuns (DA/DE/DO/DAS/DOS/E) — usado
+    quando a folha manual grafa o nome sem os conectores do cadastro."""
+    sem_conectores = _CONECTORES_NOME_RE.sub(' ', nome_normalizado)
+    tokens = [t for t in sem_conectores.split() if t]
+    if not tokens:
+        return '', ''
+    return tokens[0], tokens[-1]
+
+
+def _buscar_funcionario_por_nome_parcial(nome: str):
+    """Fallback (v3.00) quando a busca exata por nome (_buscar_funcionario_
+    por_nome) não encontra nada — ex.: folha manual grafa o nome sem os
+    conectores ("da"/"de"/"dos") presentes no cadastro. Casa por Primeiro
+    Nome + Último Nome, ambos normalizados.
+
+    Se mais de um Funcionário bater (homônimos), NÃO escolhe sozinho —
+    devolve a lista de candidatos para o chamador criar uma Pendência
+    explícita em vez de arriscar vincular à pessoa errada.
+
+    Retorna (func_id, nome_at, candidatos):
+      - achou exatamente 1: (id, nome, None)
+      - homônimos (2+):     (None, None, [{'id':..., 'nome':...}, ...])
+      - não achou:          (None, None, None)
+    """
+    nome_norm = _normalizar_nome_busca(nome)
+    primeiro, ultimo = _primeiro_ultimo_nome(nome_norm)
+    if not primeiro or not ultimo:
+        return None, None, None
+
+    candidatos = []
+    for rec in _at_listar_todos(TABLE_FUNC, ['Nome Completo']):
+        nome_cadastrado = rec['fields'].get('Nome Completo', '')
+        p_cad, u_cad = _primeiro_ultimo_nome(_normalizar_nome_busca(nome_cadastrado))
+        if p_cad == primeiro and u_cad == ultimo:
+            candidatos.append({'id': rec['id'], 'nome': nome_cadastrado})
+
+    if len(candidatos) == 1:
+        return candidatos[0]['id'], candidatos[0]['nome'], None
+    if len(candidatos) > 1:
+        return None, None, candidatos
+    return None, None, None
 
 
 def _buscar_cpf_por_funcionario_id(func_id: str) -> str:
@@ -3263,7 +3341,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.99',
+        'versao': '3.00',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -3550,116 +3628,56 @@ def processar_holerites():
         }), 500
 
 
-@app.route('/processar-folha-ponto', methods=['POST', 'OPTIONS'])
-def processar_folha_ponto_master():
+def _processar_folha_ponto_arquivo(caminho_pdf, folha_mensal, disparar_assinatura, cpfs_excluir):
+    """v3.00 — Processa UM arquivo de Folha de Ponto (master Secullum OU
+    Folha Manual): fatia por CPF/nome, anexa o cartão individual no campo
+    "PDF Folha Ponto" e (opcional) dispara a Assinatura Nativa.
+
+    Compartilhado pelas duas fases do pipeline (Folhas Manuais processadas
+    PRIMEIRO, master da Secullum depois) — `cpfs_excluir` é a Regra de
+    Prevalência: qualquer CPF nesse conjunto é IGNORADO por completo (sem
+    fatiar, sem salvar, sem disparar WhatsApp).
+
+    Formato A (CPF explícito) e Formato B ("Colaborador: NOME", sem CPF) são
+    tratados juntos aqui: Formato B busca o Funcionário por nome exato
+    normalizado e, se não achar, por Primeiro+Último Nome (ignora conectores
+    da/de/do/dos) — homônimos nesse fallback parcial viram Pendência
+    explícita em vez de vincular por adivinhação.
     """
-    v2.27 — Recebe o PDF MESTRE consolidado de Folha de Ponto / Cartão Ponto,
-    fatia por CPF (igual ao /processar-holerites) e anexa o cartão INDIVIDUAL
-    de cada colaborador no campo "PDF Folha Ponto" (prontuário em Funcionários),
-    casando por CPF.
-
-    Resolve o caso do mestre consolidado: o handler de fila
-    (_processar_folha_ponto) anexa o arquivo inteiro a uma única pessoa (a 1ª
-    do PDF). Aqui cada colaborador recebe só o seu cartão.
-
-    A fila de envio por cliente (Envios de Documentos/e-mail e o combinado de
-    WhatsApp) já pega automaticamente o cartão individual mais recente de
-    cada colaborador via _ponto_pdfs_por_cliente — não precisa de nenhum
-    passo extra aqui para isso.
-
-    disparar_assinatura (v2.98): opcional, default true — logo após anexar o
-    cartão individual, dispara automaticamente o link de Assinatura Nativa
-    (revisão/confirmação por CPF) via WhatsApp, reaproveitando
-    _gerar_assinatura_core (mesmo motor de Rescisão/Admissão/comunicado em
-    lote). Se o colaborador não tiver WhatsApp cadastrado, o disparo daquele
-    item falha isoladamente (não interrompe o processamento dos demais).
-
-    Formato B / Folhas Manuais (v2.99): quando a página não tem CPF impresso
-    (só "Colaborador: NOME"), busca o Funcionário por nome (normalizado —
-    sem acento/maiúsculas/espaço extra) em vez de CPF. O CPF real usado nas
-    comparações abaixo vem do próprio cadastro encontrado.
-
-    cpfs_ja_processados (v2.99, Regra de Exceção): lista de CPFs (JSON ou
-    CSV, com ou sem máscara) a IGNORAR nesta chamada — nenhum anexo, nenhum
-    disparo de assinatura. Uso pretendido: processar as Folhas Manuais
-    PRIMEIRO, pegar o "cpfs_processados" do retorno, e passar essa lista ao
-    processar o master da Secullum depois — evita reprocessar/disparar o
-    cartão errado (mês zerado/faltas) de quem já tem Folha Manual.
-
-    Não exige X-API-KEY (espelha /processar-holerites); usa a AIRTABLE_API_KEY
-    do servidor. Body: multipart com campo "pdf" + opcional "folha_mensal" +
-    opcional "disparar_assinatura" (true/false) + opcional "cpfs_ja_processados".
-    """
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
-
-    if not AIRTABLE_API_KEY:
-        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
-
-    caminho_pdf = extrair_pdf_do_request()
-    if not caminho_pdf or not os.path.exists(caminho_pdf) or os.path.getsize(caminho_pdf) < 100:
-        return jsonify({'status': 'erro', 'erro': 'PDF não recebido.'}), 400
-    with open(caminho_pdf, 'rb') as _f:
-        if _f.read(4) != b'%PDF':
-            os.unlink(caminho_pdf)
-            return jsonify({'status': 'erro', 'erro': 'Dados não são PDF válido.'}), 400
-
-    folha_mensal = (
-        request.form.get('folha_mensal')
-        or request.args.get('folha_mensal')
-        or (request.get_json(silent=True) or {}).get('folha_mensal')
-    )
-    if not folha_mensal:
-        nome_mes, ano, _ = mes_anterior_info()
-        folha_mensal = f'{nome_mes} {ano}'
-
-    disparar_assinatura = str(
-        request.form.get('disparar_assinatura',
-                          request.args.get('disparar_assinatura', 'true'))
-    ).strip().lower() in ('1', 'true', 'yes', 'sim')
-
-    # Regra de exceção (v2.99): CPFs que já receberam Folha Manual não devem
-    # ser reprocessados a partir do master da Secullum (que traz o mês
-    # zerado/faltas para quem tem ponto controlado manualmente). Aceita
-    # tanto JSON quanto CSV separado por vírgula, com ou sem máscara.
-    cpfs_ja_processados_raw = (
-        request.form.get('cpfs_ja_processados')
-        or request.args.get('cpfs_ja_processados')
-        or (request.get_json(silent=True) or {}).get('cpfs_ja_processados')
-    )
-    cpfs_ja_processados = set()
-    if cpfs_ja_processados_raw:
-        if isinstance(cpfs_ja_processados_raw, str):
-            try:
-                lista = json.loads(cpfs_ja_processados_raw)
-            except ValueError:
-                lista = cpfs_ja_processados_raw.split(',')
-        else:
-            lista = cpfs_ja_processados_raw
-        cpfs_ja_processados = {re.sub(r'\D', '', str(c)) for c in lista if str(c).strip()}
-
     mapa, total_paginas = construir_mapa_cpf(caminho_pdf)
-    if not mapa:
-        try:
-            os.unlink(caminho_pdf)
-        except OSError:
-            pass
-        return jsonify({'status': 'erro', 'erro': 'Nenhum CPF encontrado no PDF.'}), 422
+    anexados, erros, ignorados = [], [], []
+    cpfs_processados = set()
 
-    anexados = []
-    erros = []
-    ignorados = []
-    for cpf, dados in mapa.items():
+    for idx, (cpf, dados) in enumerate(mapa.items()):
         nome_pdf = dados.get('nome')
         paginas = dados.get('paginas')
         cpf_formato = 'A'  # A = CPF explícito no PDF; B = só nome ("Colaborador:")
 
         if cpf.startswith('sem_cpf'):
-            # Formato B (Folhas Manuais, v2.99): sem CPF impresso — o único
-            # dado disponível é o nome extraído via "Colaborador: NOME"
-            # (ver extrair_nome_funcionario). Busca o Funcionário por nome
-            # em vez de CPF; se achar, o CPF real vem do próprio cadastro.
+            # Formato B (Folhas Manuais): sem CPF impresso — o único dado
+            # disponível é o nome extraído via "Colaborador: NOME" (ver
+            # extrair_nome_funcionario). Busca exata por nome primeiro.
             func_id, nome_at = _buscar_funcionario_por_nome(nome_pdf)
+            if not func_id:
+                # Fallback (v3.00): Primeiro Nome + Último Nome, ignorando
+                # conectores — cobre o caso do PDF grafar o nome sem "da"/
+                # "de"/"dos" presentes no cadastro. Homônimos NÃO são
+                # resolvidos automaticamente.
+                func_id, nome_at, homonimos = _buscar_funcionario_por_nome_parcial(nome_pdf)
+                if homonimos:
+                    pendencia_id = _criar_registro(TABLE_PENDENCIAS, {
+                        F_PEND_NOME: f'Homônimos na Folha de Ponto: "{nome_pdf}"',
+                        F_PEND_STATUS: 'Pendente',
+                        F_PEND_TIPO: 'Homônimos - Folha de Ponto (Formato B)',
+                        F_PEND_OBS: 'Candidatos encontrados: ' + '; '.join(
+                            f"{c['nome']} ({c['id']})" for c in homonimos),
+                        F_PEND_DATA: datetime.now().isoformat(),
+                    })
+                    erros.append({'cpf': 'N/A', 'nome': nome_pdf,
+                                  'motivo': 'Homônimos encontrados — Pendência criada para revisão manual',
+                                  'pendencia_record_id': pendencia_id, 'candidatos': homonimos,
+                                  'paginas': paginas})
+                    continue
             if not func_id:
                 erros.append({'cpf': 'N/A', 'nome': nome_pdf,
                               'motivo': 'Sem CPF no PDF e nome não encontrado no Airtable (Formato B)',
@@ -3676,10 +3694,10 @@ def processar_folha_ponto_master():
                 continue
             cpf_digitos = re.sub(r'\D', '', cpf)
 
-        # Regra de exceção (v2.99): pula quem já recebeu Folha Manual nesta
-        # rodada — não anexa, não dispara assinatura, não reprocessa o
-        # cartão zerado/com faltas do master da Secullum por cima.
-        if cpf_digitos and cpf_digitos in cpfs_ja_processados:
+        # Regra de Prevalência (v3.00): pula quem já recebeu Folha Manual —
+        # não anexa, não dispara assinatura, não reprocessa o cartão
+        # zerado/com faltas do master da Secullum por cima.
+        if cpf_digitos and cpf_digitos in cpfs_excluir:
             ignorados.append({'cpf': cpf_digitos, 'nome': nome_at, 'funcionario_id': func_id,
                               'motivo': 'ja_recebeu_folha_manual_nesta_competencia'})
             continue
@@ -3721,46 +3739,185 @@ def processar_folha_ponto_master():
                     else:
                         item['assinatura'] = {'status': 'erro', 'erro': 'anexo_url_nao_encontrado'}
                 except Exception as exc:
-                    logger.error(f'[PONTO-MASTER] falha ao disparar assinatura {cpf}: {exc}')
+                    logger.error(f'[PONTO] falha ao disparar assinatura {cpf}: {exc}')
                     item['assinatura'] = {'status': 'erro', 'erro': str(exc)}
 
             anexados.append(item)
+            if cpf_digitos:
+                cpfs_processados.add(cpf_digitos)
+            del pdf_ind
         except Exception as exc:
-            logger.error(f'[PONTO-MASTER] erro ao anexar Folha de Ponto {cpf}: {exc}')
+            logger.error(f'[PONTO] erro ao anexar Folha de Ponto {cpf}: {exc}')
             erros.append({'cpf': cpf, 'nome': nome_final, 'motivo': str(exc)})
 
+        # Otimização de memória (v3.00, anti-timeout): libera RAM a cada 15
+        # colaboradores processados neste loop de anexo/disparo, além do
+        # gc.collect() que a Pass 1 (construir_mapa_cpf) já faz na varredura.
+        if (idx + 1) % 15 == 0:
+            gc.collect()
+
+    return {
+        'total_colaboradores': len(mapa),
+        'total_paginas': total_paginas,
+        'anexados': anexados,
+        'ignorados': ignorados,
+        'erros': erros,
+        'cpfs_processados': cpfs_processados,
+    }
+
+
+@app.route('/processar-folha-ponto', methods=['POST', 'OPTIONS'])
+def processar_folha_ponto_master():
+    """
+    v3.00 — Pipeline de fechamento de Folha de Ponto: master Secullum
+    (Formato A, CPF explícito) + Folhas Manuais da Magnata (Formato B,
+    "Colaborador: NOME", sem CPF), com Regra de Prevalência (Manual sempre
+    vence) e disparo de Assinatura Nativa. Escopo estritamente isolado a
+    este endpoint e ao campo "PDF Folha Ponto" de Funcionários — não toca em
+    nenhuma rota de Admissão/Rescisão/cadastro nem no motor genérico de
+    WhatsApp usado por elas.
+
+    Body multipart:
+      - "pdf": PDF master da Secullum [obrigatório]
+      - "pdf_manual": PDF das Folhas Manuais [opcional] — se enviado, é
+        processado PRIMEIRO; todo CPF resolvido nele entra automaticamente
+        na lista de exclusão (cpfs_manuais_processados, em memória) antes
+        de processar o master — nenhuma página da Secullum desses CPFs é
+        fatiada, salva ou disparada.
+      - "folha_mensal": ex. "Junho 2026" [opcional, default = mês anterior]
+      - "disparar_assinatura": true/false [opcional, default true]
+      - "cpfs_ja_processados": JSON/CSV de CPFs extras a excluir (soma-se
+        aos vindos de pdf_manual, se ambos forem enviados) [opcional]
+
+    Fase Definitiva (assinatura confirmada): tratada à parte, no webhook
+    /assinatura/<hash_token> — ver bloco isolado "Folha de Ponto" lá, que
+    substitui o PDF provisório pelo assinado (nunca acumula os dois).
+
+    Não exige X-API-KEY (espelha /processar-holerites); usa a AIRTABLE_API_KEY
+    do servidor.
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    caminho_master = extrair_pdf_do_request('pdf')
+    if not caminho_master or not os.path.exists(caminho_master) or os.path.getsize(caminho_master) < 100:
+        return jsonify({'status': 'erro', 'erro': 'PDF (master) não recebido.'}), 400
+    with open(caminho_master, 'rb') as _f:
+        if _f.read(4) != b'%PDF':
+            os.unlink(caminho_master)
+            return jsonify({'status': 'erro', 'erro': 'Dados do master não são PDF válido.'}), 400
+
+    caminho_manual = extrair_pdf_do_request('pdf_manual')
+    if caminho_manual and (not os.path.exists(caminho_manual) or os.path.getsize(caminho_manual) < 100):
+        try:
+            os.unlink(caminho_manual)
+        except OSError:
+            pass
+        caminho_manual = None
+    if caminho_manual:
+        with open(caminho_manual, 'rb') as _f:
+            if _f.read(4) != b'%PDF':
+                os.unlink(caminho_manual)
+                caminho_manual = None
+
+    folha_mensal = (
+        request.form.get('folha_mensal')
+        or request.args.get('folha_mensal')
+        or (request.get_json(silent=True) or {}).get('folha_mensal')
+    )
+    if not folha_mensal:
+        nome_mes, ano, _ = mes_anterior_info()
+        folha_mensal = f'{nome_mes} {ano}'
+
+    disparar_assinatura = str(
+        request.form.get('disparar_assinatura',
+                          request.args.get('disparar_assinatura', 'true'))
+    ).strip().lower() in ('1', 'true', 'yes', 'sim')
+
+    cpfs_ja_processados_raw = (
+        request.form.get('cpfs_ja_processados')
+        or request.args.get('cpfs_ja_processados')
+        or (request.get_json(silent=True) or {}).get('cpfs_ja_processados')
+    )
+    cpfs_ja_processados = set()
+    if cpfs_ja_processados_raw:
+        if isinstance(cpfs_ja_processados_raw, str):
+            try:
+                lista = json.loads(cpfs_ja_processados_raw)
+            except ValueError:
+                lista = cpfs_ja_processados_raw.split(',')
+        else:
+            lista = cpfs_ja_processados_raw
+        cpfs_ja_processados = {re.sub(r'\D', '', str(c)) for c in lista if str(c).strip()}
+
+    # Regra de Prevalência (v3.00): array em memória — CPFs resolvidos nas
+    # Folhas Manuais (processadas primeiro) somam-se aos excluídos explícitos
+    # antes de processar o master da Secullum.
+    cpfs_manuais_processados = set(cpfs_ja_processados)
+    resultado_manual = None
+
+    if caminho_manual:
+        r_manual = _processar_folha_ponto_arquivo(
+            caminho_manual, folha_mensal, disparar_assinatura, cpfs_excluir=cpfs_ja_processados)
+        try:
+            os.unlink(caminho_manual)
+        except OSError:
+            pass
+        cpfs_manuais_processados |= r_manual['cpfs_processados']
+        resultado_manual = {
+            'total_colaboradores': r_manual['total_colaboradores'],
+            'total_paginas': r_manual['total_paginas'],
+            'total_anexados': len(r_manual['anexados']),
+            'total_ignorados': len(r_manual['ignorados']),
+            'total_erros': len(r_manual['erros']),
+            'anexados': r_manual['anexados'],
+            'ignorados': r_manual['ignorados'],
+            'erros': r_manual['erros'],
+        }
+
+    r_master = _processar_folha_ponto_arquivo(
+        caminho_master, folha_mensal, disparar_assinatura, cpfs_excluir=cpfs_manuais_processados)
     try:
-        os.unlink(caminho_pdf)
+        os.unlink(caminho_master)
     except OSError:
         pass
 
+    if not resultado_manual and r_master['total_colaboradores'] == 0:
+        return jsonify({'status': 'erro', 'erro': 'Nenhum CPF/nome encontrado no PDF.'}), 422
+
+    todos_anexados = r_master['anexados'] + (resultado_manual['anexados'] if resultado_manual else [])
     total_assinaturas_enviadas = sum(
-        1 for a in anexados
+        1 for a in todos_anexados
         if disparar_assinatura and (a.get('assinatura') or {}).get('whatsapp_disparo') == 'enviado'
     )
     total_assinaturas_falha = sum(
-        1 for a in anexados
+        1 for a in todos_anexados
         if disparar_assinatura and (a.get('assinatura') or {}).get('status') != 'ok'
     ) if disparar_assinatura else 0
 
     return jsonify({
         'status': 'concluido',
         'folha_mensal': folha_mensal,
-        'total_colaboradores': len(mapa),
-        'total_anexados': len(anexados),
-        'total_ignorados_ja_processados': len(ignorados),
-        'total_erros': len(erros),
-        'total_paginas': total_paginas,
         'disparar_assinatura': disparar_assinatura,
         'total_assinaturas_enviadas': total_assinaturas_enviadas,
         'total_assinaturas_falha': total_assinaturas_falha,
-        # CPFs dos anexados nesta chamada — repasse em cpfs_ja_processados na
-        # chamada seguinte (ex.: master da Secullum) para aplicar a Regra de
-        # Exceção (v2.99): quem já recebeu Folha Manual não é reprocessado.
-        'cpfs_processados': [a['cpf'] for a in anexados],
-        'anexados': anexados,
-        'ignorados': ignorados,
-        'erros': erros,
+        'folhas_manuais': resultado_manual,  # None se "pdf_manual" não foi enviado
+        'master_secullum': {
+            'total_colaboradores': r_master['total_colaboradores'],
+            'total_paginas': r_master['total_paginas'],
+            'total_anexados': len(r_master['anexados']),
+            'total_ignorados_prevalencia_manual': len(r_master['ignorados']),
+            'total_erros': len(r_master['erros']),
+            'anexados': r_master['anexados'],
+            'ignorados': r_master['ignorados'],
+            'erros': r_master['erros'],
+        },
+        # CPFs processados nesta chamada (manual + master) — útil para
+        # repassar em cpfs_ja_processados numa reexecução futura, se preciso.
+        'cpfs_processados': sorted(cpfs_manuais_processados | r_master['cpfs_processados']),
     })
 
 
@@ -7459,6 +7616,45 @@ def assinatura_pagina(hash_token):
                 _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_DOCUMENTOS, pdf_comprovante, nome_comprovante)
     except Exception as exc:
         logger.warning(f'[ASSINATURA] falha ao carimbar/gerar comprovante/salvar no funcionário {registro["id"]}: {exc}')
+
+    # ── Fase Definitiva da Folha de Ponto (v3.00) ────────────────────────────
+    # Bloco ISOLADO: só executa quando Tipo de Documento == 'Folha de Ponto'.
+    # Não depende de nenhuma variável do bloco universal acima (busca e
+    # carimba por conta própria) e não altera Rescisão/Admissão/outros tipos
+    # nem o campo "Documentos" — mexe exclusivamente em "PDF Folha Ponto".
+    # Substitui o PDF provisório (não assinado) que ficou lá pela versão
+    # carimbada, via _substituir_attachment — nunca acumula os dois no mesmo
+    # campo (Regra "Sem Duplicidade").
+    if fields.get('Tipo de Documento') == 'Folha de Ponto':
+        try:
+            _at_throttle()
+            r_func_ponto = requests.get(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
+                headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                params={'returnFieldsByFieldId': 'true'}, timeout=15,
+            )
+            anexos_ponto_atual = (
+                (r_func_ponto.json().get('fields', {}).get(F_FUNC_PDF_FOLHA) or [])
+                if r_func_ponto.ok else []
+            )
+            if anexos_ponto_atual:
+                anexo_provisorio = anexos_ponto_atual[-1]
+                r_doc_ponto = requests.get(anexo_provisorio['url'], timeout=60)
+                if r_doc_ponto.ok:
+                    nome_func_ponto = r_func.json().get('fields', {}).get('Nome Completo', '')
+                    dt_fmt_ponto = agora_brt_dt.strftime('%d/%m/%Y %H:%M')
+                    pdf_ponto_assinado = _carimbar_pdf_assinado(
+                        r_doc_ponto.content, nome_func_ponto, cpf_informado, dt_fmt_ponto)
+                    nome_ponto_assinado = anexo_provisorio['filename']
+                    nome_ponto_assinado = (
+                        nome_ponto_assinado[:-4] + ' - ASSINADO.pdf'
+                        if nome_ponto_assinado.lower().endswith('.pdf') else nome_ponto_assinado + ' - ASSINADO'
+                    )
+                    _substituir_attachment(TABLE_FUNC, func_id, F_FUNC_PDF_FOLHA,
+                                            pdf_ponto_assinado, nome_ponto_assinado)
+                    logger.info(f'[ASSINATURA][PONTO] PDF Folha Ponto substituído pelo assinado — func_id={func_id}')
+        except Exception as exc:
+            logger.warning(f'[ASSINATURA][PONTO] falha ao substituir PDF Folha Ponto assinado (func_id={func_id}): {exc}')
 
     # Atualizar Status do documento de origem em Processar Arquivos, se vinculado
     processar_id = fields.get('Processar Arquivos ID')
