@@ -477,6 +477,15 @@ def extrair_nome_funcionario(texto: str):
                         nome_partes.append(p)
                     if nome_partes:
                         return ' '.join(nome_partes)
+    # Formato B (Folhas Manuais de Ponto, v2.99): sem CPF impresso — só
+    # "Colaborador: NOME" no cabeçalho. Usado como fallback quando o padrão
+    # "Nome do Funcionário" (holerites/Secullum) não bate.
+    for linha in linhas:
+        m = re.search(r'Colaborador:\s*(.+)', linha, re.IGNORECASE)
+        if m:
+            nome = m.group(1).strip()
+            if nome:
+                return nome
     return 'Desconhecido'
 
 
@@ -1503,6 +1512,20 @@ def _buscar_funcionario_por_nome(nome: str):
         if _normalizar_nome_busca(nome_cadastrado) == nome_normalizado:
             return rec['id'], nome_cadastrado
     return None, None
+
+
+def _buscar_cpf_por_funcionario_id(func_id: str) -> str:
+    """Busca o CPF cadastrado de um Funcionário pelo record id — usado no
+    Formato B da Folha de Ponto (v2.99), que não tem CPF impresso no PDF."""
+    _at_throttle()
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={'fields[]': ['CPF']}, timeout=15,
+    )
+    if r.ok:
+        return r.json().get('fields', {}).get('CPF', '') or ''
+    return ''
 
 
 def _buscar_contabilidade_mensal_por_nome(nome: str):
@@ -3240,7 +3263,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.98',
+        'versao': '2.99',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -3551,9 +3574,21 @@ def processar_folha_ponto_master():
     lote). Se o colaborador não tiver WhatsApp cadastrado, o disparo daquele
     item falha isoladamente (não interrompe o processamento dos demais).
 
+    Formato B / Folhas Manuais (v2.99): quando a página não tem CPF impresso
+    (só "Colaborador: NOME"), busca o Funcionário por nome (normalizado —
+    sem acento/maiúsculas/espaço extra) em vez de CPF. O CPF real usado nas
+    comparações abaixo vem do próprio cadastro encontrado.
+
+    cpfs_ja_processados (v2.99, Regra de Exceção): lista de CPFs (JSON ou
+    CSV, com ou sem máscara) a IGNORAR nesta chamada — nenhum anexo, nenhum
+    disparo de assinatura. Uso pretendido: processar as Folhas Manuais
+    PRIMEIRO, pegar o "cpfs_processados" do retorno, e passar essa lista ao
+    processar o master da Secullum depois — evita reprocessar/disparar o
+    cartão errado (mês zerado/faltas) de quem já tem Folha Manual.
+
     Não exige X-API-KEY (espelha /processar-holerites); usa a AIRTABLE_API_KEY
     do servidor. Body: multipart com campo "pdf" + opcional "folha_mensal" +
-    opcional "disparar_assinatura" (true/false).
+    opcional "disparar_assinatura" (true/false) + opcional "cpfs_ja_processados".
     """
     if request.method == 'OPTIONS':
         return jsonify({}), 200
@@ -3583,6 +3618,26 @@ def processar_folha_ponto_master():
                           request.args.get('disparar_assinatura', 'true'))
     ).strip().lower() in ('1', 'true', 'yes', 'sim')
 
+    # Regra de exceção (v2.99): CPFs que já receberam Folha Manual não devem
+    # ser reprocessados a partir do master da Secullum (que traz o mês
+    # zerado/faltas para quem tem ponto controlado manualmente). Aceita
+    # tanto JSON quanto CSV separado por vírgula, com ou sem máscara.
+    cpfs_ja_processados_raw = (
+        request.form.get('cpfs_ja_processados')
+        or request.args.get('cpfs_ja_processados')
+        or (request.get_json(silent=True) or {}).get('cpfs_ja_processados')
+    )
+    cpfs_ja_processados = set()
+    if cpfs_ja_processados_raw:
+        if isinstance(cpfs_ja_processados_raw, str):
+            try:
+                lista = json.loads(cpfs_ja_processados_raw)
+            except ValueError:
+                lista = cpfs_ja_processados_raw.split(',')
+        else:
+            lista = cpfs_ja_processados_raw
+        cpfs_ja_processados = {re.sub(r'\D', '', str(c)) for c in lista if str(c).strip()}
+
     mapa, total_paginas = construir_mapa_cpf(caminho_pdf)
     if not mapa:
         try:
@@ -3593,19 +3648,40 @@ def processar_folha_ponto_master():
 
     anexados = []
     erros = []
+    ignorados = []
     for cpf, dados in mapa.items():
         nome_pdf = dados.get('nome')
         paginas = dados.get('paginas')
+        cpf_formato = 'A'  # A = CPF explícito no PDF; B = só nome ("Colaborador:")
 
         if cpf.startswith('sem_cpf'):
-            erros.append({'cpf': 'N/A', 'nome': nome_pdf,
-                          'motivo': 'CPF não extraído', 'paginas': paginas})
-            continue
+            # Formato B (Folhas Manuais, v2.99): sem CPF impresso — o único
+            # dado disponível é o nome extraído via "Colaborador: NOME"
+            # (ver extrair_nome_funcionario). Busca o Funcionário por nome
+            # em vez de CPF; se achar, o CPF real vem do próprio cadastro.
+            func_id, nome_at = _buscar_funcionario_por_nome(nome_pdf)
+            if not func_id:
+                erros.append({'cpf': 'N/A', 'nome': nome_pdf,
+                              'motivo': 'Sem CPF no PDF e nome não encontrado no Airtable (Formato B)',
+                              'paginas': paginas})
+                continue
+            cpf_formato = 'B'
+            cpf_real = _buscar_cpf_por_funcionario_id(func_id)
+            cpf_digitos = re.sub(r'\D', '', cpf_real or '')
+        else:
+            func_id, nome_at = buscar_funcionario_por_cpf(cpf)
+            if not func_id:
+                erros.append({'cpf': cpf, 'nome': nome_pdf,
+                              'motivo': 'Funcionário não encontrado no Airtable'})
+                continue
+            cpf_digitos = re.sub(r'\D', '', cpf)
 
-        func_id, nome_at = buscar_funcionario_por_cpf(cpf)
-        if not func_id:
-            erros.append({'cpf': cpf, 'nome': nome_pdf,
-                          'motivo': 'Funcionário não encontrado no Airtable'})
+        # Regra de exceção (v2.99): pula quem já recebeu Folha Manual nesta
+        # rodada — não anexa, não dispara assinatura, não reprocessa o
+        # cartão zerado/com faltas do master da Secullum por cima.
+        if cpf_digitos and cpf_digitos in cpfs_ja_processados:
+            ignorados.append({'cpf': cpf_digitos, 'nome': nome_at, 'funcionario_id': func_id,
+                              'motivo': 'ja_recebeu_folha_manual_nesta_competencia'})
             continue
 
         nome_final = nome_at or nome_pdf
@@ -3614,8 +3690,8 @@ def processar_folha_ponto_master():
             pdf_ind = extrair_pdf_colaborador(caminho_pdf, paginas)
             _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_PDF_FOLHA, pdf_ind, filename)
             item = {
-                'cpf': cpf, 'nome': nome_final, 'funcionario_id': func_id,
-                'paginas': paginas, 'arquivo': filename,
+                'cpf': cpf_digitos or cpf, 'nome': nome_final, 'funcionario_id': func_id,
+                'paginas': paginas, 'arquivo': filename, 'formato': cpf_formato,
             }
 
             if disparar_assinatura:
@@ -3672,12 +3748,18 @@ def processar_folha_ponto_master():
         'folha_mensal': folha_mensal,
         'total_colaboradores': len(mapa),
         'total_anexados': len(anexados),
+        'total_ignorados_ja_processados': len(ignorados),
         'total_erros': len(erros),
         'total_paginas': total_paginas,
         'disparar_assinatura': disparar_assinatura,
         'total_assinaturas_enviadas': total_assinaturas_enviadas,
         'total_assinaturas_falha': total_assinaturas_falha,
+        # CPFs dos anexados nesta chamada — repasse em cpfs_ja_processados na
+        # chamada seguinte (ex.: master da Secullum) para aplicar a Regra de
+        # Exceção (v2.99): quem já recebeu Folha Manual não é reprocessado.
+        'cpfs_processados': [a['cpf'] for a in anexados],
         'anexados': anexados,
+        'ignorados': ignorados,
         'erros': erros,
     })
 
