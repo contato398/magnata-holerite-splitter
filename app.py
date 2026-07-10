@@ -243,7 +243,7 @@ F_PEND_DATA   = 'fldRolmP0rSbJevUZ'
 
 EMAIL_WEBHOOK_KEY = os.environ.get('EMAIL_WEBHOOK_KEY', '')
 
-# Caixa fiscal (v2.67) — Recibos/Guias/Extrato mensal de competência tributária.
+# Caixa fiscal (v2.96) — Recibos/Guias/Extrato mensal de competência tributária.
 # Remetente adicionado à lista de confiança do Apps Script (REMETENTES_CONFIAVEIS)
 # sem alterar o e-mail já existente do Departamento Pessoal. Documentos vindos
 # deste remetente são roteados no /email/webhook para as tabelas de Extrato/
@@ -287,7 +287,7 @@ TIPO_DOC_REGRAS = [
                    r'C[áa]lculo\s+de\s+Rescis[ãa]o',
                    r'Motivo\s+demiss[ãa]o', r'Data\s+demiss[ãa]o',
                    r'Data\s+de\s+demiss[ãa]o']),
-    # Extrato da Folha de Pagamento (caixa fiscal, v2.67) — precisa vir ANTES
+    # Extrato da Folha de Pagamento (caixa fiscal, v2.96) — precisa vir ANTES
     # de Holerite: é um relatório-resumo da folha (não o holerite individual),
     # mas costuma citar "Total de Vencimentos"/"Valor Líquido" também.
     ('Extrato da Folha de Pagamento', [r'Extrato\s+(?:da\s+)?Folha\s+de\s+Pagamento']),
@@ -319,7 +319,7 @@ TIPO_DOC_REGRAS = [
     ('Contrato de Experiência', [r'Contrato\s+de\s+Experi[êe]ncia']),
     ('Contrato de Trabalho', [r'Contrato\s+de\s+Trabalho', r'\bCTPS\b']),
     ('Férias', [r'Aviso\s+de\s+F[ée]rias', r'Recibo\s+de\s+F[ée]rias', r'Per[íi]odo\s+de\s+Gozo']),
-    # DCTFWeb (caixa fiscal, v2.67) — Recibo de Entrega precisa vir ANTES da
+    # DCTFWeb (caixa fiscal, v2.96) — Recibo de Entrega precisa vir ANTES da
     # Declaração genérica, senão o \bDCTFWeb\b da Declaração sempre vence
     # primeiro e o recibo nunca é distinguido.
     ('DCTFWeb - Recibo de Entrega',
@@ -3206,7 +3206,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.95',
+        'versao': '2.96',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -3791,7 +3791,7 @@ def corrigir_valores():
 
 
 def _detectar_competencia_fiscal(texto: str) -> str:
-    """v2.67 — Extrai a competência (mês/ano) de um documento fiscal a partir
+    """v2.96 — Extrai a competência (mês/ano) de um documento fiscal a partir
     de padrões 'Competência MM/AAAA' ou 'Período de Apuração MM/AAAA'. Se não
     encontrar, assume o mês anterior ao recebimento — padrão real observado:
     Extrato/FGTS/DCTFWeb de um mês sempre chegam no mês seguinte."""
@@ -3808,7 +3808,7 @@ def _detectar_competencia_fiscal(texto: str) -> str:
 
 
 def _processar_anexo_fiscal(conteudo: bytes, nome_arquivo: str, tipo_doc: str, texto: str) -> dict:
-    """v2.67 — Roteia um anexo vindo da caixa fiscal (REMETENTE_FISCAL) para a
+    """v2.96 — Roteia um anexo vindo da caixa fiscal (REMETENTE_FISCAL) para a
     tabela correta, reaproveitando a mesma infraestrutura já usada para
     Extrato/FGTS de clientes (fatiamento por CNPJ/Nome) e Guias broadcast
     (DCTFWeb), em vez do fluxo de Processar Arquivos do Departamento Pessoal
@@ -3994,7 +3994,7 @@ def email_webhook():
             resultado['anexos_processados'].append(item)
             continue
 
-        # Caixa fiscal (v2.67) — não usa o fluxo de Processar Arquivos do DP
+        # Caixa fiscal (v2.96) — não usa o fluxo de Processar Arquivos do DP
         # (Kit Admissão etc.); vai direto para Extrato/FGTS/Guias.
         if eh_fiscal:
             item.update(_processar_anexo_fiscal(conteudo, nome_arquivo, tipo_doc, texto))
