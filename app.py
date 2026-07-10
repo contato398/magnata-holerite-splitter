@@ -3240,7 +3240,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.97',
+        'versao': '2.98',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -3539,8 +3539,21 @@ def processar_folha_ponto_master():
     (_processar_folha_ponto) anexa o arquivo inteiro a uma única pessoa (a 1ª
     do PDF). Aqui cada colaborador recebe só o seu cartão.
 
+    A fila de envio por cliente (Envios de Documentos/e-mail e o combinado de
+    WhatsApp) já pega automaticamente o cartão individual mais recente de
+    cada colaborador via _ponto_pdfs_por_cliente — não precisa de nenhum
+    passo extra aqui para isso.
+
+    disparar_assinatura (v2.98): opcional, default true — logo após anexar o
+    cartão individual, dispara automaticamente o link de Assinatura Nativa
+    (revisão/confirmação por CPF) via WhatsApp, reaproveitando
+    _gerar_assinatura_core (mesmo motor de Rescisão/Admissão/comunicado em
+    lote). Se o colaborador não tiver WhatsApp cadastrado, o disparo daquele
+    item falha isoladamente (não interrompe o processamento dos demais).
+
     Não exige X-API-KEY (espelha /processar-holerites); usa a AIRTABLE_API_KEY
-    do servidor. Body: multipart com campo "pdf" + opcional "folha_mensal".
+    do servidor. Body: multipart com campo "pdf" + opcional "folha_mensal" +
+    opcional "disparar_assinatura" (true/false).
     """
     if request.method == 'OPTIONS':
         return jsonify({}), 200
@@ -3564,6 +3577,11 @@ def processar_folha_ponto_master():
     if not folha_mensal:
         nome_mes, ano, _ = mes_anterior_info()
         folha_mensal = f'{nome_mes} {ano}'
+
+    disparar_assinatura = str(
+        request.form.get('disparar_assinatura',
+                          request.args.get('disparar_assinatura', 'true'))
+    ).strip().lower() in ('1', 'true', 'yes', 'sim')
 
     mapa, total_paginas = construir_mapa_cpf(caminho_pdf)
     if not mapa:
@@ -3595,10 +3613,42 @@ def processar_folha_ponto_master():
         try:
             pdf_ind = extrair_pdf_colaborador(caminho_pdf, paginas)
             _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_PDF_FOLHA, pdf_ind, filename)
-            anexados.append({
+            item = {
                 'cpf': cpf, 'nome': nome_final, 'funcionario_id': func_id,
                 'paginas': paginas, 'arquivo': filename,
-            })
+            }
+
+            if disparar_assinatura:
+                try:
+                    _at_throttle()
+                    r_check = requests.get(
+                        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
+                        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                        params={'returnFieldsByFieldId': 'true'}, timeout=15,
+                    )
+                    anexo_url = None
+                    if r_check.ok:
+                        anexos_ponto = r_check.json().get('fields', {}).get(F_FUNC_PDF_FOLHA) or []
+                        if anexos_ponto:
+                            anexo_url = anexos_ponto[-1].get('url')
+                    if anexo_url:
+                        resultado_ass, _ = _gerar_assinatura_core(
+                            funcionario_id=func_id,
+                            tipo_documento='Folha de Ponto',
+                            nome_documento=f'Folha de Ponto {folha_mensal} - {nome_final}',
+                            documento_url=anexo_url,
+                            documento_filename=filename,
+                            mensagem_extra='Por favor, revise os dias e horários abaixo e confirme.',
+                            disparar_whatsapp=True,
+                        )
+                        item['assinatura'] = resultado_ass
+                    else:
+                        item['assinatura'] = {'status': 'erro', 'erro': 'anexo_url_nao_encontrado'}
+                except Exception as exc:
+                    logger.error(f'[PONTO-MASTER] falha ao disparar assinatura {cpf}: {exc}')
+                    item['assinatura'] = {'status': 'erro', 'erro': str(exc)}
+
+            anexados.append(item)
         except Exception as exc:
             logger.error(f'[PONTO-MASTER] erro ao anexar Folha de Ponto {cpf}: {exc}')
             erros.append({'cpf': cpf, 'nome': nome_final, 'motivo': str(exc)})
@@ -3608,6 +3658,15 @@ def processar_folha_ponto_master():
     except OSError:
         pass
 
+    total_assinaturas_enviadas = sum(
+        1 for a in anexados
+        if disparar_assinatura and (a.get('assinatura') or {}).get('whatsapp_disparo') == 'enviado'
+    )
+    total_assinaturas_falha = sum(
+        1 for a in anexados
+        if disparar_assinatura and (a.get('assinatura') or {}).get('status') != 'ok'
+    ) if disparar_assinatura else 0
+
     return jsonify({
         'status': 'concluido',
         'folha_mensal': folha_mensal,
@@ -3615,6 +3674,9 @@ def processar_folha_ponto_master():
         'total_anexados': len(anexados),
         'total_erros': len(erros),
         'total_paginas': total_paginas,
+        'disparar_assinatura': disparar_assinatura,
+        'total_assinaturas_enviadas': total_assinaturas_enviadas,
+        'total_assinaturas_falha': total_assinaturas_falha,
         'anexados': anexados,
         'erros': erros,
     })
