@@ -1602,6 +1602,149 @@ def diagnostico_fechamento(data_inicio: str, data_fim: str,
 # ║    Read-only do Secullum; escreve só no Airtable + WhatsApp.               ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║ 7. RELATÓRIO GERAL DE PONTO — zero / poucos pontos (v2.95)                 ║
+# ║    Cobre qualquer período; inclui dados cadastrais (Admissão/Rescisão/      ║
+# ║    Horário) sem batidas no Secullum. Read-only.                             ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+
+def _resumo_funcionario(f: dict) -> dict:
+    """Extrai campos cadastrais de um registro bruto do Secullum."""
+    horario   = f.get('Horario') or {}
+    admissao  = str(f.get('Admissao')  or '').strip()[:10]
+    demissao  = str(f.get('Demissao')  or '').strip()[:10]
+    return {
+        'nome':         f.get('Nome', ''),
+        'cpf':          _so_digitos(str(f.get('Cpf', ''))),
+        'n_folha':      str(f.get('NumeroFolha') or f.get('Numero') or ''),
+        'tem_admissao': bool(admissao),
+        'admissao':     admissao or None,
+        'tem_demissao': bool(demissao),
+        'demissao':     demissao or None,
+        'tem_horario':  bool(horario.get('Descricao') or horario.get('Numero')),
+        'horario_desc': horario.get('Descricao', ''),
+        'horario_num':  horario.get('Numero'),
+        'total_batidas': None,   # preenchido após /Calcular
+        'grupo':         None,   # preenchido após /Calcular ou 'nao_verificado'
+    }
+
+
+def relatorio_ponto_geral(data_inicio: str, data_fim: str,
+                           static_only: bool = False,
+                           threshold: int = 10,
+                           offset: int = 0, limit: int = None) -> dict:
+    """Relatório de zero/poucos pontos no período, com dados cadastrais.
+
+    static_only=True → lista todos com admissão/rescisão/horário sem chamar /Calcular.
+    static_only=False → idem + conta batidas; filtra zero ou ≤ threshold.
+    threshold → batidas totais no período para classificar como "poucos" (default 10).
+
+    GUARDRAIL: zero escrita Secullum — GET /Funcionarios + POST /Calcular.
+    """
+    todos = listar_funcionarios_secullum()
+    if not isinstance(todos, list):
+        todos = []
+
+    # Inclui demitidos com demissão APÓS data_inicio (ainda relevante no período)
+    # e todos os ativos
+    candidatos = [
+        f for f in todos
+        if not f.get('Demissao')
+        or (str(f.get('Demissao') or '') >= data_inicio[:10])
+    ]
+    total = len(candidatos)
+
+    if limit is not None:
+        lote = candidatos[offset: offset + limit]
+    elif offset:
+        lote = candidatos[offset:]
+    else:
+        lote = candidatos
+
+    sem_batida:   list = []
+    poucos_pontos: list = []
+    com_demissao:  list = []
+    sem_admissao:  list = []
+    sem_horario:   list = []
+    erros:        list = []
+    normais = 0
+
+    for f in lote:
+        res = _resumo_funcionario(f)
+
+        # Agrupa por cadastro (independente de batidas)
+        if res['tem_demissao']:
+            com_demissao.append(res)
+        if not res['tem_admissao']:
+            sem_admissao.append(res)
+        if not res['tem_horario']:
+            sem_horario.append(res)
+
+        if static_only:
+            res['grupo'] = 'nao_verificado'
+            continue
+
+        cpf = res['cpf']
+        if not cpf:
+            res['grupo'] = 'sem_cpf'
+            continue
+
+        try:
+            calc = obter_calculos(cpf, data_inicio, data_fim)
+        except Exception as exc:
+            erros.append({'nome': res['nome'], 'cpf': cpf, 'erro': str(exc)})
+            res['grupo'] = 'erro'
+            continue
+
+        dias = dict(_linhas_calculo(calc))
+        total_batidas = sum(_contar_batidas(mapa) for mapa in dias.values())
+        res['total_batidas'] = total_batidas
+        res['dias_periodo'] = len(dias)
+        res['dias_trabalho_escala'] = sum(
+            1 for mapa in dias.values() if _status_dia_escala(mapa) == 'trabalho'
+        )
+
+        if total_batidas == 0:
+            res['grupo'] = 'sem_batida'
+            sem_batida.append(res)
+        elif total_batidas <= threshold:
+            res['grupo'] = 'poucos_pontos'
+            poucos_pontos.append(res)
+        else:
+            res['grupo'] = 'normal'
+            normais += 1
+
+    # Ordena por nome
+    sem_batida.sort(key=lambda x: x['nome'])
+    poucos_pontos.sort(key=lambda x: x['nome'])
+
+    proximo_offset = (offset + len(lote)) if (offset + len(lote)) < total else None
+
+    return {
+        'periodo':           f'{data_inicio} a {data_fim}',
+        'static_only':       static_only,
+        'threshold_poucos':  threshold,
+        'total_candidatos':  total,
+        'lote_processado':   len(lote),
+        'offset':            offset,
+        'proximo_offset':    proximo_offset,
+        'sem_batida':        sem_batida,
+        'poucos_pontos':     poucos_pontos,
+        'normais':           normais,
+        'com_demissao':      com_demissao,
+        'sem_admissao':      sem_admissao,
+        'sem_horario':       sem_horario,
+        'erros':             erros,
+        'contagem': {
+            'sem_batida':    len(sem_batida),
+            'poucos_pontos': len(poucos_pontos),
+            'com_demissao':  len(com_demissao),
+            'sem_admissao':  len(sem_admissao),
+            'sem_horario':   len(sem_horario),
+        },
+    }
+
+
 def _sec_enviar_texto(numero: str, texto: str) -> dict:
     """Envia texto via Evolution API (espelha _evolution_enviar_texto do app.py)."""
     r = requests.post(
@@ -2010,6 +2153,54 @@ def rota_fechamento_diagnostico():
         return jsonify({'erro': 'Falha na API Secullum', 'detalhe': str(exc)}), 502
     except Exception as exc:
         logger.exception('[FECH] Erro no diagnóstico de fechamento')
+        return jsonify({
+            'erro': type(exc).__name__,
+            'detalhe': str(exc),
+            'traceback': traceback.format_exc().splitlines()[-8:],
+        }), 500
+
+
+@secullum_bp.route('/relatorio-ponto-geral', methods=['POST', 'OPTIONS'])
+def rota_relatorio_ponto_geral():
+    """Relatório geral de zero/poucos pontos com dados cadastrais (v2.95).
+
+    Cobre qualquer período. Retorna:
+      - sem_batida        → zero batidas no período
+      - poucos_pontos     → ≤ threshold batidas no período
+      - com_demissao      → demitidos dentro do período (independente de batidas)
+      - sem_admissao      → sem data de admissão no Secullum
+      - sem_horario       → sem escala/horário vinculado no Secullum
+
+    Body JSON:
+        data_inicio   → "YYYY-MM-DD" (default "2026-05-28")
+        data_fim      → "YYYY-MM-DD" (default "2026-07-10")
+        static_only   → false (default) / true — só cadastro, sem buscar batidas
+        threshold     → 10 (default) — "poucos pontos" = ≤ N batidas no período
+        offset        → 0
+        limit         → null ou int (ex: 10 para lotes no Render free)
+    """
+    if request.method == 'OPTIONS':
+        return ('', 204)
+    body        = request.get_json(silent=True) or {}
+    data_inicio  = body.get('data_inicio',  '2026-05-28')
+    data_fim     = body.get('data_fim',     '2026-07-10')
+    static_only  = bool(body.get('static_only', False))
+    threshold    = int(body.get('threshold', 10))
+    offset       = int(body.get('offset') or 0)
+    limit        = body.get('limit')
+    if limit is not None:
+        limit = int(limit)
+    try:
+        resultado = relatorio_ponto_geral(
+            data_inicio=data_inicio, data_fim=data_fim,
+            static_only=static_only, threshold=threshold,
+            offset=offset, limit=limit,
+        )
+        return jsonify(resultado), 200
+    except requests.exceptions.HTTPError as exc:
+        return jsonify({'erro': 'Falha na API Secullum', 'detalhe': str(exc)}), 502
+    except Exception as exc:
+        logger.exception('[RPG] Erro no relatório geral de ponto')
         return jsonify({
             'erro': type(exc).__name__,
             'detalhe': str(exc),
