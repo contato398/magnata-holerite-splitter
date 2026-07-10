@@ -130,6 +130,24 @@ F_FECH_ADIAN        = 'fldB8RjUJs0zUywyk'
 F_FECH_NOT_TOT      = 'fldonx0x4ttkgFbuD'
 F_FECH_CLASSIFICACAO = 'fldEHoMYrQauaoLqk'  # singleSelect com as 5 categorias
 F_FECH_OBSERVACAO   = 'fldEWlhXRHAaQBHoG'
+
+# ── Sem_Batida_Julho_2026 (tabela diagnóstico zero-batida, v2.94) ─────────────
+TABLE_SBJ           = 'tbl9foza93kj0BdAI'
+F_SBJ_NOME          = 'fldnYiz5mS1DgEbre'   # primary
+F_SBJ_FUNCIONARIO   = 'fldS0G3zqLxOTlm7e'   # link → Funcionários
+F_SBJ_CPF           = 'fldGWtDPd8uHx9PsC'
+F_SBJ_N_FOLHA       = 'flde9iqkKMnDg94CW'
+F_SBJ_ADMISSAO      = 'fldsFsLg5tzFS2m6y'
+F_SBJ_HORARIO_DESC  = 'fld6sYFJl0ZSNe6DN'
+F_SBJ_HORARIO_NUM   = 'fldOCVLLxDrYkjMeh'
+F_SBJ_PERIODO       = 'fldIorVvZETvC2W5u'
+F_SBJ_DIAS_TRABALHO = 'fldgzin2AwfRmCmFU'
+F_SBJ_OBSERVACAO    = 'fldx5L7B72sLSyldj'
+
+# Evolution API (WhatsApp) — mesmas vars de app.py; sem circular import
+_EVOL_URL      = os.environ.get('EVOLUTION_API_URL', 'http://143.95.214.239:8080').rstrip('/')
+_EVOL_INSTANCE = os.environ.get('EVOLUTION_INSTANCE', 'magnata')
+_EVOL_KEY      = os.environ.get('EVOLUTION_API_KEY', '')
 TIPO_DESVIO_CARGA = 'Desvio de Carga Horária (Ponto)'
 # Cruzamento jornada real x escala teórica (FOLGA/Feriado real) — não depende de
 # local de trabalho (Airtable); só da própria escala resolvida pela Secullum.
@@ -1579,6 +1597,195 @@ def diagnostico_fechamento(data_inicio: str, data_fim: str,
     }
 
 
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║ 6. SEM BATIDA JULHO/2026 — zero marcações no período (v2.94)               ║
+# ║    Read-only do Secullum; escreve só no Airtable + WhatsApp.               ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+
+def _sec_enviar_texto(numero: str, texto: str) -> dict:
+    """Envia texto via Evolution API (espelha _evolution_enviar_texto do app.py)."""
+    r = requests.post(
+        f'{_EVOL_URL}/message/sendText/{_EVOL_INSTANCE}',
+        headers={'apikey': _EVOL_KEY, 'Content-Type': 'application/json'},
+        json={'number': numero, 'text': texto},
+        timeout=90,
+    )
+    if not (200 <= r.status_code < 300):
+        raise RuntimeError(f'Evolution HTTP {r.status_code}: {r.text[:300]}')
+    return r.json()
+
+
+def _sbj_linha_existe(nome: str) -> bool:
+    _at_throttle()
+    esc = nome.replace('"', '\\"')
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_SBJ}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={'filterByFormula': f'{{Nome}}="{esc}"', 'maxRecords': 1},
+        timeout=30,
+    )
+    return bool(r.ok and r.json().get('records'))
+
+
+def _sbj_criar_linha(campos: dict) -> str:
+    _at_throttle()
+    r = requests.post(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_SBJ}',
+        headers=_at_headers(),
+        json={'fields': campos, 'typecast': True},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()['id']
+
+
+def _sbj_ler_todos() -> list:
+    """Lê todos os registros de Sem_Batida_Julho_2026 ordenados por Admissao desc."""
+    url = f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_SBJ}'
+    params: dict = {
+        'fields[]': ['Nome', 'N_Folha', 'Admissao', 'Horario_Descricao', 'Horario_Numero'],
+        'sort[0][field]': 'Admissao',
+        'sort[0][direction]': 'desc',
+        'pageSize': 100,
+    }
+    records: list = []
+    while True:
+        _at_throttle()
+        r = requests.get(url, headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                         params=params, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        records.extend(data.get('records', []))
+        off = data.get('offset')
+        if not off:
+            break
+        params['offset'] = off
+    return records
+
+
+def relatorio_sem_batida(data_inicio: str, data_fim: str,
+                         dry_run: bool = True,
+                         offset: int = 0, limit: int = None) -> dict:
+    """Identifica colaboradores ativos com zero batidas no período.
+
+    GUARDRAIL: lê apenas GET /Funcionarios + POST /Calcular. Zero escrita Secullum.
+    Inclui todos os tipos de escala (12x36 e Semanal).
+    Grava em Airtable Sem_Batida_Julho_2026 quando dry_run=False.
+    Suporta offset/limit para lotes (Render free ~60s por lote de 10).
+    """
+    todos = listar_funcionarios_secullum()
+    if not isinstance(todos, list):
+        todos = []
+    ativos = [f for f in todos if not f.get('Demissao')]
+    total_ativos = len(ativos)
+
+    if limit is not None:
+        lote = ativos[offset: offset + limit]
+    elif offset:
+        lote = ativos[offset:]
+    else:
+        lote = ativos
+
+    mapa_at = _mapa_cpf_airtable_ids() if not dry_run else {}
+
+    sem_batida: list = []
+    com_batida = 0
+    erros_func: list = []
+
+    for f in lote:
+        cpf = _so_digitos(str(f.get('Cpf', '')))
+        nome = f.get('Nome', f'CPF_{cpf}')
+        if not cpf:
+            continue
+
+        try:
+            calc = obter_calculos(cpf, data_inicio, data_fim)
+        except Exception as exc:
+            erros_func.append({'nome': nome, 'cpf': cpf, 'erro': str(exc)})
+            continue
+
+        dias = dict(_linhas_calculo(calc))
+        total_batidas = sum(_contar_batidas(mapa) for mapa in dias.values())
+        if total_batidas > 0:
+            com_batida += 1
+            continue
+
+        # Dias marcados como TRABALHO na escala (não-folga/feriado)
+        dias_trabalho_escala = sum(
+            1 for mapa in dias.values() if _status_dia_escala(mapa) == 'trabalho'
+        )
+
+        horario = f.get('Horario') or {}
+        horario_desc = horario.get('Descricao', '')
+        horario_num  = horario.get('Numero') or horario.get('Id')
+        n_folha      = str(f.get('NumeroFolha') or f.get('Numero') or '')
+        admissao     = str(f.get('Admissao') or '')[:10]
+
+        if dias_trabalho_escala == 0:
+            obs = 'Todos os dias do período são FOLGA na escala — verificar se é correto.'
+        else:
+            obs = f'{dias_trabalho_escala} dia(s) de TRABALHO na escala sem nenhuma batida registrada.'
+
+        entrada = {
+            'nome': nome, 'cpf': cpf, 'n_folha': n_folha, 'admissao': admissao,
+            'horario_desc': horario_desc, 'horario_num': horario_num,
+            'dias_trabalho_escala': dias_trabalho_escala, 'obs': obs,
+        }
+        sem_batida.append(entrada)
+
+        if dry_run:
+            continue
+
+        if _sbj_linha_existe(nome):
+            continue
+
+        campos: dict = {
+            F_SBJ_NOME:          nome,
+            F_SBJ_CPF:           cpf,
+            F_SBJ_N_FOLHA:       n_folha,
+            F_SBJ_HORARIO_DESC:  horario_desc,
+            F_SBJ_PERIODO:       f'{data_inicio} a {data_fim}',
+            F_SBJ_DIAS_TRABALHO: dias_trabalho_escala,
+            F_SBJ_OBSERVACAO:    obs,
+        }
+        if admissao:
+            campos[F_SBJ_ADMISSAO] = admissao
+        if horario_num is not None:
+            try:
+                campos[F_SBJ_HORARIO_NUM] = int(horario_num)
+            except (TypeError, ValueError):
+                pass
+        func_at_id = mapa_at.get(cpf)
+        if func_at_id:
+            campos[F_SBJ_FUNCIONARIO] = [func_at_id]
+        try:
+            _sbj_criar_linha(campos)
+        except Exception as exc:
+            logger.error('[SBJ] Falha ao gravar %s: %s', nome, exc)
+
+    proximo_offset = (offset + len(lote)) if (offset + len(lote)) < total_ativos else None
+
+    sem_batida_sorted = sorted(
+        sem_batida,
+        key=lambda x: x.get('admissao') or '0000-00-00',
+        reverse=True,
+    )
+
+    return {
+        'periodo': f'{data_inicio} a {data_fim}',
+        'dry_run': dry_run,
+        'total_ativos_secullum': total_ativos,
+        'lote_processado': len(lote),
+        'offset': offset,
+        'proximo_offset': proximo_offset,
+        'com_batida': com_batida,
+        'sem_batida_count': len(sem_batida),
+        'erros_funcionarios': len(erros_func),
+        'erros_detalhe': erros_func,
+        'sem_batida': sem_batida_sorted,
+    }
+
+
 def atualizar_numero_folha(cpf: str, numero: str) -> dict:
     """Atualiza o NumeroFolha de um funcionário já cadastrado na Secullum via PUT.
 
@@ -1808,6 +2015,97 @@ def rota_fechamento_diagnostico():
             'detalhe': str(exc),
             'traceback': traceback.format_exc().splitlines()[-8:],
         }), 500
+
+
+@secullum_bp.route('/sem-batida-julho', methods=['POST', 'OPTIONS'])
+def rota_sem_batida_julho():
+    """Colaboradores sem nenhuma batida em Jul/2026 (v2.94) — read-only.
+
+    GUARDRAIL: só GET /Funcionarios + POST /Calcular. Zero escrita Secullum.
+    Inclui todos os tipos de escala (12x36 e Semanal).
+
+    Body JSON:
+        data_inicio  → "YYYY-MM-DD" (default "2026-07-01")
+        data_fim     → "YYYY-MM-DD" (default "2026-07-10")
+        dry_run      → true (default) / false — grava no Airtable quando false
+        offset       → 0 (paginação de funcionários)
+        limit        → null ou int (ex: 10 para lotes no Render free)
+    """
+    if request.method == 'OPTIONS':
+        return ('', 204)
+    body = request.get_json(silent=True) or {}
+    data_inicio = body.get('data_inicio', '2026-07-01')
+    data_fim    = body.get('data_fim',    '2026-07-10')
+    dry_run     = bool(body.get('dry_run', True))
+    offset      = int(body.get('offset') or 0)
+    limit       = body.get('limit')
+    if limit is not None:
+        limit = int(limit)
+    try:
+        resultado = relatorio_sem_batida(
+            data_inicio=data_inicio, data_fim=data_fim,
+            dry_run=dry_run, offset=offset, limit=limit,
+        )
+        return jsonify(resultado), 200
+    except requests.exceptions.HTTPError as exc:
+        return jsonify({'erro': 'Falha na API Secullum', 'detalhe': str(exc)}), 502
+    except Exception as exc:
+        logger.exception('[SBJ] Erro no relatório sem-batida')
+        return jsonify({
+            'erro': type(exc).__name__,
+            'detalhe': str(exc),
+            'traceback': traceback.format_exc().splitlines()[-8:],
+        }), 500
+
+
+@secullum_bp.route('/sem-batida-julho/whatsapp', methods=['POST', 'OPTIONS'])
+def rota_sem_batida_whatsapp():
+    """Lê Airtable Sem_Batida_Julho_2026 e envia resumo por WhatsApp (v2.94).
+
+    Chame APÓS concluir todos os lotes com dry_run=false.
+
+    Body JSON:
+        numero  → ex: "5541999999999" (obrigatório)
+    """
+    if request.method == 'OPTIONS':
+        return ('', 204)
+    body = request.get_json(silent=True) or {}
+    numero = (body.get('numero') or '').strip()
+    if not numero:
+        return jsonify({'erro': 'Campo "numero" obrigatório (ex: "5541999999999").'}), 400
+    try:
+        registros = _sbj_ler_todos()
+        if not registros:
+            texto = ('🟡 *Sem Batida — Jul/2026*\n\n'
+                     'Nenhum colaborador sem batida encontrado na base.\n'
+                     '(Execute POST /secullum/sem-batida-julho com dry_run=false primeiro.)')
+        else:
+            linhas = []
+            for rec in registros:
+                fl = rec.get('fields', {})
+                adm = fl.get('Admissao', '')
+                adm_br = (f'{adm[8:10]}/{adm[5:7]}/{adm[:4]}' if len(adm) == 10 else adm)
+                hr_n = fl.get('Horario_Numero')
+                hr   = fl.get('Horario_Descricao', '—')
+                hr_label = f'#{hr_n} {hr}' if hr_n else hr
+                linhas.append(
+                    f'• *{fl.get("Nome", "")}* | Adm: {adm_br} | {hr_label} | N.Folha: {fl.get("N_Folha") or "—"}'
+                )
+            corpo = '\n'.join(linhas)
+            texto = (
+                f'🚨 *Sem Batida — Jul/2026*\n'
+                f'_{len(registros)} colaborador(es) sem nenhum registro de ponto desde 01/07_\n\n'
+                f'{corpo}\n\n'
+                f'_Gerado em: {datetime.now().strftime("%d/%m/%Y %H:%M")}_'
+            )
+        _sec_enviar_texto(numero, texto)
+        return jsonify({'status': 'enviado', 'numero': numero,
+                        'registros_enviados': len(registros)}), 200
+    except RuntimeError as exc:
+        return jsonify({'erro': str(exc)}), 502
+    except Exception as exc:
+        logger.exception('[SBJ] Erro ao enviar WhatsApp sem-batida')
+        return jsonify({'erro': type(exc).__name__, 'detalhe': str(exc)}), 500
 
 
 @secullum_bp.route('/debug', methods=['GET'])

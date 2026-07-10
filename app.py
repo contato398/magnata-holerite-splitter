@@ -1,5 +1,5 @@
 """
-magnata-holerite-splitter — app.py v2.93
+magnata-holerite-splitter — app.py v2.94
 Novidades vs v2.48:
   - Integração Secullum Ponto Web (Banco ID 149582) via blueprint isolado
     src/services/secullum_ponto.py (prefixo /secullum): autenticação Bearer,
@@ -3188,7 +3188,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '2.93',
+        'versao': '2.94',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
