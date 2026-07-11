@@ -999,7 +999,7 @@ def construir_mapa_cpf(caminho_pdf: str) -> tuple[dict, int]:
                 nome  = extrair_nome_funcionario(texto)
                 vals  = extrair_valores_holerite(texto)
 
-                if not cpf and not nome and ultimo_sem_cpf is not None:
+                if not cpf and nome in (None, '', 'Desconhecido') and ultimo_sem_cpf is not None:
                     # Página de continuação (sem CPF impresso e sem "Colaborador:
                     # NOME") — Folhas Manuais (Formato B) podem ter mais de 1
                     # página por colaborador (tabela + bloco de assinatura); sem
@@ -3364,7 +3364,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '3.03',
+        'versao': '3.04',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
