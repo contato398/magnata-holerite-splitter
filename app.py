@@ -3345,7 +3345,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '3.01',
+        'versao': '3.02',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -5700,6 +5700,33 @@ def evolution_status():
         return jsonify({'http_status': r.status_code, 'body': r.json() if r.content else None})
     except Exception as e:
         return jsonify({'erro': str(e)}), 500
+
+
+@app.route('/whatsapp/enviar-texto', methods=['POST', 'OPTIONS'])
+def whatsapp_enviar_texto():
+    """Envia 1 mensagem de texto customizada via WhatsApp (Evolution API) para
+    um número específico — usado para comunicações pontuais (ex.: avisos de
+    correção de incidente) que não seguem o fluxo automático de nenhum
+    processador. Protegido por X-API-KEY (EMAIL_WEBHOOK_KEY)."""
+    if request.method == 'OPTIONS':
+        return '', 204
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+
+    body = request.get_json(silent=True) or {}
+    numero = _normalizar_numero_evolution(body.get('numero'))
+    texto = (body.get('mensagem') or '').strip()
+    if not numero:
+        return jsonify({'status': 'erro', 'erro': 'Número inválido.'}), 400
+    if not texto:
+        return jsonify({'status': 'erro', 'erro': 'Mensagem vazia.'}), 400
+
+    try:
+        resultado = _evolution_enviar_texto(numero, texto)
+        return jsonify({'status': 'ok', 'numero': numero, 'resultado': resultado})
+    except Exception as exc:
+        return jsonify({'status': 'erro', 'erro': str(exc)}), 502
 
 
 def _evolution_enviar_documento(numero: str, media_url: str, filename: str, caption=None,
