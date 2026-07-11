@@ -1599,10 +1599,14 @@ def _buscar_cpf_por_funcionario_id(func_id: str) -> str:
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
         headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
-        params={'fields[]': ['CPF']}, timeout=15,
+        timeout=15,
     )
     if r.ok:
-        return r.json().get('fields', {}).get('CPF', '') or ''
+        cpf = r.json().get('fields', {}).get('CPF', '') or ''
+        if not cpf:
+            logger.warning(f'[PONTO] CPF vazio para func_id={func_id} — resposta Airtable sem o campo CPF preenchido.')
+        return cpf
+    logger.error(f'[PONTO] falha ao buscar CPF de func_id={func_id}: HTTP {r.status_code} — {r.text[:300]}')
     return ''
 
 
@@ -3341,7 +3345,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '3.00',
+        'versao': '3.01',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -7627,32 +7631,27 @@ def assinatura_pagina(hash_token):
     # campo (Regra "Sem Duplicidade").
     if fields.get('Tipo de Documento') == 'Folha de Ponto':
         try:
-            _at_throttle()
-            r_func_ponto = requests.get(
-                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
-                headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
-                params={'returnFieldsByFieldId': 'true'}, timeout=15,
-            )
-            anexos_ponto_atual = (
-                (r_func_ponto.json().get('fields', {}).get(F_FUNC_PDF_FOLHA) or [])
-                if r_func_ponto.ok else []
-            )
-            if anexos_ponto_atual:
-                anexo_provisorio = anexos_ponto_atual[-1]
-                r_doc_ponto = requests.get(anexo_provisorio['url'], timeout=60)
-                if r_doc_ponto.ok:
-                    nome_func_ponto = r_func.json().get('fields', {}).get('Nome Completo', '')
-                    dt_fmt_ponto = agora_brt_dt.strftime('%d/%m/%Y %H:%M')
-                    pdf_ponto_assinado = _carimbar_pdf_assinado(
-                        r_doc_ponto.content, nome_func_ponto, cpf_informado, dt_fmt_ponto)
-                    nome_ponto_assinado = anexo_provisorio['filename']
-                    nome_ponto_assinado = (
-                        nome_ponto_assinado[:-4] + ' - ASSINADO.pdf'
-                        if nome_ponto_assinado.lower().endswith('.pdf') else nome_ponto_assinado + ' - ASSINADO'
-                    )
-                    _substituir_attachment(TABLE_FUNC, func_id, F_FUNC_PDF_FOLHA,
-                                            pdf_ponto_assinado, nome_ponto_assinado)
-                    logger.info(f'[ASSINATURA][PONTO] PDF Folha Ponto substituído pelo assinado — func_id={func_id}')
+            # Nunca reler o campo compartilhado "PDF Folha Ponto" do Funcionário
+            # e pegar "o último anexo" — esse campo pode ter sido alterado por
+            # outro processamento (ex.: reprocesso, disparo duplicado) entre a
+            # geração deste link e o momento da assinatura, fazendo o código
+            # carimbar o documento errado. Em vez disso, reaproveita o mesmo
+            # `doc_atual`/`original_att` já obtidos acima a partir do PRÓPRIO
+            # registro de Assinatura (cópia imutável, gravada no momento da
+            # geração deste link específico — sempre correta).
+            if original_att and r_doc.ok:
+                nome_func_ponto = r_func.json().get('fields', {}).get('Nome Completo', '')
+                dt_fmt_ponto = agora_brt_dt.strftime('%d/%m/%Y %H:%M')
+                pdf_ponto_assinado = _carimbar_pdf_assinado(
+                    doc_bytes_original, nome_func_ponto, cpf_informado, dt_fmt_ponto)
+                nome_ponto_assinado = original_att['filename']
+                nome_ponto_assinado = (
+                    nome_ponto_assinado[:-4] + ' - ASSINADO.pdf'
+                    if nome_ponto_assinado.lower().endswith('.pdf') else nome_ponto_assinado + ' - ASSINADO'
+                )
+                _substituir_attachment(TABLE_FUNC, func_id, F_FUNC_PDF_FOLHA,
+                                        pdf_ponto_assinado, nome_ponto_assinado)
+                logger.info(f'[ASSINATURA][PONTO] PDF Folha Ponto substituído pelo assinado — func_id={func_id}')
         except Exception as exc:
             logger.warning(f'[ASSINATURA][PONTO] falha ao substituir PDF Folha Ponto assinado (func_id={func_id}): {exc}')
 
