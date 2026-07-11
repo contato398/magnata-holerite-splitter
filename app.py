@@ -984,6 +984,7 @@ def construir_mapa_cpf(caminho_pdf: str) -> tuple[dict, int]:
     Retorna: ({cpf: {'nome': str, 'paginas': [int], 'valores': dict}}, total_paginas)
     """
     mapa: dict = {}
+    ultimo_sem_cpf = None  # chave da última página "sem_cpf_*" criada (p/ continuação)
     logger.info(f'[P1] Iniciando varredura | RAM: {_mem_mb()} MB')
 
     with pdfplumber.open(caminho_pdf) as pdf:
@@ -998,12 +999,30 @@ def construir_mapa_cpf(caminho_pdf: str) -> tuple[dict, int]:
                 nome  = extrair_nome_funcionario(texto)
                 vals  = extrair_valores_holerite(texto)
 
+                if not cpf and not nome and ultimo_sem_cpf is not None:
+                    # Página de continuação (sem CPF impresso e sem "Colaborador:
+                    # NOME") — Folhas Manuais (Formato B) podem ter mais de 1
+                    # página por colaborador (tabela + bloco de assinatura); sem
+                    # essa checagem, essa página vira um "colaborador fantasma"
+                    # isolado e a página anterior fica sem o restante do conteúdo.
+                    mapa[ultimo_sem_cpf]['paginas'].append(i)
+                    for k, v in vals.items():
+                        if v is not None and k not in mapa[ultimo_sem_cpf]['valores']:
+                            mapa[ultimo_sem_cpf]['valores'][k] = v
+                    del texto
+                    logger.info(f'[P1] Pág {i+1:03d}/{total}: continuação de {ultimo_sem_cpf}')
+                    if (i + 1) % 15 == 0:
+                        gc.collect()
+                    continue
+
                 if not cpf:
                     cpf = f'sem_cpf_{i}'
 
                 if cpf not in mapa:
                     mapa[cpf] = {'nome': nome, 'paginas': [], 'valores': {}}
                 mapa[cpf]['paginas'].append(i)
+                if cpf.startswith('sem_cpf_'):
+                    ultimo_sem_cpf = cpf
 
                 # Atualiza valores: só substitui se o novo for não-nulo (aceita zero)
                 for k, v in vals.items():
@@ -3345,7 +3364,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '3.02',
+        'versao': '3.03',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
