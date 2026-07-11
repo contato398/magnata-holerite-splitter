@@ -984,7 +984,7 @@ def construir_mapa_cpf(caminho_pdf: str) -> tuple[dict, int]:
     Retorna: ({cpf: {'nome': str, 'paginas': [int], 'valores': dict}}, total_paginas)
     """
     mapa: dict = {}
-    ultimo_sem_cpf = None  # chave da última página "sem_cpf_*" criada (p/ continuação)
+    ultima_chave = None  # última chave tocada no mapa (CPF real OU sem_cpf_N) — p/ continuação
     logger.info(f'[P1] Iniciando varredura | RAM: {_mem_mb()} MB')
 
     with pdfplumber.open(caminho_pdf) as pdf:
@@ -999,18 +999,20 @@ def construir_mapa_cpf(caminho_pdf: str) -> tuple[dict, int]:
                 nome  = extrair_nome_funcionario(texto)
                 vals  = extrair_valores_holerite(texto)
 
-                if not cpf and nome in (None, '', 'Desconhecido') and ultimo_sem_cpf is not None:
+                if not cpf and nome in (None, '', 'Desconhecido') and ultima_chave is not None:
                     # Página de continuação (sem CPF impresso e sem "Colaborador:
-                    # NOME") — Folhas Manuais (Formato B) podem ter mais de 1
-                    # página por colaborador (tabela + bloco de assinatura); sem
-                    # essa checagem, essa página vira um "colaborador fantasma"
+                    # NOME"/"Nome do Funcionário") — tanto Folhas Manuais (Formato
+                    # B: tabela + bloco de assinatura) quanto exports da Secullum
+                    # (Formato A: página de legenda/observações após os dados)
+                    # podem ter mais de 1 página por colaborador. Sem essa
+                    # checagem, essa página vira um "colaborador fantasma"
                     # isolado e a página anterior fica sem o restante do conteúdo.
-                    mapa[ultimo_sem_cpf]['paginas'].append(i)
+                    mapa[ultima_chave]['paginas'].append(i)
                     for k, v in vals.items():
-                        if v is not None and k not in mapa[ultimo_sem_cpf]['valores']:
-                            mapa[ultimo_sem_cpf]['valores'][k] = v
+                        if v is not None and k not in mapa[ultima_chave]['valores']:
+                            mapa[ultima_chave]['valores'][k] = v
                     del texto
-                    logger.info(f'[P1] Pág {i+1:03d}/{total}: continuação de {ultimo_sem_cpf}')
+                    logger.info(f'[P1] Pág {i+1:03d}/{total}: continuação de {ultima_chave}')
                     if (i + 1) % 15 == 0:
                         gc.collect()
                     continue
@@ -1021,8 +1023,7 @@ def construir_mapa_cpf(caminho_pdf: str) -> tuple[dict, int]:
                 if cpf not in mapa:
                     mapa[cpf] = {'nome': nome, 'paginas': [], 'valores': {}}
                 mapa[cpf]['paginas'].append(i)
-                if cpf.startswith('sem_cpf_'):
-                    ultimo_sem_cpf = cpf
+                ultima_chave = cpf
 
                 # Atualiza valores: só substitui se o novo for não-nulo (aceita zero)
                 for k, v in vals.items():
@@ -3364,7 +3365,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '3.04',
+        'versao': '3.05',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
