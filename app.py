@@ -198,6 +198,7 @@ F_CLI_NOME          = 'fldx6AShzJCfQeBMa'
 F_CLI_HORAS_EXTRAS  = 'fldmnmpHN2toqaQkr'
 F_CLI_ASSIDUIDADE   = 'fldIW9QdiKDYeDAEZ'
 F_CLI_VRVA          = 'fldk9aUnVOXlWUHDr'
+F_CLI_ALMOCO_JANTA  = 'fldUyDDKQqytLgCkD'
 # Envios — campos de e-mail (link p/ os documentos do pacote)
 F_ENVIO_TEXTO    = 'fldGeaadeNYWaa4Og'   # Texto do Email
 F_ENVIO_EXTRATO  = 'fldITxIfLG8TKntBu'   # Extrato Mensal (link)
@@ -3384,10 +3385,11 @@ CAPACIDADES_FOLHA_PONTO = [
 # /processar-vr-va), fora de PROCESSADORES_DOCUMENTO/TIPO_DOC_REGRAS (mesmo
 # motivo da Folha de Ponto acima — lógica própria demais pra fila genérica).
 CAPACIDADES_BENEFICIOS = [
-    ('Horas Extras (Sicoob)', 'Individual por CPF, fundido por Cliente/posto', 'Clientes — coluna "Horas Extras"'),
+    ('Extrato Bancário Consolidado (PIX)', 'Classifica por palavra-chave na descrição (VR/VA, Almoço/Jantar, Horas Extras) e ignora o resto; nome por match fuzzy (CPF vem mascarado na origem)', 'Clientes — colunas "VR/VA Benefícios" / "Hora Almoço e Jantar" / "Horas Extras"'),
+    ('Horas Extras — mestre avulso (Sicoob, pré-extrato)', 'Individual por CPF, fundido por Cliente/posto', 'Clientes — coluna "Horas Extras"'),
     ('Assiduidade (Sicoob, trava R$ 110,00)', 'Individual por CPF, fundido por Cliente/posto', 'Clientes — coluna "Assiduidade"'),
     ('VR/VA — Lote (planilha .xls/.xlsx + comprovante agregado)', 'Por linha da planilha, via CPF→Local→Cliente (rota /processar-vr-va, v2.34)', 'Extratos Mensais (relatório gerado) + Guias e Comprovantes (comprovante)'),
-    ('VR/VA — PIX individual (colaborador novo, sem cartão)', 'Individual por CPF, fundido por Cliente/posto — NÃO TESTADO contra exemplo real', 'Clientes — coluna "VR/VA Benefícios"'),
+    ('VR/VA — PIX individual avulso (fora do extrato)', 'Individual por CPF, fundido por Cliente/posto — caso raro, uso normal passou a ser via Extrato Bancário', 'Clientes — coluna "VR/VA Benefícios"'),
 ]
 
 
@@ -3458,7 +3460,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '3.14',
+        'versao': '3.15',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -6504,16 +6506,253 @@ def _processar_vr_va_pix(caminho_pdf: str, folha_mensal: str, dry_run: bool = Fa
     }
 
 
+# ── Extrato Bancário Consolidador (v3.15) ──────────────────────────────────
+# O banco manda 1 PDF único de extrato PIX com centenas de comprovantes
+# concatenados (achado real: 321 num arquivo de 122 páginas), misturando
+# Horas Extras/Almoço-Jantar/VR-VA com pagamentos sem relação nenhuma
+# (diárias, fornecedores, salário — a maioria real do arquivo). CPF vem
+# MASCARADO ("***.018.388-**"), então a identificação é por NOME (fuzzy,
+# reaproveitando os helpers da Folha de Ponto Formato B). Transações podem
+# atravessar página — por isso, em vez de fatiar páginas originais, gera-se
+# um PDF-relatório novo por Cliente+Categoria (mesmo padrão de
+# _gerar_pdf_vr_va_cliente), evitando depender de fronteira de página.
+
+_EXTRATO_BLOCO_RE = re.compile(r'COMPROVANTE DE EFETIVA[ÇC][ÃA]O DE PAGAMENTO PIX')
+_EXTRATO_RUIDO_RES = [
+    re.compile(r'^\d{2}/\d{2}/\d{4},?\s*\d{2}:\d{2}\s*Sicoob\s*\|\s*Internet Banking\s*$', re.MULTILINE),
+    re.compile(r'^https://ib\.sicoob\.com\.br.*$', re.MULTILINE),
+    re.compile(r'^OUVIDORIA SICOOB.*$', re.MULTILINE),
+]
+
+
+def _extrair_transacoes_extrato_pix(caminho_pdf: str) -> list:
+    """Extrai todas as transações PIX de um extrato consolidado. Retorna
+    (transacoes, ilegiveis) — transacoes é lista de {nome, cpf_mascarado,
+    valor, descricao, data}; ilegiveis é a contagem de blocos onde Nome/
+    Descrição não puderam ser lidos (ex.: campo cortado ao meio por quebra
+    de página) — nunca descartados sem rastro, sempre contados."""
+    with pdfplumber.open(caminho_pdf) as pdf:
+        texto_total = '\n'.join((pg.extract_text() or '') for pg in pdf.pages)
+
+    texto_limpo = texto_total
+    for ruido_re in _EXTRATO_RUIDO_RES:
+        texto_limpo = ruido_re.sub('', texto_limpo)
+
+    blocos = _EXTRATO_BLOCO_RE.split(texto_limpo)
+    transacoes, ilegiveis = [], 0
+    for bloco in blocos[1:]:  # blocos[0] é preâmbulo antes do 1º comprovante
+        if 'Destinat' not in bloco:
+            ilegiveis += 1
+            continue
+        sub_destinatario = bloco.split('Destinat', 1)[1]
+        m_nome = re.search(r'Nome:\s*(.+)', sub_destinatario)
+        m_cpf = re.search(r'CPF/CNPJ:\s*([\d*./-]+)', sub_destinatario)
+        m_valor = re.search(r'Valor:\s*R\$\s*([\d.,]+)', bloco)
+        m_desc = re.search(r'Descri[çc][ãa]o:\s*(.+)', bloco)
+        m_data = re.search(r'Data do pagamento:\s*([\d/]+)', bloco)
+        if not m_nome or not m_desc:
+            ilegiveis += 1
+            continue
+        valor = None
+        if m_valor:
+            try:
+                valor = float(m_valor.group(1).replace('.', '').replace(',', '.'))
+            except ValueError:
+                pass
+        transacoes.append({
+            'nome': m_nome.group(1).strip(),
+            'cpf_mascarado': m_cpf.group(1).strip() if m_cpf else '',
+            'valor': valor,
+            'descricao': m_desc.group(1).strip(),
+            'data': m_data.group(1).strip() if m_data else '',
+        })
+    return transacoes, ilegiveis
+
+
+def _classificar_transacao_extrato(descricao: str):
+    """Ordem = prioridade das regras (v3.15): VR/VA vence sobre Almoço/
+    Jantar, que vence sobre Extra/Horas — cobre os casos reais onde uma
+    descrição cita mais de uma categoria junto (ex.: 'DIARIAS 750 VR 130
+    HORA ALMOÇO 56 45'). Retorna None para tudo que não é benefício (a
+    maioria real do extrato: diárias, fornecedores, salário)."""
+    d = descricao or ''
+    if re.search(r'\bvr\b|\bva\b|alimenta[çc][ãa]o|refei[çc][ãa]o', d, re.IGNORECASE):
+        return 'vrva'
+    if re.search(r'almo[çc]?o?|jant', d, re.IGNORECASE):
+        return 'almoco_jantar'
+    if re.search(r'extra|\bhora', d, re.IGNORECASE):
+        return 'horas_extras'
+    return None
+
+
+_CATEGORIAS_EXTRATO = {
+    'vrva':          {'rotulo': 'VR/VA', 'campo': F_CLI_VRVA},
+    'almoco_jantar': {'rotulo': 'Hora Almoço e Jantar', 'campo': F_CLI_ALMOCO_JANTA},
+    'horas_extras':  {'rotulo': 'Horas Extras', 'campo': F_CLI_HORAS_EXTRAS},
+}
+
+
+def _gerar_pdf_extrato_categoria(nome_cliente: str, rotulo_categoria: str,
+                                  folha_mensal: str, transacoes: list) -> bytes:
+    """Relatório consolidado (mesmo estilo visual de _gerar_pdf_vr_va_cliente)
+    de PIX extraídos do extrato bancário, 1 tabela por Cliente+Categoria."""
+    from fpdf import FPDF
+
+    def fmt_brl(v):
+        if v is None:
+            return '-'
+        return f'{v:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
+
+    _TZ = timezone(timedelta(hours=-3))
+    pdf = FPDF()
+    pdf.add_page()
+
+    pdf.set_font('Helvetica', 'B', 14)
+    pdf.cell(0, 8, 'Magnata Portaria e Servicos Ltda', ln=True, align='C')
+    pdf.set_font('Helvetica', '', 10)
+    pdf.cell(0, 6, f'{rotulo_categoria} - {folha_mensal}', ln=True, align='C')
+    pdf.cell(0, 6, f'Cliente: {nome_cliente}', ln=True, align='C')
+    pdf.ln(4)
+
+    pdf.set_font('Helvetica', 'B', 8)
+    pdf.set_fill_color(220, 220, 220)
+    pdf.cell(55, 7, 'Nome', border=1, fill=True)
+    pdf.cell(30, 7, 'CPF (parcial)', border=1, fill=True)
+    pdf.cell(22, 7, 'Data', border=1, fill=True)
+    pdf.cell(66, 7, 'Descricao (PIX)', border=1, fill=True)
+    pdf.cell(0, 7, 'Valor (R$)', border=1, fill=True, align='R', ln=True)
+
+    pdf.set_font('Helvetica', '', 7)
+    total_geral = 0.0
+    for t in sorted(transacoes, key=lambda x: x['nome']):
+        v = t.get('valor') or 0.0
+        total_geral += v
+        pdf.cell(55, 6, t['nome'][:32], border=1)
+        pdf.cell(30, 6, t.get('cpf_mascarado', ''), border=1)
+        pdf.cell(22, 6, t.get('data', ''), border=1)
+        pdf.cell(66, 6, (t.get('descricao') or '')[:38], border=1)
+        pdf.cell(0, 6, fmt_brl(t.get('valor')), border=1, align='R', ln=True)
+
+    pdf.set_font('Helvetica', 'B', 8)
+    pdf.set_fill_color(200, 230, 200)
+    pdf.cell(173, 7, f'TOTAL - {len(transacoes)} lançamento(s)', border=1, fill=True, align='R')
+    pdf.cell(0, 7, f'R$ {fmt_brl(total_geral)}', border=1, fill=True, align='R', ln=True)
+
+    pdf.ln(4)
+    pdf.set_font('Helvetica', 'I', 7)
+    agora = datetime.now(tz=_TZ).strftime('%d/%m/%Y %H:%M')
+    pdf.cell(0, 4, f'Gerado em {agora} a partir do Extrato Bancario consolidado (CPF mascarado na origem).', ln=True)
+
+    return bytes(pdf.output())
+
+
+def _processar_extrato_beneficios(caminho_pdf: str, folha_mensal: str, dry_run: bool = False) -> dict:
+    """v3.15 — Fluxo unificado: lê o extrato bancário consolidado, classifica
+    cada transação (VR/VA, Almoço/Jantar, Horas Extras ou nenhuma), resolve
+    o Funcionário por NOME (CPF vem mascarado, não dá pra usar) e o Cliente
+    dele, agrupa por (Cliente, Categoria) e gera 1 PDF-relatório por grupo."""
+    transacoes, ilegiveis = _extrair_transacoes_extrato_pix(caminho_pdf)
+
+    grupos = {}  # (cliente_id, categoria) -> {'cliente_nome':.., 'transacoes': []}
+    erros = []
+    ignoradas_sem_categoria = 0
+    ja_resolvidos = {}  # nome_normalizado -> (status, dado)
+
+    for t in transacoes:
+        categoria = _classificar_transacao_extrato(t['descricao'])
+        if not categoria:
+            ignoradas_sem_categoria += 1
+            continue
+
+        nome_norm = _normalizar_nome_busca(t['nome'])
+        if nome_norm not in ja_resolvidos:
+            func_id, nome_at = _buscar_funcionario_por_nome(t['nome'])
+            homonimos = None
+            if not func_id:
+                func_id, nome_at, homonimos = _buscar_funcionario_por_nome_parcial(t['nome'])
+            if homonimos:
+                ja_resolvidos[nome_norm] = ('homonimos', homonimos)
+            elif not func_id:
+                ja_resolvidos[nome_norm] = ('nao_encontrado', None)
+            else:
+                clientes = _buscar_cliente_do_funcionario(func_id)
+                ja_resolvidos[nome_norm] = ('ok', clientes) if clientes else ('sem_cliente', nome_at)
+
+        status, dado = ja_resolvidos[nome_norm]
+        if status == 'homonimos':
+            erros.append({'nome': t['nome'], 'descricao': t['descricao'],
+                           'motivo': 'homônimos — não resolvido automaticamente', 'candidatos': dado})
+            continue
+        if status == 'nao_encontrado':
+            erros.append({'nome': t['nome'], 'descricao': t['descricao'], 'motivo': 'funcionário não encontrado'})
+            continue
+        if status == 'sem_cliente':
+            erros.append({'nome': dado, 'descricao': t['descricao'], 'motivo': 'funcionário sem cliente vinculado'})
+            continue
+
+        for cliente_id, cliente_nome in dado:
+            chave = (cliente_id, categoria)
+            if chave not in grupos:
+                grupos[chave] = {'cliente_nome': cliente_nome, 'transacoes': []}
+            grupos[chave]['transacoes'].append(t)
+
+    if dry_run:
+        return {
+            'status': 'concluido', 'dry_run': True, 'folha_mensal': folha_mensal,
+            'total_transacoes_no_extrato': len(transacoes),
+            'transacoes_ilegiveis': ilegiveis,
+            'ignoradas_sem_categoria': ignoradas_sem_categoria,
+            'grupos_a_gerar': [
+                {'cliente': v['cliente_nome'], 'cliente_id': cid, 'categoria': _CATEGORIAS_EXTRATO[cat]['rotulo'],
+                 'lancamentos': len(v['transacoes']),
+                 'total_R$': round(sum(t.get('valor') or 0 for t in v['transacoes']), 2)}
+                for (cid, cat), v in grupos.items()
+            ],
+            'erros': erros,
+        }
+
+    anexados = []
+    for (cliente_id, categoria), dados in grupos.items():
+        cat_info = _CATEGORIAS_EXTRATO[categoria]
+        try:
+            pdf_bytes = _gerar_pdf_extrato_categoria(
+                dados['cliente_nome'], cat_info['rotulo'], folha_mensal, dados['transacoes'])
+            fname = f'{cat_info["rotulo"]} {folha_mensal or ""} - {dados["cliente_nome"] or cliente_id}.pdf'.strip()
+            _anexar_attachment(TABLE_CLIENTES, cliente_id, cat_info['campo'], pdf_bytes, fname)
+            anexados.append({
+                'cliente': dados['cliente_nome'], 'cliente_id': cliente_id, 'categoria': cat_info['rotulo'],
+                'lancamentos': len(dados['transacoes']),
+                'total_R$': round(sum(t.get('valor') or 0 for t in dados['transacoes']), 2),
+            })
+        except Exception as exc:
+            logger.error(f'[BENEFICIOS] falha ao gerar/anexar extrato {cat_info["rotulo"]} cliente {dados["cliente_nome"]}: {exc}')
+            erros.append({'cliente': dados['cliente_nome'], 'cliente_id': cliente_id,
+                           'categoria': cat_info['rotulo'], 'motivo': str(exc)})
+
+    return {
+        'status': 'concluido', 'dry_run': False, 'folha_mensal': folha_mensal,
+        'total_transacoes_no_extrato': len(transacoes),
+        'transacoes_ilegiveis': ilegiveis,
+        'ignoradas_sem_categoria': ignoradas_sem_categoria,
+        'clientes_anexados': anexados, 'erros': erros,
+    }
+
+
 @app.route('/processar-beneficios', methods=['POST', 'OPTIONS'])
 def processar_beneficios():
     """
-    v3.12 — Endpoint único para 3 fluxos de Benefícios (o 4º, VR/VA em
-    lote via planilha, continua em /processar-vr-va — v2.34, estendido em
-    v3.12 para aceitar .xlsx moderno além do .xls legado):
-      - tipo=horas_extras : multipart 'pdf' (mestre Sicoob, 1 pág/colaborador)
-      - tipo=assiduidade  : multipart 'pdf' (mestre Sicoob, valida R$110,00)
-      - tipo=vrva_pix      : multipart 'pdf' (PIX individual de colaborador
-        novo sem cartão de benefício ainda — "VR"/"VA" na descrição do PIX)
+    v3.15 — Endpoint único para os fluxos de Benefícios (o VR/VA em lote via
+    planilha continua em /processar-vr-va — v2.34, estendido em v3.12 para
+    aceitar .xlsx moderno além do .xls legado):
+      - tipo=extrato_pix  : multipart 'pdf' (RECOMENDADO — extrato bancário
+        consolidado do mês, centenas de PIX concatenados; classifica
+        VR/VA, Almoço/Jantar e Horas Extras automaticamente por palavra-
+        chave na descrição e ignora o resto — v3.15)
+      - tipo=horas_extras : multipart 'pdf' (mestre Sicoob avulso, 1 pág/colaborador — pré-v3.15)
+      - tipo=assiduidade  : multipart 'pdf' (mestre Sicoob avulso, valida R$110,00)
+      - tipo=vrva_pix      : multipart 'pdf' (PIX individual avulso, fora do
+        extrato — mantido para caso raro de comprovante solto; o fluxo real
+        de colaborador novo sem cartão passou a vir dentro do extrato_pix)
     Body comum: folha_mensal, dry_run (default TRUE — nunca disparar direto
     sem revisar o dry_run primeiro).
     Não exige X-API-KEY (só AIRTABLE_API_KEY do servidor), igual aos outros
@@ -6528,11 +6767,11 @@ def processar_beneficios():
     folha_mensal = (request.form.get('folha_mensal') or '').strip()
     dry_run = str(request.form.get('dry_run', 'true')).strip().lower() in ('1', 'true', 'yes', 'sim')
 
-    if tipo not in ('horas_extras', 'assiduidade', 'vrva_pix'):
+    if tipo not in ('horas_extras', 'assiduidade', 'vrva_pix', 'extrato_pix'):
         return jsonify({
             'status': 'erro',
-            'erro': "tipo deve ser 'horas_extras', 'assiduidade' ou 'vrva_pix' "
-                    "(VR/VA em lote é em /processar-vr-va)",
+            'erro': "tipo deve ser 'extrato_pix', 'horas_extras', 'assiduidade' ou 'vrva_pix' "
+                    "(VR/VA em lote via planilha é em /processar-vr-va)",
         }), 400
 
     caminho_pdf = extrair_pdf_do_request('pdf')
@@ -6540,7 +6779,9 @@ def processar_beneficios():
     try:
         if not caminho_pdf:
             return jsonify({'status': 'erro', 'erro': 'PDF não enviado (campo "pdf")'}), 400
-        if tipo in ('horas_extras', 'assiduidade'):
+        if tipo == 'extrato_pix':
+            resultado = _processar_extrato_beneficios(caminho_pdf, folha_mensal, dry_run=dry_run)
+        elif tipo in ('horas_extras', 'assiduidade'):
             resultado = _processar_lote_sicoob(caminho_pdf, tipo, folha_mensal, dry_run=dry_run)
         else:
             resultado = _processar_vr_va_pix(caminho_pdf, folha_mensal, dry_run=dry_run)
