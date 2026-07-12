@@ -3458,7 +3458,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '3.13',
+        'versao': '3.14',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -6304,11 +6304,13 @@ def _buscar_cliente_do_funcionario(func_id: str):
             rc = requests.get(
                 f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_CLIENTES}/{cid}',
                 headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
-                params={'fields[]': ['Nome', 'Cliente']},
                 timeout=15,
             )
-            # 'Nome' (texto) nem sempre está preenchido — 'Cliente' (fórmula)
-            # é o fallback já usado em _carregar_indice_clientes.
+            # Sem params 'fields[]' de propósito: GET de registro único do
+            # Airtable ignora esse filtro (mesma causa raiz do bug de CPF do
+            # Venceslau/v3.01 hoje mais cedo) — sempre retorna todos os
+            # campos, então busca-se Nome com fallback para Cliente
+            # (fórmula), igual a _carregar_indice_clientes.
             campos_cli = rc.json().get('fields', {}) if rc.ok else {}
             nome_cli = campos_cli.get('Nome') or campos_cli.get('Cliente') or ''
             clientes.append((cid, nome_cli))
