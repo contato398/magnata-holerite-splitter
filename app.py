@@ -3461,7 +3461,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '3.16',
+        'versao': '3.17',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -6736,20 +6736,19 @@ def _carregar_indice_funcionario_cliente():
     return resolver
 
 
-def _processar_extrato_beneficios(caminho_pdf: str, folha_mensal: str, dry_run: bool = False) -> dict:
-    """v3.15/v3.16 — Fluxo unificado: lê o extrato bancário consolidado,
-    classifica cada transação (VR/VA, Almoço/Jantar, Horas Extras, Diárias
-    ou nenhuma), resolve o Funcionário por NOME (CPF vem mascarado, não dá
-    pra usar) e o Cliente dele — via índice em memória, não 1 chamada por
-    pessoa — agrupa por (Cliente, Categoria) e gera 1 PDF-relatório por
-    grupo."""
-    transacoes, ilegiveis = _extrair_transacoes_extrato_pix(caminho_pdf)
+def _processar_lista_transacoes_extrato(transacoes: list, folha_mensal: str, dry_run: bool = False) -> dict:
+    """v3.16 — Metade "depois da extração" do fluxo: classifica, resolve
+    Funcionário→Cliente (índice em memória) e agrupa/gera/anexa. Separado de
+    _processar_extrato_beneficios para poder ser chamado direto com uma
+    lista de transações JÁ EXTRAÍDA E DEDUPLICADA (por 'id_transacao') vinda
+    da agregação de vários lotes de PDF — usado pelo passo de finalização
+    depois que o extrato grande é fatiado com sobreposição de página."""
     resolver = _carregar_indice_funcionario_cliente()
 
     grupos = {}  # (cliente_id, categoria) -> {'cliente_nome':.., 'transacoes': []}
     erros = []
     ignoradas_sem_categoria = 0
-    ja_resolvidos = {}  # nome_normalizado -> (status, dado) — cache local, evita chamar resolver() de novo pro mesmo nome repetido
+    ja_resolvidos = {}
 
     for t in transacoes:
         categoria = _classificar_transacao_extrato(t['descricao'])
@@ -6783,12 +6782,12 @@ def _processar_extrato_beneficios(caminho_pdf: str, folha_mensal: str, dry_run: 
         return {
             'status': 'concluido', 'dry_run': True, 'folha_mensal': folha_mensal,
             'total_transacoes_no_extrato': len(transacoes),
-            'transacoes_ilegiveis': ilegiveis,
             'ignoradas_sem_categoria': ignoradas_sem_categoria,
             'grupos_a_gerar': [
                 {'cliente': v['cliente_nome'], 'cliente_id': cid, 'categoria': _CATEGORIAS_EXTRATO[cat]['rotulo'],
                  'lancamentos': len(v['transacoes']),
-                 'total_R$': round(sum(t.get('valor') or 0 for t in v['transacoes']), 2)}
+                 'total_R$': round(sum(t.get('valor') or 0 for t in v['transacoes']), 2),
+                 'transacoes': v['transacoes']}
                 for (cid, cat), v in grupos.items()
             ],
             'erros': erros,
@@ -6815,10 +6814,21 @@ def _processar_extrato_beneficios(caminho_pdf: str, folha_mensal: str, dry_run: 
     return {
         'status': 'concluido', 'dry_run': False, 'folha_mensal': folha_mensal,
         'total_transacoes_no_extrato': len(transacoes),
-        'transacoes_ilegiveis': ilegiveis,
         'ignoradas_sem_categoria': ignoradas_sem_categoria,
         'clientes_anexados': anexados, 'erros': erros,
     }
+
+
+def _processar_extrato_beneficios(caminho_pdf: str, folha_mensal: str, dry_run: bool = False) -> dict:
+    """v3.15/v3.16 — Lê o extrato bancário (1 PDF) e processa por completo
+    (extração + classificação + resolução + agrupamento + geração/anexo).
+    Para arquivos grandes que estouram o tempo de request do Render, ver
+    /processar-beneficios-extrato-lista (v3.16) — recebe direto uma lista
+    de transações já extraídas de vários lotes menores, sem reabrir PDF."""
+    transacoes, ilegiveis = _extrair_transacoes_extrato_pix(caminho_pdf)
+    resultado = _processar_lista_transacoes_extrato(transacoes, folha_mensal, dry_run=dry_run)
+    resultado['transacoes_ilegiveis'] = ilegiveis
+    return resultado
 
 
 @app.route('/processar-beneficios', methods=['POST', 'OPTIONS'])
@@ -6874,6 +6884,65 @@ def processar_beneficios():
             os.remove(caminho_pdf)
         except OSError:
             pass
+
+
+@app.route('/processar-beneficios-extrato-lista', methods=['POST', 'OPTIONS'])
+def processar_beneficios_extrato_lista():
+    """
+    v3.16 — Passo de FINALIZAÇÃO do Extrato Bancário Consolidado para
+    arquivos grandes demais pra processar em 1 request (achado real: 122
+    páginas / 4,6 MB estoura o tempo de request do Render mesmo já com a
+    resolução de Funcionário/Cliente em lote — o gargalo é ler/processar o
+    texto do PDF inteiro, não o Airtable).
+
+    Fluxo: fatiar o PDF grande em pedaços menores COM SOBREPOSIÇÃO de
+    página (pra nenhuma transação ficar cortada na borda), chamar
+    /processar-beneficios (tipo=extrato_pix, dry_run=true) em cada pedaço,
+    juntar o campo 'transacoes' de cada grupo de todas as respostas,
+    deduplicar por 'id_transacao' (a mesma transação completa aparece nos
+    2 lotes vizinhos por causa da sobreposição) e mandar a lista final
+    aqui — 1 chamada só, leve (só classifica/resolve/agrupa/gera, sem abrir
+    PDF nenhum).
+
+    Body JSON:
+      {
+        "transacoes": [{"id_transacao":.., "nome":.., "cpf_mascarado":..,
+                         "valor":.., "descricao":.., "data":..}, ...],
+        "folha_mensal": "Junho 2026",
+        "dry_run": true
+      }
+    Não exige X-API-KEY (só AIRTABLE_API_KEY do servidor), igual ao resto
+    dos fatiadores de Benefícios.
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    data = request.get_json(force=True, silent=True) or {}
+    transacoes = data.get('transacoes')
+    if not isinstance(transacoes, list) or not transacoes:
+        return jsonify({'status': 'erro', 'erro': "'transacoes' deve ser uma lista não vazia"}), 400
+    folha_mensal = (data.get('folha_mensal') or '').strip()
+    dry_run = str(data.get('dry_run', True)).strip().lower() in ('1', 'true', 'yes', 'sim')
+
+    # Dedup defensivo por id_transacao (o chamador já deve deduplicar, mas
+    # não custa garantir aqui também — transação sem id_transacao passa
+    # direto, sem dedup, pois não tem chave confiável pra isso).
+    vistos = set()
+    lista_final = []
+    for t in transacoes:
+        tid = t.get('id_transacao')
+        if tid:
+            if tid in vistos:
+                continue
+            vistos.add(tid)
+        lista_final.append(t)
+
+    resultado = _processar_lista_transacoes_extrato(lista_final, folha_mensal, dry_run=dry_run)
+    resultado['transacoes_recebidas'] = len(transacoes)
+    resultado['transacoes_apos_dedup'] = len(lista_final)
+    return jsonify(resultado)
 
 
 def _gerar_fila_envios_email(folha_mensal=None, folha_mensal_d2=None,
