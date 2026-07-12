@@ -199,6 +199,7 @@ F_CLI_HORAS_EXTRAS  = 'fldmnmpHN2toqaQkr'
 F_CLI_ASSIDUIDADE   = 'fldIW9QdiKDYeDAEZ'
 F_CLI_VRVA          = 'fldk9aUnVOXlWUHDr'
 F_CLI_ALMOCO_JANTA  = 'fldUyDDKQqytLgCkD'
+F_CLI_DIARIAS       = 'fldjcLYeyOg9CvAe3'
 # Envios — campos de e-mail (link p/ os documentos do pacote)
 F_ENVIO_TEXTO    = 'fldGeaadeNYWaa4Og'   # Texto do Email
 F_ENVIO_EXTRATO  = 'fldITxIfLG8TKntBu'   # Extrato Mensal (link)
@@ -3385,7 +3386,7 @@ CAPACIDADES_FOLHA_PONTO = [
 # /processar-vr-va), fora de PROCESSADORES_DOCUMENTO/TIPO_DOC_REGRAS (mesmo
 # motivo da Folha de Ponto acima — lógica própria demais pra fila genérica).
 CAPACIDADES_BENEFICIOS = [
-    ('Extrato Bancário Consolidado (PIX)', 'Classifica por palavra-chave na descrição (VR/VA, Almoço/Jantar, Horas Extras) e ignora o resto; nome por match fuzzy (CPF vem mascarado na origem)', 'Clientes — colunas "VR/VA Benefícios" / "Hora Almoço e Jantar" / "Horas Extras"'),
+    ('Extrato Bancário Consolidado (PIX)', 'Classifica por palavra-chave na descrição (VR/VA, Almoço/Jantar, Horas Extras, Diárias) e ignora o resto; nome por match fuzzy (CPF vem mascarado na origem)', 'Clientes — colunas "VR/VA Benefícios" / "Hora Almoço e Jantar" / "Horas Extras" / "Diárias"'),
     ('Horas Extras — mestre avulso (Sicoob, pré-extrato)', 'Individual por CPF, fundido por Cliente/posto', 'Clientes — coluna "Horas Extras"'),
     ('Assiduidade (Sicoob, trava R$ 110,00)', 'Individual por CPF, fundido por Cliente/posto', 'Clientes — coluna "Assiduidade"'),
     ('VR/VA — Lote (planilha .xls/.xlsx + comprovante agregado)', 'Por linha da planilha, via CPF→Local→Cliente (rota /processar-vr-va, v2.34)', 'Extratos Mensais (relatório gerado) + Guias e Comprovantes (comprovante)'),
@@ -3460,7 +3461,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '3.15',
+        'versao': '3.16',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -6527,10 +6528,16 @@ _EXTRATO_RUIDO_RES = [
 
 def _extrair_transacoes_extrato_pix(caminho_pdf: str) -> list:
     """Extrai todas as transações PIX de um extrato consolidado. Retorna
-    (transacoes, ilegiveis) — transacoes é lista de {nome, cpf_mascarado,
-    valor, descricao, data}; ilegiveis é a contagem de blocos onde Nome/
-    Descrição não puderam ser lidos (ex.: campo cortado ao meio por quebra
-    de página) — nunca descartados sem rastro, sempre contados."""
+    (transacoes, ilegiveis) — transacoes é lista de {id_transacao, nome,
+    cpf_mascarado, valor, descricao, data}; ilegiveis é a contagem de blocos
+    onde Nome/Descrição não puderam ser lidos (ex.: campo cortado ao meio
+    por quebra de página) — nunca descartados sem rastro, sempre contados.
+
+    Dedup por 'ID Transação' (único por PIX, sempre presente no bloco): em
+    lotes com sobreposição de página (v3.16, para não perder transação
+    cortada na borda), a mesma transação completa pode aparecer 2x — aqui
+    dentro de UM arquivo. Dedup entre chamadas/lotes diferentes é
+    responsabilidade de quem agrega os resultados dos lotes."""
     with pdfplumber.open(caminho_pdf) as pdf:
         texto_total = '\n'.join((pg.extract_text() or '') for pg in pdf.pages)
 
@@ -6540,6 +6547,7 @@ def _extrair_transacoes_extrato_pix(caminho_pdf: str) -> list:
 
     blocos = _EXTRATO_BLOCO_RE.split(texto_limpo)
     transacoes, ilegiveis = [], 0
+    ids_vistos = set()
     for bloco in blocos[1:]:  # blocos[0] é preâmbulo antes do 1º comprovante
         if 'Destinat' not in bloco:
             ilegiveis += 1
@@ -6550,9 +6558,15 @@ def _extrair_transacoes_extrato_pix(caminho_pdf: str) -> list:
         m_valor = re.search(r'Valor:\s*R\$\s*([\d.,]+)', bloco)
         m_desc = re.search(r'Descri[çc][ãa]o:\s*(.+)', bloco)
         m_data = re.search(r'Data do pagamento:\s*([\d/]+)', bloco)
+        m_id = re.search(r'ID Transa[çc][ãa]o:\s*(\S+)', bloco)
         if not m_nome or not m_desc:
             ilegiveis += 1
             continue
+        id_transacao = m_id.group(1).strip() if m_id else None
+        if id_transacao and id_transacao in ids_vistos:
+            continue
+        if id_transacao:
+            ids_vistos.add(id_transacao)
         valor = None
         if m_valor:
             try:
@@ -6560,6 +6574,7 @@ def _extrair_transacoes_extrato_pix(caminho_pdf: str) -> list:
             except ValueError:
                 pass
         transacoes.append({
+            'id_transacao': id_transacao,
             'nome': m_nome.group(1).strip(),
             'cpf_mascarado': m_cpf.group(1).strip() if m_cpf else '',
             'valor': valor,
@@ -6570,11 +6585,13 @@ def _extrair_transacoes_extrato_pix(caminho_pdf: str) -> list:
 
 
 def _classificar_transacao_extrato(descricao: str):
-    """Ordem = prioridade das regras (v3.15): VR/VA vence sobre Almoço/
-    Jantar, que vence sobre Extra/Horas — cobre os casos reais onde uma
-    descrição cita mais de uma categoria junto (ex.: 'DIARIAS 750 VR 130
-    HORA ALMOÇO 56 45'). Retorna None para tudo que não é benefício (a
-    maioria real do extrato: diárias, fornecedores, salário)."""
+    """Ordem = prioridade das regras (v3.15/v3.16): VR/VA > Almoço/Jantar >
+    Extra/Horas > Diárias — cobre os casos reais onde uma descrição cita
+    mais de uma categoria junto (ex.: 'DIARIAS 750 VR 130 HORA ALMOÇO 56
+    45' vira VR/VA, não Diárias; 'VR ref 3 diarias Carlos' também vira
+    VR/VA). Diárias por último pega só quem não bateu em nenhuma categoria
+    mais específica. Retorna None só para o que sobra sem nenhuma palavra-
+    chave (fornecedor, salário, etc.)."""
     d = descricao or ''
     if re.search(r'\bvr\b|\bva\b|alimenta[çc][ãa]o|refei[çc][ãa]o', d, re.IGNORECASE):
         return 'vrva'
@@ -6582,6 +6599,8 @@ def _classificar_transacao_extrato(descricao: str):
         return 'almoco_jantar'
     if re.search(r'extra|\bhora', d, re.IGNORECASE):
         return 'horas_extras'
+    if re.search(r'di[áa]rias?', d, re.IGNORECASE):
+        return 'diarias'
     return None
 
 
@@ -6589,6 +6608,7 @@ _CATEGORIAS_EXTRATO = {
     'vrva':          {'rotulo': 'VR/VA', 'campo': F_CLI_VRVA},
     'almoco_jantar': {'rotulo': 'Hora Almoço e Jantar', 'campo': F_CLI_ALMOCO_JANTA},
     'horas_extras':  {'rotulo': 'Horas Extras', 'campo': F_CLI_HORAS_EXTRAS},
+    'diarias':       {'rotulo': 'Diárias', 'campo': F_CLI_DIARIAS},
 }
 
 
@@ -6646,17 +6666,90 @@ def _gerar_pdf_extrato_categoria(nome_cliente: str, rotulo_categoria: str,
     return bytes(pdf.output())
 
 
+def _carregar_indice_funcionario_cliente():
+    """v3.16 — Carrega Funcionários + Locais + Clientes em LOTE (3 chamadas
+    ao Airtable, no total) e devolve uma função resolver(nome) -> (status,
+    dado), tudo em memória a partir daí.
+
+    Causa raiz real do 502 na 1ª tentativa do Extrato Bancário Consolidado:
+    _buscar_funcionario_por_nome recarregava a tabela INTEIRA de
+    Funcionários a cada nome diferente da transação (~200 nomes únicos =
+    ~200 recargas completas da tabela) — não era o tamanho do PDF. Mesma
+    estratégia de eficiência já usada em /processar-vr-va (v2.34)."""
+    locais_map = {
+        rec['id']: [c['id'] if isinstance(c, dict) else c for c in (rec['fields'].get('Cliente') or [])]
+        for rec in _at_listar_todos(TABLE_LOCAIS, ['Nome', 'Cliente'])
+    }
+    clientes_nome = {
+        rec['id']: (rec['fields'].get('Nome') or rec['fields'].get('Cliente') or rec['id'])
+        for rec in _at_listar_todos(TABLE_CLIENTES, ['Nome', 'Cliente'])
+    }
+
+    exatos = {}       # nome_norm -> (func_id, nome_completo, [locais_ids])
+    homonimos_exatos = {}  # nome_norm -> [{'id':.., 'nome':..}, ...]
+    parcial_idx = {}  # (primeiro, ultimo) -> [(func_id, nome_completo, [locais_ids]), ...]
+
+    for rec in _at_listar_todos(TABLE_FUNC, ['Nome Completo', 'Locais de trabalho']):
+        nome_completo = rec['fields'].get('Nome Completo', '')
+        nome_norm = _normalizar_nome_busca(nome_completo)
+        if not nome_norm:
+            continue
+        locais_ids = rec['fields'].get('Locais de trabalho') or []
+        if nome_norm in exatos:
+            homonimos_exatos.setdefault(nome_norm, [
+                {'id': exatos[nome_norm][0], 'nome': exatos[nome_norm][1]}
+            ]).append({'id': rec['id'], 'nome': nome_completo})
+            continue
+        exatos[nome_norm] = (rec['id'], nome_completo, locais_ids)
+        primeiro, ultimo = _primeiro_ultimo_nome(nome_norm)
+        if primeiro and ultimo:
+            parcial_idx.setdefault((primeiro, ultimo), []).append((rec['id'], nome_completo, locais_ids))
+
+    def _clientes_do_funcionario(locais_ids):
+        clientes, vistos = [], set()
+        for lid in locais_ids:
+            for cid in locais_map.get(lid, []):
+                if cid in vistos:
+                    continue
+                vistos.add(cid)
+                clientes.append((cid, clientes_nome.get(cid, cid)))
+        return clientes
+
+    def resolver(nome_bruto):
+        nome_norm = _normalizar_nome_busca(nome_bruto)
+        if nome_norm in homonimos_exatos:
+            return ('homonimos', homonimos_exatos[nome_norm])
+        if nome_norm in exatos:
+            func_id, nome_completo, locais_ids = exatos[nome_norm]
+        else:
+            primeiro, ultimo = _primeiro_ultimo_nome(nome_norm)
+            candidatos = parcial_idx.get((primeiro, ultimo), []) if primeiro and ultimo else []
+            if len(candidatos) > 1:
+                return ('homonimos', [{'id': c[0], 'nome': c[1]} for c in candidatos])
+            if len(candidatos) == 1:
+                func_id, nome_completo, locais_ids = candidatos[0]
+            else:
+                return ('nao_encontrado', None)
+        clientes = _clientes_do_funcionario(locais_ids)
+        return ('ok', clientes) if clientes else ('sem_cliente', nome_completo)
+
+    return resolver
+
+
 def _processar_extrato_beneficios(caminho_pdf: str, folha_mensal: str, dry_run: bool = False) -> dict:
-    """v3.15 — Fluxo unificado: lê o extrato bancário consolidado, classifica
-    cada transação (VR/VA, Almoço/Jantar, Horas Extras ou nenhuma), resolve
-    o Funcionário por NOME (CPF vem mascarado, não dá pra usar) e o Cliente
-    dele, agrupa por (Cliente, Categoria) e gera 1 PDF-relatório por grupo."""
+    """v3.15/v3.16 — Fluxo unificado: lê o extrato bancário consolidado,
+    classifica cada transação (VR/VA, Almoço/Jantar, Horas Extras, Diárias
+    ou nenhuma), resolve o Funcionário por NOME (CPF vem mascarado, não dá
+    pra usar) e o Cliente dele — via índice em memória, não 1 chamada por
+    pessoa — agrupa por (Cliente, Categoria) e gera 1 PDF-relatório por
+    grupo."""
     transacoes, ilegiveis = _extrair_transacoes_extrato_pix(caminho_pdf)
+    resolver = _carregar_indice_funcionario_cliente()
 
     grupos = {}  # (cliente_id, categoria) -> {'cliente_nome':.., 'transacoes': []}
     erros = []
     ignoradas_sem_categoria = 0
-    ja_resolvidos = {}  # nome_normalizado -> (status, dado)
+    ja_resolvidos = {}  # nome_normalizado -> (status, dado) — cache local, evita chamar resolver() de novo pro mesmo nome repetido
 
     for t in transacoes:
         categoria = _classificar_transacao_extrato(t['descricao'])
@@ -6666,17 +6759,7 @@ def _processar_extrato_beneficios(caminho_pdf: str, folha_mensal: str, dry_run: 
 
         nome_norm = _normalizar_nome_busca(t['nome'])
         if nome_norm not in ja_resolvidos:
-            func_id, nome_at = _buscar_funcionario_por_nome(t['nome'])
-            homonimos = None
-            if not func_id:
-                func_id, nome_at, homonimos = _buscar_funcionario_por_nome_parcial(t['nome'])
-            if homonimos:
-                ja_resolvidos[nome_norm] = ('homonimos', homonimos)
-            elif not func_id:
-                ja_resolvidos[nome_norm] = ('nao_encontrado', None)
-            else:
-                clientes = _buscar_cliente_do_funcionario(func_id)
-                ja_resolvidos[nome_norm] = ('ok', clientes) if clientes else ('sem_cliente', nome_at)
+            ja_resolvidos[nome_norm] = resolver(t['nome'])
 
         status, dado = ja_resolvidos[nome_norm]
         if status == 'homonimos':
