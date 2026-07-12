@@ -191,6 +191,13 @@ F_GUIA_TIPO    = 'fldZc4A6stiQPI8qt'
 F_GUIA_PDF     = 'fldmC813USDUA3eVl'   # PDF GUIA
 F_GUIA_COMPROV = 'fldBSFBpAUvJFMzbH'   # PDF COMPROVANTE (comprovantes de pagamento, VR/VA…)
 F_GUIA_NOME    = 'fldOLOkac6twvlfZR'   # Nome documento
+# Benefícios (Clientes) — v3.12: Horas Extras/Assiduidade (Sicoob, fatiado
+# por colaborador e fundido por cliente) e VR/VA (lote via Excel+comprovante
+# agregado, ou PIX individual de colaborador novo sem cartão ainda).
+F_CLI_NOME          = 'fldx6AShzJCfQeBMa'
+F_CLI_HORAS_EXTRAS  = 'fldmnmpHN2toqaQkr'
+F_CLI_ASSIDUIDADE   = 'fldIW9QdiKDYeDAEZ'
+F_CLI_VRVA          = 'fldk9aUnVOXlWUHDr'
 # Envios — campos de e-mail (link p/ os documentos do pacote)
 F_ENVIO_TEXTO    = 'fldGeaadeNYWaa4Og'   # Texto do Email
 F_ENVIO_EXTRATO  = 'fldITxIfLG8TKntBu'   # Extrato Mensal (link)
@@ -3373,6 +3380,16 @@ CAPACIDADES_FOLHA_PONTO = [
     ('Folha de Ponto — Manual', 'Individual por colaborador, com Prevalência sobre o Secullum', 'PDF Folha Ponto (Funcionários) / Assinaturas Digitais'),
 ]
 
+# v3.12 — Benefícios: rotas dedicadas (/processar-beneficios e
+# /processar-vr-va), fora de PROCESSADORES_DOCUMENTO/TIPO_DOC_REGRAS (mesmo
+# motivo da Folha de Ponto acima — lógica própria demais pra fila genérica).
+CAPACIDADES_BENEFICIOS = [
+    ('Horas Extras (Sicoob)', 'Individual por CPF, fundido por Cliente/posto', 'Clientes — coluna "Horas Extras"'),
+    ('Assiduidade (Sicoob, trava R$ 110,00)', 'Individual por CPF, fundido por Cliente/posto', 'Clientes — coluna "Assiduidade"'),
+    ('VR/VA — Lote (planilha .xls/.xlsx + comprovante agregado)', 'Por linha da planilha, via CPF→Local→Cliente (rota /processar-vr-va, v2.34)', 'Extratos Mensais (relatório gerado) + Guias e Comprovantes (comprovante)'),
+    ('VR/VA — PIX individual (colaborador novo, sem cartão)', 'Individual por CPF, fundido por Cliente/posto — NÃO TESTADO contra exemplo real', 'Clientes — coluna "VR/VA Benefícios"'),
+]
+
 
 def _listar_capacidades_documentos() -> str:
     """v3.11 — Monta o texto de /status-documentos a partir de
@@ -3404,6 +3421,9 @@ def _listar_capacidades_documentos() -> str:
     linhas = ['🤖 LISTA DE CAPACIDADES DO ROBÔ (DOCUMENTOS ATIVOS):']
     idx = 1
     for nome, fatiamento, destino in CAPACIDADES_FOLHA_PONTO:
+        linhas.append(f'{idx}. {nome} (Fatiamento: {fatiamento} → Tabela: {destino})')
+        idx += 1
+    for nome, fatiamento, destino in CAPACIDADES_BENEFICIOS:
         linhas.append(f'{idx}. {nome} (Fatiamento: {fatiamento} → Tabela: {destino})')
         idx += 1
     for tipo, fatiamento, destino in sorted(automatizados):
@@ -3438,7 +3458,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '3.11',
+        'versao': '3.12',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
@@ -6219,6 +6239,314 @@ def processar_doc_cliente():
             pass
 
 
+# ── Benefícios: Horas Extras, Assiduidade, VR/VA (v3.12) ──────────────────────
+# Bloco ISOLADO: só escreve nos 3 campos novos de Clientes (Horas Extras,
+# Assiduidade, VR/VA Benefícios) — não toca em Holerite, Ponto (Regra de
+# Prevalência intacta) nem no campo "Documento PDF"/imutabilidade das
+# Assinaturas Digitais.
+
+_RECIBO_TERCEIROS_VALOR_RE = re.compile(r'quantia de\s*(?:R\$\s*)+([\d.,]+)\s*,\s*referente', re.IGNORECASE)
+_RECIBO_TERCEIROS_EMPREGADO_RE = re.compile(r'Empregado\(a\):\s*(.+)')
+
+
+def _extrair_recibo_terceiros(texto: str):
+    """Extrai (nome, cpf, valor_float) de 1 página do 'RECIBO DE PAGAMENTO DE
+    TERCEIROS' (Sicoob) — formato compartilhado por Horas Extras e
+    Assiduidade. cpf reaproveita extrair_cpf (a linha 'CPF/CNPJ' do
+    empregador não bate no formato XXX.XXX.XXX-XX, então não dá falso
+    positivo antes de chegar na linha 'CPF:' do empregado)."""
+    if not texto:
+        return None, None, None
+    m_nome = _RECIBO_TERCEIROS_EMPREGADO_RE.search(texto)
+    nome = m_nome.group(1).strip() if m_nome else None
+    cpf = extrair_cpf(texto)
+    m_valor = _RECIBO_TERCEIROS_VALOR_RE.search(texto)
+    valor = None
+    if m_valor:
+        try:
+            valor = float(m_valor.group(1).replace('.', '').replace(',', '.'))
+        except ValueError:
+            valor = None
+    return nome, cpf, valor
+
+
+def _buscar_cliente_do_funcionario(func_id: str):
+    """Resolve o(s) Cliente(s) de um Funcionário via Locais de trabalho →
+    Local.Cliente (2 saltos de multipleRecordLinks). O lookup 'Cliente'
+    direto do Funcionário não expõe o record id pela API padrão (só o nome
+    já resolvido), por isso a travessia manual em vez de ler o lookup."""
+    _at_throttle()
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        timeout=15,
+    )
+    if not r.ok:
+        return []
+    locais_ids = r.json().get('fields', {}).get('Locais de trabalho') or []
+    if not locais_ids:
+        return []
+    clientes, vistos = [], set()
+    for local_id in locais_ids:
+        _at_throttle()
+        rl = requests.get(
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_LOCAIS}/{local_id}',
+            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            timeout=15,
+        )
+        if not rl.ok:
+            continue
+        for cid in (rl.json().get('fields', {}).get('Cliente') or []):
+            if cid in vistos:
+                continue
+            vistos.add(cid)
+            _at_throttle()
+            rc = requests.get(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_CLIENTES}/{cid}',
+                headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                params={'fields[]': ['Nome']},
+                timeout=15,
+            )
+            nome_cli = rc.json().get('fields', {}).get('Nome', '') if rc.ok else ''
+            clientes.append((cid, nome_cli))
+    return clientes
+
+
+def _processar_lote_sicoob(caminho_pdf: str, tipo: str, folha_mensal: str, dry_run: bool = False) -> dict:
+    """v3.12 — Fatia um mestre de recibos Sicoob (1 página = 1 colaborador)
+    de Horas Extras ou Assiduidade, agrupa por Cliente (via Locais de
+    trabalho do Funcionário) e funde num único PDF por cliente.
+    tipo: 'horas_extras' | 'assiduidade'.
+
+    Assiduidade tem trava de segurança: só entra quem tem valor == R$110,00
+    exatos; quem diverge vira Pendência para revisão humana, nunca é
+    descartado silenciosamente."""
+    if tipo == 'horas_extras':
+        campo_cliente, rotulo = F_CLI_HORAS_EXTRAS, 'Horas Extras'
+    elif tipo == 'assiduidade':
+        campo_cliente, rotulo = F_CLI_ASSIDUIDADE, 'Assiduidade'
+    else:
+        return {'status': 'erro', 'erro': f"tipo inválido: {tipo} (use horas_extras|assiduidade)"}
+
+    paginas_por_cliente = {}
+    erros = []
+    with pdfplumber.open(caminho_pdf) as pdf:
+        total = len(pdf.pages)
+        for i in range(total):
+            texto = pdf.pages[i].extract_text() or ''
+            nome, cpf, valor = _extrair_recibo_terceiros(texto)
+            if not cpf:
+                erros.append({'pagina': i + 1, 'motivo': 'CPF não extraído da página', 'nome': nome})
+                continue
+
+            if tipo == 'assiduidade' and (valor is None or round(valor, 2) != 110.00):
+                if not dry_run:
+                    _criar_registro(TABLE_PENDENCIAS, {
+                        F_PEND_NOME: f'Assiduidade com valor divergente de R$ 110,00: {nome or cpf}',
+                        F_PEND_STATUS: 'Pendente',
+                        F_PEND_TIPO: 'Assiduidade — valor divergente (Formato B)',
+                        F_PEND_OBS: f'Página {i + 1}. Valor extraído: {valor}. CPF: {cpf}.',
+                        F_PEND_DATA: datetime.now().isoformat(),
+                    })
+                erros.append({'pagina': i + 1, 'motivo': 'valor diferente de R$ 110,00', 'nome': nome, 'valor': valor})
+                continue
+
+            func_id, nome_at = buscar_funcionario_por_cpf(cpf)
+            if not func_id:
+                if not dry_run:
+                    _criar_registro(TABLE_PENDENCIAS, {
+                        F_PEND_NOME: f'{rotulo}: funcionário não encontrado — {nome or cpf}',
+                        F_PEND_STATUS: 'Pendente',
+                        F_PEND_TIPO: f'{rotulo} — funcionário não encontrado',
+                        F_PEND_OBS: f'Página {i + 1}. CPF: {cpf}.',
+                        F_PEND_DATA: datetime.now().isoformat(),
+                    })
+                erros.append({'pagina': i + 1, 'motivo': 'funcionário não encontrado', 'nome': nome, 'cpf': cpf})
+                continue
+
+            clientes = _buscar_cliente_do_funcionario(func_id)
+            if not clientes:
+                if not dry_run:
+                    _criar_registro(TABLE_PENDENCIAS, {
+                        F_PEND_NOME: f'{rotulo}: sem Cliente/posto vinculado — {nome_at or nome}',
+                        F_PEND_STATUS: 'Pendente',
+                        F_PEND_TIPO: f'{rotulo} — sem cliente vinculado',
+                        F_PEND_OBS: f'Página {i + 1}. Funcionário {func_id} sem Locais de trabalho/Cliente.',
+                        F_PEND_DATA: datetime.now().isoformat(),
+                    })
+                erros.append({'pagina': i + 1, 'motivo': 'funcionário sem cliente vinculado', 'nome': nome_at or nome})
+                continue
+
+            for cliente_id, cliente_nome in clientes:
+                if cliente_id not in paginas_por_cliente:
+                    paginas_por_cliente[cliente_id] = {'nome': cliente_nome, 'paginas': [], 'pessoas': []}
+                paginas_por_cliente[cliente_id]['paginas'].append(i)
+                paginas_por_cliente[cliente_id]['pessoas'].append(nome_at or nome)
+
+            if (i + 1) % 15 == 0:
+                gc.collect()
+
+    if dry_run:
+        return {
+            'status': 'concluido', 'tipo': rotulo, 'dry_run': True, 'folha_mensal': folha_mensal,
+            'total_paginas': total, 'clientes_identificados': len(paginas_por_cliente),
+            'clientes_a_anexar': [
+                {'cliente': d['nome'], 'cliente_id': cid, 'colaboradores': d['pessoas'],
+                 'paginas': [p + 1 for p in d['paginas']]}
+                for cid, d in paginas_por_cliente.items()
+            ],
+            'erros': erros,
+        }
+
+    anexados = []
+    for cliente_id, dados in paginas_por_cliente.items():
+        try:
+            pdf_bytes = extrair_pdf_colaborador(caminho_pdf, dados['paginas'])
+            fname = f'{rotulo} {folha_mensal or ""} - {dados["nome"] or cliente_id}.pdf'.strip()
+            _anexar_attachment(TABLE_CLIENTES, cliente_id, campo_cliente, pdf_bytes, fname)
+            anexados.append({
+                'cliente': dados['nome'], 'cliente_id': cliente_id,
+                'colaboradores': dados['pessoas'], 'paginas': [p + 1 for p in dados['paginas']],
+            })
+        except Exception as exc:
+            logger.error(f'[BENEFICIOS] falha ao anexar {rotulo} cliente {dados["nome"]}: {exc}')
+            erros.append({'cliente': dados['nome'], 'cliente_id': cliente_id, 'motivo': str(exc)})
+
+    return {
+        'status': 'concluido', 'tipo': rotulo, 'dry_run': False, 'folha_mensal': folha_mensal,
+        'total_paginas': total, 'clientes_identificados': len(paginas_por_cliente),
+        'clientes_anexados': anexados, 'erros': erros,
+    }
+
+
+def _processar_vr_va_pix(caminho_pdf: str, folha_mensal: str, dry_run: bool = False) -> dict:
+    """v3.12 — PIX individual de VR/VA para colaborador novo sem cartão de
+    benefício ainda. NÃO TESTADO contra um exemplo real (só a descrição
+    fornecida) — layout de comprovante bancário comum, com 'VR' ou 'VA' na
+    descrição/detalhes do PIX. 1 página = 1 colaborador."""
+    paginas_por_cliente = {}
+    erros = []
+    with pdfplumber.open(caminho_pdf) as pdf:
+        total = len(pdf.pages)
+        for i in range(total):
+            texto = pdf.pages[i].extract_text() or ''
+            if not re.search(r'\bVR\b|\bVA\b', texto):
+                erros.append({'pagina': i + 1, 'motivo': "sem 'VR'/'VA' na descrição — não é PIX de benefício"})
+                continue
+            cpf = extrair_cpf(texto)
+            if not cpf:
+                erros.append({'pagina': i + 1, 'motivo': 'CPF não extraído'})
+                continue
+            func_id, nome_at = buscar_funcionario_por_cpf(cpf)
+            if not func_id:
+                if not dry_run:
+                    _criar_registro(TABLE_PENDENCIAS, {
+                        F_PEND_NOME: f'VR/VA PIX individual: funcionário não encontrado — CPF {cpf}',
+                        F_PEND_STATUS: 'Pendente',
+                        F_PEND_TIPO: 'VR/VA PIX — funcionário não encontrado',
+                        F_PEND_OBS: f'Página {i + 1}.',
+                        F_PEND_DATA: datetime.now().isoformat(),
+                    })
+                erros.append({'pagina': i + 1, 'motivo': 'funcionário não encontrado', 'cpf': cpf})
+                continue
+            clientes = _buscar_cliente_do_funcionario(func_id)
+            if not clientes:
+                if not dry_run:
+                    _criar_registro(TABLE_PENDENCIAS, {
+                        F_PEND_NOME: f'VR/VA PIX individual: sem Cliente/posto vinculado — {nome_at}',
+                        F_PEND_STATUS: 'Pendente',
+                        F_PEND_TIPO: 'VR/VA PIX — sem cliente vinculado',
+                        F_PEND_OBS: f'Página {i + 1}. Funcionário {func_id}.',
+                        F_PEND_DATA: datetime.now().isoformat(),
+                    })
+                erros.append({'pagina': i + 1, 'motivo': 'funcionário sem cliente vinculado', 'nome': nome_at})
+                continue
+            for cliente_id, cliente_nome in clientes:
+                if cliente_id not in paginas_por_cliente:
+                    paginas_por_cliente[cliente_id] = {'nome': cliente_nome, 'paginas': [], 'pessoas': []}
+                paginas_por_cliente[cliente_id]['paginas'].append(i)
+                paginas_por_cliente[cliente_id]['pessoas'].append(nome_at)
+
+    if dry_run:
+        return {
+            'status': 'concluido', 'dry_run': True, 'folha_mensal': folha_mensal,
+            'total_paginas': total,
+            'clientes_a_anexar': [
+                {'cliente': d['nome'], 'cliente_id': cid, 'colaboradores': d['pessoas'],
+                 'paginas': [p + 1 for p in d['paginas']]}
+                for cid, d in paginas_por_cliente.items()
+            ],
+            'erros': erros,
+        }
+
+    anexados = []
+    for cliente_id, dados in paginas_por_cliente.items():
+        try:
+            pdf_bytes = extrair_pdf_colaborador(caminho_pdf, dados['paginas'])
+            fname = f'VR-VA PIX Individual {folha_mensal or ""} - {dados["nome"] or cliente_id}.pdf'.strip()
+            _anexar_attachment(TABLE_CLIENTES, cliente_id, F_CLI_VRVA, pdf_bytes, fname)
+            anexados.append({
+                'cliente': dados['nome'], 'cliente_id': cliente_id,
+                'colaboradores': dados['pessoas'], 'paginas': [p + 1 for p in dados['paginas']],
+            })
+        except Exception as exc:
+            logger.error(f'[BENEFICIOS] falha ao anexar VR/VA PIX cliente {dados["nome"]}: {exc}')
+            erros.append({'cliente': dados['nome'], 'cliente_id': cliente_id, 'motivo': str(exc)})
+
+    return {
+        'status': 'concluido', 'dry_run': False, 'folha_mensal': folha_mensal,
+        'total_paginas': total, 'clientes_anexados': anexados, 'erros': erros,
+    }
+
+
+@app.route('/processar-beneficios', methods=['POST', 'OPTIONS'])
+def processar_beneficios():
+    """
+    v3.12 — Endpoint único para 3 fluxos de Benefícios (o 4º, VR/VA em
+    lote via planilha, continua em /processar-vr-va — v2.34, estendido em
+    v3.12 para aceitar .xlsx moderno além do .xls legado):
+      - tipo=horas_extras : multipart 'pdf' (mestre Sicoob, 1 pág/colaborador)
+      - tipo=assiduidade  : multipart 'pdf' (mestre Sicoob, valida R$110,00)
+      - tipo=vrva_pix      : multipart 'pdf' (PIX individual de colaborador
+        novo sem cartão de benefício ainda — "VR"/"VA" na descrição do PIX)
+    Body comum: folha_mensal, dry_run (default TRUE — nunca disparar direto
+    sem revisar o dry_run primeiro).
+    Não exige X-API-KEY (só AIRTABLE_API_KEY do servidor), igual aos outros
+    fatiadores por cliente (/processar-doc-cliente, /processar-folha-ponto).
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    if not AIRTABLE_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    tipo = (request.form.get('tipo') or '').strip().lower()
+    folha_mensal = (request.form.get('folha_mensal') or '').strip()
+    dry_run = str(request.form.get('dry_run', 'true')).strip().lower() in ('1', 'true', 'yes', 'sim')
+
+    if tipo not in ('horas_extras', 'assiduidade', 'vrva_pix'):
+        return jsonify({
+            'status': 'erro',
+            'erro': "tipo deve ser 'horas_extras', 'assiduidade' ou 'vrva_pix' "
+                    "(VR/VA em lote é em /processar-vr-va)",
+        }), 400
+
+    caminho_pdf = extrair_pdf_do_request('pdf')
+
+    try:
+        if not caminho_pdf:
+            return jsonify({'status': 'erro', 'erro': 'PDF não enviado (campo "pdf")'}), 400
+        if tipo in ('horas_extras', 'assiduidade'):
+            resultado = _processar_lote_sicoob(caminho_pdf, tipo, folha_mensal, dry_run=dry_run)
+        else:
+            resultado = _processar_vr_va_pix(caminho_pdf, folha_mensal, dry_run=dry_run)
+        return jsonify(resultado)
+    finally:
+        try:
+            os.remove(caminho_pdf)
+        except OSError:
+            pass
+
+
 def _gerar_fila_envios_email(folha_mensal=None, folha_mensal_d2=None,
                              guias_ids=None, certidoes_ids=None, limit=None, dry_run=True,
                              cliente_id_filtro=None, force=False):
@@ -7832,6 +8160,58 @@ def _ler_xls_vr_va(dados_xls: bytes) -> dict:
     return colaboradores
 
 
+def _ler_xlsx_vr_va(dados_xlsx: bytes) -> dict:
+    """v3.12 — XLSX moderno 'Pedido de Benefícios' (mesmo relatório de
+    _ler_xls_vr_va, mas formato .xlsx) -> dict CPF_NUM -> {nome, cpf_fmt, va, vr}.
+    O layout novo não tem a linha de cabeçalho num número fixo (varia por
+    quantos produtos/taxas aparecem no resumo antes da tabela), então
+    localiza dinamicamente a linha cuja coluna B (índice 1) é 'Nome'."""
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(dados_xlsx), data_only=True)
+    ws = wb.worksheets[0]
+    linhas = list(ws.iter_rows(values_only=True))
+
+    idx_header = None
+    for i, row in enumerate(linhas):
+        if row and len(row) > 1 and str(row[1] or '').strip() == 'Nome':
+            idx_header = i
+            break
+    if idx_header is None:
+        return {}
+
+    colaboradores = {}
+    for row in linhas[idx_header + 1:]:
+        if not row or len(row) < 5 or not row[1]:
+            continue
+        nome = str(row[1]).strip()
+        try:
+            valor = float(row[2])
+        except (ValueError, TypeError):
+            continue
+        produto = str(row[3] or '').strip().lower()
+        cpf_raw = str(row[4] or '').strip()
+        cpf = re.sub(r'\D', '', cpf_raw)
+        if len(cpf) < 11:
+            continue
+        if cpf not in colaboradores:
+            colaboradores[cpf] = {'nome': nome, 'cpf_fmt': cpf_raw, 'va': 0.0, 'vr': 0.0}
+        if 'alimenta' in produto:
+            colaboradores[cpf]['va'] += valor
+        elif 'refei' in produto:
+            colaboradores[cpf]['vr'] += valor
+    return colaboradores
+
+
+def _ler_planilha_vr_va(dados: bytes, nome_arquivo: str) -> dict:
+    """v3.12 — Detecta .xls legado vs .xlsx moderno pelo nome do arquivo
+    (fallback: assinatura de bytes — ZIP/'PK' = xlsx, OLE2 = xls) e despacha
+    pro parser certo. Mesmo dict de saída dos dois lados, resto do fluxo de
+    /processar-vr-va não muda."""
+    nome_lower = (nome_arquivo or '').lower()
+    eh_xlsx = nome_lower.endswith('.xlsx') or dados[:2] == b'PK'
+    return _ler_xlsx_vr_va(dados) if eh_xlsx else _ler_xls_vr_va(dados)
+
+
 def _gerar_pdf_vr_va_cliente(nome_cliente: str, folha_mensal: str,
                               colaboradores: list, pedido_num: str = '',
                               data_pedido: str = '') -> bytes:
@@ -7893,8 +8273,12 @@ def processar_vr_va():
     gera PDF de prestacao de contas por condominio e indexa em Extratos Mensais
     (ja incluso automaticamente no pacote de e-mail).
 
+    v3.12 - Aceita também .xlsx moderno (campo 'xls' OU 'xlsx' — mesmo
+    parâmetro, detecção automática por nome de arquivo/assinatura de bytes
+    em _ler_planilha_vr_va), além do .xls legado original.
+
     multipart/form-data:
-      xls          - arquivo XLS do relatorio VR/VA (obrigatorio)
+      xls / xlsx   - arquivo do relatorio VR/VA, .xls legado ou .xlsx moderno (obrigatorio)
       comprovante  - PDF comprovante consolidado (opcional - arquiva em Guias)
       folha_mensal - ex. 'Maio 2026' (obrigatorio)
       pedido_num   - numero do pedido (opcional, ex. '767390003')
@@ -7914,9 +8298,9 @@ def processar_vr_va():
     if not folha_mensal:
         return jsonify({'status': 'erro', 'erro': 'folha_mensal obrigatorio'}), 400
 
-    xls_file = request.files.get('xls')
+    xls_file = request.files.get('xls') or request.files.get('xlsx')
     if not xls_file:
-        return jsonify({'status': 'erro', 'erro': 'arquivo xls obrigatorio'}), 400
+        return jsonify({'status': 'erro', 'erro': 'arquivo xls/xlsx obrigatorio'}), 400
     xls_bytes = xls_file.read()
 
     comp_file  = request.files.get('comprovante')
@@ -7924,8 +8308,8 @@ def processar_vr_va():
     comp_nome  = comp_file.filename if comp_file else None
 
     try:
-        # 1. Parse XLS
-        colaboradores_map = _ler_xls_vr_va(xls_bytes)
+        # 1. Parse XLS/XLSX
+        colaboradores_map = _ler_planilha_vr_va(xls_bytes, xls_file.filename)
         logger.info(f'[VR/VA] {len(colaboradores_map)} colaboradores no XLS')
 
         # 2. Batch: todos os Locais (id -> lista de cliente_ids)
