@@ -3345,6 +3345,79 @@ PROCESSADORES_DOCUMENTO = {
 TIPOS_CONTRATO_5C = ('Contrato de Experiência', 'Contrato de Trabalho', 'Ficha de Registro de Empregado')
 
 
+# v3.11 — Metadados de fatiamento/destino por tipo de documento, usados só
+# para compor o texto de /status-documentos. A LISTA de tipos em si vem de
+# PROCESSADORES_DOCUMENTO + TIPOS_FISCAIS (fonte real do código) — isto aqui
+# é só a descrição. Um tipo novo em qualquer um dos dois já aparece no
+# comando automaticamente, mesmo sem entrada aqui (cai no texto genérico
+# "ver código-fonte" até alguém descrever o destino real).
+CAPACIDADES_DOCUMENTO = {
+    'Holerite': ('Individual por CPF', 'Holerites'),
+    'Contrato de Experiência': ('Pré-cadastro por exceção', 'Funcionários (Status "Validação Pendente")'),
+    'Contrato de Trabalho': ('Pré-cadastro por exceção', 'Funcionários (Status "Validação Pendente")'),
+    'Ficha de Registro de Empregado': ('Pré-cadastro por exceção', 'Funcionários (Status "Validação Pendente")'),
+    'Rescisão': ('Extração de dados + Pendência para confirmação manual', 'Pendências/Revisar'),
+    'Extrato da Folha de Pagamento': ('Por cliente (CNPJ/Nome)', 'Extratos Mensais'),
+    'FGTS': ('Por cliente (CNPJ/Nome)', 'FGTS Digital'),
+    'DCTFWeb - Recibo de Entrega': ('Broadcast (mesmo documento p/ todos os clientes ativos)', 'Guias e Comprovantes'),
+    'DCTFWeb - Declaração': ('Broadcast (mesmo documento p/ todos os clientes ativos)', 'Guias e Comprovantes'),
+}
+
+# 'Folha de Ponto' tem 1 entrada só em PROCESSADORES_DOCUMENTO (a fila
+# genérica /processar-fila), mas o motor real de produção é a rota dedicada
+# /processar-folha-ponto (v3.00+), com 2 formatos de entrada distintos e
+# Regra de Prevalência entre eles — por isso é desdobrado manualmente em 2
+# linhas no relatório, em vez de vir só da chave 'Folha de Ponto'.
+CAPACIDADES_FOLHA_PONTO = [
+    ('Folha de Ponto — Secullum (mestre)', 'Individual por CPF', 'PDF Folha Ponto (Funcionários) / Assinaturas Digitais'),
+    ('Folha de Ponto — Manual', 'Individual por colaborador, com Prevalência sobre o Secullum', 'PDF Folha Ponto (Funcionários) / Assinaturas Digitais'),
+]
+
+
+def _listar_capacidades_documentos() -> str:
+    """v3.11 — Monta o texto de /status-documentos a partir de
+    PROCESSADORES_DOCUMENTO e TIPOS_FISCAIS (fonte real do código), não de
+    uma lista escrita à mão — um tipo novo em qualquer um dos dois aparece
+    aqui sozinho no próximo deploy."""
+    automatizados = []
+    sem_automacao = []
+    for tipo, handler in PROCESSADORES_DOCUMENTO.items():
+        if tipo == 'Outro':
+            continue
+        if tipo == 'Folha de Ponto':
+            continue  # desdobrado via CAPACIDADES_FOLHA_PONTO abaixo
+        if tipo in TIPOS_FISCAIS:
+            continue  # tratado no loop de TIPOS_FISCAIS abaixo — tem rota
+            # própria (_processar_anexo_fiscal) com automação real, mesmo
+            # aparecendo aqui mapeado para _processar_documento_sem_automacao
+            # (esse handler só vale para o mesmo tipo chegando pela fila do
+            # Departamento Pessoal, não pela caixa fiscal).
+        if handler is _processar_documento_sem_automacao:
+            sem_automacao.append(tipo)
+        else:
+            fatiamento, destino = CAPACIDADES_DOCUMENTO.get(tipo, ('ver código-fonte', 'ver código-fonte'))
+            automatizados.append((tipo, fatiamento, destino))
+    for tipo in TIPOS_FISCAIS:
+        fatiamento, destino = CAPACIDADES_DOCUMENTO.get(tipo, ('ver código-fonte', 'ver código-fonte'))
+        automatizados.append((tipo, fatiamento, destino))
+
+    linhas = ['🤖 LISTA DE CAPACIDADES DO ROBÔ (DOCUMENTOS ATIVOS):']
+    idx = 1
+    for nome, fatiamento, destino in CAPACIDADES_FOLHA_PONTO:
+        linhas.append(f'{idx}. {nome} (Fatiamento: {fatiamento} → Tabela: {destino})')
+        idx += 1
+    for tipo, fatiamento, destino in sorted(automatizados):
+        linhas.append(f'{idx}. {tipo} (Fatiamento: {fatiamento} → Tabela: {destino})')
+        idx += 1
+
+    if sem_automacao:
+        linhas.append('')
+        linhas.append('📋 CLASSIFICADOS, MAS SEM AUTOMAÇÃO (viram Pendência para revisão manual):')
+        linhas.append(', '.join(sorted(sem_automacao)))
+
+    return '\n'.join(linhas)
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.route('/health', methods=['GET'])
@@ -3365,11 +3438,24 @@ def health():
     return jsonify({
         'status': 'ok',
         'servico': 'magnata-holerite-splitter',
-        'versao': '3.05',
+        'versao': '3.11',
         'ram_mb': _mem_mb(),
         'airtable_ok': at_ok,
         'airtable_status': at_status,
     })
+
+
+@app.route('/status-documentos', methods=['GET'])
+def status_documentos():
+    """v3.11 — Diagnóstico de capacidades: lista os tipos de documento que o
+    robô sabe classificar e processar hoje, com fatiamento e tabela de
+    destino. Gerado a partir de PROCESSADORES_DOCUMENTO/TIPOS_FISCAIS (ver
+    _listar_capacidades_documentos) — nunca escrito à mão, então não fica
+    desatualizado quando um tipo novo entra no código."""
+    texto = _listar_capacidades_documentos()
+    if request.args.get('formato') == 'json':
+        return jsonify({'status': 'ok', 'texto': texto})
+    return texto, 200, {'Content-Type': 'text/plain; charset=utf-8'}
 
 
 @app.route('/separar', methods=['POST'])
