@@ -2568,10 +2568,10 @@ def _montar_e_disparar_kit_admissao(ctx: dict, func_id: str, dry_run: bool,
             funcionario_id=func_id,
             tipo_documento='Kit de Admissão',
             nome_documento=nome_kit,
-            disparar_whatsapp=True,
-            dry_run=False,
+            disparar_whatsapp=not dry_run,
+            dry_run=dry_run,
         )
-        resultado['assinatura_disparada'] = True
+        resultado['assinatura_disparada'] = not dry_run
     except Exception as exc:
         logger.error(f'[KIT] Kit montado mas falha ao disparar assinatura ({func_id}): {exc}')
         resultado['motivo'] = f'Kit montado mas assinatura falhou: {exc}'
