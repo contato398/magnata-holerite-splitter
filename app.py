@@ -8229,12 +8229,16 @@ def assinatura_processar_reenvios():
     humano direto no Airtable) e, para cada um: zera o contador de
     tentativas, gera um NOVO Hash Token (o anterior pode ter sido o que
     esgotou as tentativas — por segurança não se reaproveita), volta o
-    Status para "Pendente" e dispara um novo link via WhatsApp.
+    Status para "Pendente" e dispara um novo link via WhatsApp (controlável).
 
     Reaplica a mesma validação de telefone do cenário 1 — se o WhatsApp
     estiver vazio, marca erro e não tenta enviar.
 
-    Protegido por X-API-KEY (EMAIL_WEBHOOK_KEY). Suporta dry_run e limit.
+    Protegido por X-API-KEY (EMAIL_WEBHOOK_KEY). Suporta dry_run, limit e disparar_whatsapp.
+
+    v3.5 (correções de segurança):
+    - Parametrização de disparar_whatsapp (default=True, backward compatible)
+    - Proteção contra duplicação: verifica Status antes de processar (idempotente)
     """
     if request.method == 'OPTIONS':
         return jsonify({}), 200
@@ -8248,6 +8252,7 @@ def assinatura_processar_reenvios():
 
     data = request.get_json(force=True, silent=True) or {}
     dry_run = str(data.get('dry_run', True)).strip().lower() in ('1', 'true', 'yes', 'sim')
+    disparar_whatsapp = str(data.get('disparar_whatsapp', True)).strip().lower() in ('1', 'true', 'yes', 'sim')
     limit = data.get('limit')
 
     _at_throttle()
@@ -8262,11 +8267,21 @@ def assinatura_processar_reenvios():
     if limit:
         registros = registros[:int(limit)]
 
-    resultado = {'status': 'ok', 'dry_run': dry_run, 'encontrados': len(registros), 'processados': []}
+    resultado = {'status': 'ok', 'dry_run': dry_run, 'disparar_whatsapp': disparar_whatsapp, 'encontrados': len(registros), 'processados': []}
 
     for rec in registros:
         fields = rec.get('fields', {})
         item = {'assinatura_id': rec['id'], 'nome': fields.get('Nome')}
+
+        # PROTEÇÃO CONTRA DUPLICAÇÃO (idempotência v3.5):
+        # Se Status já não é "Reenviar", alguém/algo já processou este registro
+        status_atual = fields.get('Status', 'Pendente')
+        if status_atual != 'Reenviar':
+            item['acao'] = 'ja_processado_outra_instancia'
+            item['status_atual'] = status_atual
+            logger.warning(f'[ASSINATURA] Reenvio saltado — {rec["id"]} já não está com Status=Reenviar (Status atual={status_atual})')
+            resultado['processados'].append(item)
+            continue
 
         func_links = fields.get('Funcionário') or []
         func_id = func_links[0]['id'] if func_links and isinstance(func_links[0], dict) else (func_links[0] if func_links else None)
@@ -8293,12 +8308,22 @@ def assinatura_processar_reenvios():
 
         if dry_run:
             item['acao'] = 'reenviaria'
+            item['disparar_whatsapp'] = disparar_whatsapp
             resultado['processados'].append(item)
             continue
 
         try:
             mensagem = _montar_mensagem_assinatura(nome_func, fields.get('Tipo de Documento', 'documento'), link)
-            _evolution_enviar_texto(whatsapp, mensagem)
+
+            # PARAMETRIZAÇÃO v3.5: respeita disparar_whatsapp
+            whatsapp_enviado = False
+            if disparar_whatsapp:
+                _evolution_enviar_texto(whatsapp, mensagem)
+                whatsapp_enviado = True
+                logger.info(f'[ASSINATURA] Reenvio WhatsApp disparado — {rec["id"]} para {whatsapp}')
+            else:
+                logger.info(f'[ASSINATURA] Reenvio gerado mas WhatsApp NÃO disparado — {rec["id"]} (disparar_whatsapp=False)')
+
             requests.patch(
                 f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{rec["id"]}',
                 headers=_at_headers(),
@@ -8307,7 +8332,9 @@ def assinatura_processar_reenvios():
                 }, 'typecast': True}, timeout=15,
             )
             item['acao'] = 'reenviado'
-            logger.info(f'[ASSINATURA] Reenvio OK — {rec["id"]} novo_hash={novo_hash}')
+            item['disparar_whatsapp'] = disparar_whatsapp
+            item['whatsapp_enviado'] = whatsapp_enviado
+            logger.info(f'[ASSINATURA] Reenvio OK — {rec["id"]} novo_hash={novo_hash[:8]}... whatsapp_enviado={whatsapp_enviado}')
         except Exception as exc:
             item['erro'] = str(exc)
             logger.error(f'[ASSINATURA] falha no reenvio {rec["id"]}: {exc}')
