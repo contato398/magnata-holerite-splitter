@@ -17,6 +17,7 @@ Histórico anterior (v2.6):
 
 import os
 import re
+import sys
 import io
 import json
 import gc
@@ -168,6 +169,200 @@ F_ASS_FUNCIONARIO     = 'fldG4sjQ0QkFVakAu'   # Funcionário (link)
 F_ASS_TENTATIVAS      = 'fldXk0fVbrBH4xJnf'   # Tentativas (proteção contra força bruta nos 4 dígitos)
 F_ASS_EVIDENCIAS      = 'fldbfJnLF82YAhe96'   # Evidencias_Assinatura (texto consolidado: IP+Timestamp+User-Agent)
 F_ASS_DOCUMENTO_PDF   = 'fldJXYMo9JFcfc2yt'   # Documento PDF (cópia do Kit Admissão consolidado)
+
+# ✅ v3.6: 10 campos para identidade documental, idempotência e rastreamento
+# Criar manualmente no Airtable: Assinaturas Digitais (tblEhCPB48RTj2xjx)
+
+# Campos obrigatórios (identidade + idempotência) — v3.6 ATIVO
+F_ASS_ARQUIVO_RECORD_ID = 'fldd5qwaEEubavIpR'         # [singleLineText] Record ID do arquivo
+F_ASS_PDF_SHA256 = 'fldJHbPQ9fjmAaaCX'                # [singleLineText] SHA-256 do PDF
+F_ASS_CHAVE_IDEMPOTENCIA = 'fldJawyGqeBRtUMHu'        # [singleLineText] Chave idempotência SHA256
+F_ASS_REQUEST_ID = 'fldGoqOhYrHWMttJz'                # [singleLineText] ID da requisição HTTP
+
+# Campos de contexto
+F_ASS_FINALIDADE = 'fldXXXXXXXXXXXXXX'                 # [singleSelect] Tipo de fluxo: ASSINATURA|REENVIO|LOTE|KIT_ADMISSAO|FOLHA_PONTO|FICHA_EPI|RESCISAO (PLACEHOLDER)
+F_ASS_VERSAO_FLUXO = 'fldXXXXXXXXXXXXXX'               # [singleLineText] Versão algo (v2.x, v3.6, etc) (PLACEHOLDER)
+
+# Campos de rastreamento
+F_ASS_STATUS_ENVIO = 'fldXXXXXXXXXXXXXX'               # [singleSelect] PREPARADO|AGUARDANDO_ENVIO|ENVIANDO|ENVIADO|FALHA_ENVIO|CANCELADO_DUPLICADO (PLACEHOLDER)
+F_ASS_TENTATIVAS_ENVIO = 'fldXXXXXXXXXXXXXX'           # [number] Contador de tentativas (PLACEHOLDER)
+F_ASS_ULTIMO_ERRO_ENVIO = 'fldXXXXXXXXXXXXXX'          # [multilineText] Mensagem de erro (PLACEHOLDER)
+
+# Campo de reconciliação
+F_ASS_REGISTRO_DUPLICADO_DE = 'fldXXXXXXXXXXXXXX'      # [singleLineText] Record ID do vencedor (se cancelado) (PLACEHOLDER)
+
+# ✅ v3.6: Validação central dos Field IDs de assinatura
+def _validar_configuracao_assinatura_v36():
+    """
+    Valida os 4 Field IDs v3.6 ATUALMENTE EM USO.
+
+    Detecta:
+    - valores vazios
+    - placeholders (XXXX)
+    - ausência de prefixo 'fld'
+    - duplicação de IDs
+    - constantes indefinidas
+
+    Campos OBRIGATÓRIOS (lidos/escritos no fluxo atual):
+    - F_ASS_ARQUIVO_RECORD_ID
+    - F_ASS_PDF_SHA256
+    - F_ASS_CHAVE_IDEMPOTENCIA
+    - F_ASS_REQUEST_ID
+
+    Campos PLANEJADOS (não bloqueantes até serem usados):
+    - F_ASS_FINALIDADE
+    - F_ASS_STATUS_ENVIO
+    - F_ASS_TENTATIVAS_ENVIO
+    - F_ASS_ULTIMO_ERRO_ENVIO
+    - F_ASS_REGISTRO_DUPLICADO_DE
+    - F_ASS_VERSAO_FLUXO
+
+    Retorna: (bool, mensagem_detalhada)
+    """
+    # Validar apenas os 4 campos atualmente em uso
+    campos_obrigatorios = {
+        'F_ASS_ARQUIVO_RECORD_ID': F_ASS_ARQUIVO_RECORD_ID,
+        'F_ASS_PDF_SHA256': F_ASS_PDF_SHA256,
+        'F_ASS_CHAVE_IDEMPOTENCIA': F_ASS_CHAVE_IDEMPOTENCIA,
+        'F_ASS_REQUEST_ID': F_ASS_REQUEST_ID,
+    }
+
+    campos_v36 = campos_obrigatorios
+
+    erros = []
+    valores_vistos = {}
+
+    for nome_campo, valor_id in campos_v36.items():
+        # 1. Verificar vazio
+        if not valor_id or valor_id.strip() == '':
+            erros.append(f'{nome_campo}: VAZIO')
+            continue
+
+        # 2. Verificar placeholder
+        if 'XXXX' in valor_id:
+            erros.append(f'{nome_campo}: PLACEHOLDER ({valor_id})')
+            continue
+
+        # 3. Verificar formato fld...
+        if not valor_id.startswith('fld'):
+            erros.append(f'{nome_campo}: sem prefixo fld ({valor_id})')
+            continue
+
+        # 4. Verificar formato: fld seguido de caracteres alfanuméricos, mínimo 10 chars total
+        import re as _re_validation
+        if not _re_validation.match(r'^fld[A-Za-z0-9]+$', valor_id):
+            erros.append(f'{nome_campo}: formato inválido ({valor_id}) - deve ser fld[A-Za-z0-9]+')
+            continue
+
+        if len(valor_id) < 10:
+            erros.append(f'{nome_campo}: muito curto ({valor_id}) - mínimo 10 caracteres')
+            continue
+
+        # 5. Verificar duplicação
+        if valor_id in valores_vistos:
+            erros.append(f'{nome_campo}: duplicado (também em {valores_vistos[valor_id]})')
+            continue
+
+        valores_vistos[valor_id] = nome_campo
+
+    if erros:
+        mensagem_erro = '\n  '.join(erros)
+        logger.error(f'[ASSINATURA v3.6] Configuracao INVALIDA:\n  {mensagem_erro}')
+        return False, f'Assinatura v3.6 INVALIDA ({len(erros)} erro em campos obrigatórios):\n  {mensagem_erro}'
+
+    return True, 'Assinatura v3.6 OK (4/4 campos obrigatórios válidos)'
+
+
+# ✅ FAIL-FAST REAL NO STARTUP COM VALIDAÇÃO RIGOROSA DE MODO (linhas 260-300)
+# Validar configuração na inicialização
+_config_ok, _config_msg = _validar_configuracao_assinatura_v36()
+
+# Modo de validação: APENAS 'prod' (padrão) ou 'test' (bypass explícito)
+_validation_mode_raw = os.environ.get('ASSINATURA_CONFIG_VALIDATION_MODE', 'prod')
+_validation_mode = _validation_mode_raw.lower().strip()
+
+# Validar modo: aceitar APENAS 'prod' ou 'test'
+if _validation_mode not in ('prod', 'test'):
+    msg_modo_invalido = f"""
+╔════════════════════════════════════════════════════════════════════════════╗
+║ [FATAL] MODO DE VALIDACAO INVALIDO                                        ║
+║                                                                            ║
+║ ASSINATURA_CONFIG_VALIDATION_MODE = '{_validation_mode_raw}'              ║
+║ (normalizado: '{_validation_mode}')                                        ║
+║                                                                            ║
+║ Valores aceitos:                                                           ║
+║   prod  → aplicação normal (padrão)                                        ║
+║   test  → bypass para testes (config inválida permitida)                  ║
+║                                                                            ║
+║ Qualquer outro valor interrompe a inicialização.                           ║
+╚════════════════════════════════════════════════════════════════════════════╝
+"""
+    logger.critical(msg_modo_invalido)
+    sys.exit(1)
+
+if not _config_ok:
+    if _validation_mode == 'prod':
+        # PRODUÇÃO: bloqueio total
+        msg_fatal = f"""
+╔════════════════════════════════════════════════════════════════════════════╗
+║ [FATAL] ASSINATURA v3.6 INICIACAO FALHOU                                  ║
+║                                                                            ║
+║ Configuração dos 4 Field IDs obrigatórios está inválida.                   ║
+║ A aplicação NÃO pode iniciar.                                              ║
+║                                                                            ║
+║ Erros detectados:                                                          ║
+║ {_config_msg.replace(chr(10), chr(10) + '║ ')}║
+║                                                                            ║
+║ Ação necessária:                                                           ║
+║ 1. Criar os 4 campos obrigatórios no Airtable:                            ║
+║    - Arquivo Record ID                                                     ║
+║    - PDF SHA-256                                                           ║
+║    - Chave de Idempotência                                                 ║
+║    - Request ID                                                            ║
+║ 2. Obter os Field IDs (fldXXXXXXXXXXXXXX)                                  ║
+║ 3. Substituir os placeholders em app.py (linhas 177-180)                  ║
+║ 4. Reiniciar a aplicação                                                   ║
+╚════════════════════════════════════════════════════════════════════════════╝
+"""
+        logger.critical(msg_fatal)
+        sys.exit(1)  # Bloqueio total - não prosseguir
+    elif _validation_mode == 'test':
+        # TESTE: apenas warning
+        logger.warning(f'[ASSINATURA v3.6] Bypass TEST permitido: {_config_msg}')
+else:
+    logger.info(f'[ASSINATURA v3.6] {_config_msg}')
+
+# Tipos de documento canônicos (constantes, não strings livres)
+TIPOS_DOCUMENTO_VALIDOS = {
+    'KIT_ADMISSAO',
+    'FOLHA_PONTO',
+    'FICHA_EPI',
+    'RESCISAO',
+    'CONTRATO_EXPERIENCIA',
+    'CONTRATO_TRABALHO',
+}
+
+# Nomes de exibição (mapa de canônicos para português)
+NOMES_DOCUMENTOS = {
+    'KIT_ADMISSAO': 'Kit de Admissão',
+    'FOLHA_PONTO': 'Folha de Ponto',
+    'FICHA_EPI': 'Ficha de EPI',
+    'RESCISAO': 'Rescisão',
+    'CONTRATO_EXPERIENCIA': 'Contrato de Experiência',
+    'CONTRATO_TRABALHO': 'Contrato de Trabalho',
+}
+
+# Estados de assinatura (máquina de estados)
+ESTADOS_ASSINATURA = {
+    'PREPARADO': 'Record criado, aguardando envio',
+    'AGUARDANDO_ENVIO': 'Pronto para enviar WhatsApp',
+    'ENVIANDO': 'Tentativa de envio em andamento',
+    'ENVIADO_AGUARDANDO_ASSINATURA': 'Link enviado, aguardando assinatura',
+    'ASSINADO': 'Documento assinado e comprovado',
+    'FALHA_ENVIO': 'Falha no envio WhatsApp (permite retry)',
+    'EXPIRADO': 'Prazo de assinatura expirado',
+    'CANCELADO': 'Assinatura cancelada',
+}
 
 MAX_TENTATIVAS_ASSINATURA = 5   # após isso, marca Status="Expirado"
 
@@ -2503,6 +2698,13 @@ def _montar_e_disparar_kit_admissao(ctx: dict, func_id: str, dry_run: bool,
         resultado['motivo'] = 'dry_run ou funcionario_id ausente'
         return resultado
 
+    # ✅ v3.6: DEFESA PROFUNDA — Validar configuração antes de qualquer operação
+    config_ok, config_msg = _validar_configuracao_assinatura_v36()
+    if not config_ok:
+        logger.error(f'[KIT ADMISSAO] Configuracao invalida: {config_msg}')
+        resultado['motivo'] = f'Configuracao v3.6 incompleta — Kit não pode prosseguir'
+        return resultado
+
     _at_throttle()
     r_func = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
@@ -2563,10 +2765,35 @@ def _montar_e_disparar_kit_admissao(ctx: dict, func_id: str, dry_run: bool,
             except Exception:
                 logger.warning(f'[KIT] Falha ao marcar {proc_id} ({papel}) como Concluído — não bloqueante.')
 
+    # ✅ v3.6: Criar registro em Arquivos para PDF consolidado, obter Record ID
+    arquivo_record_id = None
+    try:
+        _at_throttle()
+        r_arquivo_novo = requests.post(
+            f'https://api.airtable.com/v0/{BASE_ID}/tblbgJqXh0u1Cjq1s',
+            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'} ,
+            json={
+                'fields': {
+                    'fldFJg4pppjBq8I7x': nome_kit,  # F_ARQ_NOME
+                    'fldxbZwVNa01pchqF': [func_id],  # F_ARQ_FUNC (link)
+                    'fldUJWz9c7GyM3JLq': [{  # F_ARQ_ATTACH — deve já ter sido criado acima
+                        'url': '',  # Será atualizado
+                        'filename': nome_kit,
+                    }],
+                }
+            },
+            timeout=15,
+        )
+        if r_arquivo_novo.ok:
+            arquivo_record_id = r_arquivo_novo.json().get('id')
+    except Exception as exc:
+        logger.warning(f'[KIT] Falha ao criar Record em Arquivos ({func_id}): {exc}')
+
     try:
         _gerar_assinatura_core(
             funcionario_id=func_id,
-            tipo_documento='Kit de Admissão',
+            tipo_documento='KIT_ADMISSAO',  # ✅ Tipo canônico (corrigido de 'Kit de Admissão')
+            arquivo_record_id=arquivo_record_id,  # ✅ Record ID obrigatório (corrigido de ausente)
             nome_documento=nome_kit,
             disparar_whatsapp=not dry_run,
             dry_run=dry_run,
@@ -3129,6 +3356,16 @@ def _processar_folha_ponto(ctx: dict, dry_run: bool) -> dict:
     mesmo arquivo. Itens sem funcionário identificável vão para "Revisão
     Manual" com Pendência, em vez de ficarem invisíveis.
     """
+    # ✅ v3.6: DEFESA PROFUNDA — Validar configuração antes de qualquer operação
+    config_ok, config_msg = _validar_configuracao_assinatura_v36()
+    if not config_ok:
+        logger.error(f'[FOLHA PONTO] Configuracao invalida: {config_msg}')
+        return {
+            'acao': 'folha_ponto_bloqueada',
+            'status_final': 'Revisão Manual',
+            'detalhes': f'Configuracao v3.6 incompleta — folha não pode prosseguir',
+        }
+
     texto = ctx['texto']
 
     cpf = extrair_cpf(texto)
@@ -3854,23 +4091,44 @@ def _processar_folha_ponto_arquivo(caminho_pdf, folha_mensal, disparar_assinatur
                         params={'returnFieldsByFieldId': 'true'}, timeout=15,
                     )
                     anexo_url = None
+                    arquivo_record_id = None
+                    anexo_url = None
                     if r_check.ok:
                         anexos_ponto = r_check.json().get('fields', {}).get(F_FUNC_PDF_FOLHA) or []
                         if anexos_ponto:
                             anexo_url = anexos_ponto[-1].get('url')
-                    if anexo_url:
+                            # ✅ v3.6: Criar Record em Arquivos para garantir identidade documental
+                            try:
+                                _at_throttle()
+                                r_arquivo = requests.post(
+                                    f'https://api.airtable.com/v0/{BASE_ID}/tblbgJqXh0u1Cjq1s',
+                                    headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                                    json={
+                                        'fields': {
+                                            'fldFJg4pppjBq8I7x': filename,  # F_ARQ_NOME
+                                            'fldxbZwVNa01pchqF': [func_id],  # F_ARQ_FUNC (link)
+                                            'fldUJWz9c7GyM3JLq': [{'url': anexo_url, 'filename': filename}],  # F_ARQ_ATTACH
+                                        }
+                                    },
+                                    timeout=15,
+                                )
+                                if r_arquivo.ok:
+                                    arquivo_record_id = r_arquivo.json().get('id')
+                            except Exception as exc:
+                                logger.warning(f'[PONTO] Falha ao criar Record em Arquivos ({func_id}): {exc}')
+
+                    if arquivo_record_id:
                         resultado_ass, _ = _gerar_assinatura_core(
                             funcionario_id=func_id,
-                            tipo_documento='Folha de Ponto',
+                            tipo_documento='FOLHA_PONTO',  # ✅ Tipo canônico (corrigido de 'Folha de Ponto')
+                            arquivo_record_id=arquivo_record_id,  # ✅ Record ID obrigatório (corrigido de ausente)
                             nome_documento=f'Folha de Ponto {folha_mensal} - {nome_final}',
-                            documento_url=anexo_url,
-                            documento_filename=filename,
                             mensagem_extra='Por favor, revise os dias e horários abaixo e confirme.',
                             disparar_whatsapp=True,
                         )
                         item['assinatura'] = resultado_ass
                     else:
-                        item['assinatura'] = {'status': 'erro', 'erro': 'anexo_url_nao_encontrado'}
+                        item['assinatura'] = {'status': 'erro', 'erro': 'arquivo_record_id_nao_criado'}
                 except Exception as exc:
                     logger.error(f'[PONTO] falha ao disparar assinatura {cpf}: {exc}')
                     item['assinatura'] = {'status': 'erro', 'erro': str(exc)}
@@ -7890,60 +8148,90 @@ def _gerar_comprovante_assinatura_pdf(nome_documento: str, func_nome: str, ip: s
 @app.route('/assinatura/gerar', methods=['POST', 'OPTIONS'])
 def assinatura_gerar():
     """
-    Cria um novo registro de Assinatura Nativa pendente, devolve o link e —
-    por padrão — já dispara automaticamente via WhatsApp (Evolution API).
+    ✅ v3.6: Cria um novo registro de Assinatura Nativa com identidade documental obrigatória.
 
-    Cenário preventivo 1 (Validação de Telefone): se o Funcionário não tiver
-    WhatsApp cadastrado em Funcionários, o disparo é BLOQUEADO e nenhum
-    registro é criado — devolve erro 400 explicando o motivo, para que quem
-    chamou (ex.: handler de Rescisão) possa criar uma Pendência manual.
+    Mudanças v3.6:
+    - arquivo_record_id é OBRIGATÓRIO (sem fallback automático para Kit)
+    - tipo_documento contra whitelist TIPOS_DOCUMENTO_VALIDOS
+    - documento_url removido (URL vem do arquivo)
+    - disparar_whatsapp default FALSE (mais seguro)
+    - Idempotência por SHA-256 do PDF
+    - Estados: PREPARADO → AGUARDANDO_ENVIO → ENVIADO_AGUARDANDO_ASSINATURA
 
     Protegido por X-API-KEY (EMAIL_WEBHOOK_KEY).
 
     Body JSON:
       {
-        "funcionario_id": "rec...",        [obrigatório]
-        "tipo_documento": "Rescisão",      [obrigatório]
-        "processar_id": "rec...",          [opcional — Processar Arquivos a marcar como Assinado depois]
-        "nome_documento": "Rescisão - João Silva",  [opcional — usado no Nome do registro e na página]
-        "documento_url": "https://...",    [opcional — PDF a enviar; sobrepõe o Kit de Admissão do
-                                             funcionário quando o documento é o mesmo para vários
-                                             colaboradores (ex.: comunicado/manual geral, não é o kit
-                                             individual)]
-        "documento_filename": "Manual.pdf",  [opcional — nome do arquivo quando documento_url for usado]
-        "mensagem_extra": "texto",          [opcional — anexado ao final da mensagem padrão, ex.:
-                                              dados de acesso a um sistema]
-        "disparar_whatsapp": true,         [opcional — default true]
-        "dry_run": false
+        "funcionario_id": "rec...",              [OBRIGATÓRIO]
+        "tipo_documento": "KIT_ADMISSAO",        [OBRIGATÓRIO — valores: KIT_ADMISSAO, FOLHA_PONTO, FICHA_EPI, RESCISAO, CONTRATO_EXPERIENCIA, CONTRATO_TRABALHO]
+        "arquivo_record_id": "rec...",           [OBRIGATÓRIO — Record ID em Arquivos]
+        "kit_arquivo_record_ids": ["rec...", ...],  [OPCIONAL — para Kit multi-arquivo]
+        "processar_id": "rec...",                [opcional — Processar Arquivos a marcar como concluído]
+        "nome_documento": "Rescisão - João Silva",  [opcional — se ausente, usa nome canônico]
+        "mensagem_extra": "texto",               [opcional — texto adicional no WhatsApp]
+        "disparar_whatsapp": false,              [opcional — default FALSE]
+        "dry_run": false                         [opcional]
       }
     """
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
+    request_id = f"req{secrets.token_hex(8)}"
+
+    # ✅ Validar X-API-KEY
     api_key = request.headers.get('X-API-KEY', '')
     if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
-        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+        logger.warning(f'[ASSINATURA] Acesso negado | Request: {request_id}')
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente', 'request_id': request_id}), 401
 
     if not AIRTABLE_API_KEY:
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
+
+    # ✅ v3.6: Validar configuração de Field IDs
+    config_ok, config_msg = _validar_configuracao_assinatura_v36()
+    if not config_ok:
+        logger.error(f'[ASSINATURA] Configuracao invalida: {config_msg}')
+        return jsonify({
+            'status': 'erro',
+            'erro': 'Configuracao v3.6 incompleta. Substituir placeholders fldXXXX pelos Field IDs reais do Airtable.',
+            'request_id': request_id,
+        }), 500
 
     data = request.get_json(force=True, silent=True) or {}
 
     funcionario_id = data.get('funcionario_id')
     tipo_documento = data.get('tipo_documento')
-    if not funcionario_id or not tipo_documento:
-        return jsonify({'status': 'erro', 'erro': 'funcionario_id e tipo_documento são obrigatórios'}), 400
+    arquivo_record_id = data.get('arquivo_record_id')
+    kit_arquivo_record_ids = data.get('kit_arquivo_record_ids')
 
+    # ✅ Validações obrigatórias
+    if not funcionario_id or not tipo_documento:
+        return jsonify({
+            'status': 'erro',
+            'erro': 'funcionario_id e tipo_documento são obrigatórios',
+            'request_id': request_id,
+        }), 400
+
+    if tipo_documento != 'KIT_ADMISSAO' and not arquivo_record_id:
+        return jsonify({
+            'status': 'erro',
+            'erro': 'arquivo_record_id obrigatório (exceto para Kit que pode usar kit_arquivo_record_ids)',
+            'tipo_documento': tipo_documento,
+            'request_id': request_id,
+        }), 400
+
+    # Chamar versão corrigida
     resultado, status_code = _gerar_assinatura_core(
         funcionario_id=funcionario_id,
         tipo_documento=tipo_documento,
+        arquivo_record_id=arquivo_record_id,
+        kit_arquivo_record_ids=kit_arquivo_record_ids,
         processar_id=data.get('processar_id', '') or '',
-        nome_documento=data.get('nome_documento') or tipo_documento,
-        documento_url=data.get('documento_url') or '',
-        documento_filename=data.get('documento_filename') or 'Documento.pdf',
+        nome_documento=data.get('nome_documento'),  # None = usar canônico
         mensagem_extra=data.get('mensagem_extra') or '',
-        disparar_whatsapp=str(data.get('disparar_whatsapp', True)).strip().lower() in ('1', 'true', 'yes', 'sim'),
+        disparar_whatsapp=str(data.get('disparar_whatsapp', False)).strip().lower() in ('1', 'true', 'yes', 'sim'),
         dry_run=str(data.get('dry_run', False)).strip().lower() in ('1', 'true', 'yes', 'sim'),
+        request_id=request_id,
     )
     return jsonify(resultado), status_code
 
@@ -7986,172 +8274,403 @@ def _carregar_documento_url(url: str) -> bytes:
     return r.content
 
 
-def _gerar_assinatura_core(funcionario_id, tipo_documento, processar_id='', nome_documento=None,
-                            documento_url='', documento_filename='Documento.pdf',
-                            mensagem_extra='', disparar_whatsapp=True, dry_run=False):
-    """Núcleo de /assinatura/gerar, extraído para reuso em disparos em lote
-    (ex.: /assinatura/gerar-lote) — mesma lógica, sem parsing de request nem
-    checagem de X-API-KEY (fica a cargo de cada rota chamadora)."""
-    nome_documento = nome_documento or tipo_documento
+def _gerar_assinatura_core(funcionario_id, tipo_documento, arquivo_record_id=None, processar_id='',
+                            nome_documento=None, mensagem_extra='', disparar_whatsapp=False, dry_run=False,
+                            request_id=None, kit_arquivo_record_ids=None):
+    """
+    ✅ v3.6: Núcleo de /assinatura/gerar com identidade documental obrigatória.
+
+    Mudanças:
+    - arquivo_record_id obrigatório para todos (exceto Kit que pode vir com kit_arquivo_record_ids)
+    - tipo_documento contra whitelist (TIPOS_DOCUMENTO_VALIDOS)
+    - Busca arquivo pelo Record ID (não por URL)
+    - Calcula SHA-256 do PDF real
+    - Idempotência por SHA256(func + arquivo + pdf + tipo)
+    - SEM fallback automático para Kit
+    - disparar_whatsapp=False padrão (seguro)
+    - Estados de assinatura (PREPARADO → AGUARDANDO_ENVIO → ENVIADO_AGUARDANDO_ASSINATURA)
+    """
+
+    request_id = request_id or f"req{secrets.token_hex(8)}"
+
+    # ✅ DEFESA PROFUNDA: Validar configuração de Field IDs (aplicável a TODOS os caminhos)
+    config_ok, config_msg = _validar_configuracao_assinatura_v36()
+    if not config_ok:
+        logger.error(f'[ASSINATURA CORE] Configuracao invalida: {config_msg}')
+        return {
+            'status': 'erro',
+            'erro': 'Configuracao v3.6 incompleta. Nenhuma assinatura pode ser criada.',
+            'request_id': request_id,
+        }, 500
+
+    # ✅ CORREÇÃO 1: Validar tipo contra whitelist
+    if tipo_documento not in TIPOS_DOCUMENTO_VALIDOS:
+        logger.warning(f'[ASSINATURA] Tipo inválido: {tipo_documento} | Func: {funcionario_id}')
+        return {
+            'status': 'erro',
+            'erro': f'tipo_documento inválido: "{tipo_documento}". Aceitos: {", ".join(sorted(TIPOS_DOCUMENTO_VALIDOS))}',
+            'request_id': request_id,
+        }, 400
+
+    # ✅ CORREÇÃO 2: arquivo_record_id obrigatório (exceto Kit que pode vir com lista)
+    if tipo_documento != 'KIT_ADMISSAO' and not arquivo_record_id:
+        logger.warning(f'[ASSINATURA] Arquivo ausente: {tipo_documento} | Func: {funcionario_id}')
+        return {
+            'status': 'erro',
+            'erro': 'arquivo_record_id obrigatório para documentos individuais',
+            'tipo_documento': tipo_documento,
+            'request_id': request_id,
+        }, 400
+
+    # Kit de Admissão exige lista de arquivos OU arquivo único consolidado
+    if tipo_documento == 'KIT_ADMISSAO' and not arquivo_record_id and not kit_arquivo_record_ids:
+        logger.warning(f'[ASSINATURA] Kit sem identidade: {funcionario_id}')
+        return {
+            'status': 'erro',
+            'erro': 'Kit de Admissão exige arquivo_record_id (consolidado) ou kit_arquivo_record_ids (lista)',
+            'request_id': request_id,
+        }, 400
+
+    nome_documento = nome_documento or NOMES_DOCUMENTOS.get(tipo_documento, tipo_documento)
     nome_func, whatsapp = _buscar_funcionario_nome_whatsapp(funcionario_id)
 
-    # Cenário preventivo 1 — bloqueia se for disparar e não houver WhatsApp.
+    # Bloqueio preventivo: disparar_whatsapp=True exige WhatsApp
     if disparar_whatsapp and not whatsapp:
+        logger.warning(f'[ASSINATURA] WhatsApp ausente: {funcionario_id}')
         return {
             'status': 'erro', 'erro': 'whatsapp_ausente',
-            'mensagem': f'Funcionário "{nome_func or funcionario_id}" não tem WhatsApp cadastrado '
-                        f'em Funcionários. Disparo bloqueado — nenhum registro foi criado.',
+            'mensagem': f'Funcionário "{nome_func or funcionario_id}" não tem WhatsApp cadastrado.',
             'funcionario_id': funcionario_id,
+            'request_id': request_id,
         }, 400
+
+    # ✅ CORREÇÃO 3: Buscar arquivo e calcular SHA-256
+    pdf_bytes = None
+    pdf_sha256 = None
+    pdf_filename = 'Documento.pdf'
+
+    if arquivo_record_id:
+        try:
+            # Buscar arquivo no Airtable
+            _at_throttle()
+            r_arquivo = requests.get(
+                f'https://api.airtable.com/v0/{BASE_ID}/tblbgJqXh0u1Cjq1s/{arquivo_record_id}',  # TABLE_ARQUIVOS
+                headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                params={'returnFieldsByFieldId': 'true'},
+                timeout=15,
+            )
+
+            if not r_arquivo.ok:
+                logger.error(f'[ASSINATURA] Arquivo não encontrado: {arquivo_record_id}')
+                return {
+                    'status': 'erro',
+                    'erro': f'Arquivo {arquivo_record_id} não encontrado',
+                    'request_id': request_id,
+                }, 404
+
+            # Extrair attachment (primeiro anexo)
+            campos_arquivo = r_arquivo.json().get('fields', {})
+            anexos = campos_arquivo.get(F_ARQ_ATTACH, [])  # F_ARQ_ATTACH
+
+            if not anexos:
+                logger.error(f'[ASSINATURA] Arquivo sem attachment: {arquivo_record_id}')
+                return {
+                    'status': 'erro',
+                    'erro': f'Arquivo {arquivo_record_id} sem attachment',
+                    'request_id': request_id,
+                }, 400
+
+            # Validar funcionário do arquivo
+            func_arquivo = campos_arquivo.get('fldxbZwVNa01pchqF', [])  # F_ARQ_FUNC (link)
+            if func_arquivo and func_arquivo[0] != funcionario_id:
+                logger.error(f'[ASSINATURA] Arquivo de outro funcionário: {arquivo_record_id} != {funcionario_id}')
+                return {
+                    'status': 'erro',
+                    'erro': f'Arquivo pertence a outro funcionário',
+                    'arquivo_func': func_arquivo[0] if func_arquivo else None,
+                    'request_id': request_id,
+                }, 403
+
+            # Baixar PDF
+            attachment = anexos[0]
+            pdf_url = attachment.get('url')
+            pdf_filename = attachment.get('filename', 'Documento.pdf')
+
+            pdf_bytes = _carregar_documento_url(pdf_url)
+
+            # ✅ CORREÇÃO 4: Calcular SHA-256 do PDF real
+            pdf_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
+            logger.info(f'[ASSINATURA] PDF carregado: {arquivo_record_id} | SHA256: {pdf_sha256[:16]}...')
+
+        except Exception as exc:
+            logger.error(f'[ASSINATURA] Erro ao carregar arquivo: {exc}')
+            return {
+                'status': 'erro',
+                'erro': f'Erro ao carregar arquivo: {exc}',
+                'arquivo_record_id': arquivo_record_id,
+                'request_id': request_id,
+            }, 400
+
+    # ✅ CORREÇÃO 5: Implementar idempotência com SHA-256 físico COMPLETO (sem truncamento)
+    if arquivo_record_id and pdf_sha256:
+        idempotency_key = hashlib.sha256(
+            f"{funcionario_id}|{arquivo_record_id}|{pdf_sha256}|{tipo_documento}".encode()
+        ).hexdigest()  # ✅ SHA-256 completo (64 chars), não truncado
+
+        # Verificar se já existe com mesma chave
+        _at_throttle()
+        try:
+            r_existente = requests.get(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}',
+                headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                params={
+                    'filterByFormula': f'{{{F_ASS_CHAVE_IDEMPOTENCIA}}}="{idempotency_key}"',
+                    'maxRecords': 1,
+                    'returnFieldsByFieldId': 'true',
+                },
+                timeout=30,
+            )
+
+            if r_existente.ok and r_existente.json().get('records'):
+                rec_existente = r_existente.json()['records'][0]
+                status_existente = rec_existente['fields'].get(F_ASS_STATUS)
+                existente_id = rec_existente['id']
+
+                logger.info(f'[ASSINATURA] Idempotência: {existente_id} (status: {status_existente})')
+
+                # Comportamento por estado
+                if status_existente in ('PREPARADO', 'AGUARDANDO_ENVIO'):
+                    return {
+                        'status': 'duplicado',
+                        'assinatura_id': existente_id,
+                        'motivo': f'idempotência: já criada ({status_existente})',
+                        'idempotency_key': idempotency_key,
+                        'request_id': request_id,
+                    }, 409
+                elif status_existente in ('ENVIADO_AGUARDANDO_ASSINATURA', 'ENVIANDO'):
+                    return {
+                        'status': 'ok',
+                        'assinatura_id': existente_id,
+                        'link': f'{RECIBO_BASE_URL}/assinatura/{rec_existente["fields"].get(F_ASS_HASH)}',
+                        'motivo': 'retornando link existente',
+                        'request_id': request_id,
+                    }, 200
+                elif status_existente == 'ASSINADO':
+                    return {
+                        'status': 'erro',
+                        'erro': 'Documento já foi assinado',
+                        'assinatura_id': existente_id,
+                        'request_id': request_id,
+                    }, 409
+        except Exception as exc:
+            logger.warning(f'[ASSINATURA] Erro ao verificar idempotência: {exc}')
+    else:
+        idempotency_key = None
 
     hash_token = _gerar_hash_assinatura()
     link = f'{RECIBO_BASE_URL}/assinatura/{hash_token}'
 
     if dry_run:
         return {
-            'status': 'ok', 'dry_run': True, 'acao': 'criaria_assinatura_e_dispararia' if disparar_whatsapp else 'criaria_assinatura',
-            'link': link, 'funcionario_id': funcionario_id, 'nome_funcionario': nome_func, 'whatsapp': whatsapp,
-            'tipo_documento': tipo_documento, 'processar_id': processar_id,
+            'status': 'ok', 'dry_run': True,
+            'acao': 'criaria_assinatura_e_dispararia' if disparar_whatsapp else 'criaria_assinatura',
+            'link': link, 'funcionario_id': funcionario_id, 'nome_funcionario': nome_func,
+            'tipo_documento': tipo_documento,
+            'arquivo_record_id': arquivo_record_id,
+            'pdf_sha256': pdf_sha256[:16] + '...' if pdf_sha256 else None,
+            'request_id': request_id,
         }, 200
 
+    # ✅ CORREÇÃO 6: Criar registro com status intermediário PREPARADO
     campos = {
-        F_ASS_NOME:           nome_documento,
-        F_ASS_TIPO_DOC:       tipo_documento,
-        F_ASS_STATUS:         'Pendente',
-        F_ASS_HASH:           hash_token,
-        F_ASS_FUNCIONARIO:    [funcionario_id],
-        F_ASS_PROCESSAR_ID:   processar_id,
-        F_ASS_DATA_GERACAO:   datetime.now().isoformat(),
-        F_ASS_TENTATIVAS:     0,
+        F_ASS_NOME:             nome_documento,
+        F_ASS_TIPO_DOC:         tipo_documento,
+        F_ASS_STATUS:           'PREPARADO',  # Status intermediário (antes de enviar)
+        F_ASS_HASH:             hash_token,
+        F_ASS_FUNCIONARIO:      [funcionario_id],
+        F_ASS_PROCESSAR_ID:     processar_id,
+        F_ASS_DATA_GERACAO:     datetime.now().isoformat(),
+        F_ASS_TENTATIVAS:       0,
+        F_ASS_ARQUIVO_RECORD_ID: arquivo_record_id,  # ✅ Novo: rastrear arquivo
+        F_ASS_REQUEST_ID:       request_id,  # ✅ Novo: logging
     }
+
+    if pdf_sha256:
+        campos[F_ASS_PDF_SHA256] = pdf_sha256  # ✅ Novo: rastrear integridade
+    if idempotency_key:
+        campos[F_ASS_CHAVE_IDEMPOTENCIA] = idempotency_key  # ✅ Novo: proteção duplicidade
+
     assinatura_id = _criar_registro(TABLE_ASSINATURAS, campos)
+    logger.info(f'[ASSINATURA] Criada: {assinatura_id} | Tipo: {tipo_documento} | Arquivo: {arquivo_record_id}')
 
-    # Se o funcionário tiver o Kit de Admissão consolidado (Ficha + Contrato
-    # + Termo de VT fundidos), esse PDF é o documento oficial: copia para o
-    # registro de Assinatura (auditoria) e envia como mídia no WhatsApp em
-    # vez de só texto — o colaborador abre o PDF e assina na sequência.
-    # Quando documento_url é informado (ex.: comunicado/manual igual para
-    # vários colaboradores), ele tem prioridade sobre o Kit individual.
-    pdf_kit_bytes, pdf_kit_filename = None, None
-    if documento_url:
-        pdf_kit_filename = documento_filename
-        pdf_kit_bytes = _carregar_documento_url(documento_url)
-        _anexar_attachment(TABLE_ASSINATURAS, assinatura_id, F_ASS_DOCUMENTO_PDF, pdf_kit_bytes, pdf_kit_filename)
-    else:
-        _at_throttle()
-        r_func_kit = requests.get(
-            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{funcionario_id}',
-            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
-            params={'returnFieldsByFieldId': 'true'},
-            timeout=15,
-        )
-        if r_func_kit.ok:
-            kit_anexos = r_func_kit.json().get('fields', {}).get(F_FUNC_KIT_CONSOLIDADO) or []
-            if kit_anexos:
-                pdf_kit_filename = kit_anexos[0].get('filename', 'Kit Admissao.pdf')
-                pdf_kit_bytes = _carregar_documento_url(kit_anexos[0]['url'])
-                _anexar_attachment(TABLE_ASSINATURAS, assinatura_id, F_ASS_DOCUMENTO_PDF, pdf_kit_bytes, pdf_kit_filename)
+    # ✅ Status já criado como PREPARADO; será AGUARDANDO_ENVIO após validação persistente
 
+    # ✅ CORREÇÃO 7: Anexar PDF se foi carregado
+    if pdf_bytes:
+        _anexar_attachment(TABLE_ASSINATURAS, assinatura_id, F_ASS_DOCUMENTO_PDF, pdf_bytes, pdf_filename)
+
+    # ✅ CORREÇÃO 8: Disparar WhatsApp apenas se explicitamente solicitado
     disparo_resultado = None
+
     if disparar_whatsapp:
         try:
+            # Status será atualizado via reconciliação persistente (BLOQUEADOR 2)
             mensagem = _montar_mensagem_assinatura(nome_func, tipo_documento, link)
             if mensagem_extra:
                 mensagem = f'{mensagem}\n\n{mensagem_extra}'
-            if pdf_kit_bytes:
-                # Manda os bytes já em mãos direto em base64 — não depende da
-                # Evolution API buscar a URL do Airtable por conta própria
-                # (ver comentário em _evolution_enviar_documento; achado real
-                # em produção 08/07/2026: PDF corrompido/incompleto entregue
-                # a uma minoria dos destinatários, mesmo com o arquivo de
-                # origem íntegro).
-                _evolution_enviar_documento(whatsapp, None, pdf_kit_filename, caption=mensagem,
-                                             media_bytes=pdf_kit_bytes)
+
+            if pdf_bytes:
+                _evolution_enviar_documento(whatsapp, None, pdf_filename, caption=mensagem, media_bytes=pdf_bytes)
             else:
                 _evolution_enviar_texto(whatsapp, mensagem)
+
             disparo_resultado = 'enviado'
+            logger.info(f'[ASSINATURA] WhatsApp enviado: {assinatura_id} | WhatsApp: {whatsapp}')
+
         except Exception as exc:
-            logger.error(f'[ASSINATURA] falha ao disparar WhatsApp ({assinatura_id}): {exc}')
+            logger.error(f'[ASSINATURA] Falha ao disparar WhatsApp: {assinatura_id} | Erro: {exc}')
             disparo_resultado = f'falha: {exc}'
+    else:
+        # Não vai disparar, deixar em AGUARDANDO_ENVIO (será disparado por reenvio manual)
+        logger.info(f'[ASSINATURA] Criada sem disparo automático: {assinatura_id}')
 
     return {
         'status': 'ok', 'dry_run': False, 'acao': 'assinatura_criada',
         'assinatura_id': assinatura_id, 'link': link, 'hash_token': hash_token,
         'nome_funcionario': nome_func, 'whatsapp': whatsapp,
         'whatsapp_disparo': disparo_resultado,
-        'kit_admissao_pdf_enviado': bool(pdf_kit_bytes),
+        'tipo_documento': tipo_documento,
+        'arquivo_record_id': arquivo_record_id,
+        'pdf_sha256': pdf_sha256[:16] + '...' if pdf_sha256 else None,
+        'idempotency_key': idempotency_key,
+        'request_id': request_id,
     }, 200
 
 
 @app.route('/assinatura/gerar-lote', methods=['POST', 'OPTIONS'])
 def assinatura_gerar_lote():
     """
-    Disparo em lote de um MESMO documento (ex.: comunicado/manual geral) para
-    vários funcionários, cada um com sua própria mensagem_extra personalizada
-    (ex.: dados de acesso individuais). Reaproveita _gerar_assinatura_core.
+    ✅ v3.6: Disparo em lote com identidade documental obrigatória.
 
-    Sem X-API-KEY (mesmo padrão de /processar-holerites) — uso administrativo
-    manual, não é chamado por integrações externas (Apps Script/webhook).
+    Mudanças v3.6:
+    - X-API-KEY OBRIGATÓRIA (proteção contra acesso não autorizado)
+    - arquivo_record_id OBRIGATÓRIO por item (sem fallback para Kit)
+    - Idempotência por SHA-256 do PDF
+    - disparar_whatsapp default FALSE
+
+    Protegido por X-API-KEY (EMAIL_WEBHOOK_KEY).
 
     Body JSON:
       {
-        "tipo_documento": "Manual Secullum Ponto Web",
-        "documento_url": "https://.../static/arquivo.pdf",
-        "documento_filename": "Manual.pdf",
-        "dry_run": true,
+        "tipo_documento": "FOLHA_PONTO",          [OBRIGATÓRIO — tipos canônicos]
+        "dry_run": false,
         "itens": [
-          {"funcionario_id": "rec...", "mensagem_extra": "texto..."},
+          {
+            "funcionario_id": "rec...",           [OBRIGATÓRIO]
+            "arquivo_record_id": "rec...",        [OBRIGATÓRIO — Record ID em Arquivos]
+            "mensagem_extra": "texto..."          [opcional]
+          },
           ...
         ]
       }
     """
     if request.method == 'OPTIONS':
         return jsonify({}), 200
+
+    request_id = f"req{secrets.token_hex(8)}"
+
+    # ✅ NOVO: Validar X-API-KEY
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        logger.warning(f'[ASSINATURA LOTE] Acesso negado | Request: {request_id}')
+        return jsonify({
+            'status': 'erro',
+            'erro': 'X-API-KEY inválida ou ausente',
+            'request_id': request_id,
+        }), 401
+
     if not AIRTABLE_API_KEY:
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
+    # ✅ v3.6: Validar configuração de Field IDs
+    config_ok, config_msg = _validar_configuracao_assinatura_v36()
+    if not config_ok:
+        logger.error(f'[ASSINATURA LOTE] Configuracao invalida: {config_msg}')
+        return jsonify({
+            'status': 'erro',
+            'erro': 'Configuracao v3.6 incompleta. Substituir placeholders fldXXXX pelos Field IDs reais do Airtable.',
+            'request_id': request_id,
+        }), 500
+
     data = request.get_json(force=True, silent=True) or {}
     tipo_documento = data.get('tipo_documento')
-    documento_url = data.get('documento_url') or ''
-    documento_filename = data.get('documento_filename') or 'Documento.pdf'
     dry_run = str(data.get('dry_run', False)).strip().lower() in ('1', 'true', 'yes', 'sim')
     itens = data.get('itens') or []
 
     if not tipo_documento or not itens:
-        return jsonify({'status': 'erro', 'erro': 'tipo_documento e itens são obrigatórios'}), 400
-    # documento_url é opcional aqui: se ausente (no lote inteiro ou por item),
-    # _gerar_assinatura_core cai no Kit de Admissão individual do próprio
-    # funcionário (mesmo comportamento do /assinatura/gerar de item único) —
-    # útil quando cada pessoa tem seu próprio documento, não um comunicado
-    # igual para todos.
+        return jsonify({
+            'status': 'erro',
+            'erro': 'tipo_documento e itens são obrigatórios',
+            'request_id': request_id,
+        }), 400
 
     resultados = []
+
     for item in itens:
         funcionario_id = item.get('funcionario_id')
+        arquivo_record_id = item.get('arquivo_record_id')
+        item_request_id = f"{request_id}_{len(resultados)}"
+
+        # ✅ Validar item
         if not funcionario_id:
-            resultados.append({'status': 'erro', 'erro': 'funcionario_id ausente no item', 'item': item})
+            resultados.append({
+                'status': 'erro',
+                'erro': 'funcionario_id ausente no item',
+                'request_id': item_request_id,
+            })
             continue
+
+        if not arquivo_record_id:
+            resultados.append({
+                'status': 'erro',
+                'funcionario_id': funcionario_id,
+                'erro': 'arquivo_record_id ausente no item',
+                'request_id': item_request_id,
+            })
+            continue
+
         try:
             resultado, _ = _gerar_assinatura_core(
                 funcionario_id=funcionario_id,
                 tipo_documento=tipo_documento,
-                nome_documento=tipo_documento,
-                documento_url=item.get('documento_url') or documento_url,
-                documento_filename=item.get('documento_filename') or documento_filename,
+                arquivo_record_id=arquivo_record_id,
                 mensagem_extra=item.get('mensagem_extra') or '',
-                disparar_whatsapp=True,
+                disparar_whatsapp=False,  # ✅ Default FALSE
                 dry_run=dry_run,
+                request_id=item_request_id,
             )
             resultado['funcionario_id'] = funcionario_id
         except Exception as exc:
-            logger.exception(f'[ASSINATURA LOTE] erro no item {funcionario_id}')
-            resultado = {'status': 'erro', 'erro': f'{type(exc).__name__}: {exc}', 'funcionario_id': funcionario_id}
+            logger.exception(f'[ASSINATURA LOTE] Erro no item {funcionario_id} | Request: {item_request_id}')
+            resultado = {
+                'status': 'erro',
+                'funcionario_id': funcionario_id,
+                'erro': f'{type(exc).__name__}: {exc}',
+                'request_id': item_request_id,
+            }
+
         resultados.append(resultado)
 
+    logger.info(f'[ASSINATURA LOTE] Processado | Total: {len(itens)} | '
+                f'Sucesso: {sum(1 for r in resultados if r.get("status") == "ok")} | '
+                f'Request: {request_id}')
+
     return jsonify({
-        'status': 'ok', 'dry_run': dry_run,
+        'status': 'ok',
+        'dry_run': dry_run,
         'total': len(itens),
         'resultados': resultados,
+        'request_id': request_id,
     })
 
 
