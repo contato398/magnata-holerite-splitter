@@ -3705,6 +3705,73 @@ def health():
     })
 
 
+# ── Códigos canônicos de erro para /separar ────────────────────────────────────
+ERRO_CODIGOS_SEPARAR = {
+    'PDF_PASSWORD_INCORRECT': 'PDF protegido por senha',
+    'PDF_INVALID': 'Dados não são um PDF válido',
+    'PDF_CORRUPTED': 'PDF corrompido ou inválido',
+    'PDF_EMPTY': 'PDF vazio ou muito pequeno',
+    'PDF_NOT_SUPPORTED': 'Formato ou versão de PDF não suportada',
+    'ATTACHMENT_NOT_FOUND': 'Anexo PDF não recebido',
+    'EMPLOYEE_NOT_IDENTIFIED': 'Nenhum funcionário/CPF encontrado no PDF',
+    'DOCUMENT_TYPE_NOT_IDENTIFIED': 'Tipo de documento não identificado',
+    'AIRTABLE_RECORD_NOT_FOUND': 'Registro não encontrado no Airtable',
+    'PROCESSING_ERROR': 'Erro ao processar PDF',
+}
+
+
+def _error_response_separar(
+    error_code: str,
+    record_id: str | None = None,
+    message: str | None = None,
+    log_detail: str | None = None,
+) -> tuple[dict, int]:
+    """
+    Padroniza resposta de erro do /separar.
+    Retorna HTTP 200 com success=false para erros de negócio previsíveis.
+    Log_detail é registrado apenas nos logs internos (nunca na resposta).
+    """
+    canonical_msg = ERRO_CODIGOS_SEPARAR.get(error_code, 'Erro desconhecido')
+    final_msg = message or canonical_msg
+
+    if log_detail:
+        logger.warning(f'[/separar] {error_code}: {log_detail}')
+    else:
+        logger.warning(f'[/separar] {error_code}: {final_msg}')
+
+    resp = {
+        'success': False,
+        'status': 'erro',
+        'error_code': error_code,
+        'message': final_msg,
+    }
+    if record_id:
+        resp['processar_arquivo_record_id'] = record_id
+
+    return jsonify(resp), 200
+
+
+def _success_response_separar(
+    data: dict,
+    record_id: str | None = None,
+) -> tuple[dict, int]:
+    """
+    Padroniza resposta de sucesso do /separar.
+    Retorna HTTP 200 com success=true e os dados do resultado.
+    """
+    resp = {
+        'success': True,
+        'status': 'concluido',
+        'error_code': None,
+        'message': 'PDF processado com sucesso',
+        'resultado': data,
+    }
+    if record_id:
+        resp['processar_arquivo_record_id'] = record_id
+
+    return jsonify(resp), 200
+
+
 @app.route('/keep-alive', methods=['GET', 'POST'])
 def keep_alive():
     """Endpoint leve para evitar cold start do Render (plano free).
@@ -3728,19 +3795,65 @@ def status_documentos():
 
 @app.route('/separar', methods=['POST'])
 def separar():
+    record_id = request.args.get('record_id') or (request.get_json(silent=True) or {}).get('record_id')
+    caminho_pdf = None
     try:
         caminho_pdf = extrair_pdf_do_request()
-        if not caminho_pdf or not os.path.exists(caminho_pdf) or os.path.getsize(caminho_pdf) < 100:
-            return jsonify({'erro': 'PDF não recebido ou inválido.'}), 400
+        if not caminho_pdf or not os.path.exists(caminho_pdf):
+            return _error_response_separar(
+                'ATTACHMENT_NOT_FOUND',
+                record_id=record_id,
+                message='PDF não recebido.'
+            )
+
+        tamanho = os.path.getsize(caminho_pdf)
+        if tamanho < 100:
+            if caminho_pdf and os.path.exists(caminho_pdf):
+                os.unlink(caminho_pdf)
+            return _error_response_separar(
+                'PDF_EMPTY',
+                record_id=record_id,
+                message='PDF muito pequeno (< 100 bytes).'
+            )
+
         with open(caminho_pdf, 'rb') as _f:
             _header = _f.read(4)
         if _header != b'%PDF':
-            os.unlink(caminho_pdf)
-            return jsonify({'erro': 'Dados não são PDF válido.'}), 400
+            if caminho_pdf and os.path.exists(caminho_pdf):
+                os.unlink(caminho_pdf)
+            return _error_response_separar(
+                'PDF_INVALID',
+                record_id=record_id
+            )
 
-        mapa, _ = construir_mapa_cpf(caminho_pdf)
+        try:
+            mapa, _ = construir_mapa_cpf(caminho_pdf)
+        except Exception as exc:
+            exc_type = type(exc).__name__
+            if 'password' in str(exc).lower() or exc_type in ('PdfReadError',):
+                return _error_response_separar(
+                    'PDF_PASSWORD_INCORRECT',
+                    record_id=record_id,
+                    log_detail=f'{exc_type}: {str(exc)[:200]}'
+                )
+            elif 'corrupt' in str(exc).lower() or exc_type in ('PdfSyntaxError',):
+                return _error_response_separar(
+                    'PDF_CORRUPTED',
+                    record_id=record_id,
+                    log_detail=f'{exc_type}: {str(exc)[:200]}'
+                )
+            else:
+                return _error_response_separar(
+                    'PROCESSING_ERROR',
+                    record_id=record_id,
+                    log_detail=f'{exc_type}: {str(exc)[:200]}'
+                )
+
         if not mapa:
-            return jsonify({'erro': 'Nenhum holerite encontrado'}), 422
+            return _error_response_separar(
+                'EMPLOYEE_NOT_IDENTIFIED',
+                record_id=record_id
+            )
 
         funcionarios = []
         for cpf, dados in mapa.items():
@@ -3759,24 +3872,85 @@ def separar():
             del pdf_ind, pdf_b64
             gc.collect()
 
-        return jsonify({
-            'total_funcionarios': len(funcionarios),
-            'funcionarios': funcionarios,
-        })
+        return _success_response_separar(
+            {
+                'total_funcionarios': len(funcionarios),
+                'funcionarios': funcionarios,
+            },
+            record_id=record_id
+        )
+
     except Exception as exc:
-        logger.exception('Erro em /separar')
-        erro_msg = str(exc) if str(exc) else f'{type(exc).__name__}: erro ao processar PDF'
-        return jsonify({'erro': erro_msg, 'etapa': 'separar', 'tipo_exc': type(exc).__name__}), 500
+        logger.exception(f'ERRO INESPERADO em /separar: {type(exc).__name__}: {str(exc)[:200]}')
+        if caminho_pdf and os.path.exists(caminho_pdf):
+            try:
+                os.unlink(caminho_pdf)
+            except Exception as e:
+                logger.warning(f'Erro ao limpar {caminho_pdf}: {e}')
+        return jsonify({
+            'error': f'{type(exc).__name__}: erro interno no servidor',
+            'detail': 'Entre em contato com suporte'
+        }), 500
+    finally:
+        if caminho_pdf and os.path.exists(caminho_pdf):
+            try:
+                os.unlink(caminho_pdf)
+            except Exception as e:
+                logger.warning(f'Erro ao limpar {caminho_pdf}: {e}')
 
 
 @app.route('/separar/zip', methods=['POST'])
 def separar_zip():
+    record_id = request.args.get('record_id') or (request.get_json(silent=True) or {}).get('record_id')
+    caminho_pdf = None
     try:
         caminho_pdf = extrair_pdf_do_request()
-        if not caminho_pdf or not os.path.exists(caminho_pdf) or os.path.getsize(caminho_pdf) < 100:
-            return jsonify({'erro': 'Envie o PDF via "pdf" (multipart) ou "pdf_base64" (JSON)'}), 400
+        if not caminho_pdf or not os.path.exists(caminho_pdf):
+            return _error_response_separar(
+                'ATTACHMENT_NOT_FOUND',
+                record_id=record_id,
+                message='PDF não recebido.'
+            )
 
-        mapa, _ = construir_mapa_cpf(caminho_pdf)
+        tamanho = os.path.getsize(caminho_pdf)
+        if tamanho < 100:
+            if caminho_pdf and os.path.exists(caminho_pdf):
+                os.unlink(caminho_pdf)
+            return _error_response_separar(
+                'PDF_EMPTY',
+                record_id=record_id,
+                message='PDF muito pequeno (< 100 bytes).'
+            )
+
+        try:
+            mapa, _ = construir_mapa_cpf(caminho_pdf)
+        except Exception as exc:
+            exc_type = type(exc).__name__
+            if 'password' in str(exc).lower() or exc_type in ('PdfReadError',):
+                return _error_response_separar(
+                    'PDF_PASSWORD_INCORRECT',
+                    record_id=record_id,
+                    log_detail=f'{exc_type}: {str(exc)[:200]}'
+                )
+            elif 'corrupt' in str(exc).lower() or exc_type in ('PdfSyntaxError',):
+                return _error_response_separar(
+                    'PDF_CORRUPTED',
+                    record_id=record_id,
+                    log_detail=f'{exc_type}: {str(exc)[:200]}'
+                )
+            else:
+                return _error_response_separar(
+                    'PROCESSING_ERROR',
+                    record_id=record_id,
+                    log_detail=f'{exc_type}: {str(exc)[:200]}'
+                )
+
+        if not mapa:
+            return _error_response_separar(
+                'EMPLOYEE_NOT_IDENTIFIED',
+                record_id=record_id
+            )
+
         zip_buf = io.BytesIO()
         with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
             for cpf, dados in mapa.items():
@@ -3790,18 +3964,32 @@ def separar_zip():
                 gc.collect()
 
         zip_b64 = base64.b64encode(zip_buf.getvalue()).decode('utf-8')
-        return jsonify({
-            'total_funcionarios': len(mapa),
-            'zip_base64': zip_b64,
-            'tamanho_zip_bytes': len(zip_buf.getvalue()),
-        })
+        return _success_response_separar(
+            {
+                'total_funcionarios': len(mapa),
+                'zip_base64': zip_b64,
+                'tamanho_zip_bytes': len(zip_buf.getvalue()),
+            },
+            record_id=record_id
+        )
+
     except Exception as exc:
-        logger.exception('Erro em /separar/zip')
-        erro_msg = str(exc) if str(exc) else f'{type(exc).__name__}: erro ao processar PDF'
-        return jsonify({'erro': erro_msg, 'etapa': 'separar_zip', 'tipo_exc': type(exc).__name__}), 500
+        logger.exception(f'ERRO INESPERADO em /separar/zip: {type(exc).__name__}: {str(exc)[:200]}')
+        if caminho_pdf and os.path.exists(caminho_pdf):
+            try:
+                os.unlink(caminho_pdf)
+            except Exception as e:
+                logger.warning(f'Erro ao limpar {caminho_pdf}: {e}')
+        return jsonify({
+            'error': f'{type(exc).__name__}: erro interno no servidor',
+            'detail': 'Entre em contato com suporte'
+        }), 500
     finally:
-        if 'caminho_pdf' in dir() and caminho_pdf and os.path.exists(caminho_pdf):
-            os.unlink(caminho_pdf)
+        if caminho_pdf and os.path.exists(caminho_pdf):
+            try:
+                os.unlink(caminho_pdf)
+            except Exception as e:
+                logger.warning(f'Erro ao limpar {caminho_pdf}: {e}')
 
 
 @app.route('/processar-holerites', methods=['POST', 'OPTIONS'])
