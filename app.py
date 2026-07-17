@@ -3705,6 +3705,14 @@ def health():
     })
 
 
+@app.route('/keep-alive', methods=['GET', 'POST'])
+def keep_alive():
+    """Endpoint leve para evitar cold start do Render (plano free).
+    Deve ser chamado a cada 5-10 minutos via Make.com ou similar.
+    Retorna 200 se o serviço está aquecido."""
+    return jsonify({'status': 'ok', 'timestamp': datetime.now().isoformat()}), 200
+
+
 @app.route('/status-documentos', methods=['GET'])
 def status_documentos():
     """v3.11 — Diagnóstico de capacidades: lista os tipos de documento que o
@@ -3757,7 +3765,8 @@ def separar():
         })
     except Exception as exc:
         logger.exception('Erro em /separar')
-        return jsonify({'erro': str(exc), 'etapa': 'separar'}), 500
+        erro_msg = str(exc) if str(exc) else f'{type(exc).__name__}: erro ao processar PDF'
+        return jsonify({'erro': erro_msg, 'etapa': 'separar', 'tipo_exc': type(exc).__name__}), 500
 
 
 @app.route('/separar/zip', methods=['POST'])
@@ -3788,7 +3797,8 @@ def separar_zip():
         })
     except Exception as exc:
         logger.exception('Erro em /separar/zip')
-        return jsonify({'erro': str(exc), 'etapa': 'separar_zip'}), 500
+        erro_msg = str(exc) if str(exc) else f'{type(exc).__name__}: erro ao processar PDF'
+        return jsonify({'erro': erro_msg, 'etapa': 'separar_zip', 'tipo_exc': type(exc).__name__}), 500
     finally:
         if 'caminho_pdf' in dir() and caminho_pdf and os.path.exists(caminho_pdf):
             os.unlink(caminho_pdf)
