@@ -434,8 +434,10 @@ F_ARQ_HASH     = 'fldOB09YlKDEqKSFO'  # Hash do Anexo
 F_PROC_NAME      = 'fldmrG1ZTHHU4QYQK'
 F_PROC_STATUS    = 'fldvN9T5MiuKZGDi0'
 F_PROC_DATA      = 'flddNzmqp1Im1D02m'
-F_PROC_ARQUIVOS2 = 'fldLWSmK81i8jbtCG'
+F_PROC_ARQUIVOS  = 'fldQtevv6jAwKVdEN'  # Campo "Arquivos" (multipleAttachments) — localizado via API 2026-07-20
+F_PROC_ARQUIVOS2 = 'fldLWSmK81i8jbtCG'  # Vínculo (não usar para upload)
 F_PROC_TIPO_DOC  = 'fldvkOVlwCMywGTES'
+F_PROC_ERROR_CODE = 'fldYYYYYYYYYYYYYY'  # ⚠️ OPCIONAL: campo para error_code (se existir)
 
 # Pendências/Revisar
 F_PEND_NOME   = 'fldovcs6bySCshoXI'
@@ -3793,110 +3795,320 @@ def status_documentos():
     return texto, 200, {'Content-Type': 'text/plain; charset=utf-8'}
 
 
-@app.route('/separar', methods=['POST'])
-def separar():
-    record_id = request.args.get('record_id') or (request.get_json(silent=True) or {}).get('record_id')
-    caminho_pdf = None
+# ── FUNÇÕES DE SUPORTE PARA /separar ASSÍNCRONO ────────────────────────────────
+
+def _fazer_upload_pdf_airtable(record_id: str, pdf_bytes: bytes, filename: str = 'holerite.pdf') -> bool:
+    """
+    Faz upload do PDF para o campo 'Arquivos' no Airtable.
+
+    Args:
+        record_id: ID do registro (começa com 'rec')
+        pdf_bytes: Bytes do PDF
+        filename: Nome do arquivo
+
+    Returns:
+        True se sucesso, False se erro
+    """
     try:
-        caminho_pdf = extrair_pdf_do_request()
-        if not caminho_pdf or not os.path.exists(caminho_pdf):
-            return _error_response_separar(
-                'ATTACHMENT_NOT_FOUND',
-                record_id=record_id,
-                message='PDF não recebido.'
-            )
+        # Validar Field ID
+        if not F_PROC_ARQUIVOS or F_PROC_ARQUIVOS == 'fldXXXXXXXXXXXXXX':
+            logger.error('[UPLOAD] Field ID do campo Arquivos não configurado')
+            return False
 
-        tamanho = os.path.getsize(caminho_pdf)
-        if tamanho < 100:
-            if caminho_pdf and os.path.exists(caminho_pdf):
-                os.unlink(caminho_pdf)
-            return _error_response_separar(
-                'PDF_EMPTY',
-                record_id=record_id,
-                message='PDF muito pequeno (< 100 bytes).'
-            )
+        # Preparar requisição (usar base64)
+        pdf_b64 = base64.b64encode(pdf_bytes).decode('utf-8')
 
-        with open(caminho_pdf, 'rb') as _f:
-            _header = _f.read(4)
-        if _header != b'%PDF':
-            if caminho_pdf and os.path.exists(caminho_pdf):
-                os.unlink(caminho_pdf)
-            return _error_response_separar(
-                'PDF_INVALID',
-                record_id=record_id
-            )
+        # Upload via Airtable attachments endpoint
+        upload_url = f'https://content.airtable.com/v0/{BASE_ID}/{record_id}/{F_PROC_ARQUIVOS}/uploadAttachment'
 
-        try:
-            mapa, _ = construir_mapa_cpf(caminho_pdf)
-        except Exception as exc:
-            exc_type = type(exc).__name__
-            if 'password' in str(exc).lower() or exc_type in ('PdfReadError',):
-                return _error_response_separar(
-                    'PDF_PASSWORD_INCORRECT',
-                    record_id=record_id,
-                    log_detail=f'{exc_type}: {str(exc)[:200]}'
-                )
-            elif 'corrupt' in str(exc).lower() or exc_type in ('PdfSyntaxError',):
-                return _error_response_separar(
-                    'PDF_CORRUPTED',
-                    record_id=record_id,
-                    log_detail=f'{exc_type}: {str(exc)[:200]}'
-                )
-            else:
-                return _error_response_separar(
-                    'PROCESSING_ERROR',
-                    record_id=record_id,
-                    log_detail=f'{exc_type}: {str(exc)[:200]}'
-                )
-
-        if not mapa:
-            return _error_response_separar(
-                'EMPLOYEE_NOT_IDENTIFIED',
-                record_id=record_id
-            )
-
-        funcionarios = []
-        for cpf, dados in mapa.items():
-            pdf_ind = extrair_pdf_colaborador(caminho_pdf, dados['paginas'])
-            pdf_b64 = base64.b64encode(pdf_ind).decode('utf-8')
-            nome_arq = (
-                f"holerite_{cpf.replace('.','').replace('-','')}"
-                f"_{dados['nome'].replace(' ','_')[:30]}.pdf"
-            )
-            funcionarios.append({
-                'cpf': cpf, 'nome': dados['nome'],
-                'nome_arquivo': nome_arq, 'pdf_base64': pdf_b64,
-                'tamanho_bytes': len(pdf_ind),
-                'valores': dados.get('valores', {}),
-            })
-            del pdf_ind, pdf_b64
-            gc.collect()
-
-        return _success_response_separar(
-            {
-                'total_funcionarios': len(funcionarios),
-                'funcionarios': funcionarios,
+        r = requests.post(
+            upload_url,
+            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            json={
+                'contentType': 'application/pdf',
+                'file': pdf_b64,
+                'filename': filename,
             },
-            record_id=record_id
+            timeout=60,
         )
 
-    except Exception as exc:
-        logger.exception(f'ERRO INESPERADO em /separar: {type(exc).__name__}: {str(exc)[:200]}')
-        if caminho_pdf and os.path.exists(caminho_pdf):
+        if r.status_code in (200, 201):
+            logger.info(f'[UPLOAD] PDF enviado para Airtable: {record_id} ({len(pdf_bytes)} bytes)')
+            return True
+        else:
+            logger.error(f'[UPLOAD] Erro {r.status_code}: {r.text[:200]}')
+            return False
+
+    except Exception as e:
+        logger.error(f'[UPLOAD] Erro ao fazer upload: {type(e).__name__}: {str(e)[:200]}')
+        return False
+
+
+def _enfileirar_processamento(record_id: str, pdf_hash: str, pdf_url: str | None = None) -> tuple[bool, str]:
+    """
+    Enfileira tarefa Celery para processar PDF.
+
+    Args:
+        record_id: ID do registro Airtable
+        pdf_hash: SHA256 do PDF
+        pdf_url: URL do anexo (para worker baixar)
+
+    Returns:
+        (sucesso: bool, task_id: str)
+    """
+    try:
+        from tarefas_processar_pdf import processar_pdf_task, gerar_idempotency_key
+
+        # Gerar chave de idempotência
+        idempotency_key = gerar_idempotency_key(record_id, pdf_hash)
+
+        # Enfileirar tarefa
+        task = processar_pdf_task.apply_async(
+            args=(record_id, idempotency_key, pdf_url),
+            queue='default',
+        )
+
+        logger.info(f'[FILA] Tarefa enfileirada: {record_id} | task_id={task.id}')
+        return True, task.id
+
+    except Exception as e:
+        logger.error(f'[FILA] Erro ao enfileirar: {type(e).__name__}: {str(e)[:200]}')
+        return False, ''
+
+
+@app.route('/separar', methods=['POST'])
+def separar():
+    """
+    Versão ASSÍNCRONA do /separar (v4.0) — SEM dependência de /tmp.
+    Recebe PDF em memória, valida, faz upload para Airtable,
+    enfileira para Celery, retorna HTTP 202 imediatamente.
+    """
+    try:
+        # Validar Record ID (PRIMEIRO, antes de validar PDF)
+        record_id = request.form.get('processar_arquivo_record_id') or request.args.get('record_id')
+        if not record_id or not record_id.startswith('rec'):
+            logger.warning(f'[/separar] Record ID inválido: {record_id}')
+            return jsonify({
+                'success': False,
+                'status': 'erro',
+                'error_code': 'INVALID_RECORD_ID',
+                'message': 'Record ID obrigatório (começa com "rec")',
+            }), 400
+
+        # Obter PDF diretamente de request.files (EM MEMÓRIA)
+        if 'pdf' not in request.files:
+            return jsonify({
+                'success': False,
+                'status': 'erro',
+                'error_code': 'ATTACHMENT_NOT_FOUND',
+                'message': 'PDF não recebido.',
+                'processar_arquivo_record_id': record_id,
+            }), 200
+
+        pdf_file = request.files['pdf']
+
+        # Validar nome do arquivo e extensão
+        if not pdf_file.filename:
+            return jsonify({
+                'success': False,
+                'status': 'erro',
+                'error_code': 'PDF_NO_FILENAME',
+                'message': 'Arquivo sem nome.',
+                'processar_arquivo_record_id': record_id,
+            }), 200
+
+        if not pdf_file.filename.lower().endswith('.pdf'):
+            return jsonify({
+                'success': False,
+                'status': 'erro',
+                'error_code': 'PDF_INVALID_EXTENSION',
+                'message': 'Arquivo deve ter extensão .pdf',
+                'processar_arquivo_record_id': record_id,
+            }), 200
+
+        # Validar content-type
+        content_type = pdf_file.content_type or ''
+        if content_type and not content_type.startswith('application/pdf'):
+            logger.warning(f'[/separar] Content-Type não é PDF: {content_type}')
+            # Permitir se não foi fornecido, mas avisar se foi e está errado
+
+        # Ler PDF_BYTES em memória (NÃO em disco)
+        pdf_bytes = pdf_file.read()
+
+        # Validar tamanho mínimo
+        if len(pdf_bytes) < 100:
+            return jsonify({
+                'success': False,
+                'status': 'erro',
+                'error_code': 'PDF_EMPTY',
+                'message': 'PDF muito pequeno (< 100 bytes).',
+                'processar_arquivo_record_id': record_id,
+            }), 200
+
+        # Validar tamanho máximo (já protegido por MAX_CONTENT_LENGTH, mas checar mesmo assim)
+        max_size = 50 * 1024 * 1024  # 50 MB
+        if len(pdf_bytes) > max_size:
+            return jsonify({
+                'success': False,
+                'status': 'erro',
+                'error_code': 'PDF_TOO_LARGE',
+                'message': f'PDF muito grande (> {max_size/1024/1024:.0f}MB).',
+                'processar_arquivo_record_id': record_id,
+            }), 200
+
+        # Validar assinatura %PDF
+        if not pdf_bytes.startswith(b'%PDF'):
+            return jsonify({
+                'success': False,
+                'status': 'erro',
+                'error_code': 'PDF_INVALID',
+                'message': 'Dados não são um PDF válido.',
+                'processar_arquivo_record_id': record_id,
+            }), 200
+
+        # Verificar registro no Airtable
+        logger.info(f'[/separar] Validando: {record_id}')
+        try:
+            r = requests.get(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}/{record_id}',
+                headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                timeout=10,
+            )
+            if r.status_code != 200:
+                logger.error(f'[/separar] Registro não encontrado: {record_id}')
+                return jsonify({
+                    'success': False,
+                    'status': 'erro',
+                    'error_code': 'AIRTABLE_RECORD_NOT_FOUND',
+                    'message': 'Registro não encontrado.',
+                    'processar_arquivo_record_id': record_id,
+                }), 200
+        except Exception as e:
+            logger.error(f'[/separar] Erro ao verificar: {type(e).__name__}')
+            return jsonify({
+                'success': False,
+                'status': 'erro',
+                'error_code': 'AIRTABLE_CHECK_FAILED',
+                'message': 'Erro ao validar registro.',
+                'processar_arquivo_record_id': record_id,
+            }), 200
+
+        # Calcular SHA256 sobre pdf_bytes (em memória)
+        pdf_hash = hashlib.sha256(pdf_bytes).hexdigest()
+
+        # Upload do PDF para Airtable (passando os bytes diretos)
+        logger.info(f'[/separar] Upload: {record_id} ({len(pdf_bytes)} bytes)')
+        success_upload = _fazer_upload_pdf_airtable(
+            record_id,
+            pdf_bytes,
+            filename=pdf_file.filename or 'holerite.pdf'
+        )
+
+        if not success_upload:
+            logger.error(f'[/separar] Falha upload: {record_id}')
             try:
-                os.unlink(caminho_pdf)
-            except Exception as e:
-                logger.warning(f'Erro ao limpar {caminho_pdf}: {e}')
+                requests.patch(
+                    f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}/{record_id}',
+                    headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                    json={'fields': {F_PROC_STATUS: 'Erro', F_PROC_TIPO_DOC: 'UPLOAD_FAILED'}},
+                    timeout=10,
+                )
+            except Exception:
+                pass
+            return jsonify({
+                'success': False,
+                'status': 'erro',
+                'error_code': 'PDF_UPLOAD_FAILED',
+                'message': 'Falha ao enviar PDF.',
+                'processar_arquivo_record_id': record_id,
+            }), 200
+
+        logger.info(f'[/separar] Enfileirando: {record_id}')
+
+        # Obter URL do anexo para worker
+        pdf_url = None
+        try:
+            r = requests.get(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}/{record_id}',
+                headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                timeout=10,
+            )
+            attachments = r.json().get('fields', {}).get(F_PROC_ARQUIVOS, []) or []
+            pdf_url = attachments[0].get('url') if attachments else None
+        except Exception:
+            pdf_url = None
+
+        # Enfileirar tarefa Celery
+        success_enfileira, task_id = _enfileirar_processamento(record_id, pdf_hash, pdf_url)
+
+        if not success_enfileira:
+            logger.error(f'[/separar] Falha enfileirar: {record_id}')
+            return jsonify({
+                'success': False,
+                'status': 'erro',
+                'error_code': 'QUEUE_FAILED',
+                'message': 'Falha ao enfileirar.',
+                'processar_arquivo_record_id': record_id,
+            }), 200
+
+        # Responder HTTP 202 (sucesso assíncrono)
+        logger.info(f'[/separar] 202: {record_id} | task_id={task_id}')
         return jsonify({
-            'error': f'{type(exc).__name__}: erro interno no servidor',
-            'detail': 'Entre em contato com suporte'
+            'success': True,
+            'status': 'enfileirado',
+            'message': 'PDF armazenado e enviado para processamento',
+            'error_code': None,
+            'processar_arquivo_record_id': record_id,
+            'task_id': task_id,
+        }), 202
+
+    except Exception as exc:
+        logger.exception(f'ERRO INESPERADO em /separar: {type(exc).__name__}')
+        return jsonify({
+            'error': f'{type(exc).__name__}: erro interno',
+            'detail': 'Entre em contato com suporte',
         }), 500
-    finally:
-        if caminho_pdf and os.path.exists(caminho_pdf):
-            try:
-                os.unlink(caminho_pdf)
-            except Exception as e:
-                logger.warning(f'Erro ao limpar {caminho_pdf}: {e}')
+
+
+@app.route('/tarefas/<task_id>', methods=['GET'])
+def consultar_tarefa(task_id):
+    """
+    Consulta status de uma tarefa Celery.
+
+    Retorna:
+    {
+      "task_id": "...",
+      "state": "PENDING|STARTED|SUCCESS|FAILURE",
+      "processar_arquivo_record_id": "rec..." (se disponível)
+    }
+    """
+    try:
+        from tarefas_processar_pdf import processar_pdf_task
+        from celery_app import celery_app
+
+        # Obter resultado da tarefa
+        result = celery_app.AsyncResult(task_id)
+
+        resp = {
+            'task_id': task_id,
+            'state': result.state,
+        }
+
+        # Se tiver metadata, incluir
+        if result.info:
+            if isinstance(result.info, dict):
+                if 'processar_arquivo_record_id' in result.info:
+                    resp['processar_arquivo_record_id'] = result.info.get('processar_arquivo_record_id')
+
+        logger.info(f'[TAREFAS] Consulta: {task_id} → {result.state}')
+        return jsonify(resp), 200
+
+    except Exception as e:
+        logger.error(f'[TAREFAS] Erro ao consultar {task_id}: {type(e).__name__}')
+        return jsonify({
+            'error': 'Erro ao consultar tarefa',
+            'task_id': task_id,
+        }), 500
 
 
 @app.route('/separar/zip', methods=['POST'])

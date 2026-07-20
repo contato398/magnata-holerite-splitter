@@ -7,3 +7,12 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
+
+  - type: worker
+    name: magnata-holerite-worker
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A celery_app.celery_app worker --loglevel=INFO --concurrency=2
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
