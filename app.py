@@ -3886,6 +3886,8 @@ def separar():
     try:
         # Validar Record ID (PRIMEIRO, antes de validar PDF)
         record_id = request.form.get('processar_arquivo_record_id') or request.args.get('record_id')
+        app.logger.info(f"FORM={request.form}")
+        app.logger.info(f"RECORD_ID={record_id!r}")
         if not record_id or not record_id.startswith('rec'):
             logger.warning(f'[/separar] Record ID inválido: {record_id}')
             return jsonify({
