@@ -4011,11 +4011,9 @@ def separar():
                 app.logger.info(f"PATCH URL: https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}/{record_id}")
                 app.logger.info(f"TABLE_PROCESSAR={TABLE_PROCESSAR}")
                 app.logger.info(f"record_id={record_id!r}")
-                headers = {'Authorization': f'Bearer {AIRTABLE_API_KEY}'}
-                app.logger.info(f"headers={headers}")
                 requests.patch(
                     f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}/{record_id}',
-                    headers=headers,
+                    headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
                     json={'fields': {F_PROC_STATUS: 'Erro', F_PROC_TIPO_DOC: 'UPLOAD_FAILED'}},
                     timeout=10,
                 )

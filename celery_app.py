@@ -14,6 +14,7 @@ celery_app = Celery(
     'magnata_holerites',
     broker=redis_url,
     backend=redis_url,
+    include=['tarefas_processar_pdf'],
 )
 
 # Configuração obrigatória
@@ -31,5 +32,8 @@ celery_app.conf.update(
     task_time_limit=900,  # 15 minutos (hard limit)
 )
 
-# Descobrir tasks automaticamente
-celery_app.autodiscover_tasks(['tarefas_processar_pdf'])
+# Importar tasks APÓS a instância Celery estar criada
+try:
+    from tarefas_processar_pdf import processar_pdf_task  # noqa: F401
+except ImportError:
+    pass
