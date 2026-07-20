@@ -17,7 +17,7 @@ BASE_ID = 'appaCpIVj7Q97VhFy'
 TABLE_PROCESSAR = 'tblXaLXvGJMyFOayc'
 F_PROC_STATUS = 'fldvN9T5MiuKZGDi0'
 F_PROC_DATA = 'flddNzmqp1Im1D02m'
-F_PROC_TIPO_DOC = 'fldvkOVlwCMywGTEs'
+F_PROC_TIPO_DOC = 'fldvkOVlwCMywGTES'
 
 # Import das funções de processamento do app.py
 from app import construir_mapa_cpf, extrair_pdf_colaborador, logger as app_logger

@@ -4029,18 +4029,54 @@ def separar():
 
         logger.info(f'[/separar] Enfileirando: {record_id}')
 
-        # Obter URL do anexo para worker
+        # Obter URL do anexo para worker — com retry e validação robusta
         pdf_url = None
-        try:
-            r = requests.get(
-                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}/{record_id}',
-                headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
-                timeout=10,
-            )
-            attachments = r.json().get('fields', {}).get(F_PROC_ARQUIVOS, []) or []
-            pdf_url = attachments[0].get('url') if attachments else None
-        except Exception:
-            pdf_url = None
+        max_retries = 5
+        for tentativa in range(1, max_retries + 1):
+            try:
+                r = requests.get(
+                    f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}/{record_id}?returnFieldsByFieldId=true',
+                    headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                    timeout=10,
+                )
+                if r.status_code != 200:
+                    logger.warning(f'[/separar] Tentativa {tentativa}: status {r.status_code}')
+                    if tentativa < max_retries:
+                        time.sleep(0.5)
+                    continue
+
+                fields = r.json().get('fields', {})
+                attachments = fields.get(F_PROC_ARQUIVOS, []) or []
+
+                if attachments and isinstance(attachments, list) and len(attachments) > 0:
+                    candidate_url = attachments[0].get('url')
+                    if candidate_url and candidate_url.startswith('http'):
+                        pdf_url = candidate_url
+                        logger.info(f'[/separar] URL obtida na tentativa {tentativa}: {pdf_url[:60]}...')
+                        break
+                    else:
+                        logger.warning(f'[/separar] Tentativa {tentativa}: URL inválida')
+                else:
+                    logger.warning(f'[/separar] Tentativa {tentativa}: campo vazio')
+
+                if tentativa < max_retries:
+                    time.sleep(0.5)
+
+            except Exception as e:
+                logger.warning(f'[/separar] Tentativa {tentativa}: {type(e).__name__}: {str(e)[:100]}')
+                if tentativa < max_retries:
+                    time.sleep(0.5)
+
+        # Validar que pdf_url foi obtida
+        if not pdf_url:
+            logger.error(f'[/separar] Falha: URL do PDF não disponível após {max_retries} tentativas')
+            return jsonify({
+                'success': False,
+                'status': 'erro',
+                'error_code': 'PDF_ATTACHMENT_URL_NOT_AVAILABLE',
+                'message': 'URL do anexo não disponível no Airtable.',
+                'processar_arquivo_record_id': record_id,
+            }), 200
 
         # Enfileirar tarefa Celery
         success_enfileira, task_id = _enfileirar_processamento(record_id, pdf_hash, pdf_url)
