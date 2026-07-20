@@ -3865,7 +3865,6 @@ def _enfileirar_processamento(record_id: str, pdf_hash: str, pdf_url: str | None
         # Enfileirar tarefa
         task = processar_pdf_task.apply_async(
             args=(record_id, idempotency_key, pdf_url),
-            queue='default',
         )
 
         logger.info(f'[FILA] Tarefa enfileirada: {record_id} | task_id={task.id}')
