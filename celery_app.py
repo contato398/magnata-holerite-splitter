@@ -30,3 +30,6 @@ celery_app.conf.update(
     task_soft_time_limit=600,  # 10 minutos
     task_time_limit=900,  # 15 minutos (hard limit)
 )
+
+# Descobrir tasks automaticamente
+celery_app.autodiscover_tasks(['tarefas_processar_pdf'])
