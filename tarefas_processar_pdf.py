@@ -61,13 +61,21 @@ def processar_pdf_task(
                 'message': 'ID do registro inválido',
             }
 
-        # Atualizar status para "Processando"
-        _atualizar_airtable(
+        # Atualizar status para "Processando" — obrigatório
+        success_inicial = _atualizar_airtable(
             processar_arquivo_record_id,
             {
                 F_PROC_STATUS: 'Processando',
+                F_PROC_DATA: datetime.now().isoformat(),
             }
         )
+        if not success_inicial:
+            logger.error(f'[TASK] Falha ao atualizar Status→Processando')
+            return {
+                'success': False,
+                'error_code': 'INITIAL_STATUS_UPDATE_FAILED',
+                'message': 'Falha ao marcar registro como Processando',
+            }
         logger.info(f'[TASK] Status → Processando | {processar_arquivo_record_id}')
 
         # Baixar PDF do Airtable
@@ -149,15 +157,23 @@ def processar_pdf_task(
 
             logger.info(f'[TASK] PDF processado: {len(funcionarios)} funcionários')
 
-            # Sucesso!
+            # Sucesso! — Atualizar Status para Concluído (obrigatório)
             duracao = (datetime.now() - inicio).total_seconds()
-            _atualizar_airtable(
+            success_final = _atualizar_airtable(
                 processar_arquivo_record_id,
                 {
                     F_PROC_STATUS: 'Concluído',
                     F_PROC_DATA: datetime.now().isoformat(),
                 }
             )
+
+            if not success_final:
+                logger.error(f'[TASK] Falha ao atualizar Status→Concluído')
+                return {
+                    'success': False,
+                    'error_code': 'AIRTABLE_FINAL_UPDATE_FAILED',
+                    'message': 'Falha ao marcar registro como Concluído',
+                }
 
             logger.info(f'[TASK] Concluído em {duracao:.1f}s | {processar_arquivo_record_id}')
 
@@ -194,29 +210,65 @@ def processar_pdf_task(
 
 def _atualizar_airtable(record_id: str, campos: dict) -> bool:
     """
-    Atualiza registro no Airtable de forma segura.
+    Atualiza registro no Airtable de forma segura com retry e validação.
 
     Returns:
-        True se sucesso, False se erro
+        True se sucesso e campo Status confirmado, False se erro
     """
-    try:
-        r = requests.patch(
-            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}/{record_id}',
-            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
-            json={'fields': campos, 'typecast': True},
-            timeout=30,
-        )
+    max_retries = 3
+    for tentativa in range(1, max_retries + 1):
+        try:
+            r = requests.patch(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}/{record_id}?returnFieldsByFieldId=true',
+                headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                json={'fields': campos, 'typecast': True},
+                timeout=30,
+            )
 
-        if r.status_code in (200, 201, 204):
-            logger.info(f'[AIRTABLE] Atualizado: {record_id}')
-            return True
-        else:
-            logger.error(f'[AIRTABLE] Erro {r.status_code}: {r.text[:200]}')
+            logger.info(f'[AIRTABLE] Tentativa {tentativa}: HTTP {r.status_code}')
+
+            # Retry apenas para falhas transitórias
+            if r.status_code in (429, 500, 502, 503, 504):
+                if tentativa < max_retries:
+                    logger.warning(f'[AIRTABLE] Retry em falha {r.status_code}')
+                    import time
+                    time.sleep(0.5)
+                    continue
+                else:
+                    logger.error(f'[AIRTABLE] Falha após {max_retries} tentativas: {r.status_code}')
+                    return False
+
+            if r.status_code in (200, 201, 204):
+                # Validar que o campo Status foi realmente atualizado
+                try:
+                    resp_json = r.json()
+                    updated_fields = resp_json.get('fields', {})
+
+                    # Se Status foi enviado, verificar que foi recebido
+                    if F_PROC_STATUS in campos:
+                        if F_PROC_STATUS in updated_fields:
+                            logger.info(f'[AIRTABLE] Status confirmado: {updated_fields.get(F_PROC_STATUS)}')
+                        else:
+                            logger.warning(f'[AIRTABLE] Status não retornou na resposta')
+
+                    logger.info(f'[AIRTABLE] Sucesso: {record_id}')
+                except Exception as e:
+                    logger.warning(f'[AIRTABLE] Resposta não é JSON: {type(e).__name__}')
+
+                return True
+            else:
+                logger.error(f'[AIRTABLE] Erro {r.status_code}: {r.text[:200]}')
+                return False
+
+        except Exception as e:
+            logger.error(f'[AIRTABLE] Tentativa {tentativa}: {type(e).__name__}: {str(e)[:100]}')
+            if tentativa < max_retries:
+                import time
+                time.sleep(0.5)
+                continue
             return False
 
-    except Exception as e:
-        logger.error(f'[AIRTABLE] Erro ao atualizar: {type(e).__name__}: {str(e)[:200]}')
-        return False
+    return False
 
 
 def gerar_idempotency_key(record_id: str, pdf_hash: str) -> str:
