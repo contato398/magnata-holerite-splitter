@@ -7916,6 +7916,175 @@ def _smtp_enviar_email(destinatario: str, assunto: str, corpo_texto: str, anexos
         server.send_message(msg)
 
 
+# ============================================================================
+# ENVIO AVULSO — rota isolada para envios pontuais fora da fila mensal.
+# Criada para o primeiro envio de documentos da Unimed Shopping (2026-07-21).
+# NÃO participa de /disparar-fila-email, não percorre outros Envios, não usa
+# nenhum campo de lookup — só resolve exatamente os anexos explicitados.
+# ============================================================================
+
+EMAIL_AVULSO_ORIGENS = {
+    'Envio':        {'table_id': TABLE_ENVIOS, 'campo_id': F_ENVIO_ARQUIVOS},
+    'Funcionario':  {'table_id': TABLE_FUNC,   'campo_id': F_FUNC_DOCUMENTOS},
+}
+EMAIL_AVULSO_LIMITE_MB = 20
+_email_avulso_pacotes_enviados = set()  # idempotência em memória (vida do processo)
+
+
+def _resolver_anexo_avulso(origem, record_id, attachment_id):
+    cfg = EMAIL_AVULSO_ORIGENS.get(origem)
+    if not cfg:
+        raise ValueError(f'origem inválida: {origem!r} (aceitas: {sorted(EMAIL_AVULSO_ORIGENS)})')
+    _at_throttle()
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{cfg["table_id"]}/{record_id}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={'returnFieldsByFieldId': 'true'}, timeout=15,
+    )
+    if not r.ok:
+        raise ValueError(f'registro não encontrado: {origem}/{record_id}')
+    anexos = r.json().get('fields', {}).get(cfg['campo_id']) or []
+    match = next((a for a in anexos if a.get('id') == attachment_id), None)
+    if not match:
+        raise ValueError(f'attachment_id {attachment_id!r} não encontrado em {origem}/{record_id}')
+    return match
+
+
+def _enviar_email_avulso_core(destinatario, assunto, corpo, arquivos_spec, dry_run=True, request_id=None):
+    """
+    Envia UM e-mail avulso com uma lista explícita de anexos.
+
+    arquivos_spec: lista de
+      {'origem': 'Envio'|'Funcionario', 'record_id': 'rec...', 'attachment_id': 'att...'}
+
+    Uso pretendido: sempre chamar primeiro com dry_run=True, conferir o
+    resultado (anexos, hashes, tamanho), e só então repetir com dry_run=False.
+    A função não impõe essa sequência via estado persistente (não cria tabela
+    nem campo novo) — é uma responsabilidade de quem opera a rota.
+    """
+    request_id = request_id or f"avulso{secrets.token_hex(8)}"
+
+    if not destinatario or '@' not in destinatario:
+        return {'status': 'erro', 'erro': 'destinatario_invalido', 'request_id': request_id}, 400
+    if not assunto:
+        return {'status': 'erro', 'erro': 'assunto_obrigatorio', 'request_id': request_id}, 400
+    if not arquivos_spec:
+        return {'status': 'erro', 'erro': 'lista_arquivos_vazia', 'request_id': request_id}, 400
+
+    resolvidos = []
+    for spec in arquivos_spec:
+        try:
+            att = _resolver_anexo_avulso(spec.get('origem'), spec.get('record_id'), spec.get('attachment_id'))
+        except Exception as exc:
+            return {'status': 'erro', 'erro': f'falha_ao_resolver_anexo: {exc}',
+                    'spec': spec, 'request_id': request_id}, 400
+        resolvidos.append({'filename': att.get('filename', 'documento.pdf'), 'url': att.get('url')})
+
+    # bloqueio de duplicidade por nome normalizado dentro da própria seleção
+    vistos = set()
+    for r in resolvidos:
+        chave = _normalizar_filename(r['filename'])
+        if chave in vistos:
+            return {'status': 'erro', 'erro': 'arquivo_duplicado_na_selecao',
+                    'filename': r['filename'], 'request_id': request_id}, 409
+        vistos.add(chave)
+
+    # baixar bytes, validar que abre como PDF, calcular hash e tamanho real
+    anexos_bytes = []
+    tamanho_total = 0
+    for r in resolvidos:
+        try:
+            conteudo = _carregar_documento_url(r['url'])
+        except Exception as exc:
+            return {'status': 'erro', 'erro': f'falha_ao_baixar: {r["filename"]} ({exc})',
+                    'request_id': request_id}, 400
+        try:
+            PdfReader(io.BytesIO(conteudo))
+        except Exception as exc:
+            return {'status': 'erro', 'erro': f'pdf_nao_abre: {r["filename"]} ({exc})',
+                    'request_id': request_id}, 422
+        sha256 = hashlib.sha256(conteudo).hexdigest()
+        tamanho_total += len(conteudo)
+        anexos_bytes.append({'filename': r['filename'], 'bytes': conteudo,
+                              'size': len(conteudo), 'sha256': sha256})
+
+    limite_bytes = EMAIL_AVULSO_LIMITE_MB * 1024 * 1024
+    if tamanho_total > limite_bytes:
+        return {'status': 'erro', 'erro': 'tamanho_total_excede_limite',
+                'tamanho_total_mb': round(tamanho_total / 1024 / 1024, 2),
+                'limite_mb': EMAIL_AVULSO_LIMITE_MB, 'request_id': request_id}, 413
+
+    pacote_hash = hashlib.sha256(
+        (destinatario + '|' + assunto + '|' + '|'.join(sorted(a['sha256'] for a in anexos_bytes))).encode()
+    ).hexdigest()
+
+    resultado = {
+        'status': 'ok', 'dry_run': dry_run, 'request_id': request_id,
+        'destinatario': destinatario, 'assunto': assunto,
+        'total_anexos': len(anexos_bytes),
+        'tamanho_total_mb': round(tamanho_total / 1024 / 1024, 2),
+        'pacote_hash': pacote_hash,
+        'anexos': [{'filename': a['filename'], 'size': a['size'], 'sha256': a['sha256']} for a in anexos_bytes],
+    }
+
+    if dry_run:
+        resultado['acao'] = 'enviaria'
+        return resultado, 200
+
+    if pacote_hash in _email_avulso_pacotes_enviados:
+        return {'status': 'duplicado', 'erro': 'pacote_ja_enviado_nesta_sessao',
+                'pacote_hash': pacote_hash, 'request_id': request_id}, 409
+
+    try:
+        _smtp_enviar_email(destinatario, assunto, corpo, [(a['filename'], a['bytes']) for a in anexos_bytes])
+    except Exception as exc:
+        logger.error(f'[EMAIL-AVULSO] falha no envio {request_id}: {exc}')
+        return {'status': 'erro', 'erro': f'falha_envio: {exc}', 'request_id': request_id}, 502
+
+    _email_avulso_pacotes_enviados.add(pacote_hash)
+    logger.info(f'[EMAIL-AVULSO] enviado {request_id} | destino={destinatario} | '
+                f'anexos={len(anexos_bytes)} | pacote_hash={pacote_hash}')
+    resultado['acao'] = 'enviado'
+    return resultado, 200
+
+
+@app.route('/email-avulso/enviar', methods=['POST', 'OPTIONS'])
+def email_avulso_enviar():
+    """
+    Rota isolada para um único envio avulso, fora da fila mensal.
+    NÃO usa /disparar-fila-email, não percorre outros Envios, não usa lookup.
+
+    Body JSON:
+      {
+        "destinatario": "...",
+        "assunto": "...",
+        "corpo": "...",
+        "arquivos": [{"origem": "Envio"|"Funcionario", "record_id": "rec...", "attachment_id": "att..."}, ...],
+        "dry_run": true
+      }
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    request_id = f"avulso{secrets.token_hex(8)}"
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        logger.warning(f'[EMAIL-AVULSO] Acesso negado | Request: {request_id}')
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente', 'request_id': request_id}), 401
+
+    data = request.get_json(force=True, silent=True) or {}
+    destinatario = data.get('destinatario', '') or ''
+    assunto = data.get('assunto', '') or ''
+    corpo = data.get('corpo', '') or ''
+    arquivos_spec = data.get('arquivos') or []
+    dry_run = str(data.get('dry_run', True)).strip().lower() in ('1', 'true', 'yes', 'sim')
+
+    resultado, status_code = _enviar_email_avulso_core(
+        destinatario, assunto, corpo, arquivos_spec, dry_run=dry_run, request_id=request_id,
+    )
+    return jsonify(resultado), status_code
+
+
 def _fmt_quando(valor):
     """Formata um ISO datetime/date -> 'dd/mm/aaaa às HH:MM' (ou só a data)."""
     if not valor:
