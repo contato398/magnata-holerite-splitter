@@ -8003,6 +8003,159 @@ def _recibos_pdfs_por_cliente(contexto=None):
     return out
 
 
+# ── Fix v3.01 — Recibos de Assiduidade via "Outros documentos" ──────────────
+# Caminho alternativo a _recibos_pdfs_por_cliente(): em vez de depender de
+# Funcionário->Locais de trabalho->Cliente (sujeito a Local atual em vez do
+# Local da competência, e sem filtro de mês — ver achados da auditoria de
+# 2026-07-21), lê diretamente a tabela "Outros documentos", que já guarda o
+# vínculo correto e definitivo com o Envio de Documentos (setado no momento
+# em que o recibo foi fatiado e classificado), sem nenhuma resolução de
+# Funcionário/Local/Cliente em tempo de leitura.
+
+TABLE_OUTROS_DOCS = 'tblanxELlj11HjJEV'
+F_OD_DOCUMENTO = 'Documento'
+F_OD_PDF = 'PDF ARQUIVO'
+F_OD_ENVIO = 'Envios de Documentos 2'
+
+
+def _outros_documentos_por_envio(competencia_substr):
+    """Somente leitura. Lê 'Outros documentos' e agrupa por Envio de
+    Documentos vinculado, exigindo PDF anexado + vínculo de Envio, e
+    filtrando pela substring de competência no nome do 'Documento' (ex.:
+    'Junho 2026'). Não usa Funcionário/Local/Cliente em nenhum momento —
+    o Envio já vem pronto no próprio registro.
+
+    Retorna (por_envio, rejeitados):
+      por_envio:  {envio_id: [{'filename','url','documento','source_record_id'}]}
+      rejeitados: [{'record_id','documento','motivo'}]
+    """
+    registros = _at_listar_todos(TABLE_OUTROS_DOCS, [
+        F_OD_DOCUMENTO, F_OD_PDF, F_OD_ENVIO,
+    ])
+    por_envio = {}
+    rejeitados = []
+    for rec in registros:
+        f = rec['fields']
+        doc_nome = f.get(F_OD_DOCUMENTO, '') or ''
+        if competencia_substr not in doc_nome:
+            continue  # fora do escopo desta competência — não é rejeição, é filtro normal
+        pdf = f.get(F_OD_PDF) or []
+        envio_links = f.get(F_OD_ENVIO) or []
+        motivo = None
+        if not pdf:
+            motivo = 'sem_pdf_anexado'
+        elif not envio_links:
+            motivo = 'sem_envio_vinculado'
+        if motivo:
+            rejeitados.append({'record_id': rec['id'], 'documento': doc_nome, 'motivo': motivo})
+            continue
+        envio_id = envio_links[0]['id'] if isinstance(envio_links[0], dict) else envio_links[0]
+        att = pdf[0]
+        por_envio.setdefault(envio_id, []).append({
+            'filename': att.get('filename'),
+            'url': att.get('url'),
+            'documento': doc_nome,
+            'source_record_id': rec['id'],
+        })
+    return por_envio, rejeitados
+
+
+def _dry_run_outros_documentos_para_envios(competencia_substr):
+    """Somente leitura. Simula o que _aplicar_outros_documentos_no_envio()
+    faria para CADA Envio afetado, sem escrever nada. Para cada envio_id em
+    por_envio, lê o campo 'Arquivos' atual do Envio e calcula quais dos
+    novos anexos seriam de fato adicionados (dedup por (filename, url))."""
+    por_envio, rejeitados = _outros_documentos_por_envio(competencia_substr)
+    if not por_envio:
+        return {'envios': [], 'rejeitados': rejeitados}
+
+    envio_ids = list(por_envio.keys())
+    envios_atuais = {}
+    for envio_id in envio_ids:
+        _at_throttle()
+        r = requests.get(
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ENVIOS}/{envio_id}',
+            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            timeout=30,
+        )
+        r.raise_for_status()
+        envios_atuais[envio_id] = r.json().get('fields', {})
+
+    resultado = []
+    for envio_id, novos in por_envio.items():
+        atuais = envios_atuais.get(envio_id, {})
+        arquivos_existentes = atuais.get('Arquivos') or []
+        chaves_existentes = {(a.get('filename'), a.get('url')) for a in arquivos_existentes}
+        a_adicionar = []
+        duplicados_evitados = []
+        for n in novos:
+            chave = (n['filename'], n['url'])
+            if chave in chaves_existentes:
+                duplicados_evitados.append(n['filename'])
+            else:
+                a_adicionar.append(n)
+                chaves_existentes.add(chave)
+        cliente_nomes = [c.get('name') if isinstance(c, dict) else c
+                         for c in (atuais.get('Cliente') or [])]
+        resultado.append({
+            'envio_id': envio_id,
+            'envio_nome': atuais.get('Name'),
+            'cliente': cliente_nomes,
+            'status_atual': atuais.get('Status'),
+            'qtd_recibos_novos': len(novos),
+            'qtd_a_adicionar': len(a_adicionar),
+            'filenames_a_adicionar': [n['filename'] for n in a_adicionar],
+            'qtd_ja_existentes_no_envio': len(arquivos_existentes),
+            'duplicados_evitados': duplicados_evitados,
+        })
+    return {'envios': resultado, 'rejeitados': rejeitados}
+
+
+def _aplicar_outros_documentos_no_envio(envio_id, competencia_substr):
+    """ESCREVE. Aplica, para UM único envio_id, os recibos de
+    'Outros documentos' filtrados por competência — preserva os anexos já
+    existentes em 'Arquivos' e só adiciona os que não estão lá (dedup por
+    filename+url). Não toca em nenhum outro campo do Envio."""
+    por_envio, rejeitados = _outros_documentos_por_envio(competencia_substr)
+    novos = por_envio.get(envio_id, [])
+    if not novos:
+        return {'envio_id': envio_id, 'status': 'nada_a_fazer', 'rejeitados': rejeitados}
+
+    _at_throttle()
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ENVIOS}/{envio_id}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        timeout=30,
+    )
+    r.raise_for_status()
+    arquivos_existentes = r.json().get('fields', {}).get('Arquivos') or []
+    chaves_existentes = {(a.get('filename'), a.get('url')) for a in arquivos_existentes}
+
+    a_adicionar = [n for n in novos if (n['filename'], n['url']) not in chaves_existentes]
+    if not a_adicionar:
+        return {'envio_id': envio_id, 'status': 'sem_novidade_apos_dedup', 'rejeitados': rejeitados}
+
+    novo_valor = (
+        [{'id': a['id']} for a in arquivos_existentes]
+        + [{'url': n['url'], 'filename': n['filename']} for n in a_adicionar]
+    )
+    _at_throttle()
+    r2 = requests.patch(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ENVIOS}/{envio_id}',
+        headers=_at_headers(),
+        json={'fields': {'Arquivos': novo_valor}, 'typecast': True},
+        timeout=30,
+    )
+    _raise_for_airtable(r2, f'aplicar outros documentos no envio {envio_id}')
+    return {
+        'envio_id': envio_id,
+        'status': 'aplicado',
+        'adicionados': [a['filename'] for a in a_adicionar],
+        'total_apos': len(novo_valor),
+        'rejeitados': rejeitados,
+    }
+
+
 def _formatar_protocolo(linhas):
     """Monta o texto do Protocolo de Entrega para o corpo do e-mail."""
     if not linhas:
