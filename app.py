@@ -8026,7 +8026,7 @@ def _outros_documentos_por_envio(competencia_substr):
     o Envio já vem pronto no próprio registro.
 
     Retorna (por_envio, rejeitados):
-      por_envio:  {envio_id: [{'filename','url','documento','source_record_id'}]}
+      por_envio:  {envio_id: [{'filename','url','size','documento','source_record_id'}]}
       rejeitados: [{'record_id','documento','motivo'}]
     """
     registros = _at_listar_todos(TABLE_OUTROS_DOCS, [
@@ -8054,17 +8054,70 @@ def _outros_documentos_por_envio(competencia_substr):
         por_envio.setdefault(envio_id, []).append({
             'filename': att.get('filename'),
             'url': att.get('url'),
+            'size': att.get('size'),
             'documento': doc_nome,
             'source_record_id': rec['id'],
         })
     return por_envio, rejeitados
 
 
+def _normalizar_filename(nome):
+    """Normaliza um nome de arquivo para comparação (espaços nas pontas +
+    caixa). Não mexe em acentuação — os nomes já vêm consistentes de quem
+    gera o PDF."""
+    return (nome or '').strip().casefold()
+
+
+def _classificar_novos_vs_existentes(arquivos_existentes, candidatos):
+    """Decide o que fazer com cada candidato comparado aos anexos já
+    presentes em 'Arquivos' — SEM usar a URL como parte da chave (URLs de
+    anexo do Airtable são assinadas e mudam a cada leitura; usá-las em
+    dedup falha silenciosamente e causa duplicação real — foi o que
+    aconteceu com Teodolino/João Batista na Unimed em 2026-07-21).
+
+    Chave de dedup: filename normalizado. Quando o nome já existe,
+    confirma que é de fato o MESMO arquivo comparando o tamanho (bytes) —
+    campo estável, presente tanto no anexo já hospedado quanto no
+    candidato. Nome igual + tamanho igual = duplicata real (não
+    adiciona). Nome igual + tamanho diferente = conflito real (não
+    adiciona, registra para revisão manual).
+
+    Retorna (a_adicionar, ja_existentes, conflitos) — três listas de
+    candidatos.
+    """
+    existentes_por_nome = {}
+    for a in arquivos_existentes:
+        chave = _normalizar_filename(a.get('filename'))
+        existentes_por_nome.setdefault(chave, []).append(a)
+
+    a_adicionar, ja_existentes, conflitos = [], [], []
+    vistos_nesta_rodada = set()
+    for c in candidatos:
+        chave = _normalizar_filename(c['filename'])
+        if chave in vistos_nesta_rodada:
+            conflitos.append({**c, 'motivo': 'duplicado_dentro_dos_proprios_candidatos'})
+            continue
+        vistos_nesta_rodada.add(chave)
+        existentes_mesmo_nome = existentes_por_nome.get(chave)
+        if not existentes_mesmo_nome:
+            a_adicionar.append(c)
+            continue
+        tamanho_bate = any(
+            e.get('size') is not None and e.get('size') == c.get('size')
+            for e in existentes_mesmo_nome
+        )
+        if tamanho_bate:
+            ja_existentes.append(c)
+        else:
+            conflitos.append({**c, 'motivo': 'mesmo_nome_tamanho_diferente'})
+    return a_adicionar, ja_existentes, conflitos
+
+
 def _dry_run_outros_documentos_para_envios(competencia_substr):
     """Somente leitura. Simula o que _aplicar_outros_documentos_no_envio()
-    faria para CADA Envio afetado, sem escrever nada. Para cada envio_id em
-    por_envio, lê o campo 'Arquivos' atual do Envio e calcula quais dos
-    novos anexos seriam de fato adicionados (dedup por (filename, url))."""
+    faria para CADA Envio afetado, sem escrever nada. Dedup por filename
+    normalizado + tamanho (ver _classificar_novos_vs_existentes) — não usa
+    URL como chave."""
     por_envio, rejeitados = _outros_documentos_por_envio(competencia_substr)
     if not por_envio:
         return {'envios': [], 'rejeitados': rejeitados}
@@ -8085,16 +8138,8 @@ def _dry_run_outros_documentos_para_envios(competencia_substr):
     for envio_id, novos in por_envio.items():
         atuais = envios_atuais.get(envio_id, {})
         arquivos_existentes = atuais.get('Arquivos') or []
-        chaves_existentes = {(a.get('filename'), a.get('url')) for a in arquivos_existentes}
-        a_adicionar = []
-        duplicados_evitados = []
-        for n in novos:
-            chave = (n['filename'], n['url'])
-            if chave in chaves_existentes:
-                duplicados_evitados.append(n['filename'])
-            else:
-                a_adicionar.append(n)
-                chaves_existentes.add(chave)
+        a_adicionar, ja_existentes, conflitos = _classificar_novos_vs_existentes(
+            arquivos_existentes, novos)
         cliente_nomes = [c.get('name') if isinstance(c, dict) else c
                          for c in (atuais.get('Cliente') or [])]
         resultado.append({
@@ -8106,7 +8151,8 @@ def _dry_run_outros_documentos_para_envios(competencia_substr):
             'qtd_a_adicionar': len(a_adicionar),
             'filenames_a_adicionar': [n['filename'] for n in a_adicionar],
             'qtd_ja_existentes_no_envio': len(arquivos_existentes),
-            'duplicados_evitados': duplicados_evitados,
+            'duplicados_evitados': [n['filename'] for n in ja_existentes],
+            'conflitos': conflitos,
         })
     return {'envios': resultado, 'rejeitados': rejeitados}
 
@@ -8114,8 +8160,10 @@ def _dry_run_outros_documentos_para_envios(competencia_substr):
 def _aplicar_outros_documentos_no_envio(envio_id, competencia_substr):
     """ESCREVE. Aplica, para UM único envio_id, os recibos de
     'Outros documentos' filtrados por competência — preserva os anexos já
-    existentes em 'Arquivos' e só adiciona os que não estão lá (dedup por
-    filename+url). Não toca em nenhum outro campo do Envio."""
+    existentes em 'Arquivos' e só adiciona os que não estão lá. Dedup por
+    filename normalizado + tamanho (ver _classificar_novos_vs_existentes),
+    NÃO por URL. Se houver conflito real (mesmo nome, tamanho diferente),
+    NÃO escreve nada neste Envio e retorna o conflito para revisão manual."""
     por_envio, rejeitados = _outros_documentos_por_envio(competencia_substr)
     novos = por_envio.get(envio_id, [])
     if not novos:
@@ -8129,11 +8177,21 @@ def _aplicar_outros_documentos_no_envio(envio_id, competencia_substr):
     )
     r.raise_for_status()
     arquivos_existentes = r.json().get('fields', {}).get('Arquivos') or []
-    chaves_existentes = {(a.get('filename'), a.get('url')) for a in arquivos_existentes}
 
-    a_adicionar = [n for n in novos if (n['filename'], n['url']) not in chaves_existentes]
+    a_adicionar, ja_existentes, conflitos = _classificar_novos_vs_existentes(
+        arquivos_existentes, novos)
+
+    if conflitos:
+        return {
+            'envio_id': envio_id, 'status': 'conflito_nao_aplicado',
+            'conflitos': conflitos, 'rejeitados': rejeitados,
+        }
     if not a_adicionar:
-        return {'envio_id': envio_id, 'status': 'sem_novidade_apos_dedup', 'rejeitados': rejeitados}
+        return {
+            'envio_id': envio_id, 'status': 'sem_novidade_apos_dedup',
+            'duplicados_evitados': [n['filename'] for n in ja_existentes],
+            'rejeitados': rejeitados,
+        }
 
     novo_valor = (
         [{'id': a['id']} for a in arquivos_existentes]
@@ -8151,6 +8209,7 @@ def _aplicar_outros_documentos_no_envio(envio_id, competencia_substr):
         'envio_id': envio_id,
         'status': 'aplicado',
         'adicionados': [a['filename'] for a in a_adicionar],
+        'duplicados_evitados': [n['filename'] for n in ja_existentes],
         'total_apos': len(novo_valor),
         'rejeitados': rejeitados,
     }
