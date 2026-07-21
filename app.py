@@ -2772,13 +2772,12 @@ def _montar_e_disparar_kit_admissao(ctx: dict, func_id: str, dry_run: bool,
     try:
         _at_throttle()
         r_arquivo_novo = requests.post(
-            f'https://api.airtable.com/v0/{BASE_ID}/tblbgJqXh0u1Cjq1s',
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ARQUIVOS}',  # ✅ corrigido: tblbgJqXh0u1Cjq1s não existe na base
             headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'} ,
             json={
                 'fields': {
-                    'fldFJg4pppjBq8I7x': nome_kit,  # F_ARQ_NOME
-                    'fldxbZwVNa01pchqF': [func_id],  # F_ARQ_FUNC (link)
-                    'fldUJWz9c7GyM3JLq': [{  # F_ARQ_ATTACH — deve já ter sido criado acima
+                    F_ARQ_NOME: nome_kit,
+                    F_ARQ_ATTACH: [{  # deve já ter sido criado acima
                         'url': '',  # Será atualizado
                         'filename': nome_kit,
                     }],
@@ -4551,13 +4550,12 @@ def _processar_folha_ponto_arquivo(caminho_pdf, folha_mensal, disparar_assinatur
                             try:
                                 _at_throttle()
                                 r_arquivo = requests.post(
-                                    f'https://api.airtable.com/v0/{BASE_ID}/tblbgJqXh0u1Cjq1s',
+                                    f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ARQUIVOS}',  # ✅ corrigido: tblbgJqXh0u1Cjq1s não existe na base
                                     headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
                                     json={
                                         'fields': {
-                                            'fldFJg4pppjBq8I7x': filename,  # F_ARQ_NOME
-                                            'fldxbZwVNa01pchqF': [func_id],  # F_ARQ_FUNC (link)
-                                            'fldUJWz9c7GyM3JLq': [{'url': anexo_url, 'filename': filename}],  # F_ARQ_ATTACH
+                                            F_ARQ_NOME: filename,
+                                            F_ARQ_ATTACH: [{'url': anexo_url, 'filename': filename}],
                                         }
                                     },
                                     timeout=15,
@@ -9016,7 +9014,7 @@ def _gerar_assinatura_core(funcionario_id, tipo_documento, arquivo_record_id=Non
             # Buscar arquivo no Airtable
             _at_throttle()
             r_arquivo = requests.get(
-                f'https://api.airtable.com/v0/{BASE_ID}/tblbgJqXh0u1Cjq1s/{arquivo_record_id}',  # TABLE_ARQUIVOS
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ARQUIVOS}/{arquivo_record_id}',  # ✅ corrigido: tblbgJqXh0u1Cjq1s não existe na base
                 headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
                 params={'returnFieldsByFieldId': 'true'},
                 timeout=15,
