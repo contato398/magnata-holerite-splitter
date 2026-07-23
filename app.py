@@ -69,6 +69,9 @@ app.register_blueprint(sync_bp)
 from src.ingestao_secullum import ingestao_bp
 app.register_blueprint(ingestao_bp)
 
+# ── Módulo 01 (Ingestão) — Fase 0: observabilidade, sem efeito operacional ──────
+from src.observability import observar_ingestao
+
 @app.after_request
 def _add_cors(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
@@ -3876,6 +3879,7 @@ def _enfileirar_processamento(record_id: str, pdf_hash: str, pdf_url: str | None
 
 
 @app.route('/separar', methods=['POST'])
+@observar_ingestao('/separar')
 def separar():
     """
     Versão ASSÍNCRONA do /separar (v4.0) — SEM dependência de /tmp.
