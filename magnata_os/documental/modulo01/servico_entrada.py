@@ -14,10 +14,18 @@ Principios aplicados (Manifesto):
     repositorio.RepositorioDocumentosEmMemoria.salvar_se_ausente_por_hash).
   - Auditoria: toda transicao de estado gera um EventoHistorico.
   - Consistencia: o Documento NUNCA e removido depois de criado. Se o
-    registro do historico falhar, o Documento permanece persistido,
-    marcado com status ERRO -- nunca apagado, nunca "como se nao tivesse
-    acontecido". Um EventoHistorico nunca aponta para um documento_id
-    que deixou de existir, porque nada remove Documento nesta fase.
+    registro do historico falhar, o Documento permanece persistido --
+    nunca apagado, nunca "como se nao tivesse acontecido". Um
+    EventoHistorico nunca aponta para um documento_id que deixou de
+    existir, porque nada remove Documento nesta fase.
+      - Falha ao registrar DOCUMENTO_RECEBIDO ou DOCUMENTO_REGISTRADO
+        (falha no proprio registro do Documento): o Documento e marcado
+        ERRO.
+      - Falha ao registrar TENTATIVA_DUPLICADA (falha na AUDITORIA de
+        um reenvio de conteudo ja registrado, nao no Documento em si):
+        o Documento existente NAO e alterado de forma alguma -- nem
+        status, nem atualizado_em, nem nenhum outro campo. Uma falha ao
+        auditar uma duplicidade nunca degrada um Documento ja valido.
 """
 from __future__ import annotations
 
@@ -92,12 +100,13 @@ class ServicoEntradaDocumental:
         simultaneas para o mesmo conteudo.
 
         Se o registro de QUALQUER evento no historico falhar, o
-        Documento correspondente NAO e removido -- fica persistido,
-        transicionado para status ERRO (quando essa transicao for
-        valida a partir do status atual), e um evento
-        FALHA_REGISTRO_HISTORICO e registrado quando possivel. A
-        excecao sempre propaga como FalhaPersistencia, preservando a
-        causa original.
+        Documento correspondente NAO e removido -- fica persistido, e
+        um evento FALHA_REGISTRO_HISTORICO e registrado quando
+        possivel. Falha em DOCUMENTO_RECEBIDO/DOCUMENTO_REGISTRADO marca
+        o Documento como ERRO; falha em TENTATIVA_DUPLICADA (auditoria
+        de um reenvio, nao do Documento em si) NUNCA altera o Documento
+        existente. A excecao sempre propaga como FalhaPersistencia,
+        preservando a causa original.
         """
         if not conteudo:
             raise ArquivoAusente(
@@ -151,7 +160,7 @@ class ServicoEntradaDocumental:
                     },
                 ))
             except Exception as exc:
-                self._tratar_falha_historico(documento, 'TENTATIVA_DUPLICADA', exc, correlation_id, agora)
+                self._tratar_falha_auditoria_duplicada(documento, exc, correlation_id, agora)
             return documento
 
         # Documento novo. A partir daqui, qualquer falha de historico NAO
@@ -251,4 +260,54 @@ class ServicoEntradaDocumental:
 
         raise FalhaPersistencia(
             f'Falha ao registrar {evento_que_falhou} (documento_id={documento_final.documento_id}): {causa}'
+        ) from causa
+
+    def _tratar_falha_auditoria_duplicada(
+        self, documento_existente: Documento, causa: Exception,
+        correlation_id: str, agora: datetime,
+    ) -> None:
+        """
+        Reacao especifica a uma falha ao registrar TENTATIVA_DUPLICADA
+        (falha na AUDITORIA de uma tentativa de reenvio de conteudo ja
+        registrado -- nao uma falha no registro do proprio Documento).
+
+        O Documento existente e o unico dado valido e ja confirmado
+        desta operacao -- a falha e so em registrar que alguem tentou
+        reenviar o mesmo conteudo. Por isso, ao contrario de
+        _tratar_falha_historico:
+          - o status do Documento existente NUNCA muda (nunca vai para
+            ERRO por causa de uma falha de auditoria de duplicidade);
+          - nenhum campo do Documento e tocado, incluindo
+            atualizado_em -- self._documentos.salvar() nunca e chamado
+            aqui.
+
+        Ainda assim tenta registrar FALHA_REGISTRO_HISTORICO (best
+        effort, deixando explicito no detalhe que a falha ocorreu numa
+        tentativa duplicada) e sempre levanta FalhaPersistencia
+        preservando a causa original -- este metodo nunca retorna
+        normalmente.
+        """
+        try:
+            self._historico.registrar(EventoHistorico(
+                documento_id=documento_existente.documento_id,
+                evento='FALHA_REGISTRO_HISTORICO',
+                status_anterior=documento_existente.status,
+                status_novo=documento_existente.status,
+                timestamp=agora,
+                correlation_id=correlation_id,
+                detalhes={
+                    'evento_que_falhou': 'TENTATIVA_DUPLICADA',
+                    'contexto': 'falha_auditoria_de_duplicidade',
+                    'causa': str(causa),
+                },
+            ))
+        except Exception:
+            # "Quando possivel": se o proprio historico esta
+            # indisponivel, nao ha como registrar isso nele. Nao mascara
+            # nem substitui o erro original.
+            pass
+
+        raise FalhaPersistencia(
+            f'Falha ao registrar auditoria de tentativa duplicada '
+            f'(documento_id={documento_existente.documento_id}): {causa}'
         ) from causa

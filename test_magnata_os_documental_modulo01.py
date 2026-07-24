@@ -335,31 +335,100 @@ def test_falha_no_segundo_evento_historico_mantem_documento_marcado_erro():
     assert eventos[1].detalhes['evento_que_falhou'] == 'DOCUMENTO_REGISTRADO'
 
 
-def test_falha_no_terceiro_evento_historico_marca_documento_original_como_erro():
-    """3o evento = TENTATIVA_DUPLICADA, numa segunda chamada com o mesmo
-    conteudo, apos a primeira ja ter sido concluida com sucesso (2
-    eventos). O documento original permanece o mesmo (mesmo
-    documento_id), mas passa a ERRO por causa da falha ao registrar a
-    tentativa duplicada -- nao e removido nem duplicado."""
+# ------------- falha na auditoria de TENTATIVA_DUPLICADA (caso especial) --
+# Ao contrario da falha em DOCUMENTO_RECEBIDO/DOCUMENTO_REGISTRADO, uma
+# falha ao registrar TENTATIVA_DUPLICADA e falha em AUDITAR um reenvio,
+# nao no Documento em si -- o Documento existente e valido e ja
+# confirmado, e nunca deve ser degradado por causa disso.
+
+def test_falha_em_tentativa_duplicada_documento_registrado_continua_registrado():
+    """1: Documento REGISTRADO + falha em TENTATIVA_DUPLICADA -> continua
+    REGISTRADO (nunca vai para ERRO)."""
     repo_docs = RepositorioDocumentosEmMemoria()
     repo_hist = _HistoricoComFalhaControlada(falhar_na_chamada=3)
     servico = ServicoEntradaDocumental(repo_docs, repo_hist)
 
-    original = servico.registrar_entrada(b'conteudo falha 3', 'z1.pdf', 'application/pdf', 'upload_manual')
+    original = servico.registrar_entrada(b'conteudo falha dup', 'z1.pdf', 'application/pdf', 'upload_manual')
+    assert original.status == StatusDocumento.REGISTRADO
 
     with pytest.raises(FalhaPersistencia):
-        servico.registrar_entrada(b'conteudo falha 3', 'z2.pdf', 'application/pdf', 'upload_manual')
+        servico.registrar_entrada(b'conteudo falha dup', 'z2.pdf', 'application/pdf', 'upload_manual')
 
     documentos = repo_docs.listar_todos()
     assert len(documentos) == 1  # nenhum documento novo criado, nenhum removido
     assert documentos[0].documento_id == original.documento_id
-    assert documentos[0].status == StatusDocumento.ERRO
+    assert documentos[0].status == StatusDocumento.REGISTRADO  # NAO foi para ERRO
+
+
+def test_falha_em_tentativa_duplicada_nao_altera_nenhum_campo_do_documento():
+    """2: campos do Documento permanecem inalterados, inclusive
+    atualizado_em -- self._documentos.salvar() nunca e chamado neste
+    caminho de falha."""
+    repo_docs = RepositorioDocumentosEmMemoria()
+    repo_hist = _HistoricoComFalhaControlada(falhar_na_chamada=3)
+    servico = ServicoEntradaDocumental(repo_docs, repo_hist)
+
+    original = servico.registrar_entrada(b'conteudo falha dup campos', 'w1.pdf', 'application/pdf', 'upload_manual')
+
+    with pytest.raises(FalhaPersistencia):
+        servico.registrar_entrada(
+            b'conteudo falha dup campos', 'w2.pdf', 'application/pdf', 'outra_origem_tentativa',
+        )
+
+    documento_apos = repo_docs.buscar_por_id(original.documento_id)
+    assert documento_apos == original  # identico em todos os campos, inclusive atualizado_em
+
+
+def test_falha_em_tentativa_duplicada_levanta_falha_persistencia():
+    """3: FalhaPersistencia e levantada, com a causa original preservada."""
+    repo_docs = RepositorioDocumentosEmMemoria()
+    repo_hist = _HistoricoComFalhaControlada(falhar_na_chamada=3)
+    servico = ServicoEntradaDocumental(repo_docs, repo_hist)
+
+    servico.registrar_entrada(b'conteudo falha dup excecao', 'v1.pdf', 'application/pdf', 'upload_manual')
+
+    with pytest.raises(FalhaPersistencia) as exc_info:
+        servico.registrar_entrada(b'conteudo falha dup excecao', 'v2.pdf', 'application/pdf', 'upload_manual')
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert 'falha simulada' in str(exc_info.value.__cause__)
+
+
+def test_falha_em_tentativa_duplicada_registra_falha_registro_historico_com_contexto():
+    """FALHA_REGISTRO_HISTORICO e registrado em best-effort, informando
+    que a falha ocorreu numa tentativa duplicada."""
+    repo_docs = RepositorioDocumentosEmMemoria()
+    repo_hist = _HistoricoComFalhaControlada(falhar_na_chamada=3)
+    servico = ServicoEntradaDocumental(repo_docs, repo_hist)
+
+    original = servico.registrar_entrada(b'conteudo falha dup evento', 'u1.pdf', 'application/pdf', 'upload_manual')
+
+    with pytest.raises(FalhaPersistencia):
+        servico.registrar_entrada(b'conteudo falha dup evento', 'u2.pdf', 'application/pdf', 'upload_manual')
 
     eventos = repo_hist.listar_todos()
     assert [e.evento for e in eventos] == [
         'DOCUMENTO_RECEBIDO', 'DOCUMENTO_REGISTRADO', 'FALHA_REGISTRO_HISTORICO',
     ]
-    assert eventos[-1].detalhes['evento_que_falhou'] == 'TENTATIVA_DUPLICADA'
+    evento_falha = eventos[-1]
+    assert evento_falha.documento_id == original.documento_id
+    assert evento_falha.detalhes['evento_que_falhou'] == 'TENTATIVA_DUPLICADA'
+    assert evento_falha.detalhes['contexto'] == 'falha_auditoria_de_duplicidade'
+    assert evento_falha.status_anterior == StatusDocumento.REGISTRADO
+    assert evento_falha.status_novo == StatusDocumento.REGISTRADO  # nao mudou
+
+
+def test_falha_em_tentativa_duplicada_nao_gera_eventos_orfaos():
+    """4: nao existem eventos orfaos apos falha na auditoria de duplicidade."""
+    repo_docs = RepositorioDocumentosEmMemoria()
+    repo_hist = _HistoricoComFalhaControlada(falhar_na_chamada=3)
+    servico = ServicoEntradaDocumental(repo_docs, repo_hist)
+
+    servico.registrar_entrada(b'conteudo falha dup orfao', 't1.pdf', 'application/pdf', 'upload_manual')
+    with pytest.raises(FalhaPersistencia):
+        servico.registrar_entrada(b'conteudo falha dup orfao', 't2.pdf', 'application/pdf', 'upload_manual')
+
+    _assert_sem_eventos_orfaos(repo_docs, repo_hist)
 
 
 def test_falha_de_historico_preserva_correlation_id_da_tentativa():
