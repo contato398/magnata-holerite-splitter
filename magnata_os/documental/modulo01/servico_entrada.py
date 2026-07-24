@@ -13,10 +13,11 @@ Principios aplicados (Manifesto):
     chamadas concorrentes (atomicidade delegada ao repositorio, ver
     repositorio.RepositorioDocumentosEmMemoria.salvar_se_ausente_por_hash).
   - Auditoria: toda transicao de estado gera um EventoHistorico.
-  - Consistencia: a criacao do Documento e seus 2 primeiros eventos
-    (DOCUMENTO_RECEBIDO, DOCUMENTO_REGISTRADO) formam uma unica unidade
-    logica -- se qualquer parte falhar depois da criacao, o Documento
-    criado e removido (rollback explicito) antes de propagar o erro.
+  - Consistencia: o Documento NUNCA e removido depois de criado. Se o
+    registro do historico falhar, o Documento permanece persistido,
+    marcado com status ERRO -- nunca apagado, nunca "como se nao tivesse
+    acontecido". Um EventoHistorico nunca aponta para um documento_id
+    que deixou de existir, porque nada remove Documento nesta fase.
 """
 from __future__ import annotations
 
@@ -89,6 +90,14 @@ class ServicoEntradaDocumental:
         existe) e atomica no repositorio -- nunca cria um segundo
         Documento para o mesmo hash SHA-256, mesmo com chamadas
         simultaneas para o mesmo conteudo.
+
+        Se o registro de QUALQUER evento no historico falhar, o
+        Documento correspondente NAO e removido -- fica persistido,
+        transicionado para status ERRO (quando essa transicao for
+        valida a partir do status atual), e um evento
+        FALHA_REGISTRO_HISTORICO e registrado quando possivel. A
+        excecao sempre propaga como FalhaPersistencia, preservando a
+        causa original.
         """
         if not conteudo:
             raise ArquivoAusente(
@@ -142,17 +151,11 @@ class ServicoEntradaDocumental:
                     },
                 ))
             except Exception as exc:
-                raise FalhaPersistencia(
-                    f'Falha ao registrar tentativa duplicada (documento_id={documento.documento_id}): {exc}'
-                ) from exc
+                self._tratar_falha_historico(documento, 'TENTATIVA_DUPLICADA', exc, correlation_id, agora)
             return documento
 
-        # Criacao + eventos formam uma unica unidade logica a partir
-        # daqui: qualquer falha desfaz a criacao (remove o Documento)
-        # antes de propagar FalhaPersistencia. O EventoHistorico que ja
-        # tiver sido gravado com sucesso ANTES da falha permanece --
-        # historico e append-only, nunca apagado, mesmo em rollback (ver
-        # MAGNATA_OS_ESTADOS.md).
+        # Documento novo. A partir daqui, qualquer falha de historico NAO
+        # remove o Documento -- ele fica persistido, marcado ERRO.
         try:
             self._historico.registrar(EventoHistorico(
                 documento_id=documento.documento_id,
@@ -168,10 +171,18 @@ class ServicoEntradaDocumental:
                     'metadados': dict(metadados or {}),
                 },
             ))
+        except Exception as exc:
+            self._tratar_falha_historico(documento, 'DOCUMENTO_RECEBIDO', exc, correlation_id, agora)
 
+        try:
             documento_registrado = transicionar_status(documento, StatusDocumento.REGISTRADO, agora)
             self._documentos.salvar(documento_registrado)
+        except Exception as exc:
+            raise FalhaPersistencia(
+                f'Falha ao transicionar para REGISTRADO (documento_id={documento.documento_id}): {exc}'
+            ) from exc
 
+        try:
             self._historico.registrar(EventoHistorico(
                 documento_id=documento_registrado.documento_id,
                 evento='DOCUMENTO_REGISTRADO',
@@ -182,11 +193,7 @@ class ServicoEntradaDocumental:
                 detalhes={},
             ))
         except Exception as exc:
-            self._documentos.remover(documento.documento_id)
-            raise FalhaPersistencia(
-                f'Falha ao registrar entrada, rollback aplicado '
-                f'(documento_id={documento.documento_id}): {exc}'
-            ) from exc
+            self._tratar_falha_historico(documento_registrado, 'DOCUMENTO_REGISTRADO', exc, correlation_id, agora)
 
         return documento_registrado
 
@@ -197,3 +204,51 @@ class ServicoEntradaDocumental:
         if not hash_valido(hash_sha256):
             raise HashInvalido(f'hash_sha256 invalido: {hash_sha256!r}')
         return self._documentos.buscar_por_hash(hash_sha256.strip().lower())
+
+    def _tratar_falha_historico(
+        self, documento_afetado: Documento, evento_que_falhou: str,
+        causa: Exception, correlation_id: str, agora: datetime,
+    ) -> None:
+        """
+        Reacao padrao a uma falha em historico.registrar(): o Documento
+        NUNCA e removido. Tenta marca-lo como ERRO (persistindo essa
+        transicao) e, se possivel, registra um evento
+        FALHA_REGISTRO_HISTORICO com a causa original. Sempre levanta
+        FalhaPersistencia ao final, preservando a causa original -- este
+        metodo nunca retorna normalmente.
+        """
+        documento_final = documento_afetado
+        try:
+            documento_em_erro = transicionar_status(documento_afetado, StatusDocumento.ERRO, agora)
+            self._documentos.salvar(documento_em_erro)
+            documento_final = documento_em_erro
+        except Exception:
+            # Nao foi possivel marcar ERRO (ex.: transicao invalida a
+            # partir do status atual, ou o proprio repositorio de
+            # documentos tambem esta falhando). O Documento permanece
+            # como estava -- nunca removido, nunca perdido.
+            pass
+
+        try:
+            self._historico.registrar(EventoHistorico(
+                documento_id=documento_final.documento_id,
+                evento='FALHA_REGISTRO_HISTORICO',
+                status_anterior=documento_afetado.status,
+                status_novo=documento_final.status,
+                timestamp=agora,
+                correlation_id=correlation_id,
+                detalhes={
+                    'evento_que_falhou': evento_que_falhou,
+                    'causa': str(causa),
+                },
+            ))
+        except Exception:
+            # "Quando possivel": se o proprio historico esta
+            # indisponivel, nao ha como registrar isso nele. Nao mascara
+            # nem substitui o erro original -- so nao adiciona uma
+            # segunda excecao por cima da primeira.
+            pass
+
+        raise FalhaPersistencia(
+            f'Falha ao registrar {evento_que_falhou} (documento_id={documento_final.documento_id}): {causa}'
+        ) from causa

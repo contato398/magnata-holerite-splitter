@@ -288,9 +288,14 @@ def test_falha_na_criacao_atomica_propaga_como_falha_persistencia():
     assert repo_hist.listar_todos() == []
 
 
-# ------------------------------------------ rollback: 1o, 2o e 3o evento --
+# -------------------------- falha de historico: 1o, 2o e 3o evento --------
+# Comportamento oficial: o Documento NUNCA e removido quando o registro
+# do historico falha. Ele permanece persistido, transicionado para ERRO,
+# e um evento FALHA_REGISTRO_HISTORICO e registrado quando possivel --
+# nunca fica um EventoHistorico apontando para um documento_id inexistente,
+# porque nada remove Documento nesta fase.
 
-def test_falha_no_primeiro_evento_historico_faz_rollback_completo():
+def test_falha_no_primeiro_evento_historico_mantem_documento_marcado_erro():
     """1o evento = DOCUMENTO_RECEBIDO, na criacao de um Documento novo."""
     repo_docs = RepositorioDocumentosEmMemoria()
     repo_hist = _HistoricoComFalhaControlada(falhar_na_chamada=1)
@@ -299,15 +304,21 @@ def test_falha_no_primeiro_evento_historico_faz_rollback_completo():
     with pytest.raises(FalhaPersistencia):
         servico.registrar_entrada(b'conteudo falha 1', 'x.pdf', 'application/pdf', 'upload_manual')
 
-    assert repo_docs.listar_todos() == []  # rollback completo -- nenhum documento orfao
-    assert repo_hist.listar_todos() == []
+    documentos = repo_docs.listar_todos()
+    assert len(documentos) == 1  # documento preservado, nao removido
+    assert documentos[0].status == StatusDocumento.ERRO
+
+    eventos = repo_hist.listar_todos()
+    assert [e.evento for e in eventos] == ['FALHA_REGISTRO_HISTORICO']
+    assert eventos[0].documento_id == documentos[0].documento_id
+    assert eventos[0].detalhes['evento_que_falhou'] == 'DOCUMENTO_RECEBIDO'
+    assert 'falha simulada' in eventos[0].detalhes['causa']
 
 
-def test_falha_no_segundo_evento_historico_faz_rollback_do_documento():
+def test_falha_no_segundo_evento_historico_mantem_documento_marcado_erro():
     """2o evento = DOCUMENTO_REGISTRADO, apos o 1o (DOCUMENTO_RECEBIDO) ja
-    ter tido sucesso. O Documento e removido (rollback), mas o evento que
-    ja havia sido gravado com sucesso permanece -- historico e
-    append-only, nunca apagado, mesmo durante rollback."""
+    ter tido sucesso. O evento bem-sucedido permanece; o Documento e
+    preservado e marcado ERRO."""
     repo_docs = RepositorioDocumentosEmMemoria()
     repo_hist = _HistoricoComFalhaControlada(falhar_na_chamada=2)
     servico = ServicoEntradaDocumental(repo_docs, repo_hist)
@@ -315,16 +326,21 @@ def test_falha_no_segundo_evento_historico_faz_rollback_do_documento():
     with pytest.raises(FalhaPersistencia):
         servico.registrar_entrada(b'conteudo falha 2', 'y.pdf', 'application/pdf', 'upload_manual')
 
-    assert repo_docs.listar_todos() == []  # documento nao fica parcialmente registrado
+    documentos = repo_docs.listar_todos()
+    assert len(documentos) == 1
+    assert documentos[0].status == StatusDocumento.ERRO
+
     eventos = repo_hist.listar_todos()
-    assert len(eventos) == 1
-    assert eventos[0].evento == 'DOCUMENTO_RECEBIDO'  # preservado, nao apagado pelo rollback
+    assert [e.evento for e in eventos] == ['DOCUMENTO_RECEBIDO', 'FALHA_REGISTRO_HISTORICO']
+    assert eventos[1].detalhes['evento_que_falhou'] == 'DOCUMENTO_REGISTRADO'
 
 
-def test_falha_no_terceiro_evento_historico_nao_afeta_documento_original():
+def test_falha_no_terceiro_evento_historico_marca_documento_original_como_erro():
     """3o evento = TENTATIVA_DUPLICADA, numa segunda chamada com o mesmo
     conteudo, apos a primeira ja ter sido concluida com sucesso (2
-    eventos). O documento original nao e tocado pela falha."""
+    eventos). O documento original permanece o mesmo (mesmo
+    documento_id), mas passa a ERRO por causa da falha ao registrar a
+    tentativa duplicada -- nao e removido nem duplicado."""
     repo_docs = RepositorioDocumentosEmMemoria()
     repo_hist = _HistoricoComFalhaControlada(falhar_na_chamada=3)
     servico = ServicoEntradaDocumental(repo_docs, repo_hist)
@@ -334,8 +350,77 @@ def test_falha_no_terceiro_evento_historico_nao_afeta_documento_original():
     with pytest.raises(FalhaPersistencia):
         servico.registrar_entrada(b'conteudo falha 3', 'z2.pdf', 'application/pdf', 'upload_manual')
 
-    assert repo_docs.listar_todos() == [original]
-    assert repo_docs.buscar_por_hash(original.hash_sha256) == original
+    documentos = repo_docs.listar_todos()
+    assert len(documentos) == 1  # nenhum documento novo criado, nenhum removido
+    assert documentos[0].documento_id == original.documento_id
+    assert documentos[0].status == StatusDocumento.ERRO
+
+    eventos = repo_hist.listar_todos()
+    assert [e.evento for e in eventos] == [
+        'DOCUMENTO_RECEBIDO', 'DOCUMENTO_REGISTRADO', 'FALHA_REGISTRO_HISTORICO',
+    ]
+    assert eventos[-1].detalhes['evento_que_falhou'] == 'TENTATIVA_DUPLICADA'
+
+
+def test_falha_de_historico_preserva_correlation_id_da_tentativa():
+    repo_docs = RepositorioDocumentosEmMemoria()
+    repo_hist = _HistoricoComFalhaControlada(falhar_na_chamada=1)
+    servico = ServicoEntradaDocumental(repo_docs, repo_hist)
+
+    with pytest.raises(FalhaPersistencia):
+        servico.registrar_entrada(
+            b'conteudo falha correlation', 'c.pdf', 'application/pdf', 'upload_manual',
+            correlation_id='corr-da-falha-123',
+        )
+
+    eventos = repo_hist.listar_todos()
+    assert eventos[0].correlation_id == 'corr-da-falha-123'
+
+
+def _assert_sem_eventos_orfaos(repo_docs, repo_hist):
+    ids_existentes = {d.documento_id for d in repo_docs.listar_todos()}
+    for evento in repo_hist.listar_todos():
+        assert evento.documento_id in ids_existentes, (
+            f'evento {evento.evento} aponta para documento_id inexistente: {evento.documento_id}'
+        )
+
+
+def test_nenhum_evento_historico_aponta_para_documento_inexistente():
+    """Confirma a invariante em 4 cenarios independentes (sucesso normal,
+    falha no 1o, no 2o e no 3o evento de historico): todo
+    EventoHistorico.documento_id corresponde a um Documento que de fato
+    existe no repositorio -- nunca um evento orfao."""
+    # sucesso normal
+    repo_docs = RepositorioDocumentosEmMemoria()
+    repo_hist = RepositorioHistoricoEmMemoria()
+    servico = ServicoEntradaDocumental(repo_docs, repo_hist)
+    servico.registrar_entrada(b'conteudo orfao sucesso', 'a.pdf', 'application/pdf', 'upload_manual')
+    _assert_sem_eventos_orfaos(repo_docs, repo_hist)
+
+    # falha no 1o evento (DOCUMENTO_RECEBIDO)
+    repo_docs = RepositorioDocumentosEmMemoria()
+    repo_hist = _HistoricoComFalhaControlada(falhar_na_chamada=1)
+    servico = ServicoEntradaDocumental(repo_docs, repo_hist)
+    with pytest.raises(FalhaPersistencia):
+        servico.registrar_entrada(b'conteudo orfao falha1', 'b.pdf', 'application/pdf', 'upload_manual')
+    _assert_sem_eventos_orfaos(repo_docs, repo_hist)
+
+    # falha no 2o evento (DOCUMENTO_REGISTRADO)
+    repo_docs = RepositorioDocumentosEmMemoria()
+    repo_hist = _HistoricoComFalhaControlada(falhar_na_chamada=2)
+    servico = ServicoEntradaDocumental(repo_docs, repo_hist)
+    with pytest.raises(FalhaPersistencia):
+        servico.registrar_entrada(b'conteudo orfao falha2', 'c.pdf', 'application/pdf', 'upload_manual')
+    _assert_sem_eventos_orfaos(repo_docs, repo_hist)
+
+    # falha no 3o evento (TENTATIVA_DUPLICADA, apos 1o registro ok)
+    repo_docs = RepositorioDocumentosEmMemoria()
+    repo_hist = _HistoricoComFalhaControlada(falhar_na_chamada=3)
+    servico = ServicoEntradaDocumental(repo_docs, repo_hist)
+    servico.registrar_entrada(b'conteudo orfao falha3', 'd1.pdf', 'application/pdf', 'upload_manual')
+    with pytest.raises(FalhaPersistencia):
+        servico.registrar_entrada(b'conteudo orfao falha3', 'd2.pdf', 'application/pdf', 'upload_manual')
+    _assert_sem_eventos_orfaos(repo_docs, repo_hist)
 
 
 # ------------------------------------------------------------ correlation_id --
