@@ -55,6 +55,7 @@ from app import (
     BASE_ID,
     TABLE_ENVIOS,
     TABLE_OUTROS_DOCS,
+    TABLE_FUNC,
     F_OD_DOCUMENTO,
     F_OD_ENVIO,
     _at_throttle,
@@ -166,6 +167,36 @@ def _get_registro(table_id, record_id):
     )
 
 
+def _item_funcionario_compativel(item, nome_esperado):
+    """
+    Confere se UM item da lista 'Funcionario(s) Vinculado(s)' do Envio e
+    compativel com nome_esperado. A API do Airtable pode retornar um item
+    de campo de link de duas formas:
+      - objeto {'id': ..., 'name': ...} (quando o nome vem embutido);
+      - string 'recXXXX' (so o ID) -- nesse caso busca o registro do
+        Funcionario e compara pelo record_id (confirma que o registro
+        retornado e o mesmo que foi pedido) e pelo Nome Completo
+        normalizado.
+    """
+    if isinstance(item, dict):
+        nome = item.get('name') or ''
+        return nome.strip().casefold() == nome_esperado.strip().casefold()
+
+    if isinstance(item, str):
+        r_func = _get_registro(TABLE_FUNC, item)
+        if r_func.status_code == 404:
+            return False
+        r_func.raise_for_status()
+        corpo_func = r_func.json()
+        nome = corpo_func.get('fields', {}).get('Nome Completo') or ''
+        return (
+            corpo_func.get('id') == item
+            and nome.strip().casefold() == nome_esperado.strip().casefold()
+        )
+
+    return False
+
+
 def validar_par(record_id, envio_id_esperado):
     """
     Valida UM par sem escrever nada.
@@ -200,14 +231,12 @@ def validar_par(record_id, envio_id_esperado):
     campos_envio = r_envio.json().get('fields', {})
 
     nome_esperado = _extrair_nome_do_documento(campos_od.get(F_OD_DOCUMENTO, ''))
-    nomes_envio = [
-        (f.get('name') if isinstance(f, dict) else None)
-        for f in (campos_envio.get(CAMPO_FUNC_ENVIO) or [])
-    ]
-    if nome_esperado.strip().casefold() not in [(n or '').strip().casefold() for n in nomes_envio]:
+    func_links = campos_envio.get(CAMPO_FUNC_ENVIO) or []
+    compativel = any(_item_funcionario_compativel(item, nome_esperado) for item in func_links)
+    if not compativel:
         return {
             'status': 'divergente', 'motivo': 'funcionario_incompativel',
-            'nome_esperado': nome_esperado, 'nomes_envio': nomes_envio,
+            'nome_esperado': nome_esperado, 'func_links': func_links,
         }
 
     enviado_em = campos_envio.get(CAMPO_ENVIADO_EM) or campos_envio.get(CAMPO_DATA_ENVIO)

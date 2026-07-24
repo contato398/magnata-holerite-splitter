@@ -24,17 +24,29 @@ def _sem_throttle_real():
         yield
 
 
-def _resp(status_code=200, fields=None):
+def _resp(status_code=200, fields=None, record_id=None):
     m = Mock()
     m.status_code = status_code
     m.ok = 200 <= status_code < 300
-    m.json = lambda: {'fields': fields or {}}
+    body = {'fields': fields or {}}
+    if record_id is not None:
+        body['id'] = record_id
+    m.json = lambda: body
     m.text = ''
     if m.ok:
         m.raise_for_status = Mock()
     else:
         m.raise_for_status = Mock(side_effect=requests.exceptions.HTTPError(str(status_code)))
     return m
+
+
+def _campos_envio_com_ids_string(ids, data=vod.DATA_ENVIADO_ESPERADA):
+    """Formato alternativo do campo de link: lista de IDs string, sem
+    objeto {'id','name'} -- o formato real que motivou a correcao."""
+    return {
+        vod.CAMPO_FUNC_ENVIO: list(ids),
+        vod.CAMPO_ENVIADO_EM: f'{data}T00:00:00.000Z',
+    }
 
 
 def _campos_od_vazio(nome):
@@ -129,6 +141,59 @@ def test_validar_par_funcionario_incompativel():
         mock_get.side_effect = [
             _resp(200, _campos_od_vazio('FULANO DE TAL')),
             _resp(200, _campos_envio_ok('OUTRA PESSOA COMPLETAMENTE DIFERENTE')),
+        ]
+        resultado = vod.validar_par('recOD1', 'recEnvio1')
+    assert resultado['status'] == 'divergente'
+    assert resultado['motivo'] == 'funcionario_incompativel'
+
+
+def test_validar_par_funcionario_lista_ids_string_compativel():
+    """Funcionario(s) Vinculado(s) como lista de IDs string (formato real
+    retornado pela API em leitura de registro unico) -- deve buscar o
+    registro do Funcionario e comparar pelo Nome Completo."""
+    campos_envio = _campos_envio_com_ids_string(['recFunc1'])
+    with patch('scripts.vincular_outros_documentos_junho_2026.requests.get') as mock_get:
+        mock_get.side_effect = [
+            _resp(200, _campos_od_vazio('FULANO DE TAL')),
+            _resp(200, campos_envio),
+            _resp(200, {'Nome Completo': 'FULANO DE TAL'}, record_id='recFunc1'),
+        ]
+        resultado = vod.validar_par('recOD1', 'recEnvio1')
+    assert resultado['status'] == 'ok'
+
+
+def test_validar_par_funcionario_lista_ids_string_incompativel():
+    campos_envio = _campos_envio_com_ids_string(['recFunc1'])
+    with patch('scripts.vincular_outros_documentos_junho_2026.requests.get') as mock_get:
+        mock_get.side_effect = [
+            _resp(200, _campos_od_vazio('FULANO DE TAL')),
+            _resp(200, campos_envio),
+            _resp(200, {'Nome Completo': 'PESSOA COMPLETAMENTE DIFERENTE'}, record_id='recFunc1'),
+        ]
+        resultado = vod.validar_par('recOD1', 'recEnvio1')
+    assert resultado['status'] == 'divergente'
+    assert resultado['motivo'] == 'funcionario_incompativel'
+
+
+def test_validar_par_funcionario_objeto_id_name_compativel():
+    """Formato antigo {'id':..., 'name':...} -- precisa continuar
+    funcionando depois da correcao (regressao)."""
+    campos_envio = _campos_envio_ok('FULANO DE TAL')
+    with patch('scripts.vincular_outros_documentos_junho_2026.requests.get') as mock_get:
+        mock_get.side_effect = [
+            _resp(200, _campos_od_vazio('FULANO DE TAL')),
+            _resp(200, campos_envio),
+        ]
+        resultado = vod.validar_par('recOD1', 'recEnvio1')
+    assert resultado['status'] == 'ok'
+
+
+def test_validar_par_funcionario_campo_vazio():
+    campos_envio = _campos_envio_com_ids_string([])
+    with patch('scripts.vincular_outros_documentos_junho_2026.requests.get') as mock_get:
+        mock_get.side_effect = [
+            _resp(200, _campos_od_vazio('FULANO DE TAL')),
+            _resp(200, campos_envio),
         ]
         resultado = vod.validar_par('recOD1', 'recEnvio1')
     assert resultado['status'] == 'divergente'
