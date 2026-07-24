@@ -8,7 +8,20 @@ duplicava os recibos de Joao Batista e Teodolino que ja estavam la.
 A correcao troca a chave para filename normalizado + comparacao de
 tamanho (bytes), que sao estaveis entre leituras.
 """
-from app import _normalizar_filename, _classificar_novos_vs_existentes
+from unittest.mock import patch, Mock
+
+import pytest
+
+from app import (
+    AirtableError,
+    _normalizar_filename,
+    _classificar_novos_vs_existentes,
+    _dry_run_outros_documentos_para_envios,
+    _aplicar_outros_documentos_no_envio,
+    F_OD_DOCUMENTO,
+    F_OD_PDF,
+    F_OD_ENVIO,
+)
 
 
 # Tamanhos reais dos PDFs fatiados nesta rodada (MANIFESTO_FINAL.json)
@@ -122,3 +135,264 @@ def test_mesmo_nome_duplicado_dentro_dos_proprios_candidatos():
     assert len(a_adicionar) == 1
     assert len(conflitos) == 1
     assert conflitos[0]['motivo'] == 'duplicado_dentro_dos_proprios_candidatos'
+
+
+# ============================================================================
+# Testes de _dry_run_outros_documentos_para_envios e
+# _aplicar_outros_documentos_no_envio (integracao manual da PR #4).
+# Nomes de colaboradores nestes testes sao sinteticos ("COLABORADOR X"),
+# nao reproduzem o caso real da Unimed usado nos testes acima.
+# ============================================================================
+
+def _registro_outros_doc(record_id, documento, filename, size, envio_id,
+                          url='https://airtable-attachments/x.pdf'):
+    return {
+        'id': record_id,
+        'fields': {
+            F_OD_DOCUMENTO: documento,
+            F_OD_PDF: [{'filename': filename, 'url': url, 'size': size}],
+            F_OD_ENVIO: [{'id': envio_id}],
+        },
+    }
+
+
+def _registro_outros_doc_sem_pdf(record_id, documento, envio_id):
+    return {
+        'id': record_id,
+        'fields': {
+            F_OD_DOCUMENTO: documento,
+            F_OD_PDF: [],
+            F_OD_ENVIO: [{'id': envio_id}],
+        },
+    }
+
+
+def _registro_outros_doc_sem_envio(record_id, documento, filename, size):
+    return {
+        'id': record_id,
+        'fields': {
+            F_OD_DOCUMENTO: documento,
+            F_OD_PDF: [{'filename': filename, 'url': 'https://x/a.pdf', 'size': size}],
+            F_OD_ENVIO: [],
+        },
+    }
+
+
+def _mock_get_envio(fields_por_envio):
+    """side_effect para requests.get que resolve o envio_id pelo final da URL."""
+    def _fake(url, **kwargs):
+        for envio_id, fields in fields_por_envio.items():
+            if url.endswith(f'/{envio_id}'):
+                return Mock(ok=True, status_code=200,
+                            json=lambda fields=fields: {'fields': fields},
+                            raise_for_status=lambda: None)
+        raise AssertionError(f'GET inesperado para envio nao mapeado: {url}')
+    return _fake
+
+
+def test_dry_run_agrupa_por_envio_e_calcula_quantidade_a_adicionar():
+    registros = [
+        _registro_outros_doc('recOD1', 'Assiduidade Junho 2026 - COLABORADOR UM.pdf',
+                              'Assiduidade Junho 2026 - COLABORADOR UM.pdf', 1000, 'recEnvioA'),
+        _registro_outros_doc('recOD2', 'Assiduidade Junho 2026 - COLABORADOR DOIS.pdf',
+                              'Assiduidade Junho 2026 - COLABORADOR DOIS.pdf', 2000, 'recEnvioB'),
+    ]
+    fields_por_envio = {
+        'recEnvioA': {'Name': 'Envio A', 'Status': 'Pendente', 'Cliente': [], 'Arquivos': []},
+        'recEnvioB': {'Name': 'Envio B', 'Status': 'Pendente', 'Cliente': [], 'Arquivos': []},
+    }
+    with patch('app._at_listar_todos', return_value=registros), \
+         patch('app._at_throttle'), \
+         patch('app.requests.get', side_effect=_mock_get_envio(fields_por_envio)):
+        resultado = _dry_run_outros_documentos_para_envios('Junho 2026')
+
+    assert len(resultado['envios']) == 2
+    assert {e['envio_id'] for e in resultado['envios']} == {'recEnvioA', 'recEnvioB'}
+    for e in resultado['envios']:
+        assert e['qtd_a_adicionar'] == 1
+    assert resultado['rejeitados'] == []
+
+
+def test_dry_run_nunca_faz_patch():
+    registros = [
+        _registro_outros_doc('recOD1', 'Assiduidade Junho 2026 - COLABORADOR UM.pdf',
+                              'Assiduidade Junho 2026 - COLABORADOR UM.pdf', 1000, 'recEnvioA'),
+    ]
+    fields_por_envio = {'recEnvioA': {'Name': 'Envio A', 'Status': 'Pendente', 'Cliente': [], 'Arquivos': []}}
+    with patch('app._at_listar_todos', return_value=registros), \
+         patch('app._at_throttle'), \
+         patch('app.requests.get', side_effect=_mock_get_envio(fields_por_envio)), \
+         patch('app.requests.patch') as mock_patch:
+        _dry_run_outros_documentos_para_envios('Junho 2026')
+
+    mock_patch.assert_not_called()
+
+
+def test_dry_run_retorna_rejeitados_sem_pdf_ou_sem_envio():
+    registros = [
+        _registro_outros_doc_sem_pdf('recOD1', 'Assiduidade Junho 2026 - SEM PDF.pdf', 'recEnvioA'),
+        _registro_outros_doc_sem_envio('recOD2', 'Assiduidade Junho 2026 - SEM ENVIO.pdf',
+                                        'Assiduidade Junho 2026 - SEM ENVIO.pdf', 500),
+    ]
+    with patch('app._at_listar_todos', return_value=registros), \
+         patch('app._at_throttle'), \
+         patch('app.requests.get') as mock_get:
+        resultado = _dry_run_outros_documentos_para_envios('Junho 2026')
+
+    mock_get.assert_not_called()  # nenhum envio valido para consultar
+    assert resultado['envios'] == []
+    assert sorted(r['motivo'] for r in resultado['rejeitados']) == [
+        'sem_envio_vinculado', 'sem_pdf_anexado',
+    ]
+
+
+def test_dry_run_competencia_sem_match_retorna_vazio():
+    registros = [
+        _registro_outros_doc('recOD1', 'Assiduidade Maio 2026 - COLABORADOR UM.pdf',
+                              'Assiduidade Maio 2026 - COLABORADOR UM.pdf', 1000, 'recEnvioA'),
+    ]
+    with patch('app._at_listar_todos', return_value=registros), \
+         patch('app._at_throttle'), \
+         patch('app.requests.get') as mock_get:
+        resultado = _dry_run_outros_documentos_para_envios('Junho 2026')
+
+    mock_get.assert_not_called()
+    assert resultado == {'envios': [], 'rejeitados': []}
+
+
+def test_aplica_preserva_existentes_e_adiciona_somente_novos():
+    registros = [
+        _registro_outros_doc('recOD1', 'Assiduidade Junho 2026 - COLABORADOR NOVO.pdf',
+                              'Assiduidade Junho 2026 - COLABORADOR NOVO.pdf', 1000, 'recEnvioA'),
+    ]
+    envio_fields = {
+        'Arquivos': [{'id': 'attExistente', 'filename': 'Holerite Junho 2026 - OUTRO.pdf', 'size': 900}],
+    }
+    with patch('app._at_listar_todos', return_value=registros), \
+         patch('app._at_throttle'), \
+         patch('app.requests.get', return_value=Mock(ok=True, json=lambda: {'fields': envio_fields},
+                                                       raise_for_status=lambda: None)), \
+         patch('app.requests.patch', return_value=Mock(ok=True, status_code=200, text='{}')) as mock_patch:
+        resultado = _aplicar_outros_documentos_no_envio('recEnvioA', 'Junho 2026')
+
+    assert resultado['status'] == 'aplicado'
+    assert resultado['adicionados'] == ['Assiduidade Junho 2026 - COLABORADOR NOVO.pdf']
+    mock_patch.assert_called_once()
+    payload = mock_patch.call_args.kwargs['json']['fields']['Arquivos']
+    assert {'id': 'attExistente'} in payload
+    assert any(a.get('filename') == 'Assiduidade Junho 2026 - COLABORADOR NOVO.pdf' for a in payload)
+
+
+def test_aplica_nao_duplica_arquivo_ja_existente():
+    registros = [
+        _registro_outros_doc('recOD1', 'Assiduidade Junho 2026 - COLABORADOR UM.pdf',
+                              'Assiduidade Junho 2026 - COLABORADOR UM.pdf', 1000, 'recEnvioA'),
+    ]
+    envio_fields = {
+        'Arquivos': [{'id': 'att1', 'filename': 'Assiduidade Junho 2026 - COLABORADOR UM.pdf', 'size': 1000}],
+    }
+    with patch('app._at_listar_todos', return_value=registros), \
+         patch('app._at_throttle'), \
+         patch('app.requests.get', return_value=Mock(ok=True, json=lambda: {'fields': envio_fields},
+                                                       raise_for_status=lambda: None)), \
+         patch('app.requests.patch') as mock_patch:
+        resultado = _aplicar_outros_documentos_no_envio('recEnvioA', 'Junho 2026')
+
+    assert resultado['status'] == 'sem_novidade_apos_dedup'
+    mock_patch.assert_not_called()
+
+
+def test_aplica_com_conflito_nao_escreve():
+    registros = [
+        _registro_outros_doc('recOD1', 'Assiduidade Junho 2026 - COLABORADOR UM.pdf',
+                              'Assiduidade Junho 2026 - COLABORADOR UM.pdf', 9999, 'recEnvioA'),
+    ]
+    envio_fields = {
+        'Arquivos': [{'id': 'att1', 'filename': 'Assiduidade Junho 2026 - COLABORADOR UM.pdf', 'size': 1000}],
+    }
+    with patch('app._at_listar_todos', return_value=registros), \
+         patch('app._at_throttle'), \
+         patch('app.requests.get', return_value=Mock(ok=True, json=lambda: {'fields': envio_fields},
+                                                       raise_for_status=lambda: None)), \
+         patch('app.requests.patch') as mock_patch:
+        resultado = _aplicar_outros_documentos_no_envio('recEnvioA', 'Junho 2026')
+
+    assert resultado['status'] == 'conflito_nao_aplicado'
+    assert len(resultado['conflitos']) == 1
+    mock_patch.assert_not_called()
+
+
+def test_aplica_sem_novidade_nao_faz_patch():
+    with patch('app._at_listar_todos', return_value=[]), \
+         patch('app._at_throttle'), \
+         patch('app.requests.get') as mock_get, \
+         patch('app.requests.patch') as mock_patch:
+        resultado = _aplicar_outros_documentos_no_envio('recEnvioA', 'Junho 2026')
+
+    assert resultado['status'] == 'nada_a_fazer'
+    mock_get.assert_not_called()
+    mock_patch.assert_not_called()
+
+
+def test_aplica_erro_get_propaga():
+    import requests
+    registros = [
+        _registro_outros_doc('recOD1', 'Assiduidade Junho 2026 - COLABORADOR UM.pdf',
+                              'Assiduidade Junho 2026 - COLABORADOR UM.pdf', 1000, 'recEnvioA'),
+    ]
+    resposta_falha = Mock(ok=False, status_code=500, text='erro interno')
+    resposta_falha.raise_for_status.side_effect = requests.exceptions.HTTPError('500')
+    with patch('app._at_listar_todos', return_value=registros), \
+         patch('app._at_throttle'), \
+         patch('app.requests.get', return_value=resposta_falha), \
+         patch('app.requests.patch') as mock_patch:
+        with pytest.raises(requests.exceptions.HTTPError):
+            _aplicar_outros_documentos_no_envio('recEnvioA', 'Junho 2026')
+
+    mock_patch.assert_not_called()
+
+
+def test_aplica_erro_patch_propaga():
+    registros = [
+        _registro_outros_doc('recOD1', 'Assiduidade Junho 2026 - COLABORADOR UM.pdf',
+                              'Assiduidade Junho 2026 - COLABORADOR UM.pdf', 1000, 'recEnvioA'),
+    ]
+    envio_fields = {'Arquivos': []}
+    resposta_patch_falha = Mock(ok=False, status_code=422,
+                                 text='{"error":{"type":"INVALID","message":"x"}}')
+    with patch('app._at_listar_todos', return_value=registros), \
+         patch('app._at_throttle'), \
+         patch('app.requests.get', return_value=Mock(ok=True, json=lambda: {'fields': envio_fields},
+                                                       raise_for_status=lambda: None)), \
+         patch('app.requests.patch', return_value=resposta_patch_falha):
+        with pytest.raises(AirtableError):
+            _aplicar_outros_documentos_no_envio('recEnvioA', 'Junho 2026')
+
+
+def test_aplica_segunda_execucao_e_idempotente():
+    registros = [
+        _registro_outros_doc('recOD1', 'Assiduidade Junho 2026 - COLABORADOR UM.pdf',
+                              'Assiduidade Junho 2026 - COLABORADOR UM.pdf', 1000, 'recEnvioA'),
+    ]
+    envio_fields_antes = {'Arquivos': []}
+    envio_fields_depois = {
+        'Arquivos': [{'id': 'attNovo', 'filename': 'Assiduidade Junho 2026 - COLABORADOR UM.pdf', 'size': 1000}],
+    }
+
+    with patch('app._at_listar_todos', return_value=registros), \
+         patch('app._at_throttle'), \
+         patch('app.requests.get', return_value=Mock(ok=True, json=lambda: {'fields': envio_fields_antes},
+                                                       raise_for_status=lambda: None)), \
+         patch('app.requests.patch', return_value=Mock(ok=True, status_code=200, text='{}')) as mock_patch:
+        resultado1 = _aplicar_outros_documentos_no_envio('recEnvioA', 'Junho 2026')
+    assert resultado1['status'] == 'aplicado'
+    assert mock_patch.call_count == 1
+
+    with patch('app._at_listar_todos', return_value=registros), \
+         patch('app._at_throttle'), \
+         patch('app.requests.get', return_value=Mock(ok=True, json=lambda: {'fields': envio_fields_depois},
+                                                       raise_for_status=lambda: None)), \
+         patch('app.requests.patch') as mock_patch2:
+        resultado2 = _aplicar_outros_documentos_no_envio('recEnvioA', 'Junho 2026')
+    assert resultado2['status'] == 'sem_novidade_apos_dedup'
+    mock_patch2.assert_not_called()
