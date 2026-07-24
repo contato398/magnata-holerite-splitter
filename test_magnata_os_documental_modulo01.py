@@ -3,13 +3,21 @@ Testes do Modulo 01 (Documental) -- fundacao da esteira documental
 central.
 
 Tudo em memoria, sem I/O real -- nenhum destes testes acessa Airtable,
-rede ou disco.
+rede ou disco. Nenhum teste acessa atributos privados dos repositorios
+(_por_id, _id_por_hash, _eventos) -- so os contratos publicos.
 """
+import threading
+import types
 from datetime import datetime, timezone
 
 import pytest
 
-from magnata_os.documental.modulo01.dominio import StatusDocumento
+from magnata_os.documental.modulo01.dominio import (
+    Documento,
+    StatusDocumento,
+    TransicaoStatusInvalida,
+    transicionar_status,
+)
 from magnata_os.documental.modulo01.repositorio import (
     RepositorioDocumentosEmMemoria,
     RepositorioHistoricoEmMemoria,
@@ -22,21 +30,57 @@ from magnata_os.documental.modulo01.servico_entrada import (
 )
 
 
-def _relogio_fixo(sequencia):
-    """Devolve um relogio de teste que avanca 1 segundo a cada chamada,
-    a partir de uma lista de datetimes pre-definida (para testar ordem)."""
-    it = iter(sequencia)
-    return lambda: next(it)
-
-
-def _servico(relogio=None):
+def _servico(relogio=None, gerador_referencia_arquivo=None):
     repo_docs = RepositorioDocumentosEmMemoria()
     repo_hist = RepositorioHistoricoEmMemoria()
     kwargs = {}
     if relogio is not None:
         kwargs['relogio'] = relogio
+    if gerador_referencia_arquivo is not None:
+        kwargs['gerador_referencia_arquivo'] = gerador_referencia_arquivo
     servico = ServicoEntradaDocumental(repo_docs, repo_hist, **kwargs)
     return servico, repo_docs, repo_hist
+
+
+def _documento_de_teste(status):
+    agora = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    return Documento(
+        documento_id='doc-teste-1',
+        arquivo_original='pendente-armazenamento://abc',
+        nome_original='teste.pdf',
+        mime_type='application/pdf',
+        tamanho=100,
+        hash_sha256='a' * 64,
+        origem='upload_manual',
+        recebido_em=agora,
+        lote_id=None,
+        status=status,
+        correlation_id='corr-teste',
+        criado_em=agora,
+        atualizado_em=agora,
+    )
+
+
+class _HistoricoComFalhaControlada:
+    """Test double: falha na N-esima chamada a registrar(), sucede nas
+    demais. Usado para testar rollback em pontos especificos."""
+
+    def __init__(self, falhar_na_chamada):
+        self._falhar_na_chamada = falhar_na_chamada
+        self._chamadas = 0
+        self._eventos = []
+
+    def registrar(self, evento):
+        self._chamadas += 1
+        if self._chamadas == self._falhar_na_chamada:
+            raise RuntimeError(f'falha simulada na chamada numero {self._chamadas}')
+        self._eventos.append(evento)
+
+    def listar_por_documento(self, documento_id):
+        return [e for e in self._eventos if e.documento_id == documento_id]
+
+    def listar_todos(self):
+        return list(self._eventos)
 
 
 # ------------------------------------------------------ primeiro registro --
@@ -59,6 +103,7 @@ def test_primeiro_registro_cria_documento_registrado():
     assert len(documento.hash_sha256) == 64
     assert documento.documento_id
     assert repo_docs.buscar_por_id(documento.documento_id) == documento
+    assert repo_docs.listar_todos() == [documento]
 
 
 def test_documentos_com_conteudo_diferente_recebem_ids_diferentes():
@@ -80,6 +125,48 @@ def test_status_iniciais_definidos_corretamente():
     assert valores_reais == esperados
 
 
+# --------------------------------------------------------- maquina de estados --
+
+def test_transicao_valida_recebido_para_registrado():
+    documento = _documento_de_teste(StatusDocumento.RECEBIDO)
+    quando = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    novo = transicionar_status(documento, StatusDocumento.REGISTRADO, quando)
+    assert novo.status == StatusDocumento.REGISTRADO
+    assert novo.atualizado_em == quando
+    assert documento.status == StatusDocumento.RECEBIDO  # original nunca mutado
+
+
+def test_transicao_invalida_levanta_erro():
+    documento = _documento_de_teste(StatusDocumento.REGISTRADO)
+    with pytest.raises(TransicaoStatusInvalida):
+        transicionar_status(documento, StatusDocumento.RECEBIDO, datetime.now(timezone.utc))
+
+
+def test_transicao_para_o_mesmo_status_e_invalida():
+    documento = _documento_de_teste(StatusDocumento.RECEBIDO)
+    with pytest.raises(TransicaoStatusInvalida):
+        transicionar_status(documento, StatusDocumento.RECEBIDO, datetime.now(timezone.utc))
+
+
+def test_transicao_a_partir_de_estado_terminal_e_invalida():
+    documento = _documento_de_teste(StatusDocumento.DUPLICADO)
+    with pytest.raises(TransicaoStatusInvalida):
+        transicionar_status(documento, StatusDocumento.REGISTRADO, datetime.now(timezone.utc))
+
+
+# ------------------------------------------------------------ imutabilidade --
+
+def test_evento_historico_detalhes_e_imutavel():
+    servico, _, repo_hist = _servico()
+    documento = servico.registrar_entrada(
+        b'conteudo imutavel', 'a.pdf', 'application/pdf', 'upload_manual',
+    )
+    evento = repo_hist.listar_por_documento(documento.documento_id)[0]
+    assert isinstance(evento.detalhes, types.MappingProxyType)
+    with pytest.raises(TypeError):
+        evento.detalhes['nome_original'] = 'alterado'
+
+
 # ------------------------------------------------------ duplicidade/hash --
 
 def test_duplicidade_por_hash_retorna_documento_existente():
@@ -93,8 +180,8 @@ def test_duplicidade_por_hash_retorna_documento_existente():
     )
 
     assert tentativa.documento_id == original.documento_id
-    assert tentativa == original  # nao foi criada uma segunda instancia com dado diferente
-    assert len(repo_docs._por_id) == 1  # so 1 Documento persistido no total
+    assert tentativa == original
+    assert repo_docs.listar_todos() == [original]  # so 1 Documento persistido no total
 
     eventos = repo_hist.listar_por_documento(original.documento_id)
     tipos_evento = [e.evento for e in eventos]
@@ -112,9 +199,9 @@ def test_idempotencia_multiplas_tentativas_preserva_documento_original():
         repetido = servico.registrar_entrada(
             b'conteudo estavel', f'v{i}.pdf', 'application/pdf', f'origem_{i}',
         )
-        assert repetido == primeiro  # sempre devolve exatamente o mesmo, nunca sobrescreve
+        assert repetido == primeiro
 
-    assert len(repo_docs._por_id) == 1
+    assert repo_docs.listar_todos() == [primeiro]
     assert repo_docs.buscar_por_id(primeiro.documento_id).nome_original == 'v1.pdf'
 
 
@@ -152,8 +239,8 @@ def test_registrar_entrada_com_arquivo_ausente_levanta_erro():
     with pytest.raises(ArquivoAusente):
         servico.registrar_entrada(b'', 'vazio.pdf', 'application/pdf', 'upload_manual')
 
-    assert repo_docs._por_id == {}
-    assert repo_hist._eventos == []
+    assert repo_docs.listar_todos() == []
+    assert repo_hist.listar_todos() == []
 
 
 def test_consultar_por_hash_invalido_levanta_erro():
@@ -172,8 +259,8 @@ def test_consultar_por_hash_valido_nao_registrado_retorna_none():
     assert servico.consultar_por_hash(hash_valido_mas_desconhecido) is None
 
 
-def test_falha_de_persistencia_propaga_erro_e_nao_registra_historico_falso():
-    class RepositorioQueFalha:
+def test_falha_na_criacao_atomica_propaga_como_falha_persistencia():
+    class RepositorioQueFalhaNaCriacao:
         def buscar_por_hash(self, hash_sha256):
             return None
 
@@ -181,17 +268,74 @@ def test_falha_de_persistencia_propaga_erro_e_nao_registra_historico_falso():
             return None
 
         def salvar(self, documento):
+            pass
+
+        def salvar_se_ausente_por_hash(self, hash_sha256, fabricar_documento):
             raise RuntimeError('Airtable indisponivel (simulado)')
 
-    repo_docs_falho = RepositorioQueFalha()
+        def remover(self, documento_id):
+            pass
+
+        def listar_todos(self):
+            return []
+
     repo_hist = RepositorioHistoricoEmMemoria()
-    servico = ServicoEntradaDocumental(repo_docs_falho, repo_hist)
+    servico = ServicoEntradaDocumental(RepositorioQueFalhaNaCriacao(), repo_hist)
 
     with pytest.raises(FalhaPersistencia):
         servico.registrar_entrada(b'conteudo qualquer', 'x.pdf', 'application/pdf', 'upload_manual')
 
-    # nenhum evento de sucesso foi registrado -- a falha nao foi mascarada
-    assert repo_hist._eventos == []
+    assert repo_hist.listar_todos() == []
+
+
+# ------------------------------------------ rollback: 1o, 2o e 3o evento --
+
+def test_falha_no_primeiro_evento_historico_faz_rollback_completo():
+    """1o evento = DOCUMENTO_RECEBIDO, na criacao de um Documento novo."""
+    repo_docs = RepositorioDocumentosEmMemoria()
+    repo_hist = _HistoricoComFalhaControlada(falhar_na_chamada=1)
+    servico = ServicoEntradaDocumental(repo_docs, repo_hist)
+
+    with pytest.raises(FalhaPersistencia):
+        servico.registrar_entrada(b'conteudo falha 1', 'x.pdf', 'application/pdf', 'upload_manual')
+
+    assert repo_docs.listar_todos() == []  # rollback completo -- nenhum documento orfao
+    assert repo_hist.listar_todos() == []
+
+
+def test_falha_no_segundo_evento_historico_faz_rollback_do_documento():
+    """2o evento = DOCUMENTO_REGISTRADO, apos o 1o (DOCUMENTO_RECEBIDO) ja
+    ter tido sucesso. O Documento e removido (rollback), mas o evento que
+    ja havia sido gravado com sucesso permanece -- historico e
+    append-only, nunca apagado, mesmo durante rollback."""
+    repo_docs = RepositorioDocumentosEmMemoria()
+    repo_hist = _HistoricoComFalhaControlada(falhar_na_chamada=2)
+    servico = ServicoEntradaDocumental(repo_docs, repo_hist)
+
+    with pytest.raises(FalhaPersistencia):
+        servico.registrar_entrada(b'conteudo falha 2', 'y.pdf', 'application/pdf', 'upload_manual')
+
+    assert repo_docs.listar_todos() == []  # documento nao fica parcialmente registrado
+    eventos = repo_hist.listar_todos()
+    assert len(eventos) == 1
+    assert eventos[0].evento == 'DOCUMENTO_RECEBIDO'  # preservado, nao apagado pelo rollback
+
+
+def test_falha_no_terceiro_evento_historico_nao_afeta_documento_original():
+    """3o evento = TENTATIVA_DUPLICADA, numa segunda chamada com o mesmo
+    conteudo, apos a primeira ja ter sido concluida com sucesso (2
+    eventos). O documento original nao e tocado pela falha."""
+    repo_docs = RepositorioDocumentosEmMemoria()
+    repo_hist = _HistoricoComFalhaControlada(falhar_na_chamada=3)
+    servico = ServicoEntradaDocumental(repo_docs, repo_hist)
+
+    original = servico.registrar_entrada(b'conteudo falha 3', 'z1.pdf', 'application/pdf', 'upload_manual')
+
+    with pytest.raises(FalhaPersistencia):
+        servico.registrar_entrada(b'conteudo falha 3', 'z2.pdf', 'application/pdf', 'upload_manual')
+
+    assert repo_docs.listar_todos() == [original]
+    assert repo_docs.buscar_por_hash(original.hash_sha256) == original
 
 
 # ------------------------------------------------------------ correlation_id --
@@ -212,7 +356,7 @@ def test_correlation_id_gerado_automaticamente_quando_ausente():
     documento = servico.registrar_entrada(
         b'conteudo sem correlation explicito', 'y.pdf', 'application/pdf', 'upload_manual',
     )
-    assert documento.correlation_id  # nao vazio
+    assert documento.correlation_id
     assert documento.correlation_id.startswith('doc')
 
 
@@ -230,3 +374,75 @@ def test_correlation_id_diferente_por_tentativa_duplicada():
     correlations = [e.correlation_id for e in eventos]
     assert 'corr-original' in correlations
     assert 'corr-tentativa-2' in correlations
+
+
+# ------------------------------------------------------ referencia de arquivo --
+
+def test_gerador_referencia_arquivo_e_injetavel():
+    chamadas = []
+
+    def gerador_customizado(hash_sha256):
+        chamadas.append(hash_sha256)
+        return f'meu-storage://{hash_sha256}'
+
+    servico, _, _ = _servico(gerador_referencia_arquivo=gerador_customizado)
+    documento = servico.registrar_entrada(
+        b'conteudo referencia', 'r.pdf', 'application/pdf', 'upload_manual',
+    )
+
+    assert documento.arquivo_original == f'meu-storage://{documento.hash_sha256}'
+    assert chamadas == [documento.hash_sha256]
+
+
+def test_referencia_arquivo_padrao_e_provisoria_baseada_no_hash():
+    servico, _, _ = _servico()
+    documento = servico.registrar_entrada(
+        b'conteudo referencia padrao', 'p.pdf', 'application/pdf', 'upload_manual',
+    )
+    assert documento.arquivo_original == f'pendente-armazenamento://{documento.hash_sha256}'
+
+
+# ----------------------------------------------------------------- concorrencia --
+
+def test_concorrencia_multiplas_threads_mesmo_arquivo_cria_um_unico_documento():
+    servico, repo_docs, repo_hist = _servico()
+    conteudo = b'conteudo identico registrado por varias threads ao mesmo tempo'
+    n_threads = 20
+    barreira = threading.Barrier(n_threads)
+    resultados = []
+    erros = []
+    lock_resultados = threading.Lock()
+
+    def _tentar_registrar(indice):
+        try:
+            barreira.wait(timeout=5)
+            doc = servico.registrar_entrada(
+                conteudo, f'arquivo_{indice}.pdf', 'application/pdf', f'origem_{indice}',
+            )
+            with lock_resultados:
+                resultados.append(doc)
+        except Exception as exc:  # nao esperado -- registrado para diagnostico do teste
+            with lock_resultados:
+                erros.append(exc)
+
+    threads = [threading.Thread(target=_tentar_registrar, args=(i,)) for i in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+
+    assert erros == []
+    assert len(resultados) == n_threads
+
+    ids_unicos = {doc.documento_id for doc in resultados}
+    assert len(ids_unicos) == 1  # um unico documento_id entre todas as chamadas
+
+    todos_documentos = repo_docs.listar_todos()
+    assert len(todos_documentos) == 1  # nenhuma estrutura orfa
+
+    documento_id_final = next(iter(ids_unicos))
+    eventos = repo_hist.listar_por_documento(documento_id_final)
+    tipos = [e.evento for e in eventos]
+    assert tipos.count('DOCUMENTO_RECEBIDO') == 1
+    assert tipos.count('DOCUMENTO_REGISTRADO') == 1
+    assert tipos.count('TENTATIVA_DUPLICADA') == n_threads - 1  # todas as demais registradas
