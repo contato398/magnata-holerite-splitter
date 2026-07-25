@@ -22,12 +22,16 @@ from magnata_os.documental.modulo01.consultas_esteira import (
     ultimo_evento_e_proxima_acao,
 )
 from magnata_os.documental.modulo01.dominio_esteira import (
+    INDICE_ETAPA,
+    TRANSICOES_ETAPA_PERMITIDAS,
     AvancoBloqueadoPorPendencia,
     EtapaEsteira,
     MotivoBloqueio,
+    MotivoSaltoObrigatorio,
     SituacaoEsteira,
     TipoProximaAcao,
     TransicaoEtapaInvalida,
+    eh_salto_de_etapa,
 )
 from magnata_os.documental.modulo01.dtos_esteira import montar_item_esteira
 from magnata_os.documental.modulo01.repositorio import (
@@ -214,6 +218,93 @@ def test_criar_lote_todos_os_arquivos_falham_situacao_erro():
 
 
 # ============================================================================
+# Ajuste 1 -- entrada oficial obrigatoriamente por lote
+# ============================================================================
+
+class _RepositorioEstadosEsteiraQueFalha:
+    """Duplo de teste: simula RepositorioEstadosEsteira indisponivel --
+    todo criar_se_ausente() falha, mesmo com o Documento ja persistido
+    com sucesso pelo ServicoEntradaDocumental (Fase 1) na chamada
+    anterior."""
+
+    def criar_se_ausente(self, documento_id, fabricar_estado):
+        raise ConnectionError('RepositorioEstadosEsteira indisponivel (simulado)')
+
+    def buscar_por_documento_id(self, documento_id):
+        return None
+
+    def salvar(self, estado):
+        raise ConnectionError('RepositorioEstadosEsteira indisponivel (simulado)')
+
+    def listar_todos(self):
+        return []
+
+    def listar_por_lote(self, lote_id):
+        return []
+
+    def listar_por_etapa(self, etapa):
+        return []
+
+    def listar_por_situacao(self, situacao):
+        return []
+
+
+def test_entrada_oficial_documento_novo_sempre_recebe_lote_id_e_estado_inicial():
+    """A porta oficial (ServicoCriacaoLote) nunca deixa um Documento
+    novo sem lote_id nem sem EstadoEsteiraDocumento -- as duas coisas
+    sempre juntas para todo item com sucesso e nao-duplicado."""
+    ctx = _montar_servicos()
+    arquivos = [
+        ArquivoEntradaLote(b'entrada oficial arquivo 1', 'a.pdf', 'application/pdf'),
+        ArquivoEntradaLote(b'entrada oficial arquivo 2', 'b.pdf', 'application/pdf'),
+    ]
+
+    resumo = ctx.servico_lote.criar_lote('upload_manual', arquivos)
+
+    for item in resumo.itens:
+        assert item.sucesso is True
+        assert item.duplicado is False
+        documento = ctx.repo_docs.buscar_por_id(item.documento_id)
+        assert documento is not None
+        assert documento.lote_id == resumo.lote_id  # nunca None
+
+        estado = ctx.repo_estados.buscar_por_documento_id(item.documento_id)
+        assert estado is not None  # nunca ausente
+        assert estado.lote_id == resumo.lote_id
+
+
+def test_entrada_oficial_falha_no_estado_esteira_nao_esconde_documento_ja_criado():
+    """Se o Documento for persistido com sucesso mas a criacao do
+    estado inicial da esteira falhar, o item do resumo precisa deixar
+    isso explicito -- documento_id presente, sucesso=False, e a
+    mensagem de erro precisa deixar claro que o Documento JA EXISTE."""
+    repo_docs = RepositorioDocumentosEmMemoria()
+    repo_hist = RepositorioHistoricoEmMemoria()
+    repo_lotes = RepositorioLotesEmMemoria()
+    repo_estados_com_falha = _RepositorioEstadosEsteiraQueFalha()
+
+    servico_entrada = ServicoEntradaDocumental(repo_docs, repo_hist)
+    servico_avanco = ServicoAvancoEsteira(repo_estados_com_falha, repo_hist)
+    servico_lote = ServicoCriacaoLote(repo_lotes, servico_entrada, servico_avanco)
+
+    resumo = servico_lote.criar_lote(
+        'upload_manual', [ArquivoEntradaLote(b'documento sem estado esteira', 'a.pdf', 'application/pdf')],
+    )
+
+    assert resumo.quantidade_sucesso == 0
+    assert resumo.quantidade_erro == 1
+    item = resumo.itens[0]
+    assert item.sucesso is False
+    assert item.documento_id is not None  # o Documento NAO fica escondido
+    assert 'persistido' in item.erro.lower()  # mensagem deixa claro que o Documento ja existe
+
+    # o Documento realmente foi persistido, apesar da falha na esteira
+    documento = repo_docs.buscar_por_id(item.documento_id)
+    assert documento is not None
+    assert documento.lote_id == resumo.lote_id
+
+
+# ============================================================================
 # 5. transicao valida / 6. transicao invalida
 # ============================================================================
 
@@ -245,6 +336,159 @@ def test_avancar_etapa_documento_sem_estado_levanta_excecao():
     ctx = _montar_servicos()
     with pytest.raises(EstadoEsteiraInexistente):
         ctx.servico_avanco.avancar_etapa('documento-inexistente', EtapaEsteira.REGISTRO, 'corr-1')
+
+
+# ============================================================================
+# Ajuste 2 -- rotas flexiveis da esteira (politica explicita de transicoes)
+# ============================================================================
+
+def _levar_ate_classificacao(ctx, conteudo: bytes = b'conteudo ate classificacao') -> str:
+    """Cada teste desta secao usa um ctx PROPRIO (_montar_servicos()
+    fresco) e chama esta funcao no maximo uma vez -- o conteudo padrao
+    nao precisa ser unico entre testes, so dentro do mesmo ctx."""
+    documento_id = _criar_documento_registrado(ctx, conteudo)
+    ctx.servico_avanco.criar_estado_inicial(documento_id, None, 'corr-1')
+    ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.REGISTRO, 'corr-1', situacao_nova_etapa=SituacaoEsteira.CONCLUIDO)
+    ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.CLASSIFICACAO, 'corr-1')
+    return documento_id
+
+
+def test_politica_transicoes_nao_contem_retrocesso():
+    """Invariante da politica: nenhuma transicao aponta para uma etapa
+    de indice igual ou menor que a etapa de origem -- retrocesso nunca
+    e permitido, nem silenciosamente nem de forma explicita."""
+    for origem, destinos in TRANSICOES_ETAPA_PERMITIDAS.items():
+        for destino in destinos:
+            assert INDICE_ETAPA[destino] > INDICE_ETAPA[origem], (
+                f'{origem.value} -> {destino.value} e um retrocesso ou fica na mesma etapa'
+            )
+
+
+def test_transicao_classificacao_para_separacao_nao_e_salto_nao_exige_motivo():
+    ctx = _montar_servicos()
+    documento_id = _levar_ate_classificacao(ctx)
+
+    novo_estado = ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.SEPARACAO, 'corr-1')
+
+    assert novo_estado.etapa_atual == EtapaEsteira.SEPARACAO
+    assert eh_salto_de_etapa(EtapaEsteira.CLASSIFICACAO, EtapaEsteira.SEPARACAO) is False
+
+
+def test_transicao_classificacao_para_identificacao_pula_separacao_exige_motivo():
+    """Documento que NAO exige separacao vai direto de CLASSIFICACAO
+    para IDENTIFICACAO, sem passar artificialmente por SEPARACAO -- mas
+    precisa declarar a razao do salto."""
+    ctx = _montar_servicos()
+    documento_id = _levar_ate_classificacao(ctx)
+
+    assert eh_salto_de_etapa(EtapaEsteira.CLASSIFICACAO, EtapaEsteira.IDENTIFICACAO) is True
+
+    with pytest.raises(MotivoSaltoObrigatorio):
+        ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.IDENTIFICACAO, 'corr-1')
+
+    novo_estado = ctx.servico_avanco.avancar_etapa(
+        documento_id, EtapaEsteira.IDENTIFICACAO, 'corr-1',
+        motivo_transicao='documento nao exige separacao -- ja chega como uma unidade so',
+    )
+    assert novo_estado.etapa_atual == EtapaEsteira.IDENTIFICACAO
+
+    # o salto e a razao ficam registrados no historico (Fase 1, eventos ESTEIRA_*)
+    eventos = ctx.repo_hist.listar_por_documento(documento_id)
+    evento_avanco = [e for e in eventos if e.evento == 'ESTEIRA_ETAPA_AVANCADA'][-1]
+    assert evento_avanco.detalhes['eh_salto'] is True
+    assert 'nao exige separacao' in evento_avanco.detalhes['motivo_transicao']
+
+    # nenhum evento passou pela etapa SEPARACAO para este documento
+    assert not any(
+        e.evento == 'ESTEIRA_ETAPA_AVANCADA' and e.detalhes.get('etapa_nova') == 'SEPARACAO'
+        for e in eventos
+    )
+
+
+def test_transicao_classificacao_para_validacao_pula_duas_etapas_exige_motivo():
+    ctx = _montar_servicos()
+    documento_id = _levar_ate_classificacao(ctx)
+
+    with pytest.raises(MotivoSaltoObrigatorio):
+        ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.VALIDACAO, 'corr-1')
+
+    novo_estado = ctx.servico_avanco.avancar_etapa(
+        documento_id, EtapaEsteira.VALIDACAO, 'corr-1', motivo_transicao='dados ja extraidos e identificados previamente',
+    )
+    assert novo_estado.etapa_atual == EtapaEsteira.VALIDACAO
+
+
+def test_transicao_classificacao_para_auditoria_duplicidade_ou_descarte():
+    ctx = _montar_servicos()
+    documento_id = _levar_ate_classificacao(ctx)
+
+    with pytest.raises(MotivoSaltoObrigatorio):
+        ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.AUDITORIA, 'corr-1')
+
+    novo_estado = ctx.servico_avanco.avancar_etapa(
+        documento_id, EtapaEsteira.AUDITORIA, 'corr-1',
+        situacao_nova_etapa=SituacaoEsteira.CONCLUIDO,
+        motivo_transicao='duplicidade_detectada: mesmo conteudo ja processado em outro documento',
+    )
+    assert novo_estado.etapa_atual == EtapaEsteira.AUDITORIA
+
+
+def test_transicao_separacao_para_identificacao_permitida():
+    ctx = _montar_servicos()
+    documento_id = _levar_ate_classificacao(ctx)
+    ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.SEPARACAO, 'corr-1')
+
+    novo_estado = ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.IDENTIFICACAO, 'corr-1')
+    assert novo_estado.etapa_atual == EtapaEsteira.IDENTIFICACAO
+
+
+def test_transicao_identificacao_para_validacao_permitida():
+    ctx = _montar_servicos()
+    documento_id = _levar_ate_classificacao(ctx)
+    ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.SEPARACAO, 'corr-1')
+    ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.IDENTIFICACAO, 'corr-1')
+
+    novo_estado = ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.VALIDACAO, 'corr-1')
+    assert novo_estado.etapa_atual == EtapaEsteira.VALIDACAO
+
+
+def test_rota_completa_ate_confirmacao_e_auditoria():
+    """Percorre a rota inteira ENTRADA ate AUDITORIA passando por
+    SEPARACAO -- prova que a rota "completa" (sem nenhum salto)
+    continua funcionando ponta a ponta com a nova politica."""
+    ctx = _montar_servicos()
+    documento_id = _levar_ate_classificacao(ctx)
+
+    estado = ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.SEPARACAO, 'corr-1')
+    assert estado.etapa_atual == EtapaEsteira.SEPARACAO
+    estado = ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.IDENTIFICACAO, 'corr-1')
+    assert estado.etapa_atual == EtapaEsteira.IDENTIFICACAO
+    estado = ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.VALIDACAO, 'corr-1')
+    assert estado.etapa_atual == EtapaEsteira.VALIDACAO
+    estado = ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.MONTAGEM_PACOTE, 'corr-1')
+    assert estado.etapa_atual == EtapaEsteira.MONTAGEM_PACOTE
+    estado = ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.DISTRIBUICAO, 'corr-1')
+    assert estado.etapa_atual == EtapaEsteira.DISTRIBUICAO
+    estado = ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.CONFIRMACAO, 'corr-1')
+    assert estado.etapa_atual == EtapaEsteira.CONFIRMACAO
+    estado = ctx.servico_avanco.avancar_etapa(
+        documento_id, EtapaEsteira.AUDITORIA, 'corr-1', situacao_nova_etapa=SituacaoEsteira.CONCLUIDO,
+    )
+    assert estado.etapa_atual == EtapaEsteira.AUDITORIA
+
+    with pytest.raises(TransicaoEtapaInvalida):
+        ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.CONFIRMACAO, 'corr-1')  # AUDITORIA e terminal
+
+
+def test_transicao_retrocesso_nunca_permitida():
+    ctx = _montar_servicos()
+    documento_id = _levar_ate_classificacao(ctx)
+    ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.SEPARACAO, 'corr-1')
+
+    with pytest.raises(TransicaoEtapaInvalida):
+        ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.CLASSIFICACAO, 'corr-1')  # retrocesso
+    with pytest.raises(TransicaoEtapaInvalida):
+        ctx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.REGISTRO, 'corr-1')  # retrocesso
 
 
 # ============================================================================

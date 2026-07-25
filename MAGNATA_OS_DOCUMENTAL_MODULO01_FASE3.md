@@ -104,31 +104,72 @@ chamador — ver `calcular_proxima_acao()` em `servico_avanco_esteira.py`.
 
 ## Etapas e transições
 
+A ordem **canônica** das etapas (usada só para medir distância/"salto"
+entre duas etapas, ver `INDICE_ETAPA`/`eh_salto_de_etapa` abaixo — não
+para dizer que a transição é sempre passo a passo) é:
+
 ```
 ENTRADA → REGISTRO → CLASSIFICACAO → SEPARACAO → IDENTIFICACAO →
 VALIDACAO → MONTAGEM_PACOTE → DISTRIBUICAO → CONFIRMACAO → AUDITORIA
 ```
 
-Sequência **linear e estrita**: cada etapa só avança para a *próxima* da
-lista (`TRANSICOES_ETAPA_PERMITIDAS`, `dominio_esteira.py`) — nunca pula
-etapas, nunca retrocede, nunca fica na mesma etapa. `AUDITORIA` é
-terminal (nenhuma transição permitida a partir dela). Uma transição fora
-dessa maquina levanta `TransicaoEtapaInvalida`, nunca aplicada em
-silêncio.
+**A transição entre etapas segue uma política explícita
+(`TRANSICOES_ETAPA_PERMITIDAS`, `dominio_esteira.py`), não uma sequência
+linear universal.** `CLASSIFICACAO` é um ponto de ramificação: a partir
+dela, um documento pode seguir para `SEPARACAO` (rota completa,
+documento que precisa ser fatiado), ou pular direto para
+`IDENTIFICACAO`/`VALIDACAO` (documento que **não exige separação** —
+nunca passa artificialmente por `SEPARACAO` só para manter a forma da
+sequência), ou ainda para `AUDITORIA` (duplicidade detectada ou descarte
+controlado, sem passar pelo fluxo normal de pacote/distribuição). Fora
+desse ponto de ramificação, a rota é passo a passo:
+
+```
+ENTRADA → REGISTRO → CLASSIFICACAO ┬→ SEPARACAO → IDENTIFICACAO → VALIDACAO
+                                    ├→ IDENTIFICACAO (pula SEPARACAO)
+                                    ├→ VALIDACAO (pula SEPARACAO e IDENTIFICACAO)
+                                    └→ AUDITORIA (duplicidade/descarte)
+
+VALIDACAO → MONTAGEM_PACOTE → DISTRIBUICAO → CONFIRMACAO → AUDITORIA
+```
+
+`AUDITORIA` é sempre terminal (nenhuma transição permitida a partir
+dela). Uma transição fora da política levanta `TransicaoEtapaInvalida`,
+nunca aplicada em silêncio.
+
+**Retrocesso nunca é permitido, em nenhum caso.** Nenhuma entrada de
+`TRANSICOES_ETAPA_PERMITIDAS` aponta para uma etapa de índice igual ou
+menor (na ordem canônica) que a etapa de origem — essa invariante é
+verificada por um `assert` **na carga do módulo** (`dominio_esteira.py`):
+uma edição futura da política que introduza retrocesso quebra a
+*importação* do módulo (falha alta e ruidosa), nunca passa em silêncio.
+`test_politica_transicoes_nao_contem_retrocesso` documenta a mesma
+garantia dentro da suíte de testes.
 
 **Retroceder/revisar não é modelado como retrocesso de etapa.** Um
 documento que precisa de revisão manual numa etapa qualquer tem sua
 `situacao` marcada `EM_REVISAO` — a etapa em si nunca anda para trás.
 Isso mantém as duas dimensões (etapa x situação) genuinamente
-independentes: a etapa é sempre monotônica; a situação é o que varia
+independentes: a etapa nunca retrocede; a situação é o que varia
 livremente dentro dela.
+
+**Todo salto exige uma razão registrada.** Uma transição que pula uma ou
+mais etapas intermediárias da ordem canônica (`eh_salto_de_etapa()` —
+ex.: `CLASSIFICACAO → VALIDACAO`, ou `CLASSIFICACAO → AUDITORIA`) exige
+o parâmetro `motivo_transicao` em `avancar_etapa()`; sem ele, levanta
+`MotivoSaltoObrigatorio`. Uma transição "passo a passo" comum (destino é
+a próxima etapa imediata da ordem canônica, ex.: `CLASSIFICACAO →
+SEPARACAO`, `SEPARACAO → IDENTIFICACAO`) não exige motivo. Quando
+informado, `motivo_transicao` é sempre registrado no evento
+`ESTEIRA_ETAPA_AVANCADA` (junto com a flag `eh_salto`), nunca perdido.
 
 **Bloqueio impede qualquer avanço de etapa.** Enquanto
 `situacao == BLOQUEADO`, `avancar_etapa()` levanta
 `AvancoBloqueadoPorPendencia` — o bloqueio precisa ser resolvido primeiro
 via `resolver_bloqueio()` (que nunca avança etapa por si só; um
 `avancar_etapa()` separado continua sendo necessário depois, se for o
-caso).
+caso). Essa regra não mudou com a política flexível — é verificada
+**antes** de qualquer checagem de política ou de salto.
 
 ## Cálculo de próxima ação
 
@@ -150,7 +191,47 @@ em ordem de prioridade:
    nenhuma automação implementada — ver "O que esta fase explicitamente
    NÃO faz").
 
-## Serviço de criação de lote (`servico_lote.py`)
+## Entrada oficial por lote (`servico_lote.py`)
+
+**`ServicoCriacaoLote` é a PORTA OFICIAL de entrada operacional a partir
+desta fase.** Qualquer integração nova que precise registrar documentos
+deve chamar `ServicoCriacaoLote.criar_lote()` — nunca
+`ServicoEntradaDocumental` (Fase 1) diretamente. Duas garantias formais
+dessa porta:
+
+1. **Todo `Documento` NOVO criado por `criar_lote()` sempre recebe
+   `lote_id` (nunca `None`) E `EstadoEsteiraDocumento` inicial — as duas
+   coisas juntas, nunca uma sem a outra silenciosamente.** `lote_id` vem
+   de sempre passar um `lote_id` real (nunca `None`) para
+   `ServicoEntradaDocumental.registrar_entrada()` — o único lugar que
+   fabrica `lote_id` é `gerar_lote_id()` (`dominio_esteira.py`), chamado
+   uma vez por `criar_lote()`. `test_entrada_oficial_documento_novo_sempre_recebe_lote_id_e_estado_inicial`
+   verifica isso diretamente: para todo item bem-sucedido e não
+   duplicado, o `Documento` persistido tem `lote_id == resumo.lote_id` e
+   existe um `EstadoEsteiraDocumento` para ele.
+2. **Se o `Documento` for persistido com sucesso mas a criação do
+   estado inicial da esteira falhar (ex.: `RepositorioEstadosEsteira`
+   indisponível), a falha é marcada explicitamente — o `Documento` nunca
+   fica escondido.** O item do `ResumoLote` correspondente vem com
+   `sucesso=False`, `documento_id` **preenchido** (não `None`) e uma
+   mensagem de erro que começa com "Documento persistido com sucesso...",
+   deixando inequívoco que o `Documento` existe de fato, apesar da falha.
+   Um `Documento` nesse estado fica, na prática, no mesmo caso de
+   "documento legado" (`rastreado_pela_esteira=False`, ver abaixo) até
+   que uma nova tentativa com o mesmo conteúdo (idempotência por hash)
+   crie o estado que faltou.
+   `test_entrada_oficial_falha_no_estado_esteira_nao_esconde_documento_ja_criado`
+   verifica isso com um `RepositorioEstadosEsteira` que sempre falha.
+
+`ServicoEntradaDocumental` (Fase 1) continua aceitando `lote_id=None` e
+**não foi alterado** — ele é agora explicitamente documentado (ver sua
+docstring em `servico_entrada.py`) como um **serviço de baixo nível**,
+mantido por compatibilidade com quem já o chama diretamente
+(`servico_entrada_persistente.py` da Fase 2, testes, composição interna
+do próprio `ServicoCriacaoLote`). A garantia de "toda entrada nova tem
+lote" é de **convenção a partir desta porta**, não uma restrição de
+código na Fase 1 — mudar a assinatura da Fase 1 quebraria contratos já
+revisados e mergeados, fora do escopo deste ajuste.
 
 `ServicoCriacaoLote.criar_lote(origem, arquivos, correlation_id=None)`:
 
@@ -171,7 +252,13 @@ em ordem de prioridade:
      já persistiu o `Documento` com `status=REGISTRADO`; as duas etapas
      já aconteceram de fato.
    - **Qualquer exceção neste arquivo é capturada e vira um item de erro
-     no resumo — nunca aborta o processamento dos demais arquivos.**
+     no resumo — nunca aborta o processamento dos demais arquivos.** A
+     mensagem de erro distingue as duas falhas possíveis: se
+     `registrar_entrada()` falhou, `documento_id=None` (nada foi
+     persistido); se a falha foi depois, na criação do estado da
+     esteira, `documento_id` vem preenchido e a mensagem começa com
+     "Documento persistido com sucesso..." (ver "Entrada oficial por
+     lote" acima).
 3. Calcula a situação final do lote: `CONCLUIDO` se nenhum arquivo
    falhou; `ERRO` se todos falharam; `EM_REVISAO` se foi parcial
    (alguns sucesso, alguns erro) — sinalizando que um humano precisa
@@ -319,16 +406,31 @@ delas é implementada aqui.
 pytest test_magnata_os_documental_modulo01_fase3.py -v
 ```
 
-25 testes, cobrindo os 13 cenários exigidos por esta fase: lote com
-vários arquivos, duplicidade no mesmo lote, duplicidade em lote
-anterior, falha isolada (parcial e total), transição de etapa válida e
-inválida (incluindo documento sem estado), bloqueio impedindo avanço,
-resolução de bloqueio (incluindo tentativa sem bloqueio ativo), cálculo
-de documentos parados (via relógio controlável), próxima ação automática
-e humana (incluindo bloqueio resolvível automaticamente e etapa
-terminal), compatibilidade com documento legado, e concorrência na
-criação de lotes (15 threads, mesmo conteúdo, `threading.Barrier`) —
-mais cobertura complementar das consultas (`documentos_bloqueados`,
-`documentos_com_acao_humana_pendente`, `ultimo_evento_e_proxima_acao`,
-`lotes_recentes`, `lote_por_id`, `documentos_por_situacao`,
-`montar_resumo_esteira`).
+36 testes: os 25 originais da fundação desta fase (13 cenários exigidos
+— lote com vários arquivos, duplicidade no mesmo lote e em lote
+anterior, falha isolada parcial/total, transição válida/inválida,
+bloqueio impedindo avanço, resolução de bloqueio, documentos parados,
+próxima ação automática/humana, compatibilidade legado, concorrência na
+criação de lotes — mais cobertura complementar de consultas) **mais 11
+testes dos dois ajustes finais**:
+
+- **Entrada oficial por lote** (2 testes): todo `Documento` novo criado
+  por `criar_lote()` recebe `lote_id` e `EstadoEsteiraDocumento`
+  (`test_entrada_oficial_documento_novo_sempre_recebe_lote_id_e_estado_inicial`);
+  falha na criação do estado da esteira, com `Documento` já persistido,
+  nunca esconde o `documento_id` no resumo
+  (`test_entrada_oficial_falha_no_estado_esteira_nao_esconde_documento_ja_criado`,
+  via um `RepositorioEstadosEsteira` fake que sempre falha).
+- **Rotas flexíveis da esteira** (9 testes): invariante de não-retrocesso
+  da política inteira (`test_politica_transicoes_nao_contem_retrocesso`);
+  `CLASSIFICACAO → SEPARACAO` sem exigir motivo (não é salto);
+  `CLASSIFICACAO → IDENTIFICACAO`/`VALIDACAO`/`AUDITORIA` exigindo
+  `motivo_transicao` (levanta `MotivoSaltoObrigatorio` sem ele, registra
+  o motivo e a flag `eh_salto` no evento `ESTEIRA_ETAPA_AVANCADA` com
+  ele) — incluindo a verificação de que nenhum evento
+  `ESTEIRA_ETAPA_AVANCADA` com `etapa_nova=SEPARACAO` é criado quando o
+  documento pula essa etapa; `SEPARACAO → IDENTIFICACAO` e
+  `IDENTIFICACAO → VALIDACAO` permitidas sem motivo; uma rota completa
+  ponta a ponta `ENTRADA → ... → AUDITORIA` passando por `SEPARACAO`
+  (prova que a rota "sem salto nenhum" continua funcionando); e
+  retrocesso explicitamente rejeitado em dois pontos diferentes da rota.

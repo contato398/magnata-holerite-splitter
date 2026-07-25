@@ -31,8 +31,12 @@ from typing import Mapping, Optional
 
 
 class EtapaEsteira(str, Enum):
-    """Etapas operacionais oficiais da esteira documental, nesta ordem
-    linear. Nenhuma etapa nova entra aqui sem decisao explicita -- ver
+    """Etapas operacionais oficiais da esteira documental, na ordem
+    canonica abaixo (usada para medir "salto" de etapa -- ver
+    INDICE_ETAPA/eh_salto_de_etapa -- nao para dizer que a transicao e
+    sempre passo-a-passo: ver TRANSICOES_ETAPA_PERMITIDAS, que e uma
+    politica explicita, nao uma sequencia linear obrigatoria). Nenhuma
+    etapa nova entra aqui sem decisao explicita -- ver
     MAGNATA_OS_DOCUMENTAL_MODULO01_FASE3.md."""
 
     ENTRADA = 'ENTRADA'
@@ -164,12 +168,18 @@ class AvancoBloqueadoPorPendencia(Exception):
     de qualquer avanco de etapa."""
 
 
-# Maquina de estados oficial da esteira: ordem linear, cada etapa so
-# avanca para a PROXIMA etapa da sequencia (nunca pula, nunca volta,
-# nunca fica parada na mesma etapa). AUDITORIA e terminal. Retroceder
-# ou "revisar" uma etapa e modelado via SituacaoEsteira (EM_REVISAO),
-# nao via retrocesso de EtapaEsteira -- a etapa em si nunca anda para
-# tras.
+class MotivoSaltoObrigatorio(Exception):
+    """Tentativa de pular uma ou mais etapas intermediarias (ver
+    eh_salto_de_etapa) sem informar `motivo_transicao`. Um salto sempre
+    precisa de uma razao registrada -- nunca aplicado em silencio (ver
+    servico_avanco_esteira.py, ServicoAvancoEsteira.avancar_etapa)."""
+
+
+# Ordem CANONICA das etapas -- usada so para medir distancia/"salto"
+# entre duas etapas (ver INDICE_ETAPA/eh_salto_de_etapa), NAO para
+# definir quais transicoes sao permitidas (isso e
+# TRANSICOES_ETAPA_PERMITIDAS, uma politica explicita abaixo, nao uma
+# sequencia linear obrigatoria).
 _ORDEM_ETAPAS = (
     EtapaEsteira.ENTRADA,
     EtapaEsteira.REGISTRO,
@@ -183,15 +193,70 @@ _ORDEM_ETAPAS = (
     EtapaEsteira.AUDITORIA,
 )
 
-TRANSICOES_ETAPA_PERMITIDAS: Mapping[EtapaEsteira, frozenset] = types.MappingProxyType({
-    etapa: frozenset({_ORDEM_ETAPAS[indice + 1]}) if indice + 1 < len(_ORDEM_ETAPAS) else frozenset()
-    for indice, etapa in enumerate(_ORDEM_ETAPAS)
+INDICE_ETAPA: Mapping[EtapaEsteira, int] = types.MappingProxyType({
+    etapa: indice for indice, etapa in enumerate(_ORDEM_ETAPAS)
 })
 
 
+def eh_salto_de_etapa(etapa_origem: EtapaEsteira, etapa_destino: EtapaEsteira) -> bool:
+    """True se a transicao pula uma ou mais etapas intermediarias da
+    ordem canonica (ex.: CLASSIFICACAO -> VALIDACAO pula SEPARACAO e
+    IDENTIFICACAO; CLASSIFICACAO -> AUDITORIA pula todas as
+    intermediarias, usado para duplicidade/descarte controlado).
+    CLASSIFICACAO -> SEPARACAO (a proxima etapa imediata da ordem
+    canonica) NAO e um salto. Funcao pura -- nao valida se a transicao
+    e permitida, so mede distancia; quem decide se motivo_transicao e
+    obrigatorio e ServicoAvancoEsteira.avancar_etapa."""
+    return (INDICE_ETAPA[etapa_destino] - INDICE_ETAPA[etapa_origem]) > 1
+
+
+# Politica EXPLICITA de transicoes permitidas -- substitui a antiga
+# sequencia linear universal (toda etapa so avancava para a proxima).
+# Um documento que nao exige separacao, por exemplo, vai direto de
+# CLASSIFICACAO para IDENTIFICACAO ou VALIDACAO, sem passar
+# artificialmente por SEPARACAO. CLASSIFICACAO -> AUDITORIA existe para
+# duplicidade detectada ou descarte controlado (documento que nao
+# segue o fluxo normal de pacote/distribuicao). AUDITORIA e sempre
+# terminal (frozenset() -- nenhuma transicao a partir dela). Nenhuma
+# entrada aqui pode apontar para uma etapa de indice igual ou menor que
+# a etapa de origem -- essa invariante e verificada logo abaixo, na
+# carga do modulo, para que uma edicao futura que introduza retrocesso
+# quebre a IMPORTACAO do modulo (falha alta e ruidosa), nunca em
+# silencio.
+TRANSICOES_ETAPA_PERMITIDAS: Mapping[EtapaEsteira, frozenset] = types.MappingProxyType({
+    EtapaEsteira.ENTRADA: frozenset({EtapaEsteira.REGISTRO}),
+    EtapaEsteira.REGISTRO: frozenset({EtapaEsteira.CLASSIFICACAO}),
+    EtapaEsteira.CLASSIFICACAO: frozenset({
+        EtapaEsteira.SEPARACAO,
+        EtapaEsteira.IDENTIFICACAO,
+        EtapaEsteira.VALIDACAO,
+        EtapaEsteira.AUDITORIA,
+    }),
+    EtapaEsteira.SEPARACAO: frozenset({EtapaEsteira.IDENTIFICACAO}),
+    EtapaEsteira.IDENTIFICACAO: frozenset({EtapaEsteira.VALIDACAO}),
+    EtapaEsteira.VALIDACAO: frozenset({EtapaEsteira.MONTAGEM_PACOTE}),
+    EtapaEsteira.MONTAGEM_PACOTE: frozenset({EtapaEsteira.DISTRIBUICAO}),
+    EtapaEsteira.DISTRIBUICAO: frozenset({EtapaEsteira.CONFIRMACAO}),
+    EtapaEsteira.CONFIRMACAO: frozenset({EtapaEsteira.AUDITORIA}),
+    EtapaEsteira.AUDITORIA: frozenset(),  # terminal
+})
+
+assert all(
+    INDICE_ETAPA[destino] > INDICE_ETAPA[origem]
+    for origem, destinos in TRANSICOES_ETAPA_PERMITIDAS.items()
+    for destino in destinos
+), (
+    'TRANSICOES_ETAPA_PERMITIDAS contem uma transicao retroativa ou para a '
+    'propria etapa -- nunca permitido (ver "nao permitir retrocesso silencioso" '
+    'em MAGNATA_OS_DOCUMENTAL_MODULO01_FASE3.md).'
+)
+
+
 def validar_transicao_etapa(etapa_atual: EtapaEsteira, nova_etapa: EtapaEsteira) -> None:
-    """Levanta TransicaoEtapaInvalida se `nova_etapa` nao for a proxima
-    etapa valida a partir de `etapa_atual`. Nao muta nada -- so valida."""
+    """Levanta TransicaoEtapaInvalida se `nova_etapa` nao estiver
+    prevista na politica (TRANSICOES_ETAPA_PERMITIDAS) a partir de
+    `etapa_atual`. Nao muta nada -- so valida. Nao decide se a
+    transicao e um "salto" que exige motivo -- ver eh_salto_de_etapa."""
     permitidas = TRANSICOES_ETAPA_PERMITIDAS.get(etapa_atual, frozenset())
     if nova_etapa not in permitidas:
         raise TransicaoEtapaInvalida(

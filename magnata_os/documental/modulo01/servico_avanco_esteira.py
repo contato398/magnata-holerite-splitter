@@ -30,6 +30,8 @@ from .dominio_esteira import (
     SituacaoEsteira,
     TipoProximaAcao,
     AvancoBloqueadoPorPendencia,
+    MotivoSaltoObrigatorio,
+    eh_salto_de_etapa,
     validar_transicao_etapa,
 )
 from .repositorio import RepositorioHistorico
@@ -194,15 +196,28 @@ class ServicoAvancoEsteira:
         nova_etapa: EtapaEsteira,
         correlation_id: str,
         situacao_nova_etapa: SituacaoEsteira = SituacaoEsteira.AGUARDANDO,
+        motivo_transicao: Optional[str] = None,
     ) -> EstadoEsteiraDocumento:
         """
         Avanca o documento para `nova_etapa`. Valida a transicao contra
-        TRANSICOES_ETAPA_PERMITIDAS (dominio_esteira.py) e impede
-        qualquer avanco enquanto situacao == BLOQUEADO (levanta
+        a politica TRANSICOES_ETAPA_PERMITIDAS (dominio_esteira.py --
+        um grafo explicito, nao mais uma sequencia linear obrigatoria)
+        e impede qualquer avanco enquanto situacao == BLOQUEADO (levanta
         AvancoBloqueadoPorPendencia) -- o bloqueio precisa ser resolvido
-        primeiro via resolver_bloqueio(). Registra saida da etapa
-        anterior e entrada na nova via um unico evento ESTEIRA_* no
-        historico (Fase 1).
+        primeiro via resolver_bloqueio().
+
+        Quando a transicao PULA uma ou mais etapas intermediarias da
+        ordem canonica (ver eh_salto_de_etapa -- ex.:
+        CLASSIFICACAO -> VALIDACAO, ou CLASSIFICACAO -> AUDITORIA para
+        duplicidade/descarte controlado), `motivo_transicao` e
+        OBRIGATORIO -- levanta MotivoSaltoObrigatorio se ausente ou
+        vazio. Para uma transicao "passo a passo" comum (destino e a
+        proxima etapa imediata da ordem canonica), `motivo_transicao` e
+        opcional. Em qualquer caso, `motivo_transicao` (quando
+        informado) e sempre registrado no evento de auditoria.
+
+        Registra saida da etapa anterior e entrada na nova via um unico
+        evento ESTEIRA_* no historico (Fase 1).
         """
         estado_atual = self._buscar_estado_ou_levantar(documento_id)
 
@@ -214,6 +229,14 @@ class ServicoAvancoEsteira:
             )
 
         validar_transicao_etapa(estado_atual.etapa_atual, nova_etapa)
+
+        eh_salto = eh_salto_de_etapa(estado_atual.etapa_atual, nova_etapa)
+        if eh_salto and not (motivo_transicao and motivo_transicao.strip()):
+            raise MotivoSaltoObrigatorio(
+                f'Transicao {estado_atual.etapa_atual.value} -> {nova_etapa.value} pula etapa(s) '
+                f'intermediaria(s) da ordem canonica -- motivo_transicao e obrigatorio para '
+                f'justificar o salto (documento_id={documento_id}).'
+            )
 
         agora = self._relogio()
         novo_estado = EstadoEsteiraDocumento(
@@ -234,6 +257,8 @@ class ServicoAvancoEsteira:
                 'etapa_anterior': estado_atual.etapa_atual.value,
                 'etapa_nova': nova_etapa.value,
                 'situacao_nova': situacao_nova_etapa.value,
+                'eh_salto': eh_salto,
+                'motivo_transicao': motivo_transicao,
             },
         )
         return novo_estado

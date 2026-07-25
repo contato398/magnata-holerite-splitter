@@ -1,30 +1,51 @@
 """
 Servico de criacao de lote (Modulo 01, Fase 3).
 
-Ponto de entrada oficial para qualquer entrada NOVA de documentos a
-partir desta fase: agrupa N arquivos recebidos juntos (mesma origem,
-mesmo correlation_id) num LoteDocumental, delega a cada arquivo
+PORTA OFICIAL DE ENTRADA OPERACIONAL a partir desta fase: qualquer
+integracao NOVA que precise registrar documentos deve chamar
+ServicoCriacaoLote.criar_lote(), nunca ServicoEntradaDocumental
+(Fase 1) diretamente -- ver aviso na docstring de
+ServicoEntradaDocumental em servico_entrada.py.
+
+Agrupa N arquivos recebidos juntos (mesma origem, mesmo
+correlation_id) num LoteDocumental, delega a cada arquivo
 individualmente ao ServicoEntradaDocumental (Fase 1, reaproveitado sem
 alteracao) e cria o EstadoEsteiraDocumento inicial de cada um via
 ServicoAvancoEsteira (Fase 3).
 
-Principios aplicados:
-  - Nenhuma entrada nova criada por este servico fica sem lote_id --
-    "cada entrada nova deve possuir lote" e garantido aqui, no unico
-    lugar que fabrica lote_id (ver gerar_lote_id, dominio_esteira.py).
-    ServicoEntradaDocumental (Fase 1) continua aceitando lote_id=None
-    para nao quebrar nenhum chamador existente -- a garantia e de
-    CONVENCAO desta fase em diante, nao de um novo parametro obrigatorio
-    que quebraria a Fase 1/2 ja mergeadas (ver "Documentos legados" em
-    MAGNATA_OS_DOCUMENTAL_MODULO01_FASE3.md).
+Garantias desta porta:
+  - Todo Documento NOVO criado por criar_lote() sempre recebe lote_id
+    (nunca None) E EstadoEsteiraDocumento inicial -- as duas coisas
+    juntas, nunca uma sem a outra silenciosamente. lote_id vem de
+    passar sempre um lote_id real para
+    ServicoEntradaDocumental.registrar_entrada() (o unico lugar que
+    fabrica lote_id e gerar_lote_id(), dominio_esteira.py).
+  - Se o Documento for persistido com sucesso mas a criacao do estado
+    inicial da esteira falhar (ex.: RepositorioEstadosEsteira
+    indisponivel), o item do resumo e marcado sucesso=False com
+    documento_id preenchido e uma mensagem de erro explicita
+    (ver _processar_um_arquivo) -- o Documento JA EXISTE e NUNCA fica
+    escondido do resumo, mesmo sem estado de esteira. Esse Documento
+    fica, na pratica, no mesmo caso de "documento legado" tratado por
+    dtos_esteira.montar_item_esteira (rastreado_pela_esteira=False) ate
+    que uma nova tentativa (com o mesmo conteudo, via idempotencia por
+    hash) crie o estado que faltou.
   - Duplicidade nunca aborta o lote -- um arquivo cujo conteudo ja foi
     registrado antes (neste lote ou em qualquer lote anterior) e
     marcado `duplicado=True` no resumo, sem interromper o processamento
     dos demais arquivos.
   - Erro isolado nunca aborta o lote -- uma excecao ao processar UM
-    arquivo (ex.: arquivo vazio, falha de persistencia) e capturada,
-    registrada no item correspondente do resumo, e o loop continua para
-    o proximo arquivo.
+    arquivo (ex.: arquivo vazio, falha de persistencia, falha de
+    estado inicial da esteira) e capturada, registrada no item
+    correspondente do resumo, e o loop continua para o proximo
+    arquivo.
+
+ServicoEntradaDocumental (Fase 1) continua aceitando lote_id=None para
+nao quebrar nenhum chamador existente (scripts internos, testes,
+composicao de servicos) -- a garantia de "toda entrada nova tem lote" e
+de CONVENCAO a partir desta porta, nao um parametro obrigatorio novo
+que quebraria a Fase 1/2 ja mergeadas. Ver "Documentos legados" e
+"Entrada oficial por lote" em MAGNATA_OS_DOCUMENTAL_MODULO01_FASE3.md.
 """
 from __future__ import annotations
 
@@ -162,9 +183,21 @@ class ServicoCriacaoLote:
                     situacao_nova_etapa=SituacaoEsteira.CONCLUIDO,
                 )
         except Exception as exc:
+            # O Documento JA FOI PERSISTIDO com sucesso (linha acima) --
+            # essa falha e so no estado da esteira. Nunca escondemos o
+            # documento_id aqui: o item de resumo deixa explicito que o
+            # Documento existe, mas ficou sem (ou com) estado de esteira
+            # incompleto, para que quem consumir o ResumoLote saiba que
+            # precisa investigar/reconciliar esse documento_id
+            # especificamente -- nao e o mesmo caso de "arquivo nunca
+            # virou Documento" (bloco try acima).
             return ItemResumoLote(
                 nome_original=arquivo.nome_original, documento_id=documento.documento_id,
-                sucesso=False, duplicado=False, erro=str(exc),
+                sucesso=False, duplicado=False,
+                erro=(
+                    f'Documento persistido com sucesso (documento_id={documento.documento_id}), '
+                    f'mas falha ao criar/avancar o estado inicial da esteira: {exc}'
+                ),
             )
 
         return ItemResumoLote(
