@@ -143,6 +143,35 @@ Ordem de precedência (definida nesta etapa do Powerpack, item 6):
 não compete com os outros documentos — é a autoridade sobre princípios
 que nenhum item de 1 a 5 pode contrariar, em nenhuma circunstância.
 
+## Camada técnica: Skills e Subagentes (Etapa 3)
+
+**Documentação:** [`MAGNATA_AI_SKILLS_E_SUBAGENTES.md`](MAGNATA_AI_SKILLS_E_SUBAGENTES.md)
+
+**Propósito:** Estabelecer procedimentos reutilizáveis de engenharia e
+agentes técnicos especializados para verificação, governança e validação.
+
+**Composição:**
+
+- **5 Skills** (procedimentos):
+  1. `magnata-repository-safety` — segurança do repositório
+  2. `magnata-architecture-governance` — governança arquitetural
+  3. `magnata-legacy-preservation` — proteção do legado
+  4. `magnata-documentation-consistency` — coerência documental
+  5. `magnata-validation-gate` — consolidação final
+
+- **5 Subagentes** (agentes especializados):
+  1. `repository-cartographer` — mapeamento estrutural
+  2. `architecture-reviewer` — análise arquitetural
+  3. `legacy-guardian` — proteção operacional
+  4. `documentation-auditor` — auditoria documental
+  5. `quality-gate-reviewer` — revisão final
+
+**Matriz de responsabilidades:** [`.claude/MATRIX_DE_RESPONSABILIDADES.md`](../../.claude/MATRIX_DE_RESPONSABILIDADES.md)
+
+**Limite de escopo:** Todos trabalham em leitura segura do repositório.
+Nenhum acesso autônomo a produção. Nenhuma alteração de código. Nenhum
+MCP, hook ou agente contínuo instalado.
+
 ## Por que os arquivos não foram movidos para cá
 
 Os 9 documentos fundacionais se referenciam uns aos outros **pelo nome
