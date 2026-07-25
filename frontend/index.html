@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Magnata OS — Central Documental</title>
+  <meta name="description" content="Painel operacional da esteira documental do Magnata OS." />
+  <link rel="icon" type="image/svg+xml" href="assets/brand/magnata-symbol.svg" />
+  <link rel="stylesheet" href="styles/tokens.css" />
+  <link rel="stylesheet" href="styles/base.css" />
+  <link rel="stylesheet" href="styles/components.css" />
+</head>
+<body>
+  <div id="raiz"></div>
+  <script type="module">
+    import { iniciarApp } from './src/app.js';
+    iniciarApp(document.getElementById('raiz'));
+  </script>
+</body>
+</html>

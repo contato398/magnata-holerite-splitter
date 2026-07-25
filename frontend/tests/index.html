@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>Magnata OS — Central Documental — Testes (Fase 5)</title>
+  <style>
+    body { font-family: -apple-system, sans-serif; max-width: 900px; margin: 24px auto; padding: 0 16px; color: #1c2430; }
+    h1 { font-size: 1.4rem; }
+    section { margin-bottom: 20px; }
+    section h2 { font-size: 1rem; border-bottom: 1px solid #e2e5ea; padding-bottom: 4px; }
+    ul { list-style: none; padding: 0; }
+    li { padding: 3px 0; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <div id="relatorio">Rodando testes…</div>
+  <script type="module">
+    import { rodarTestes, renderRelatorio } from './test-harness.js';
+
+    import './format.test.js';
+    import './contracts.test.js';
+    import './errors.test.js';
+    import './filtros.test.js';
+    import './prioridade.test.js';
+    import './responsive.test.js';
+    import './store.test.js';
+    import './mockAdapter.test.js';
+    import './components.test.js';
+    import './legado.test.js';
+
+    rodarTestes().then((relatorio) => {
+      renderRelatorio(document.getElementById('relatorio'), relatorio);
+      console.log(`TESTES: ${relatorio.testes - relatorio.falhas}/${relatorio.testes} passaram`);
+      if (relatorio.falhas > 0) {
+        for (const suite of relatorio.resultados) {
+          for (const teste of suite.testes) {
+            if (!teste.ok) console.error(`FALHOU: [${suite.nome}] ${teste.nome} -- ${teste.mensagem}`);
+          }
+        }
+      }
+    });
+  </script>
+</body>
+</html>
