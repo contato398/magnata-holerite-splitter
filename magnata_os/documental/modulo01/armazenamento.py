@@ -8,16 +8,26 @@ ver adapters/s3_armazenamento.py para o adapter real.
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import threading
 from typing import BinaryIO, Protocol
 
 
 class ConteudoDivergente(Exception):
-    """Ja existe um objeto armazenado para este hash, mas com tamanho
-    diferente do conteudo agora enviado -- nunca sobrescreve em
-    silencio. Indica colisao de hash (praticamente impossivel para
-    SHA-256) ou um bug de quem calculou o hash antes de chamar aqui."""
+    """Ja existe um objeto armazenado para este hash que nao corresponde
+    ao conteudo agora enviado -- nunca sobrescreve em silencio. Indica
+    corrupcao/adulteracao do objeto ja armazenado (o que foi gravado nao
+    bate mais com o proprio hash que o nomeia), ja que
+    HashInconsistente cobre o caso de o CHAMADOR informar um hash que
+    nao corresponde ao conteudo desta chamada."""
+
+
+class HashInconsistente(Exception):
+    """O hash_sha256 informado nao corresponde ao SHA-256 real do
+    conteudo desta chamada -- nunca aceito, mesmo que o tamanho bata.
+    Verificado localmente (recalculando o hash), sem confiar no valor
+    que o chamador afirma."""
 
 
 class ArquivoNaoEncontrado(Exception):
@@ -79,13 +89,21 @@ class ArmazenamentoArquivosEmMemoria:
         self, hash_sha256: str, conteudo: bytes, mime_type: str,
         nome_original: str, tamanho: int,
     ) -> str:
+        hash_real = hashlib.sha256(conteudo).hexdigest()
+        if hash_real != (hash_sha256 or '').strip().lower():
+            raise HashInconsistente(
+                f'hash_sha256 informado ({hash_sha256!r}) nao corresponde ao SHA-256 '
+                f'real do conteudo ({hash_real}).'
+            )
+
         with self._lock:
             existente = self._objetos.get(hash_sha256)
             if existente is not None:
                 if len(existente) != tamanho or existente != conteudo:
                     raise ConteudoDivergente(
-                        f'Ja existe objeto armazenado para hash={hash_sha256} '
-                        f'com conteudo diferente do agora enviado.'
+                        f'Ja existe objeto armazenado para hash={hash_sha256} que nao '
+                        f'corresponde ao conteudo agora enviado (mesmo tamanho ou nao) -- '
+                        f'objeto ja armazenado pode estar corrompido/adulterado.'
                     )
                 return self.referencia(hash_sha256)
 

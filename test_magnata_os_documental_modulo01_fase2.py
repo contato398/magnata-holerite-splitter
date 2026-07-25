@@ -6,9 +6,11 @@ testados contra duplos de teste (fakes) que implementam a mesma
 interface minima (DB-API 2.0 / cliente S3-like) que um driver real
 exporia -- nunca importam psycopg2/psycopg/boto3.
 """
+import hashlib
 import io
 import threading
 from datetime import datetime, timezone
+from urllib.parse import unquote
 
 import pytest
 
@@ -16,6 +18,7 @@ from magnata_os.documental.modulo01.armazenamento import (
     ArmazenamentoArquivosEmMemoria,
     ArquivoNaoEncontrado,
     ConteudoDivergente,
+    HashInconsistente,
 )
 from magnata_os.documental.modulo01.adapters.postgres_repositorio import (
     RepositorioDocumentosPostgres,
@@ -59,8 +62,9 @@ class _BancoFalso:
 
 
 class _CursorFalso:
-    def __init__(self, banco: _BancoFalso):
+    def __init__(self, banco: _BancoFalso, conexao: '_ConexaoFalsa | None' = None):
         self._banco = banco
+        self._conexao = conexao
         self._resultado = []
         self._indice = 0
 
@@ -71,6 +75,11 @@ class _CursorFalso:
         return False
 
     def execute(self, sql, params=()):
+        if self._conexao is not None and self._conexao.falhar_no_proximo_execute:
+            self._conexao.falhar_no_proximo_execute = False
+            self._conexao._abortada = True
+            raise ConnectionError('conexao com o banco perdida durante execute (simulado)')
+
         sql_norm = ' '.join(sql.split())
         banco = self._banco
 
@@ -165,15 +174,34 @@ class _ConexaoFalsa:
         self._banco = banco
         self.commits = 0
         self.rollbacks = 0
+        self._abortada = False
+        # Flags de injecao de falha, one-shot (resetadas ao disparar uma vez).
+        self.falhar_no_proximo_execute = False
+        self.falhar_no_proximo_commit = False
 
     def cursor(self):
-        return _CursorFalso(self._banco)
+        if self._abortada:
+            raise RuntimeError(
+                'current transaction is aborted, commands ignored until '
+                'end of transaction block (simulado)'
+            )
+        return _CursorFalso(self._banco, self)
 
     def commit(self):
+        if self._abortada:
+            raise RuntimeError(
+                'current transaction is aborted, commands ignored until '
+                'end of transaction block (simulado)'
+            )
+        if self.falhar_no_proximo_commit:
+            self.falhar_no_proximo_commit = False
+            self._abortada = True
+            raise ConnectionError('conexao com o banco perdida durante commit (simulado)')
         self.commits += 1
 
     def rollback(self):
         self.rollbacks += 1
+        self._abortada = False
 
 
 class _ConexaoQueFalhaNoExecute:
@@ -221,7 +249,16 @@ class _ClienteS3Falso:
         if chave not in self.objetos:
             raise ClientError({'Error': {'Code': '404', 'Message': 'Not Found'}}, 'HeadObject')
         obj = self.objetos[chave]
-        return {'ContentLength': len(obj['Body']), 'ContentType': obj['ContentType']}
+        # ETag real (MD5 hex entre aspas, como upload de parte unica) --
+        # recalculado a partir do Body ATUAL, para que uma adulteracao
+        # direta de objetos[...]['Body'] (usada nos testes de corrupcao)
+        # mude o ETag exatamente como aconteceria num S3 real.
+        etag = hashlib.md5(obj['Body']).hexdigest()
+        return {
+            'ContentLength': len(obj['Body']),
+            'ContentType': obj['ContentType'],
+            'ETag': f'"{etag}"',
+        }
 
     def put_object(self, Bucket, Key, Body, ContentType, Metadata):
         self.chamadas_put_object += 1
@@ -246,24 +283,45 @@ class _ClienteS3Falso:
 
 def test_armazenamento_em_memoria_idempotente_por_hash():
     armazenamento = ArmazenamentoArquivosEmMemoria()
-    ref1 = armazenamento.armazenar('h1' * 32, b'conteudo', 'application/pdf', 'a.pdf', 8)
-    ref2 = armazenamento.armazenar('h1' * 32, b'conteudo', 'application/pdf', 'a.pdf', 8)
+    conteudo = b'conteudo'
+    h = _sha(conteudo)
+    ref1 = armazenamento.armazenar(h, conteudo, 'application/pdf', 'a.pdf', len(conteudo))
+    ref2 = armazenamento.armazenar(h, conteudo, 'application/pdf', 'a.pdf', len(conteudo))
     assert ref1 == ref2
-    assert armazenamento.existe('h1' * 32)
+    assert armazenamento.existe(h)
 
 
 def test_armazenamento_em_memoria_conteudo_diferente_mesma_chave_rejeitado():
+    """Um segundo armazenar() legitimo nunca alcanca mais ConteudoDivergente
+    por si so -- o hash informado e sempre validado contra o conteudo desta
+    chamada primeiro (HashInconsistente cobre esse caso, ver teste
+    especifico abaixo). ConteudoDivergente agora so e alcancavel quando o
+    objeto JA armazenado foi corrompido/adulterado depois do fato -- aqui
+    simulado adulterando o backing store diretamente."""
     armazenamento = ArmazenamentoArquivosEmMemoria()
-    h = 'h2' * 32
-    armazenamento.armazenar(h, b'conteudo original', 'application/pdf', 'a.pdf', 18)
+    conteudo = b'conteudo original mesmo tamanho'
+    corrompido = b'conteudo alterado mesmo tamanho'
+    assert len(corrompido) == len(conteudo)
+    h = _sha(conteudo)
+
+    armazenamento.armazenar(h, conteudo, 'application/pdf', 'a.pdf', len(conteudo))
+    armazenamento._objetos[h] = corrompido  # simula corrupcao do objeto ja armazenado
+
     with pytest.raises(ConteudoDivergente):
-        armazenamento.armazenar(h, b'conteudo TOTALMENTE diferente!!', 'application/pdf', 'a.pdf', 31)
+        armazenamento.armazenar(h, conteudo, 'application/pdf', 'a.pdf', len(conteudo))
+
+
+def test_armazenamento_em_memoria_hash_informado_diferente_do_conteudo_rejeitado():
+    armazenamento = ArmazenamentoArquivosEmMemoria()
+    with pytest.raises(HashInconsistente):
+        armazenamento.armazenar('0' * 64, b'conteudo qualquer', 'application/pdf', 'a.pdf', 17)
 
 
 def test_armazenamento_em_memoria_leitura_por_streaming():
     armazenamento = ArmazenamentoArquivosEmMemoria()
-    h = 'h3' * 32
-    armazenamento.armazenar(h, b'conteudo para streaming', 'application/pdf', 'a.pdf', 23)
+    conteudo = b'conteudo para streaming'
+    h = _sha(conteudo)
+    armazenamento.armazenar(h, conteudo, 'application/pdf', 'a.pdf', len(conteudo))
     stream = armazenamento.abrir_leitura(h)
     assert hasattr(stream, 'read')
     assert stream.read() == b'conteudo para streaming'
@@ -281,7 +339,7 @@ def test_armazenamento_em_memoria_concorrencia_por_hash():
     mesma referencia."""
     armazenamento = ArmazenamentoArquivosEmMemoria()
     conteudo = b'conteudo concorrente identico'
-    h = 'h4' * 32
+    h = _sha(conteudo)
     n = 20
     barreira = threading.Barrier(n)
     referencias = []
@@ -316,27 +374,47 @@ def test_armazenamento_em_memoria_concorrencia_por_hash():
 def test_s3_armazenar_idempotente_nao_reenvia():
     cliente = _ClienteS3Falso()
     adapter = ArmazenamentoArquivosS3(cliente, bucket='meu-bucket')
-    h = 's1' * 32
-    ref1 = adapter.armazenar(h, b'conteudo s3', 'application/pdf', 'a.pdf', 11)
-    ref2 = adapter.armazenar(h, b'conteudo s3', 'application/pdf', 'a.pdf', 11)
+    conteudo = b'conteudo s3'
+    h = _sha(conteudo)
+    ref1 = adapter.armazenar(h, conteudo, 'application/pdf', 'a.pdf', len(conteudo))
+    ref2 = adapter.armazenar(h, conteudo, 'application/pdf', 'a.pdf', len(conteudo))
     assert ref1 == ref2
     assert cliente.chamadas_put_object == 1  # segunda chamada nao reenviou
 
 
 def test_s3_conteudo_diferente_mesma_chave_rejeitado():
+    """Mesma logica do teste equivalente em memoria: so alcancavel via
+    corrupcao do objeto ja gravado no S3 (ETag muda), nunca por uma
+    chamada legitima de armazenar() (que agora sempre valida o hash
+    informado contra o conteudo desta chamada primeiro)."""
     cliente = _ClienteS3Falso()
     adapter = ArmazenamentoArquivosS3(cliente, bucket='meu-bucket')
-    h = 's2' * 32
-    adapter.armazenar(h, b'conteudo original s3', 'application/pdf', 'a.pdf', 20)
+    conteudo = b'conteudo original mesmo tamanho'
+    corrompido = b'conteudo alterado mesmo tamanho'
+    assert len(corrompido) == len(conteudo)
+    h = _sha(conteudo)
+
+    adapter.armazenar(h, conteudo, 'application/pdf', 'a.pdf', len(conteudo))
+    cliente.objetos[('meu-bucket', f'documentos/{h}')]['Body'] = corrompido
+
     with pytest.raises(ConteudoDivergente):
-        adapter.armazenar(h, b'conteudo diferente completamente novo', 'application/pdf', 'a.pdf', 37)
+        adapter.armazenar(h, conteudo, 'application/pdf', 'a.pdf', len(conteudo))
+
+
+def test_s3_hash_informado_diferente_do_conteudo_rejeitado():
+    cliente = _ClienteS3Falso()
+    adapter = ArmazenamentoArquivosS3(cliente, bucket='meu-bucket')
+    with pytest.raises(HashInconsistente):
+        adapter.armazenar('0' * 64, b'conteudo qualquer s3', 'application/pdf', 'a.pdf', 20)
+    assert cliente.chamadas_put_object == 0
 
 
 def test_s3_leitura_por_streaming():
     cliente = _ClienteS3Falso()
     adapter = ArmazenamentoArquivosS3(cliente, bucket='meu-bucket')
-    h = 's3' * 32
-    adapter.armazenar(h, b'conteudo para stream s3', 'application/pdf', 'a.pdf', 23)
+    conteudo = b'conteudo para stream s3'
+    h = _sha(conteudo)
+    adapter.armazenar(h, conteudo, 'application/pdf', 'a.pdf', len(conteudo))
     stream = adapter.abrir_leitura(h)
     assert hasattr(stream, 'read')
     assert stream.read() == b'conteudo para stream s3'
@@ -351,8 +429,9 @@ def test_s3_existe_false_quando_nao_armazenado():
 def test_s3_remover_e_so_compensacao_nunca_automatico():
     cliente = _ClienteS3Falso()
     adapter = ArmazenamentoArquivosS3(cliente, bucket='meu-bucket')
-    h = 's4' * 32
-    adapter.armazenar(h, b'conteudo removivel', 'application/pdf', 'a.pdf', 18)
+    conteudo = b'conteudo removivel'
+    h = _sha(conteudo)
+    adapter.armazenar(h, conteudo, 'application/pdf', 'a.pdf', len(conteudo))
     assert adapter.existe(h)
     adapter.remover(h)
     assert not adapter.existe(h)
@@ -361,10 +440,26 @@ def test_s3_remover_e_so_compensacao_nunca_automatico():
 def test_s3_chave_baseada_no_hash():
     cliente = _ClienteS3Falso()
     adapter = ArmazenamentoArquivosS3(cliente, bucket='meu-bucket', prefixo='docs/')
-    h = 's5' * 32
-    ref = adapter.armazenar(h, b'x', 'application/pdf', 'a.pdf', 1)
+    conteudo = b'x'
+    h = _sha(conteudo)
+    ref = adapter.armazenar(h, conteudo, 'application/pdf', 'a.pdf', len(conteudo))
     assert ref == f's3://meu-bucket/docs/{h}'
     assert (('meu-bucket', f'docs/{h}')) in cliente.objetos
+
+
+def test_s3_nome_original_com_acentos_codificado_com_seguranca_nos_metadados():
+    cliente = _ClienteS3Falso()
+    adapter = ArmazenamentoArquivosS3(cliente, bucket='meu-bucket')
+    nome = 'contracheque – João Ação (março).pdf'
+    conteudo = b'conteudo com nome acentuado'
+    h = _sha(conteudo)
+
+    adapter.armazenar(h, conteudo, 'application/pdf', nome, len(conteudo))
+
+    metadata = cliente.objetos[('meu-bucket', f'documentos/{h}')]['Metadata']
+    valor_codificado = metadata['nome-original']
+    assert valor_codificado.isascii()
+    assert unquote(valor_codificado) == nome
 
 
 # ============================================================================
@@ -476,6 +571,98 @@ def test_postgres_reinicializacao_simulada_dados_sobrevivem():
 
 
 # ============================================================================
+# adapter Postgres -- rollback explicito em falha (correcao BLOCKING da
+# revisao do commit a44bb10)
+# ============================================================================
+
+def test_postgres_salvar_execute_falha_aciona_rollback_e_propaga():
+    banco = _BancoFalso()
+    conexao = _ConexaoFalsa(banco)
+    repo = RepositorioDocumentosPostgres(conexao)
+
+    conexao.falhar_no_proximo_execute = True
+    with pytest.raises(ConnectionError):
+        repo.salvar(_documento_teste('doc-exec-falha', 'hashexecfalha' * 5))
+
+    assert conexao.rollbacks == 1
+    assert conexao.commits == 0
+
+
+def test_postgres_salvar_commit_falha_aciona_rollback_e_propaga():
+    banco = _BancoFalso()
+    conexao = _ConexaoFalsa(banco)
+    repo = RepositorioDocumentosPostgres(conexao)
+
+    conexao.falhar_no_proximo_commit = True
+    with pytest.raises(ConnectionError):
+        repo.salvar(_documento_teste('doc-commit-falha', 'hashcommitfalha' * 4))
+
+    assert conexao.rollbacks == 1
+
+
+def test_postgres_remover_execute_falha_aciona_rollback_e_propaga():
+    banco = _BancoFalso()
+    conexao = _ConexaoFalsa(banco)
+    repo = RepositorioDocumentosPostgres(conexao)
+    repo.salvar(_documento_teste('doc-remover-falha', 'hashremoverfalha' * 4))
+
+    conexao.falhar_no_proximo_execute = True
+    with pytest.raises(ConnectionError):
+        repo.remover('doc-remover-falha')
+
+    assert conexao.rollbacks == 1
+    # documento nao foi removido -- o DELETE nunca foi efetivado (o fake
+    # simula a falha ANTES de mutar o banco, ver _CursorFalso.execute)
+    assert repo.buscar_por_id('doc-remover-falha') is not None
+
+
+def test_postgres_fake_conexao_bloqueada_ate_rollback_explicito():
+    """Prova a fidelidade do duplo de teste: uma falha de execute deixa a
+    'conexao' em estado abortado, bloqueando qualquer operacao seguinte
+    ate um rollback() explicito -- exatamente o comportamento real do
+    Postgres que motivou adicionar try/except com rollback explicito em
+    RepositorioDocumentosPostgres.salvar()/remover() e
+    RepositorioHistoricoPostgres.registrar() (revisao do commit a44bb10).
+    Este teste opera diretamente na conexao falsa, sem passar pelo
+    rollback automatico do adapter, para isolar o comportamento do fake."""
+    banco = _BancoFalso()
+    conexao = _ConexaoFalsa(banco)
+
+    conexao.falhar_no_proximo_execute = True
+    with pytest.raises(ConnectionError):
+        with conexao.cursor() as cur:
+            cur.execute('INSERT INTO documentos (documento_id) VALUES (%s)', ('x',))
+
+    with pytest.raises(RuntimeError, match='aborted'):
+        conexao.cursor()
+    with pytest.raises(RuntimeError, match='aborted'):
+        conexao.commit()
+
+    conexao.rollback()
+    assert conexao.cursor() is not None  # nao levanta mais apos rollback()
+
+
+def test_postgres_nova_operacao_funciona_apos_rollback_automatico_do_adapter():
+    """Ao contrario do teste acima (que prova o bloqueio no nivel do
+    fake), este prova que o rollback automatico DENTRO do adapter
+    (salvar/remover/registrar) e suficiente -- o chamador nao precisa
+    fazer nada alem de tratar a excecao propagada; a proxima operacao na
+    MESMA conexao ja funciona normalmente."""
+    banco = _BancoFalso()
+    conexao = _ConexaoFalsa(banco)
+    repo = RepositorioDocumentosPostgres(conexao)
+
+    conexao.falhar_no_proximo_execute = True
+    with pytest.raises(ConnectionError):
+        repo.salvar(_documento_teste('doc-falha-1', 'hashfalha1' * 6))
+
+    assert conexao.rollbacks == 1  # rollback ja aconteceu, sem intervencao externa
+
+    repo.salvar(_documento_teste('doc-ok-depois', 'hashokdepois' * 5))
+    assert repo.buscar_por_id('doc-ok-depois') is not None
+
+
+# ============================================================================
 # adapter Postgres -- historico
 # ============================================================================
 
@@ -522,6 +709,26 @@ def test_postgres_historico_correlation_id_preservado():
 
     eventos = repo_hist.listar_por_documento('doc-corr')
     assert eventos[0].correlation_id == 'corr-pg-123'
+
+
+def test_postgres_historico_registrar_execute_falha_aciona_rollback_e_propaga():
+    banco = _BancoFalso()
+    conexao = _ConexaoFalsa(banco)
+    repo_docs = RepositorioDocumentosPostgres(conexao)
+    repo_hist = RepositorioHistoricoPostgres(conexao)
+    repo_docs.salvar(_documento_teste('doc-hist-exec-falha', 'hashhistexecfalha' * 3))
+
+    conexao.falhar_no_proximo_execute = True
+    with pytest.raises(ConnectionError):
+        repo_hist.registrar(_evento_teste('doc-hist-exec-falha'))
+
+    assert conexao.rollbacks == 1
+
+    # nova operacao (documento diferente) na mesma conexao funciona
+    # imediatamente apos o rollback automatico do adapter
+    repo_docs.salvar(_documento_teste('doc-hist-exec-falha-2', 'hashhistexecfalha2' * 2))
+    repo_hist.registrar(_evento_teste('doc-hist-exec-falha-2'))
+    assert len(repo_hist.listar_por_documento('doc-hist-exec-falha-2')) == 1
 
 
 # ============================================================================
@@ -598,8 +805,7 @@ def test_entrada_com_armazenamento_compensacao_arquivo_permanece_apos_falha_no_d
             conteudo, 'y.pdf', 'application/pdf', 'upload_manual',
         )
 
-    import hashlib
-    hash_sha256 = hashlib.sha256(conteudo).hexdigest()
+    hash_sha256 = _sha(conteudo)
     assert armazenamento.existe(hash_sha256)  # arquivo NAO foi removido
 
     # nova tentativa (com repositorio funcional) reaproveita o arquivo ja armazenado
@@ -631,6 +837,10 @@ def test_entrada_com_armazenamento_nunca_cria_dois_documentos_para_mesmo_hash():
 # ============================================================================
 # helpers
 # ============================================================================
+
+def _sha(conteudo: bytes) -> str:
+    return hashlib.sha256(conteudo).hexdigest()
+
 
 def _documento_teste(documento_id, hash_sha256):
     from magnata_os.documental.modulo01.dominio import Documento

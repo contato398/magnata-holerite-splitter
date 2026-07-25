@@ -34,9 +34,12 @@ def _e_violacao_de_integridade(exc: Exception) -> bool:
     """
     Deteccao duck-typed de violacao de constraint (ex.: UNIQUE, FK), sem
     importar nenhum driver especifico. A PEP 249 (DB-API 2.0) padroniza
-    o NOME da classe IntegrityError entre drivers compativeis (psycopg2,
-    psycopg v3, sqlite3, etc.) -- confere pelo nome na cadeia de
-    classes-base, nao por isinstance contra um modulo especifico.
+    o NOME da classe IntegrityError entre drivers da familia psycopg
+    (psycopg2, psycopg v3) -- confere pelo nome na cadeia de
+    classes-base, nao por isinstance contra um modulo especifico. Este
+    adapter usa placeholders `%s` (estilo pyformat), especifico de
+    psycopg -- NAO e generico para qualquer driver DB-API 2.0 (ex.:
+    sqlite3 usa `?` e nao e compativel sem adaptacao).
     """
     return any(base.__name__ == 'IntegrityError' for base in type(exc).__mro__)
 
@@ -115,15 +118,24 @@ class RepositorioDocumentosPostgres:
         colunas = ', '.join(_COLUNAS_DOCUMENTOS)
         marcadores = ', '.join(['%s'] * len(_COLUNAS_DOCUMENTOS))
         atualizacoes = ', '.join(f'{c} = EXCLUDED.{c}' for c in _COLUNAS_DOCUMENTOS if c != 'documento_id')
-        with self._conexao.cursor() as cur:
-            cur.execute(
-                f"""
-                INSERT INTO documentos ({colunas}) VALUES ({marcadores})
-                ON CONFLICT (documento_id) DO UPDATE SET {atualizacoes}
-                """,
-                _documento_para_linha(documento),
-            )
-        self._conexao.commit()
+        try:
+            with self._conexao.cursor() as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO documentos ({colunas}) VALUES ({marcadores})
+                    ON CONFLICT (documento_id) DO UPDATE SET {atualizacoes}
+                    """,
+                    _documento_para_linha(documento),
+                )
+            self._conexao.commit()
+        except Exception:
+            # Sem rollback aqui, a conexao ficaria em estado de transacao
+            # abortada ate um ROLLBACK explicito -- qualquer operacao
+            # seguinte na mesma conexao falharia, inclusive as tentativas
+            # de compensacao da Fase 1 (marcar ERRO, registrar
+            # FALHA_REGISTRO_HISTORICO).
+            self._conexao.rollback()
+            raise
 
     def salvar_se_ausente_por_hash(
         self, hash_sha256: str, fabricar_documento: Callable[[], Documento],
@@ -170,9 +182,13 @@ class RepositorioDocumentosPostgres:
         return existente, False
 
     def remover(self, documento_id: str) -> None:
-        with self._conexao.cursor() as cur:
-            cur.execute('DELETE FROM documentos WHERE documento_id = %s', (documento_id,))
-        self._conexao.commit()
+        try:
+            with self._conexao.cursor() as cur:
+                cur.execute('DELETE FROM documentos WHERE documento_id = %s', (documento_id,))
+            self._conexao.commit()
+        except Exception:
+            self._conexao.rollback()
+            raise
 
     def listar_todos(self) -> List[Documento]:
         colunas = ', '.join(_COLUNAS_DOCUMENTOS)
@@ -195,20 +211,29 @@ class RepositorioHistoricoPostgres:
     def registrar(self, evento: EventoHistorico) -> None:
         colunas = ', '.join(_COLUNAS_EVENTOS)
         marcadores = ', '.join(['%s'] * len(_COLUNAS_EVENTOS))
-        with self._conexao.cursor() as cur:
-            cur.execute(
-                f'INSERT INTO eventos_documentais ({colunas}) VALUES ({marcadores})',
-                (
-                    evento.documento_id,
-                    evento.evento,
-                    evento.status_anterior.value if evento.status_anterior else None,
-                    evento.status_novo.value if evento.status_novo else None,
-                    evento.timestamp,
-                    evento.correlation_id,
-                    json.dumps(dict(evento.detalhes)),
-                ),
-            )
-        self._conexao.commit()
+        try:
+            with self._conexao.cursor() as cur:
+                cur.execute(
+                    f'INSERT INTO eventos_documentais ({colunas}) VALUES ({marcadores})',
+                    (
+                        evento.documento_id,
+                        evento.evento,
+                        evento.status_anterior.value if evento.status_anterior else None,
+                        evento.status_novo.value if evento.status_novo else None,
+                        evento.timestamp,
+                        evento.correlation_id,
+                        json.dumps(dict(evento.detalhes)),
+                    ),
+                )
+            self._conexao.commit()
+        except Exception:
+            # Critico: sem rollback, uma falha aqui (ex.: violacao de FK)
+            # deixaria a conexao abortada -- e a proxima tentativa de
+            # compensacao da Fase 1 (_tratar_falha_historico tentando
+            # marcar o Documento como ERRO na MESMA conexao) falharia
+            # silenciosamente, mascarando a falha real.
+            self._conexao.rollback()
+            raise
 
     def listar_por_documento(self, documento_id: str) -> List[EventoHistorico]:
         colunas = ', '.join(_COLUNAS_EVENTOS)
