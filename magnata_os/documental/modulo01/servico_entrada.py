@@ -66,7 +66,22 @@ def _relogio_padrao() -> datetime:
 
 class ServicoEntradaDocumental:
     """Orquestra o registro de um documento novo. Nao faz OCR,
-    classificacao, fatiamento nem vinculo -- so recebe e registra."""
+    classificacao, fatiamento nem vinculo -- so recebe e registra.
+
+    AVISO (a partir da Fase 3): este e um servico de BAIXO NIVEL,
+    mantido por compatibilidade com quem ja o chama diretamente
+    (servico_entrada_persistente.py da Fase 2, testes, composicao
+    interna de outros servicos). Integracoes NOVAS nao devem chamar
+    este servico diretamente -- a porta oficial de entrada operacional
+    e ServicoCriacaoLote.criar_lote() (servico_lote.py, Fase 3), que
+    garante lote_id e EstadoEsteiraDocumento para todo Documento novo e
+    isola falha/duplicidade por arquivo. Chamar este servico direto
+    cria um Documento tecnicamente valido, mas sem nenhum
+    acompanhamento operacional pela esteira (mesmo tratamento dado a
+    documentos legados -- ver "Documentos legados" em
+    MAGNATA_OS_DOCUMENTAL_MODULO01_FASE3.md). Esta classe continua sem
+    nenhuma dependencia de lote/esteira de proposito -- e o
+    ServicoCriacaoLote que a compoe, nao o contrario."""
 
     def __init__(
         self,
