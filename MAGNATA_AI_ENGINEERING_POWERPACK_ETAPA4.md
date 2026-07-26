@@ -2,8 +2,8 @@
 
 **Relatório de Conclusão: Arquitetura e Roadmap Operacional**
 
-**Data:** 2026-07-25  
-**Status:** Pronto para Revisão  
+**Data:** 2026-07-25
+**Status:** Pronto para Revisão
 **Escopo:** Documentação de capacidades, módulos, roadmap, matriz arquitetural e ADR-001
 
 ---
@@ -188,7 +188,7 @@ Arquivos novos (untracked):
   - MAGNATA_OS_ROADMAP.md
   - MAGNATA_OS_MATRIZ_ARQUITETURAL.md
   - MAGNATA_OS_ADR_001_NOMENCLATURA_ITEM_INGESTAO_VS_DOCUMENTO.md
-  
+
 Arquivos modificados:
   - docs/magnata-os/README.md
 
@@ -294,7 +294,7 @@ Aguardando aprovação de:
 
 ---
 
-**Relatório preparado em:** 2026-07-25  
-**Pronto para revisão sequencial:** Sim  
-**Bloqueadores de commit:** Nenhum pendente de Etapa 4  
+**Relatório preparado em:** 2026-07-25
+**Pronto para revisão sequencial:** Sim
+**Bloqueadores de commit:** Nenhum pendente de Etapa 4
 **Próxima ação:** Executar 5 revisões de subagentes (sem alterações durante revisão)

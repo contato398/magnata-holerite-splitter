@@ -1,9 +1,9 @@
 # Magnata AI Engineering Powerpack — Etapa 4
 ## Relatório de Divergências Encontradas na Revisão
 
-**Data:** 2026-07-25  
-**Status:** BLOQUEADOR CRÍTICO — Etapa 4 não pode prosseguir para commit  
-**Fonte:** Parecer de `architecture-reviewer` subagent  
+**Data:** 2026-07-25
+**Status:** BLOQUEADOR CRÍTICO — Etapa 4 não pode prosseguir para commit
+**Fonte:** Parecer de `architecture-reviewer` subagent
 **Norma:** CLAUDE.md §2 — "Nenhuma decisão arquitetural é tomada em silêncio"
 
 ---
@@ -179,7 +179,7 @@ A revisão arquitetural do subagent `architecture-reviewer` identificou **3 bloq
 - Nenhuma integração real foi acessada
 - Nenhuma violação de segurança
 
-**Pronto para:** Continuar revisão pelos 3 subagentes restantes (leitura apenas)  
+**Pronto para:** Continuar revisão pelos 3 subagentes restantes (leitura apenas)
 **Não pronto para:** Commit até que bloqueadores sejam resolvidos
 
 ---

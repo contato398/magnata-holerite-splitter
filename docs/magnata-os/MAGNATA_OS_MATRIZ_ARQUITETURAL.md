@@ -1,7 +1,7 @@
 # Magnata OS — Matriz Arquitetural
 
-**Versão:** 1.0  
-**Propósito:** Relacionar capacidades, módulos, camadas e estado atual vs. alvo  
+**Versão:** 1.0
+**Propósito:** Relacionar capacidades, módulos, camadas e estado atual vs. alvo
 **Data:** 2026-07-25
 
 ---

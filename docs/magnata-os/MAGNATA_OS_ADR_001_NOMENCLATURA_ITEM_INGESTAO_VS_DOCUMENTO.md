@@ -1,8 +1,8 @@
 # ADR-001: Nomenclatura — "Item de Ingestão" vs. "Documento"
 
-**Status:** PROPOSTA (Não decidida)  
-**Data:** 2026-07-25  
-**Autores:** Magnata OS Architecture  
+**Status:** PROPOSTA (Não decidida)
+**Data:** 2026-07-25
+**Autores:** Magnata OS Architecture
 **Impacto:** Alto (afeta código, documentação, contratos)
 
 ---

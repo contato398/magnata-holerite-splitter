@@ -1,8 +1,8 @@
 # Magnata OS — Roadmap de Implantação
 
-**Versão:** 1.0  
-**Estratégia:** Migração incremental via strangler pattern  
-**Data:** 2026-07-25  
+**Versão:** 1.0
+**Estratégia:** Migração incremental via strangler pattern
+**Data:** 2026-07-25
 
 ---
 

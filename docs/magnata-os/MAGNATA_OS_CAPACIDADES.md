@@ -1,8 +1,8 @@
 # Magnata OS — Catálogo de Capacidades
 
-**Versão:** 1.0  
-**Status:** Mapa estrutural ativo  
-**Data:** 2026-07-25  
+**Versão:** 1.0
+**Status:** Mapa estrutural ativo
+**Data:** 2026-07-25
 **Escopo:** Definição canônica das capacidades do Magnata OS
 
 ---

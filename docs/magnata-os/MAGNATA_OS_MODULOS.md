@@ -1,8 +1,8 @@
 # Magnata OS — Dez Módulos Funcionais
 
-**Versão:** 1.0  
-**Status:** Definição canônica de domínios  
-**Data:** 2026-07-25  
+**Versão:** 1.0
+**Status:** Definição canônica de domínios
+**Data:** 2026-07-25
 
 ---
 
@@ -55,7 +55,7 @@ Cada módulo abaixo **integra** essas responsabilidades em seu design. Não há 
 
 **Camadas:** Entrada, Auditoria
 
-**Estado atual:** Legado operacional (Gmail, upload parcial)  
+**Estado atual:** Legado operacional (Gmail, upload parcial)
 **Arquitetura-alvo:** API REST + adapter de armazenamento
 
 **Critérios de saída:** Arquivo armazenado, hash registrado, rastreabilidade confirmada
@@ -83,7 +83,7 @@ Cada módulo abaixo **integra** essas responsabilidades em seu design. Não há 
 
 **Camadas:** Inteligência, Transformação
 
-**Estado atual:** Não implementado (legado via app.py manual)  
+**Estado atual:** Não implementado (legado via app.py manual)
 **Arquitetura-alvo:** Módulo novo, com ML/heurísticas
 
 **Critérios de saída:** Tipo definido, proprietário associado, confiança registrada
@@ -111,7 +111,7 @@ Cada módulo abaixo **integra** essas responsabilidades em seu design. Não há 
 
 **Camadas:** Inteligência, Transformação
 
-**Estado atual:** Legado parcial (Secullum, Airtable)  
+**Estado atual:** Legado parcial (Secullum, Airtable)
 **Arquitetura-alvo:** PostgreSQL com sincronização bidirecional
 
 **Critérios de saída:** Entidade validada, canônica, com rastreabilidade
@@ -139,7 +139,7 @@ Cada módulo abaixo **integra** essas responsabilidades em seu design. Não há 
 
 **Camadas:** Negócio
 
-**Estado atual:** Legado em app.py (admissão manual)  
+**Estado atual:** Legado em app.py (admissão manual)
 **Arquitetura-alvo:** Módulo novo com workflow
 
 **Critérios de saída:** Vínculo registrado, documentos arquivados, dados validados
@@ -167,7 +167,7 @@ Cada módulo abaixo **integra** essas responsabilidades em seu design. Não há 
 
 **Camadas:** Entrada, Transformação
 
-**Estado atual:** Legado (Secullum API, cálculo em app.py)  
+**Estado atual:** Legado (Secullum API, cálculo em app.py)
 **Arquitetura-alvo:** Módulo novo com tratamento defensivo
 
 **Critérios de saída:** Colunar calculada, alertas gerados, histórico registrado
@@ -195,7 +195,7 @@ Cada módulo abaixo **integra** essas responsabilidades em seu design. Não há 
 
 **Camadas:** Transformação
 
-**Estado atual:** Legado (template em app.py, específico por cliente)  
+**Estado atual:** Legado (template em app.py, específico por cliente)
 **Arquitetura-alvo:** Motor de template com contrato definido
 
 **Critérios de saída:** PDF gerado, assinado, versionado, enviável
@@ -223,7 +223,7 @@ Cada módulo abaixo **integra** essas responsabilidades em seu design. Não há 
 
 **Camadas:** Entrega, Auditoria
 
-**Estado atual:** Legado (4 rotas duplicadas em app.py)  
+**Estado atual:** Legado (4 rotas duplicadas em app.py)
 **Arquitetura-alvo:** Módulo unificado, parametrizado por canal
 
 **Critérios de saída:** Documento entregue, status registrado, rastreabilidade confirmada
@@ -251,7 +251,7 @@ Cada módulo abaixo **integra** essas responsabilidades em seu design. Não há 
 
 **Camadas:** Negócio, Auditoria
 
-**Estado atual:** Legado (formulário simples, IP/CPF como evidência)  
+**Estado atual:** Legado (formulário simples, IP/CPF como evidência)
 **Arquitetura-alvo:** Módulo novo com protocolo robusto
 
 **Critérios de saída:** Link expirado, evidência imutável, auditável
@@ -279,7 +279,7 @@ Cada módulo abaixo **integra** essas responsabilidades em seu design. Não há 
 
 **Camadas:** Auditoria
 
-**Estado atual:** Parcialmente estruturado (eventos em código novo, não centralizado)  
+**Estado atual:** Parcialmente estruturado (eventos em código novo, não centralizado)
 **Arquitetura-alvo:** EventLog com replicação + dashboard
 
 **Critérios de saída:** Evento gravado, recuperável, com correlação
@@ -307,7 +307,7 @@ Cada módulo abaixo **integra** essas responsabilidades em seu design. Não há 
 
 **Camadas:** Plataforma (todas)
 
-**Estado atual:** Monólito legado em app.py, com extratos em src/  
+**Estado atual:** Monólito legado em app.py, com extratos em src/
 **Arquitetura-alvo:** Monólito modular com pacotes por domínio
 
 **Critérios de saída:** Serviço disponível, responde SLA, observável
