@@ -164,15 +164,47 @@ Criar os artefatos de **arquitetura operacional** necessários para implementar 
 
 ## 6. Parecer de Revisão (Subagentes)
 
-**Status:** Aguardando execução sequencial de 5 subagentes
+**Status:** ✓ EXECUÇÃO CONCLUÍDA — 5 subagentes revisaram, todas as decisões formais implementadas
 
-Subagentes a executar na ordem (sem alterar arquivos):
+### 6.1 magnata-repository-cartographer
 
-1. **`repository-cartographer`** — Verificar coerência estrutural (referências, nomes, links)
-2. **`architecture-reviewer`** — Verificar consistência arquitetural (módulos, camadas, capacidades)
-3. **`legacy-guardian`** — Verificar proteção do legado (app.py, migrations, frontend intactos)
-4. **`documentation-auditor`** — Verificar qualidade documental (clareza, completude, terminologia)
-5. **`quality-gate-reviewer`** — Parecer consolidado antes de commit
+**Escopo:** Verificar coerência estrutural (referências internas, nomenclatura, links)
+**Achados:** Nenhum bloqueador; todas as referências apontam para arquivos válidos
+**Correção exigida:** Linha 295 de ROADMAP.md (5% → Nenhuma autonomia) — aplicada
+**Resultado:** ✓ APROVADO (validado em segunda execução)
+**Parecer final:** Estrutura coerente, referencias válidas, nomenclatura consistente
+
+### 6.2 magnata-architecture-reviewer
+
+**Escopo:** Verificar consistência arquitetural (módulos, camadas, capacidades, autonomia)
+**Achados:** 3 bloqueadores críticos encontrados (Segurança módulo, camadas inconsistentes, autonomia Fase 1)
+**Correção exigida:** Decisões formais (3) tomadas e implementadas
+**Resultado:** ✓ BLOQUEADORES RESOLVIDOS
+**Parecer final:** Após decisões formais, arquitetura validada
+
+### 6.3 magnata-legacy-guardian
+
+**Escopo:** Verificar proteção de legado (app.py, migrations, frontend, MCP, hooks)
+**Achados:** Zero violações de proteção
+**Correção exigida:** Nenhuma
+**Resultado:** ✓ APROVADO
+**Parecer final:** Legado 100% protegido, nenhum arquivo crítico alterado
+
+### 6.4 magnata-documentation-auditor
+
+**Escopo:** Verificar qualidade documental (clareza, completude, terminologia, exemplos)
+**Achados:** 6 deficiências menores (não bloqueadores)
+**Correção exigida:** Sugestões de melhoria (não críticas)
+**Resultado:** ✓ ALERTA (não bloqueador)
+**Parecer final:** Documentação sólida e abrangente, aprovada para commit com recomendações
+
+### 6.5 magnata-quality-gate-reviewer
+
+**Escopo:** Parecer consolidado; validar se bloqueadores são REAIS e se podem ser resolvidos
+**Achados:** 3 bloqueadores confirmados como REAIS e CRÍTICOS
+**Correção exigida:** Decisões formais (3) — aplicadas
+**Resultado:** ✓ BLOQUEADORES RESOLVIDOS por decisões formais
+**Parecer final:** ETAPA 4 PRONTA PARA COMMIT após decisões formais
 
 ---
 
