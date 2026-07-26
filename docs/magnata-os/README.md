@@ -17,11 +17,21 @@ principal de uma coisa diferente:
   decisão ou documento que o contrarie está errado por definição
   (ver a cláusula "Autoridade" no próprio Manifesto).
 - **Estado real medido do sistema + plano de evolução:** [`MAGNATA_OS_ARQUITETURA.md`](../../MAGNATA_OS_ARQUITETURA.md).
+- **Capacidades e maturidade:** [`MAGNATA_OS_CAPACIDADES.md`](MAGNATA_OS_CAPACIDADES.md).
+  Inventário de 26+ capacidades (o que o sistema pode fazer), maturidade de cada uma, estado atual, riscos e limites de autonomia.
+- **Definição dos dez módulos funcionais:** [`MAGNATA_OS_MODULOS.md`](MAGNATA_OS_MODULOS.md).
+  Propósito, responsabilidades, critérios de entrada/saída e riscos de cada módulo.
+- **Roadmap de 11 fases:** [`MAGNATA_OS_ROADMAP.md`](MAGNATA_OS_ROADMAP.md).
+  Migração incremental do legado para Magnata OS (Fase 0 concluída, Fases 1-11 planejadas).
+- **Matriz arquitetural:** [`MAGNATA_OS_MATRIZ_ARQUITETURAL.md`](MAGNATA_OS_MATRIZ_ARQUITETURAL.md).
+  Relacionamento entre capacidades, módulos, camadas, componentes atuais vs. alvo, autonomia, riscos.
 - **Modelo de entidades canônico:** [`MAGNATA_OS_ENTIDADES.md`](../../MAGNATA_OS_ENTIDADES.md),
   com seu histórico de decisão em [`MAGNATA_OS_DECISOES_ENTIDADES.md`](../../MAGNATA_OS_DECISOES_ENTIDADES.md).
 - **Vocabulário de eventos:** [`MAGNATA_OS_EVENTOS.md`](../../MAGNATA_OS_EVENTOS.md).
 - **Forma dos dados (contratos):** [`MAGNATA_OS_CONTRATOS.md`](../../MAGNATA_OS_CONTRATOS.md).
 - **Máquinas de estado:** [`MAGNATA_OS_ESTADOS.md`](../../MAGNATA_OS_ESTADOS.md).
+- **Registro de decisões arquiteturais:** [`MAGNATA_OS_ADR_001_NOMENCLATURA_ITEM_INGESTAO_VS_DOCUMENTO.md`](MAGNATA_OS_ADR_001_NOMENCLATURA_ITEM_INGESTAO_VS_DOCUMENTO.md).
+  Primeira ADR: divergência não resolvida entre "Item de Ingestão" (docs) e "Documento" (código), com 4 alternativas propostas.
 - **O que já foi de fato implementado (Módulo 01 — Documental):**
   [`MAGNATA_OS_DOCUMENTAL_MODULO01.md`](../../MAGNATA_OS_DOCUMENTAL_MODULO01.md)
   e suas fases (`_FASE2` a `_FASE4`) — a fonte da verdade sobre o que
@@ -35,16 +45,21 @@ voltar:
 
 1. [`MAGNATA_OS_MANIFESTO.md`](../../MAGNATA_OS_MANIFESTO.md) — por que o sistema existe e o que nunca pode ser violado.
 2. [`MAGNATA_OS_ARQUITETURA.md`](../../MAGNATA_OS_ARQUITETURA.md) — onde o sistema está hoje e para onde vai.
-3. [`MAGNATA_OS_ENTIDADES.md`](../../MAGNATA_OS_ENTIDADES.md) — o que existe (as "coisas" do domínio).
-4. [`MAGNATA_OS_DECISOES_ENTIDADES.md`](../../MAGNATA_OS_DECISOES_ENTIDADES.md) — por que o modelo de entidades é o que é (pauta de decisão, algumas ainda `PENDENTE`).
-5. [`MAGNATA_OS_EVENTOS.md`](../../MAGNATA_OS_EVENTOS.md) — o que acontece (fatos de negócio).
-6. [`MAGNATA_OS_CONTRATOS.md`](../../MAGNATA_OS_CONTRATOS.md) — a forma exata dos dados.
-7. [`MAGNATA_OS_ESTADOS.md`](../../MAGNATA_OS_ESTADOS.md) — como cada entidade transiciona.
-8. [`MAGNATA_OS_MODULO_01_INGESTAO.md`](../../MAGNATA_OS_MODULO_01_INGESTAO.md) — plano do primeiro módulo real, construído sobre 1-7.
-9. [`MAGNATA_OS_MODULO_01_DECISOES_IMPLEMENTACAO.md`](../../MAGNATA_OS_MODULO_01_DECISOES_IMPLEMENTACAO.md) — decisões que destravaram o código do Módulo 01.
-10. [`MAGNATA_OS_MODULO_01_PLANO_TECNICO_FASES_0_1.md`](../../MAGNATA_OS_MODULO_01_PLANO_TECNICO_FASES_0_1.md) e [`MAGNATA_OS_MODULO_01_FASE_0_OBSERVABILIDADE.md`](../../MAGNATA_OS_MODULO_01_FASE_0_OBSERVABILIDADE.md) — plano técnico das primeiras fases.
-11. [`MAGNATA_OS_DOCUMENTAL_MODULO01.md`](../../MAGNATA_OS_DOCUMENTAL_MODULO01.md) → `_FASE2` → `_FASE3` → `_FASE4` → `_FASE5` (não mesclada ainda) — o que **de fato foi implementado**, fase a fase.
-12. [`MAGNATA_OS_IDENTIDADE_VISUAL.md`](../../MAGNATA_OS_IDENTIDADE_VISUAL.md) — independente da cadeia acima (identidade de marca, não de domínio).
+3. [`MAGNATA_OS_CAPACIDADES.md`](MAGNATA_OS_CAPACIDADES.md) — o que o sistema consegue fazer (26+ capacidades inventariadas).
+4. [`MAGNATA_OS_MODULOS.md`](MAGNATA_OS_MODULOS.md) — os dez módulos funcionais.
+5. [`MAGNATA_OS_ROADMAP.md`](MAGNATA_OS_ROADMAP.md) — as 11 fases de migração incremental.
+6. [`MAGNATA_OS_MATRIZ_ARQUITETURAL.md`](MAGNATA_OS_MATRIZ_ARQUITETURAL.md) — relacionamento entre capacidades, módulos, camadas, estados.
+7. [`MAGNATA_OS_ENTIDADES.md`](../../MAGNATA_OS_ENTIDADES.md) — o que existe (as "coisas" do domínio).
+8. [`MAGNATA_OS_DECISOES_ENTIDADES.md`](../../MAGNATA_OS_DECISOES_ENTIDADES.md) — por que o modelo de entidades é o que é (pauta de decisão, algumas ainda `PENDENTE`).
+9. [`MAGNATA_OS_EVENTOS.md`](../../MAGNATA_OS_EVENTOS.md) — o que acontece (fatos de negócio).
+10. [`MAGNATA_OS_CONTRATOS.md`](../../MAGNATA_OS_CONTRATOS.md) — a forma exata dos dados.
+11. [`MAGNATA_OS_ESTADOS.md`](../../MAGNATA_OS_ESTADOS.md) — como cada entidade transiciona.
+12. [`MAGNATA_OS_ADR_001_NOMENCLATURA_ITEM_INGESTAO_VS_DOCUMENTO.md`](MAGNATA_OS_ADR_001_NOMENCLATURA_ITEM_INGESTAO_VS_DOCUMENTO.md) — primeira decisão arquitetural pendente (nomenclatura).
+13. [`MAGNATA_OS_MODULO_01_INGESTAO.md`](../../MAGNATA_OS_MODULO_01_INGESTAO.md) — plano do primeiro módulo real, construído sobre 1-12.
+14. [`MAGNATA_OS_MODULO_01_DECISOES_IMPLEMENTACAO.md`](../../MAGNATA_OS_MODULO_01_DECISOES_IMPLEMENTACAO.md) — decisões que destravaram o código do Módulo 01.
+15. [`MAGNATA_OS_MODULO_01_PLANO_TECNICO_FASES_0_1.md`](../../MAGNATA_OS_MODULO_01_PLANO_TECNICO_FASES_0_1.md) e [`MAGNATA_OS_MODULO_01_FASE_0_OBSERVABILIDADE.md`](../../MAGNATA_OS_MODULO_01_FASE_0_OBSERVABILIDADE.md) — plano técnico das primeiras fases.
+16. [`MAGNATA_OS_DOCUMENTAL_MODULO01.md`](../../MAGNATA_OS_DOCUMENTAL_MODULO01.md) → `_FASE2` → `_FASE3` → `_FASE4` → `_FASE5` (não mesclada ainda) — o que **de fato foi implementado**, fase a fase.
+17. [`MAGNATA_OS_IDENTIDADE_VISUAL.md`](../../MAGNATA_OS_IDENTIDADE_VISUAL.md) — independente da cadeia acima (identidade de marca, não de domínio).
 
 ## Relação entre os documentos
 
@@ -55,11 +70,21 @@ MANIFESTO (princípios, nunca contrariados)
 ARQUITETURA (estado real + plano)
    │
    ▼
+┌──────────────────────────────────────────┐
+│ CAPACIDADES, MODULOS, ROADMAP, MATRIZ    │
+│ (visão de 11 fases, 26+ capacidades,     │
+│  10 módulos, maturidade, autonomia)      │
+└──────────────────────────────────────────┘
+   │
+   ▼
 ENTIDADES ──────► DECISOES_ENTIDADES (decisão por trás do modelo)
    │
    ▼
 EVENTOS ────────► CONTRATOS ────────► ESTADOS
-   │                                      │
+   │                   │
+   │                   ▼
+   │          ADR_001_NOMENCLATURA (Item de Ingestão vs. Documento)
+   │
    └──────────────┬───────────────────────┘
                    ▼
      MODULO_01_INGESTAO (plano do 1º módulo)
@@ -82,6 +107,11 @@ marca (símbolo, cores, lockups), não do modelo de domínio.
 
 Todos os listados acima estão em vigor. Dentro deles, nuances:
 
+- `MAGNATA_OS_CAPACIDADES.md` — **versão 1.0**, inventário de 26+ capacidades mapeadas com maturidade 1-9.
+- `MAGNATA_OS_MODULOS.md` — **versão 1.0**, definição canônica de 10 módulos funcionais.
+- `MAGNATA_OS_ROADMAP.md` — **versão 1.0**, 11 fases de migração (Fase 0 concluída, Fases 1-11 planejadas).
+- `MAGNATA_OS_MATRIZ_ARQUITETURAL.md` — **versão 1.0**, matriz de capacidades × módulos × camadas × estado.
+- `MAGNATA_OS_ADR_001_NOMENCLATURA_ITEM_INGESTAO_VS_DOCUMENTO.md` — **PROPOSTA (não decidida)**, 4 alternativas sem recomendação vinculativa.
 - `MAGNATA_OS_DECISOES_ENTIDADES.md` tem **26 de 29 decisões
   `APROVADA`** e **3 ainda `PENDENTE`** (`DEC-ENT-010`, `DEC-ENT-011`,
   `DEC-ENT-012`, ver §12 do próprio documento) — as pendentes não
@@ -187,16 +217,18 @@ o risco que esta etapa foi instruída a evitar.
 
 ```
 docs/magnata-os/
-  00-manifesto.md              ← MAGNATA_OS_MANIFESTO.md
-  01-arquitetura.md            ← MAGNATA_OS_ARQUITETURA.md
-  02-capacidades.md            ← (ainda não existe — ver pendências)
-  03-modulos.md                ← (ainda não existe — ver pendências)
-  04-entidades.md               ← MAGNATA_OS_ENTIDADES.md
-  04a-decisoes-entidades.md     ← MAGNATA_OS_DECISOES_ENTIDADES.md
-  05-contratos.md               ← MAGNATA_OS_CONTRATOS.md
-  06-estados.md                 ← MAGNATA_OS_ESTADOS.md
-  07-eventos.md                 ← MAGNATA_OS_EVENTOS.md
-  08-roadmap.md                 ← (ainda não existe — ver pendências)
+  00-manifesto.md                    ← MAGNATA_OS_MANIFESTO.md
+  01-arquitetura.md                  ← MAGNATA_OS_ARQUITETURA.md
+  02-capacidades.md                  ← MAGNATA_OS_CAPACIDADES.md (criado Etapa 4)
+  03-modulos.md                      ← MAGNATA_OS_MODULOS.md (criado Etapa 4)
+  04-roadmap.md                      ← MAGNATA_OS_ROADMAP.md (criado Etapa 4)
+  05-matriz-arquitetural.md          ← MAGNATA_OS_MATRIZ_ARQUITETURAL.md (criado Etapa 4)
+  06-entidades.md                    ← MAGNATA_OS_ENTIDADES.md
+  06a-decisoes-entidades.md          ← MAGNATA_OS_DECISOES_ENTIDADES.md
+  07-contratos.md                    ← MAGNATA_OS_CONTRATOS.md
+  08-estados.md                      ← MAGNATA_OS_ESTADOS.md
+  09-eventos.md                      ← MAGNATA_OS_EVENTOS.md
+  10-adr-001-nomenclatura.md          ← MAGNATA_OS_ADR_001_NOMENCLATURA_ITEM_INGESTAO_VS_DOCUMENTO.md (criado Etapa 4)
 ```
 
 Quando essa reorganização for feita de verdade, precisa ser numa etapa
