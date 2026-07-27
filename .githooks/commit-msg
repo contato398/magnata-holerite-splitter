@@ -2,9 +2,19 @@
 # Commit-msg hook para Magnata OS — Validação de mensagem de commit
 # Etapa 5: Hooks Locais de Segurança
 
-set -e
-
 COMMIT_MSG_FILE=$1
+
+# Ler mensagem do arquivo ou stdin
+if [ -z "$COMMIT_MSG_FILE" ] || [ ! -f "$COMMIT_MSG_FILE" ]; then
+    # Fallback: ler de stdin ou tentar .git/COMMIT_EDITMSG
+    if [ -f ".git/COMMIT_EDITMSG" ]; then
+        COMMIT_MSG_FILE=".git/COMMIT_EDITMSG"
+    else
+        echo "ERROR: No commit message file provided"
+        exit 1
+    fi
+fi
+
 COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
 
 RED='\033[0;31m'

@@ -126,6 +126,7 @@ echo "[6/14] Verificando escopo permitido..."
 ALLOWED_FILES=(
   ".githooks/README.md"
   ".githooks/commit-msg"
+  ".githooks/install-hooks.sh"
   ".githooks/post-commit"
   ".githooks/pre-commit"
   ".githooks/pre-push"
