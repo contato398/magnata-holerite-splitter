@@ -32,6 +32,8 @@ principal de uma coisa diferente:
 - **Máquinas de estado:** [`MAGNATA_OS_ESTADOS.md`](../../MAGNATA_OS_ESTADOS.md).
 - **Registro de decisões arquiteturais:** [`MAGNATA_OS_ADR_001_NOMENCLATURA_ITEM_INGESTAO_VS_DOCUMENTO.md`](MAGNATA_OS_ADR_001_NOMENCLATURA_ITEM_INGESTAO_VS_DOCUMENTO.md).
   Primeira ADR: divergência não resolvida entre "Item de Ingestão" (docs) e "Documento" (código), com 4 alternativas propostas.
+- **Hooks locais de segurança:** [`MAGNATA_AI_HOOKS_LOCAIS.md`](MAGNATA_AI_HOOKS_LOCAIS.md).
+  Barreiras locais determinísticas para validar conformidade, proteger arquivos, detectar segredos.
 - **O que já foi de fato implementado (Módulo 01 — Documental):**
   [`MAGNATA_OS_DOCUMENTAL_MODULO01.md`](../../MAGNATA_OS_DOCUMENTAL_MODULO01.md)
   e suas fases (`_FASE2` a `_FASE4`) — a fonte da verdade sobre o que
