@@ -1,0 +1,32 @@
+#!/bin/bash
+# Pre-push hook para Magnata OS — Bloqueio de push automático
+# Etapa 5: Hooks Locais de Segurança
+# Este hook BLOQUEIA TODOS os pushes automaticamente na Etapa 5
+
+set -e
+
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+echo ""
+echo "================================"
+echo "PRE-PUSH VALIDATION"
+echo "================================"
+echo ""
+
+# BLOQUEIO ABSOLUTO: Push não é permitido na Etapa 5 (hooks locais)
+echo -e "${RED}✗ BLOQUEADO: Push não é permitido na Etapa 5${NC}"
+echo ""
+echo "Hooks locais são para validação LOCAL apenas."
+echo "Push será realizado somente no final da Etapa 5, após aprovação."
+echo ""
+echo "Próxima ação esperada:"
+echo "  1. Completar testes locais dos hooks"
+echo "  2. Aguardar parecer dos 5 subagentes"
+echo "  3. Validação final: git diff --check"
+echo "  4. Push será realizado manualmente com comando do usuário"
+echo ""
+
+exit 1

@@ -1,0 +1,78 @@
+#!/bin/bash
+# Commit-msg hook para Magnata OS — Validação de mensagem de commit
+# Etapa 5: Hooks Locais de Segurança
+
+set -e
+
+COMMIT_MSG_FILE=$1
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+echo ""
+echo "================================"
+echo "COMMIT-MSG VALIDATION"
+echo "================================"
+echo ""
+
+# VALIDAÇÃO 1: Mensagem não vazia
+if [ -z "$(echo "$COMMIT_MSG" | grep -v '^#' | tr -d '[:space:]')" ]; then
+  echo -e "${RED}✗ BLOQUEADO: Mensagem de commit vazia${NC}"
+  exit 1
+fi
+echo -e "${GREEN}✓ Mensagem não vazia${NC}"
+
+# VALIDAÇÃO 2: Prefixo válido
+VALID_PREFIXES=("docs:" "feat:" "fix:" "chore:" "test:" "refactor:")
+FIRST_LINE=$(echo "$COMMIT_MSG" | head -n 1)
+PREFIX_FOUND=0
+
+for prefix in "${VALID_PREFIXES[@]}"; do
+  if [[ "$FIRST_LINE" == "$prefix"* ]]; then
+    PREFIX_FOUND=1
+    break
+  fi
+done
+
+if [ $PREFIX_FOUND -eq 0 ]; then
+  echo -e "${RED}✗ BLOQUEADO: Prefixo de commit inválido${NC}"
+  echo "  Encontrado: $FIRST_LINE"
+  echo "  Prefixos permitidos: ${VALID_PREFIXES[@]}"
+  exit 1
+fi
+echo -e "${GREEN}✓ Prefixo válido: $FIRST_LINE${NC}"
+
+# VALIDAÇÃO 3: Descrição presente e significativa
+DESCRIPTION=$(echo "$FIRST_LINE" | sed 's/^[a-z]*: *//')
+if [ ${#DESCRIPTION} -lt 10 ]; then
+  echo -e "${RED}✗ BLOQUEADO: Descrição muito curta ou vaga${NC}"
+  echo "  Comprimento mínimo: 10 caracteres"
+  echo "  Atual: ${#DESCRIPTION} caracteres"
+  exit 1
+fi
+echo -e "${GREEN}✓ Descrição adequada (${#DESCRIPTION} caracteres)${NC}"
+
+# VALIDAÇÃO 4: Proibir mensagens vagas
+VAGUE_PATTERNS=("^update" "^changes" "^ajustes" "^teste" "^final" "^wip")
+FIRST_LINE_LOWER=$(echo "$FIRST_LINE" | tr '[:upper:]' '[:lower:]')
+
+for vague in "${VAGUE_PATTERNS[@]}"; do
+  if [[ "$FIRST_LINE_LOWER" =~ $vague ]]; then
+    echo -e "${RED}✗ BLOQUEADO: Mensagem vaga ou genérica${NC}"
+    echo "  Padrão proibido: $vague"
+    echo "  Use: 'docs:', 'feat:', 'fix:', etc. com descrição específica"
+    exit 1
+  fi
+done
+echo -e "${GREEN}✓ Mensagem específica (não vaga)${NC}"
+
+echo ""
+echo -e "${GREEN}================================"
+echo "COMMIT-MSG: VALIDAÇÃO APROVADA"
+echo "================================${NC}"
+echo ""
+
+exit 0
