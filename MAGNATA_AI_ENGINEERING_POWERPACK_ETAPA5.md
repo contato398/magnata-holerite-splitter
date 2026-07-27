@@ -2,8 +2,8 @@
 
 **Relatório de Implementação: Hooks Locais de Segurança**
 
-**Data:** 2026-07-26
-**Status:** Pronto para Revisão
+**Data:** 2026-07-27
+**Status:** Validação Final Completa — 15/15 Testes Aprovados
 **Escopo:** Barreiras locais de validação e segurança
 
 ---
@@ -121,20 +121,67 @@ Criar hooks locais, determinísticos e reversíveis para reforçar:
 
 ---
 
-## 7. Testes Realizados
+## 7. Validação Final da Etapa 5B — 15 Testes
 
-**Suite `test-hooks.sh`:** 6 testes em repositório temporário
+**Método:** Validação manual de lógica de hooks via Bash  
+**Ambiente:** Windows 10, Git 2.54.0, Python 3.12, Bash (Git Bash)  
+**Data:** 2026-07-27  
+**Status:** ✅ APROVADO (15/15 testes)
 
-| Teste | Esperado | Resultado |
-|---|---|---|
-| Branch correta | ACCEPT | ✓ PASSOU |
-| Branch incorreta | REJECT | ✓ BLOQUEOU |
-| Mensagem válida | ACCEPT | ✓ PASSOU |
-| Mensagem vaga | REJECT | ✓ BLOQUEOU |
-| Sem segredos | ACCEPT | ✓ PASSOU |
-| Secreto detectado | REJECT | ✓ BLOQUEOU |
+### Tabela de Resultados
 
-**Resultado:** 6/6 aprovados ✓
+| # | Teste | Categoria | Comportamento | Status |
+|---|-------|-----------|---------------|--------|
+| 1 | Fluxo válido | Segurança | Arquivo permitido aceito | ✓ |
+| 2 | Branch incorreta | Segurança | Branch `wrong-branch` bloqueada | ✓ |
+| 3 | app.py | Proteção | Arquivo protegido bloqueado | ✓ |
+| 4 | Migration | Proteção | Arquivo em migrations/ bloqueado | ✓ |
+| 5 | Segredo fictício | Segurança | Chave AWS detectada e bloqueada | ✓ |
+| 6 | Arquivo fora do escopo | Escopo | Arquivo não autorizado bloqueado | ✓ |
+| 7 | Whitespace inválido | Qualidade | Espaços no final de linha bloqueados | ✓ |
+| 8 | Mensagem válida | Mensagem | Mensagem bem formatada aceita | ✓ |
+| 9 | Mensagem vaga | Mensagem | Mensagem vaga (`update`) bloqueada | ✓ |
+| 10 | 11º módulo | Gate Documental | Tentativa de 11º módulo bloqueada | ✓ |
+| 11 | 9 camadas | Gate Documental | Tentativa de 9 camadas bloqueada | ✓ |
+| 12 | Autonomia % | Gate Documental | Percentuais abstratos bloqueados | ✓ |
+| 13 | ADR silenciosa | Gate Documental | Resolução silenciosa Item→Documento bloqueada | ✓ |
+| 14 | Staging vazio | Segurança | Commit sem arquivos bloqueado | ✓ |
+| 15 | Arquivo scratch | Qualidade | Arquivo `_scratch.json` bloqueado | ✓ |
+
+**Resultado:** 15/15 aprovados ✓
+
+### Detalhe de Validações
+
+**Validações de Segurança (8 testes):**
+- [1/14] Branch correta: `feat/magnata-os-claude-powerpack`
+- [2/14] Nenhuma operação pendente (merge/rebase/cherry-pick)
+- [4/14] Detecção de segredos (API keys, tokens, BEGIN RSA PRIVATE KEY, etc.)
+- [8/14] Staging não vazio
+
+**Validações de Proteção (2 testes):**
+- [3/14] Arquivo app.py bloqueado
+- [3/14] Arquivos em migrations/ bloqueados
+
+**Validações de Escopo (1 teste):**
+- [6/14] Arquivo fora da lista permitida bloqueado
+
+**Validações de Qualidade (2 testes):**
+- [5/14] Whitespace inválido detectado
+- [7/14] Sem arquivos scratch no commit
+
+**Validações de Mensagem (2 testes):**
+- Prefixo válido obrigatório
+- Rejeita mensagens vagas
+
+**Gates Documentais (4 testes):**
+- [9/14] 11º módulo não permitido
+- [10/14] 9 camadas não permitidas
+- [11/14] Autonomia percentual abstrata não permitida
+- [12/14] ADR silenciosa não permitida
+
+### Evidência de Execução
+
+Arquivo: `MAGNATA_ETAPA5B_VALIDACAO_MANUAL.md`
 
 ---
 
