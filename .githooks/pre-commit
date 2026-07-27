@@ -18,7 +18,7 @@ echo "================================"
 echo ""
 
 # VALIDAÇÃO 1: Branch correta
-echo "[1/7] Verificando branch..."
+echo "[1/14] Verificando branch..."
 if [ "$BRANCH" != "$EXPECTED_BRANCH" ]; then
   echo -e "${RED}✗ BLOQUEADO: Branch incorreta${NC}"
   echo "  Branch atual: $BRANCH"
@@ -29,7 +29,7 @@ fi
 echo -e "${GREEN}✓ Branch correta: $BRANCH${NC}"
 
 # VALIDAÇÃO 2: Nenhuma operação de merge/rebase em andamento
-echo "[2/7] Verificando estado de operações Git..."
+echo "[2/14] Verificando estado de operações Git..."
 if [ -f .git/MERGE_HEAD ] || [ -f .git/REBASE_HEAD ] || [ -f .git/CHERRY_PICK_HEAD ]; then
   echo -e "${RED}✗ BLOQUEADO: Operação pendente (merge/rebase/cherry-pick)${NC}"
   exit 1
@@ -37,7 +37,7 @@ fi
 echo -e "${GREEN}✓ Sem operações pendentes${NC}"
 
 # VALIDAÇÃO 3: Arquivos sensíveis não podem ser alterados
-echo "[3/7] Verificando proteção de arquivos sensíveis..."
+echo "[3/14] Verificando proteção de arquivos sensíveis..."
 STAGED_FILES=$(git diff --cached --name-only)
 PROTECTED_FILES=(
   "app.py"
@@ -64,8 +64,8 @@ if [ $FOUND_PROTECTED -eq 1 ]; then
 fi
 echo -e "${GREEN}✓ Nenhum arquivo protegido foi alterado${NC}"
 
-# VALIDAÇÃO 4: Detecção de segredos
-echo "[4/7] Verificando presença de segredos..."
+# VALIDAÇÃO 4: Detecção de segredos (excluindo .githooks/ — padrões de validação)
+echo "[4/14] Verificando presença de segredos..."
 SECRETS_PATTERNS=(
   "BEGIN RSA PRIVATE KEY"
   "BEGIN PRIVATE KEY"
@@ -86,6 +86,11 @@ SECRETS_PATTERNS=(
 
 FOUND_SECRETS=0
 for file in $STAGED_FILES; do
+  # Pular arquivos .githooks/ (padrões de validação, não segredos)
+  if [[ "$file" == .githooks/* ]]; then
+    continue
+  fi
+
   # Pular arquivos não-texto
   if file "$file" | grep -q "binary"; then
     continue
@@ -107,7 +112,7 @@ fi
 echo -e "${GREEN}✓ Nenhum segredo detectado${NC}"
 
 # VALIDAÇÃO 5: Espaçamento inválido
-echo "[5/7] Verificando whitespace inválido..."
+echo "[5/14] Verificando whitespace inválido..."
 if git diff --cached --check > /dev/null 2>&1; then
   echo -e "${GREEN}✓ Whitespace válido${NC}"
 else
@@ -116,25 +121,25 @@ else
   exit 1
 fi
 
-# VALIDAÇÃO 6: Escopo permitido (somente Etapa 5)
-echo "[6/7] Verificando escopo permitido..."
-ALLOWED_PATTERNS=(
-  "\.git/hooks/"
-  "\.claude/"
-  "docs/magnata-os/"
+# VALIDAÇÃO 6: Escopo permitido (lista explícita e auditável)
+echo "[6/14] Verificando escopo permitido..."
+ALLOWED_FILES=(
+  ".githooks/README.md"
+  ".githooks/commit-msg"
+  ".githooks/post-commit"
+  ".githooks/pre-commit"
+  ".githooks/pre-push"
+  ".githooks/test-hooks.sh"
   "MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA5.md"
+  "docs/magnata-os/MAGNATA_AI_HOOKS_LOCAIS.md"
+  "docs/magnata-os/README.md"
 )
 
 ALLOWED=0
 for file in $STAGED_FILES; do
-  # Pular arquivos que podem estar sendo removidos
-  if [ ! -f "$file" ] && [ ! -d "$file" ]; then
-    continue
-  fi
-
   FOUND=0
-  for pattern in "${ALLOWED_PATTERNS[@]}"; do
-    if [[ "$file" == "$pattern"* ]]; then
+  for allowed_file in "${ALLOWED_FILES[@]}"; do
+    if [ "$file" = "$allowed_file" ]; then
       FOUND=1
       break
     fi
@@ -143,14 +148,23 @@ for file in $STAGED_FILES; do
   if [ $FOUND -eq 0 ]; then
     echo -e "${RED}✗ BLOQUEADO: Arquivo fora do escopo da Etapa 5${NC}"
     echo "  Arquivo: $file"
-    echo "  Escopo permitido: hooks, docs, CLAUDE.md, README"
+    echo "  Escopo permitido (lista explícita):"
+    echo "    - .githooks/README.md"
+    echo "    - .githooks/commit-msg"
+    echo "    - .githooks/post-commit"
+    echo "    - .githooks/pre-commit"
+    echo "    - .githooks/pre-push"
+    echo "    - .githooks/test-hooks.sh"
+    echo "    - MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA5.md"
+    echo "    - docs/magnata-os/MAGNATA_AI_HOOKS_LOCAIS.md"
+    echo "    - docs/magnata-os/README.md"
     exit 1
   fi
 done
 echo -e "${GREEN}✓ Todos os arquivos dentro do escopo permitido${NC}"
 
 # VALIDAÇÃO 7: Sem arquivos scratch no commit
-echo "[7/7] Verificando arquivos scratch..."
+echo "[7/14] Verificando arquivos scratch..."
 SCRATCH_PATTERNS=(
   "^_"
   "^test_"
@@ -174,9 +188,108 @@ if [ $FOUND_SCRATCH -eq 1 ]; then
 fi
 echo -e "${GREEN}✓ Nenhum arquivo scratch no commit${NC}"
 
+# VALIDAÇÃO 8: Staging não pode estar vazio
+echo "[8/14] Verificando staging não vazio..."
+if [ -z "$STAGED_FILES" ]; then
+  echo -e "${RED}✗ BLOQUEADO: Staging vazio — nada a commitar${NC}"
+  echo "  Use: git add <arquivo> antes de git commit"
+  exit 1
+fi
+echo -e "${GREEN}✓ Staging com conteúdo${NC}"
+
+# VALIDAÇÃO 9: Gate Documental — 11º módulo
+echo "[9/14] Verificando gate documental: 11º módulo..."
+GATE_SECURITY_MODULE_FOUND=0
+for file in $STAGED_FILES; do
+  if [ ! -f "$file" ]; then continue; fi
+  if git diff --cached "$file" | grep -E "(## 11º módulo|11º módulo.*Segurança)" > /dev/null 2>&1; then
+    GATE_SECURITY_MODULE_FOUND=1
+    break
+  fi
+done
+if [ $GATE_SECURITY_MODULE_FOUND -eq 1 ]; then
+  echo -e "${RED}✗ BLOQUEADO: Arquivo tenta declarar 11º módulo${NC}"
+  echo "  Arquitetura atual: Segurança e Plataforma como camadas transversais"
+  exit 1
+fi
+echo -e "${GREEN}✓ Sem tentativa de 11º módulo separado${NC}"
+
+# VALIDAÇÃO 10: Gate Documental — 9 camadas
+echo "[10/14] Verificando gate documental: modelo de camadas..."
+GATE_LAYERS_FOUND=0
+for file in $STAGED_FILES; do
+  if [ ! -f "$file" ]; then continue; fi
+  if git diff --cached "$file" | grep -E "(^[+].*9 camadas|^[+].*nove camadas)" > /dev/null 2>&1; then
+    GATE_LAYERS_FOUND=1
+    break
+  fi
+done
+if [ $GATE_LAYERS_FOUND -eq 1 ]; then
+  echo -e "${RED}✗ BLOQUEADO: Arquivo tenta introduzir 9 camadas sequenciais${NC}"
+  exit 1
+fi
+echo -e "${GREEN}✓ Modelo de camadas conforme arquitetura${NC}"
+
+# VALIDAÇÃO 11: Gate Documental — Autonomia percentual
+echo "[11/14] Verificando gate documental: percentuais de autonomia..."
+GATE_AUTONOMY_PCT_FOUND=0
+for file in $STAGED_FILES; do
+  if [ ! -f "$file" ]; then continue; fi
+  if git diff --cached "$file" | grep -iE "^[+].*autonomia.*[0-9]+\s*(%|perce?nt)" > /dev/null 2>&1; then
+    GATE_AUTONOMY_PCT_FOUND=1
+    break
+  fi
+done
+if [ $GATE_AUTONOMY_PCT_FOUND -eq 1 ]; then
+  echo -e "${RED}✗ BLOQUEADO: Arquivo tenta introduzir percentuais abstratos${NC}"
+  exit 1
+fi
+echo -e "${GREEN}✓ Sem percentuais de autonomia abstratos${NC}"
+
+# VALIDAÇÃO 12: Gate Documental — ADR silenciosa
+echo "[12/14] Verificando gate documental: ADR silenciosa..."
+GATE_ADR_SILENT_FOUND=0
+for file in $STAGED_FILES; do
+  if [ ! -f "$file" ]; then continue; fi
+  if git diff --cached "$file" | grep -iE "(Item de Ingestão foi renomeado|Documento substitui Item)" > /dev/null 2>&1; then
+    GATE_ADR_SILENT_FOUND=1
+    break
+  fi
+done
+if [ $GATE_ADR_SILENT_FOUND -eq 1 ]; then
+  echo -e "${RED}✗ BLOQUEADO: Arquivo tenta introduzir resolução silenciosa da ADR${NC}"
+  exit 1
+fi
+echo -e "${GREEN}✓ Sem ADR resolvida silenciosamente${NC}"
+
+# VALIDAÇÃO 13: Reforço de operações em progresso
+echo "[13/14] Reforçando: sem operações em progresso..."
+if [ -f .git/MERGE_HEAD ] || [ -f .git/REBASE_HEAD ] || [ -f .git/CHERRY_PICK_HEAD ]; then
+  echo -e "${RED}✗ BLOQUEADO: Operação de merge/rebase/cherry-pick em andamento${NC}"
+  exit 1
+fi
+echo -e "${GREEN}✓ Nenhuma operação em progresso${NC}"
+
+# VALIDAÇÃO 14: Validação consolidada de escopo
+echo "[14/14] Validação consolidada de escopo..."
+for file in $STAGED_FILES; do
+  FOUND=0
+  for allowed_file in "${ALLOWED_FILES[@]}"; do
+    if [ "$file" = "$allowed_file" ]; then
+      FOUND=1
+      break
+    fi
+  done
+  if [ $FOUND -eq 0 ]; then
+    echo -e "${RED}✗ BLOQUEADO: Arquivo não autorizado: $file${NC}"
+    exit 1
+  fi
+done
+echo -e "${GREEN}✓ Validação consolidada aprovada${NC}"
+
 echo ""
 echo -e "${GREEN}================================"
-echo "PRE-COMMIT: TODAS AS VALIDAÇÕES APROVADAS"
+echo "PRE-COMMIT: TODAS AS 14 VALIDAÇÕES APROVADAS"
 echo "================================${NC}"
 echo ""
 
