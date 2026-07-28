@@ -132,6 +132,8 @@ ALLOWED_FILES=(
   ".githooks/pre-push"
   ".githooks/test-hooks.sh"
   "MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA5.md"
+  "MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA5_PARECERES.md"
+  "MAGNATA_ETAPA5B_VALIDACAO_MANUAL.md"
   "docs/magnata-os/MAGNATA_AI_HOOKS_LOCAIS.md"
   "docs/magnata-os/README.md"
 )
@@ -157,6 +159,8 @@ for file in $STAGED_FILES; do
     echo "    - .githooks/pre-push"
     echo "    - .githooks/test-hooks.sh"
     echo "    - MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA5.md"
+    echo "    - MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA5_PARECERES.md"
+    echo "    - MAGNATA_ETAPA5B_VALIDACAO_MANUAL.md"
     echo "    - docs/magnata-os/MAGNATA_AI_HOOKS_LOCAIS.md"
     echo "    - docs/magnata-os/README.md"
     exit 1

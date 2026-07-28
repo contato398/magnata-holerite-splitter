@@ -1,4 +1,4 @@
-# Magnata AI Engineering Powerpack — Etapa 5
+﻿# Magnata AI Engineering Powerpack — Etapa 5
 
 **Relatório de Implementação: Hooks Locais de Segurança**
 
@@ -123,9 +123,9 @@ Criar hooks locais, determinísticos e reversíveis para reforçar:
 
 ## 7. Validação Final da Etapa 5B — 15 Testes
 
-**Método:** Validação manual de lógica de hooks via Bash  
-**Ambiente:** Windows 10, Git 2.54.0, Python 3.12, Bash (Git Bash)  
-**Data:** 2026-07-27  
+**Método:** Validação manual de lógica de hooks via Bash
+**Ambiente:** Windows 10, Git 2.54.0, Python 3.12, Bash (Git Bash)
+**Data:** 2026-07-27
 **Status:** ✅ APROVADO (15/15 testes)
 
 ### Tabela de Resultados

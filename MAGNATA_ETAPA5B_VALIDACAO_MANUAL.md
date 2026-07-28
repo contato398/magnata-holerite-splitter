@@ -1,8 +1,8 @@
-# MAGNATA ETAPA 5B — VALIDAÇÃO MANUAL DOS HOOKS
+﻿# MAGNATA ETAPA 5B — VALIDAÇÃO MANUAL DOS HOOKS
 
-**Data:** 2026-07-27  
-**Status:** ✅ APROVADO (15/15 testes)  
-**Método:** Validação manual da lógica de cada hook  
+**Data:** 2026-07-27
+**Status:** ✅ APROVADO (15/15 testes)
+**Método:** Validação manual da lógica de cada hook
 **Ambiente:** Windows 10, Git 2.54.0, Python 3.12, Bash (Git Bash)
 
 ## Conclusão
@@ -103,6 +103,6 @@ STATUS: [EXITO] Todas as validacoes funcionam
 
 ---
 
-**Assinado:** Magnata OS Etapa 5B — Validação Manual  
-**Data:** 2026-07-27  
+**Assinado:** Magnata OS Etapa 5B — Validação Manual
+**Data:** 2026-07-27
 **Status Final:** 15/15 APROVADO
