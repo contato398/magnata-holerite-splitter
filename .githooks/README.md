@@ -33,6 +33,28 @@ git config core.hooksPath
 git config --unset core.hooksPath
 ```
 
+## Pre-Push Authorization
+
+Para fazer `git push`, crie um arquivo de autorização temporária:
+
+**PowerShell:**
+```powershell
+New-Item -ItemType File -Path ".git\MAGNATA_PUSH_AUTHORIZED_ONCE" -Force
+git push origin feat/magnata-os-claude-powerpack
+```
+
+**Git Bash:**
+```bash
+touch "$(git rev-parse --git-dir)/MAGNATA_PUSH_AUTHORIZED_ONCE"
+git push origin feat/magnata-os-claude-powerpack
+```
+
+O arquivo é:
+- Criado localmente, nunca versionado
+- Válido para um único push
+- Removido automaticamente após o push
+- Recriado para cada novo push
+
 ## Testes
 
 ```bash
