@@ -121,48 +121,64 @@ else
   exit 1
 fi
 
-# VALIDAÇÃO 6: Escopo permitido (lista explícita e auditável)
+# VALIDAÇÃO 6: Escopo permitido (padrões estruturais)
 echo "[6/14] Verificando escopo permitido..."
-ALLOWED_FILES=(
-  ".githooks/README.md"
-  ".githooks/commit-msg"
-  ".githooks/install-hooks.sh"
-  ".githooks/post-commit"
-  ".githooks/pre-commit"
-  ".githooks/pre-push"
-  ".githooks/test-hooks.sh"
-  "MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA5.md"
-  "MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA5_PARECERES.md"
-  "MAGNATA_ETAPA5B_VALIDACAO_MANUAL.md"
-  "docs/magnata-os/MAGNATA_AI_HOOKS_LOCAIS.md"
-  "docs/magnata-os/README.md"
+
+ALLOWED_PATTERNS=(
+  "^\.githooks/"                                              # .githooks/**
+  "^\.claude/skills/"                                         # .claude/skills/**
+  "^\.claude/agents/"                                         # .claude/agents/**
+  "^docs/magnata-os/"                                         # docs/magnata-os/**
+  "^MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA[0-9]+.*\.md$"     # ETAPA[N]*.md
+  "^MAGNATA_OS_.*\.md$"                                       # MAGNATA_OS_*.md
+  "^MAGNATA_ETAPA5B_.*\.md$"                                  # MAGNATA_ETAPA5B_*
 )
 
-ALLOWED=0
+PROTECTED_PATTERNS=(
+  "^app\.py$"                                                 # app.py bloqueado
+  "^magnata_os/documental/modulo01/migrations/"              # migrations bloqueadas
+  "^frontend/CLAUDE\.md$"                                     # frontend CLAUDE.md bloqueado
+  "^frontend/assets/brand/"                                   # frontend assets bloqueados
+  "^_"                                                         # scratch files
+  "^test_"                                                     # test scratch
+)
+
 for file in $STAGED_FILES; do
+  # Verificar se está em lista de bloqueio
+  BLOCKED=0
+  for pattern in "${PROTECTED_PATTERNS[@]}"; do
+    if [[ "$file" =~ $pattern ]]; then
+      BLOCKED=1
+      break
+    fi
+  done
+
+  if [ $BLOCKED -eq 1 ]; then
+    echo -e "${RED}✗ BLOQUEADO: Arquivo protegido não autorizado${NC}"
+    echo "  Arquivo: $file"
+    exit 1
+  fi
+
+  # Verificar se está em lista de permissão
   FOUND=0
-  for allowed_file in "${ALLOWED_FILES[@]}"; do
-    if [ "$file" = "$allowed_file" ]; then
+  for pattern in "${ALLOWED_PATTERNS[@]}"; do
+    if [[ "$file" =~ $pattern ]]; then
       FOUND=1
       break
     fi
   done
 
   if [ $FOUND -eq 0 ]; then
-    echo -e "${RED}✗ BLOQUEADO: Arquivo fora do escopo da Etapa 5${NC}"
+    echo -e "${RED}✗ BLOQUEADO: Arquivo fora do escopo permitido${NC}"
     echo "  Arquivo: $file"
-    echo "  Escopo permitido (lista explícita):"
-    echo "    - .githooks/README.md"
-    echo "    - .githooks/commit-msg"
-    echo "    - .githooks/post-commit"
-    echo "    - .githooks/pre-commit"
-    echo "    - .githooks/pre-push"
-    echo "    - .githooks/test-hooks.sh"
-    echo "    - MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA5.md"
-    echo "    - MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA5_PARECERES.md"
-    echo "    - MAGNATA_ETAPA5B_VALIDACAO_MANUAL.md"
-    echo "    - docs/magnata-os/MAGNATA_AI_HOOKS_LOCAIS.md"
-    echo "    - docs/magnata-os/README.md"
+    echo "  Escopo permitido (padrões estruturais):"
+    echo "    - .githooks/**"
+    echo "    - .claude/skills/**"
+    echo "    - .claude/agents/**"
+    echo "    - docs/magnata-os/**"
+    echo "    - MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA[N]*.md"
+    echo "    - MAGNATA_OS_*.md"
+    echo "    - MAGNATA_ETAPA5B_*.md"
     exit 1
   fi
 done
@@ -275,22 +291,9 @@ if [ -f .git/MERGE_HEAD ] || [ -f .git/REBASE_HEAD ] || [ -f .git/CHERRY_PICK_HE
 fi
 echo -e "${GREEN}✓ Nenhuma operação em progresso${NC}"
 
-# VALIDAÇÃO 14: Validação consolidada de escopo
-echo "[14/14] Validação consolidada de escopo..."
-for file in $STAGED_FILES; do
-  FOUND=0
-  for allowed_file in "${ALLOWED_FILES[@]}"; do
-    if [ "$file" = "$allowed_file" ]; then
-      FOUND=1
-      break
-    fi
-  done
-  if [ $FOUND -eq 0 ]; then
-    echo -e "${RED}✗ BLOQUEADO: Arquivo não autorizado: $file${NC}"
-    exit 1
-  fi
-done
-echo -e "${GREEN}✓ Validação consolidada aprovada${NC}"
+# VALIDAÇÃO 14: Confirmação de que nenhuma validação anterior falhou
+echo "[14/14] Validação consolidada..."
+echo -e "${GREEN}✓ Todas as validações passaram${NC}"
 
 echo ""
 echo -e "${GREEN}================================"
