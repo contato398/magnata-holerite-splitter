@@ -204,6 +204,27 @@ agentes técnicos especializados para verificação, governança e validação.
 Nenhum acesso autônomo a produção. Nenhuma alteração de código. Nenhum
 MCP, hook ou agente contínuo instalado.
 
+## Camada técnica: CI de Governança (Etapa 6 — Plano)
+
+**Status:** Planejado (não implementado)
+**Documentação:** [`MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6_PLANO.md`](../../MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6_PLANO.md)
+
+**Propósito:** Estabelecer validação automática de governança e conformidade
+documental via GitHub Actions, sem autonomia de produção.
+
+**Escopo:**
+- CI não invasivo em pull requests e pushes
+- 15 quality gates (segurança, proteção, conformidade, documentação)
+- Reutilização de validações dos hooks locais
+- Read-only, sem secrets, sem deploy
+
+**Composição:**
+- `.github/workflows/magnata-governance.yml` — workflow principal
+- `scripts/ci/validate_governance.sh` — script de orquestração (se necessário)
+- `.magnata/patterns.sh` — padrões canônicos (se necessário)
+
+**Status atual:** Plano aprovado pelas 5 revisões de subagentes (pendente).
+
 ## Por que os arquivos não foram movidos para cá
 
 Os 9 documentos fundacionais se referenciam uns aos outros **pelo nome
