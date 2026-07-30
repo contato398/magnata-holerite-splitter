@@ -1,6 +1,6 @@
 #!/bin/bash
 # Magnata OS — Suíte de Testes de Governança
-# Executa 25 cenários em repositório temporário isolado
+# Executa 28 cenários em repositório temporário isolado
 # Não realiza testes destrutivos no repositório principal
 
 set -euo pipefail
@@ -51,6 +51,10 @@ setup_test_repo() {
   # de cada categoria (EXECUTABLE_FILES / NON_EXECUTABLE_FILES) para checar.
   cp "$PROJECT_ROOT/.githooks/pre-commit" .githooks/
   chmod +x .githooks/pre-commit
+  # Necessário para o Teste 26 (Gate 15 autossuficiente) exercitar a suíte
+  # de hooks real, não apenas o "test-hooks.sh não encontrado" (warning).
+  cp "$PROJECT_ROOT/.githooks/test-hooks.sh" "$PROJECT_ROOT/.githooks/commit-msg" "$PROJECT_ROOT/.githooks/pre-push" "$PROJECT_ROOT/.githooks/post-commit" .githooks/
+  chmod +x .githooks/test-hooks.sh .githooks/commit-msg .githooks/pre-push .githooks/post-commit
   cp "$PROJECT_ROOT/.github/workflows/magnata-governance.yml" .github/workflows/
   chmod 644 .github/workflows/magnata-governance.yml
 
@@ -613,6 +617,73 @@ EOF
   rm -f docs/magnata-os/MAGNATA_AI_CI_GOVERNANCA_TEST25.md
 }
 
+# TEST 26: Gate 15 (hooks_suite) precisa aprovar num clone limpo, sem
+# nenhum hook do Magnata instalado em .git/hooks/ — exatamente a condição
+# de um runner de CI recém-clonado (install-hooks.sh nunca roda lá). Este
+# repositório de teste já usa core.hooksPath apontando para .githooks/, não
+# para .git/hooks/, então .git/hooks/ nunca recebeu os hooks do Magnata.
+test_26_gate15_self_sufficient_no_installed_hooks() {
+  run_test 26 "Gate 15 aprova em clone limpo sem hooks instalados em .git/hooks/ (autossuficiente)" "PASS"
+
+  cd "$TEST_REPO"
+  if bash scripts/ci/validate_governance.sh hooks_suite >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+}
+
+# TEST 27: Gate 16 (relatório final) precisa testar todos os 15 gates e
+# reportar a contagem — não abortar logo após "Testing branch" por causa
+# do bug de aritmética "((var++))" sob set -e quando var começa em 0.
+test_27_gate16_report_final_completes() {
+  run_test 27 "Gate 16 (relatório final) completa todos os gates, sem abortar prematuramente" "PASS"
+
+  cd "$TEST_REPO"
+  local output
+  output=$(bash scripts/ci/validate_governance.sh report_final 2>&1)
+
+  if [[ "$output" == *"Testing hooks_suite"* && "$output" == *"Total gates aprovados"* ]]; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+}
+
+# TEST 28: o gate de branch precisa distinguir execução local, push e
+# pull_request. Em pull_request, actions/checkout deixa o HEAD destacado
+# (git rev-parse --abbrev-ref HEAD retorna "HEAD" literal) — o gate precisa
+# usar GITHUB_HEAD_REF/GITHUB_REF_NAME quando disponíveis, sem abrir mão do
+# bloqueio quando nenhum dos dois está presente.
+test_28_gate_branch_context_aware() {
+  run_test 28 "Gate de branch usa GITHUB_HEAD_REF/GITHUB_REF_NAME com HEAD destacado (PR/push)" "PASS"
+
+  cd "$TEST_REPO"
+  local commit_sha
+  commit_sha=$(git rev-parse HEAD)
+  git checkout -q --detach "$commit_sha"
+
+  local result="PASS"
+
+  if ! GITHUB_HEAD_REF="feat/magnata-os-claude-powerpack" bash scripts/ci/validate_governance.sh branch >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+
+  if ! GITHUB_REF_NAME="feat/magnata-os-claude-powerpack" bash scripts/ci/validate_governance.sh branch >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+
+  # Sem nenhuma variável do Actions, HEAD destacado continua bloqueando —
+  # não pode virar aprovação silenciosa por acidente.
+  if bash scripts/ci/validate_governance.sh branch >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+
+  git checkout -q feat/magnata-os-claude-powerpack
+
+  test_result "$result"
+}
+
 # ============================================================================
 # MAIN EXECUTION
 # ============================================================================
@@ -658,6 +729,9 @@ main() {
   test_23_semantic_gate_technical_mention_not_false_positive || true
   test_24_semantic_gate_normative_redefinition_blocked || true
   test_25_secret_in_technical_doc_still_blocked || true
+  test_26_gate15_self_sufficient_no_installed_hooks || true
+  test_27_gate16_report_final_completes || true
+  test_28_gate_branch_context_aware || true
 
   # Report
   echo ""

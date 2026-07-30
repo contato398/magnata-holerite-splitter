@@ -181,10 +181,10 @@ modos Git, permissões, documentação anterior).
 
 ---
 
-## 6. Resultado da suíte de testes (25 cenários, 15 gates + relatório final + contrato base/head + classificação segredo/arquivo sensível + classificação documental normativo/técnico)
+## 6. Resultado da suíte de testes (28 cenários, 15 gates + relatório final + contrato base/head + classificação segredo/arquivo sensível + classificação documental normativo/técnico + execução real em runner de CI)
 
 **Comando:** `bash scripts/ci/test_governance.sh`
-**Resultado:** 25/25 testes aprovados, 0 reprovados, 0 SKIP, 0 erro
+**Resultado:** 28/28 testes aprovados, 0 reprovados, 0 SKIP, 0 erro
 interno inesperado.
 
 | # | Cenário | Esperado | Obtido | Gate | Parecer |
@@ -214,6 +214,9 @@ interno inesperado.
 | 23 | Menção técnica a "9 camadas" em doc de CI (não normativo) | PASS | PASS | 9_layers | ✓ zero falso positivo |
 | 24 | Redefinição de "9 camadas" em documento normativo real | FAIL | FAIL | 9_layers | ✓ zero falso negativo |
 | 25 | Segredo real em documento técnico de CI (não normativo) | FAIL | FAIL | secrets | ✓ sem isenção geral de Markdown |
+| 26 | Gate 15 em clone limpo, sem hooks instalados em `.git/hooks/` | PASS | PASS | hooks_suite | ✓ autossuficiente, condição real do runner |
+| 27 | Gate 16 (relatório final) testa todos os 15 gates | PASS | PASS | report_final | ✓ não aborta em "Testing branch" |
+| 28 | Gate de branch com HEAD destacado + `GITHUB_HEAD_REF`/`GITHUB_REF_NAME` | PASS | PASS | branch | ✓ distingue local/push/pull_request |
 
 Suíte roda em repositório Git isolado e temporário
 (`/tmp/magnata_governance_test`), nunca no repositório real.
@@ -414,6 +417,66 @@ usado para prová-los mudou.
 
 ---
 
+## 7C. Falhas reais no PR #12 (GitHub Actions) — Gate 15 e Gate 16
+
+Primeira execução real do workflow (fora deste sandbox, no runner do
+GitHub Actions do PR #12). Duas falhas relatadas pelo usuário, mais uma
+terceira encontrada ao investigar o mesmo tipo de divergência
+ambiente-local-vs-runner.
+
+**Gate 15 (`hooks_suite`) — causa:** `.githooks/test-hooks.sh` copiava
+`.git/hooks/` do ambiente **chamador** (`cp -r "$(git rev-parse
+--git-dir)/hooks" ...`) para testar contra eles. Isso só funciona se
+`install-hooks.sh` já rodou ali antes — o que nunca acontece
+automaticamente num checkout novo de CI. No runner, `.git/hooks/` só
+tinha os `.sample` padrão do Git (não-executáveis), então os hooks
+"copiados" para o teste não faziam nada — 3 dos 6 testes internos
+(que esperam bloqueio) commitavam sem serem barrados, e a suíte
+reprovava. **Correção:** copiar da fonte versionada (`.githooks/`,
+resolvida por `BASH_SOURCE`), junto com `.magnata/patterns.sh` (que o
+hook importa e também estava faltando no repositório temporário).
+Achado adicional na mesma investigação: um "unborn branch" (branch
+criada sem nenhum commit ainda) faz `git rev-parse --abbrev-ref HEAD`
+retornar `HEAD` literal neste ambiente — corrigido adicionando um
+commit inicial antes dos cenários de teste, como o resto da suíte já
+faz.
+
+**Gate 16 (`report_final`) — causa:** o contador usava `((total_approved++))`/
+`((total_blocked++))` (forma de comando aritmético). Sob `set -e`
+(ativo no topo do script), o pós-incremento de uma variável que começa
+em `0` avalia como falso na primeira vez — abortando o script
+imediatamente após testar o primeiro gate (`branch`), exatamente o
+sintoma relatado ("Testing branch..." e nada mais). Bug pré-existente,
+nunca exercitado pela suíte automatizada (nenhum dos testes 1–25 chama
+`report_final` ou `hooks_suite` diretamente — só os steps reais do
+workflow chamam). **Correção:** forma de atribuição
+(`total_approved=$((total_approved + 1))`), imune a esse efeito
+colateral de `set -e`. O mesmo padrão existia em
+`.githooks/test-hooks.sh` (`TEST_PASS`/`TEST_FAIL`) e foi corrigido
+igual.
+
+**Achado adicional, mesma classe de problema (branch em `pull_request`):**
+`gate_branch()` usava só `git rev-parse --abbrev-ref HEAD`. Em eventos
+`pull_request`, `actions/checkout` deixa o HEAD **destacado** (aponta
+para o merge commit), e isso retorna `HEAD` literal, não o nome da
+branch — bloquearia todo PR real, mesmo com o código correto. Não fazia
+parte dos dois sintomas relatados, mas é a mesma classe de divergência
+ambiente-local-vs-runner, e o usuário pediu explicitamente para checar
+isso nesta investigação. **Correção:** usar `GITHUB_HEAD_REF` (PR) ou
+`GITHUB_REF_NAME` (push) quando disponíveis, caindo para `git
+rev-parse` só em execução local — sem abrir mão do bloqueio quando
+nenhuma das duas variáveis está presente.
+
+**Evidência (Testes 26–28, seção 6, mais simulação manual):**
+confirmado com git real que: (a) Gate 15 aprova num clone genuinamente
+sem hooks instalados; (b) Gate 16 completa os 15 gates e imprime a
+contagem final, em vez de abortar; (c) o gate de branch aprova com HEAD
+destacado quando `GITHUB_HEAD_REF`/`GITHUB_REF_NAME` estão corretos, e
+continua bloqueando quando nenhum dos dois está presente ou aponta
+para a branch errada.
+
+---
+
 ## 8. Validação do workflow (checagem local, sem acesso ao GitHub)
 
 - Sintaxe YAML: válida (parse via PyYAML).
@@ -497,11 +560,13 @@ classificação segredo-vs-arquivo-sensível no hook foi corrigida
 (seção 7A), assim como a classificação documento-normativo-vs-técnico
 dos gates semânticos (seção 7B), sem perder detecção de segredo real,
 proteção de nome de arquivo sensível, ou bloqueio de redefinição
-arquitetural real. 25/25 testes aprovados, 0 falhas, 0 SKIP, 0 erro
-interno inesperado. Workflow permanece read-only, sem segredo, sem
-deploy, sem escrita. `app.py`, migrations e frontend intactos. Nenhum
-commit, push, PR, merge ou deploy foi realizado — a decisão de
-commitar continua sendo do usuário.
+arquitetural real. As duas falhas reais observadas no PR #12 do
+GitHub Actions (Gate 15 e Gate 16), mais uma terceira da mesma classe
+encontrada na investigação (gate de branch em `pull_request`), foram
+corrigidas e comprovadas (seção 7C). 28/28 testes aprovados, 0 falhas,
+0 SKIP, 0 erro interno inesperado. Workflow permanece read-only, sem
+segredo, sem deploy, sem escrita. `app.py`, migrations e frontend
+intactos.
 
 **Risco remanescente declarado, não bloqueante:** divergência residual
 entre `.githooks/pre-commit` e `.magnata/patterns.sh` para os gates de
