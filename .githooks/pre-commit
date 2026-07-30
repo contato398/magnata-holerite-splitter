@@ -17,6 +17,18 @@ echo "PRE-COMMIT VALIDATION"
 echo "================================"
 echo ""
 
+# Arquivos que definem ou testam os próprios padrões proibidos (segredo,
+# 11º módulo, 9 camadas, autonomia %, ADR silenciosa) — não são violação
+# real, são a fonte canônica de detecção (.magnata/patterns.sh) ou
+# fixtures da suíte de testes do CI de governança (Etapa 6).
+is_gate_pattern_source_file() {
+  local file="$1"
+  [[ "$file" == .githooks/* ]] || \
+  [[ "$file" == ".magnata/patterns.sh" ]] || \
+  [[ "$file" == "scripts/ci/test_governance.sh" ]] || \
+  [[ "$file" == "scripts/ci/validate_governance.sh" ]]
+}
+
 # VALIDAÇÃO 1: Branch correta
 echo "[1/14] Verificando branch..."
 if [ "$BRANCH" != "$EXPECTED_BRANCH" ]; then
@@ -37,19 +49,19 @@ fi
 echo -e "${GREEN}✓ Sem operações pendentes${NC}"
 
 # VALIDAÇÃO 3: Arquivos sensíveis não podem ser alterados
+# Nota: app.py, migrations/ e frontend/assets/brand/ NÃO estão aqui —
+# são cobertos pela VALIDAÇÃO 6 via PROTECTED_FILES de .magnata/patterns.sh
+# (fonte única de verdade). Esta lista cobre só o que não tem equivalente lá.
 echo "[3/14] Verificando proteção de arquivos sensíveis..."
 STAGED_FILES=$(git diff --cached --name-only)
-PROTECTED_FILES=(
-  "app.py"
-  "migrations/"
-  "frontend/assets/brand/"
+SENSITIVE_FILENAMES=(
   ".env"
   "secrets.json"
   "credentials.json"
 )
 
 FOUND_PROTECTED=0
-for protected in "${PROTECTED_FILES[@]}"; do
+for protected in "${SENSITIVE_FILENAMES[@]}"; do
   for file in $STAGED_FILES; do
     if [[ "$file" == "$protected" ]] || [[ "$file" == "$protected"* ]]; then
       echo -e "${RED}✗ BLOQUEADO: Arquivo protegido não pode ser alterado${NC}"
@@ -65,6 +77,11 @@ fi
 echo -e "${GREEN}✓ Nenhum arquivo protegido foi alterado${NC}"
 
 # VALIDAÇÃO 4: Detecção de segredos (excluindo .githooks/ — padrões de validação)
+# Detecta CONTEÚDO de segredo (token, chave, senha, assignment sensível) — não
+# nome de arquivo. Nome de arquivo sensível (.env, secrets.json,
+# credentials.json) é responsabilidade da VALIDAÇÃO 3 (bloqueia o arquivo em
+# si); listar o nome aqui também gerava falso positivo em documentação que só
+# *menciona* esses nomes em prosa, sem conter nenhum segredo real.
 echo "[4/14] Verificando presença de segredos..."
 SECRETS_PATTERNS=(
   "BEGIN RSA PRIVATE KEY"
@@ -80,14 +97,11 @@ SECRETS_PATTERNS=(
   "Authorization: Bearer"
   "password.*="
   "passwd.*="
-  "^\.env"
-  "credentials\.json"
 )
 
 FOUND_SECRETS=0
 for file in $STAGED_FILES; do
-  # Pular arquivos .githooks/ (padrões de validação, não segredos)
-  if [[ "$file" == .githooks/* ]]; then
+  if is_gate_pattern_source_file "$file"; then
     continue
   fi
 
@@ -124,29 +138,20 @@ fi
 # VALIDAÇÃO 6: Escopo permitido (padrões estruturais)
 echo "[6/14] Verificando escopo permitido..."
 
-ALLOWED_PATTERNS=(
-  "^\.githooks/"                                              # .githooks/**
-  "^\.claude/skills/"                                         # .claude/skills/**
-  "^\.claude/agents/"                                         # .claude/agents/**
-  "^docs/magnata-os/"                                         # docs/magnata-os/**
-  "^MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA[0-9]+.*\.md$"     # ETAPA[N]*.md
-  "^MAGNATA_OS_.*\.md$"                                       # MAGNATA_OS_*.md
-  "^MAGNATA_ETAPA5B_.*\.md$"                                  # MAGNATA_ETAPA5B_*
-)
+# Fonte única de verdade: .magnata/patterns.sh (ALLOWED_PATHS, PROTECTED_FILES)
+# Evita divergência entre o hook local e o CI de governança da Etapa 6.
+REPO_ROOT=$(git rev-parse --show-toplevel)
+source "$REPO_ROOT/.magnata/patterns.sh"
 
-PROTECTED_PATTERNS=(
-  "^app\.py$"                                                 # app.py bloqueado
-  "^magnata_os/documental/modulo01/migrations/"              # migrations bloqueadas
-  "^frontend/CLAUDE\.md$"                                     # frontend CLAUDE.md bloqueado
-  "^frontend/assets/brand/"                                   # frontend assets bloqueados
+SCRATCH_SCOPE_PATTERNS=(
   "^_"                                                         # scratch files
   "^test_"                                                     # test scratch
 )
 
 for file in $STAGED_FILES; do
-  # Verificar se está em lista de bloqueio
+  # Verificar se está em lista de bloqueio (PROTECTED_FILES de .magnata/patterns.sh)
   BLOCKED=0
-  for pattern in "${PROTECTED_PATTERNS[@]}"; do
+  for pattern in "${PROTECTED_FILES[@]}" "${SCRATCH_SCOPE_PATTERNS[@]}"; do
     if [[ "$file" =~ $pattern ]]; then
       BLOCKED=1
       break
@@ -159,9 +164,9 @@ for file in $STAGED_FILES; do
     exit 1
   fi
 
-  # Verificar se está em lista de permissão
+  # Verificar se está em lista de permissão (ALLOWED_PATHS de .magnata/patterns.sh)
   FOUND=0
-  for pattern in "${ALLOWED_PATTERNS[@]}"; do
+  for pattern in "${ALLOWED_PATHS[@]}" "^\.claude/skills/" "^\.claude/agents/" "^MAGNATA_ETAPA5B_.*\.md$"; do
     if [[ "$file" =~ $pattern ]]; then
       FOUND=1
       break
@@ -171,14 +176,8 @@ for file in $STAGED_FILES; do
   if [ $FOUND -eq 0 ]; then
     echo -e "${RED}✗ BLOQUEADO: Arquivo fora do escopo permitido${NC}"
     echo "  Arquivo: $file"
-    echo "  Escopo permitido (padrões estruturais):"
-    echo "    - .githooks/**"
-    echo "    - .claude/skills/**"
-    echo "    - .claude/agents/**"
-    echo "    - docs/magnata-os/**"
-    echo "    - MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA[N]*.md"
-    echo "    - MAGNATA_OS_*.md"
-    echo "    - MAGNATA_ETAPA5B_*.md"
+    echo "  Escopo permitido: ver ALLOWED_PATHS em .magnata/patterns.sh"
+    echo "  (+ .claude/skills/**, .claude/agents/**, MAGNATA_ETAPA5B_*.md)"
     exit 1
   fi
 done
@@ -223,6 +222,8 @@ echo "[9/14] Verificando gate documental: 11º módulo..."
 GATE_SECURITY_MODULE_FOUND=0
 for file in $STAGED_FILES; do
   if [ ! -f "$file" ]; then continue; fi
+  if is_gate_pattern_source_file "$file"; then continue; fi
+  if ! is_normative_doc "$file"; then continue; fi
   if git diff --cached "$file" | grep -E "(## 11º módulo|11º módulo.*Segurança)" > /dev/null 2>&1; then
     GATE_SECURITY_MODULE_FOUND=1
     break
@@ -240,6 +241,8 @@ echo "[10/14] Verificando gate documental: modelo de camadas..."
 GATE_LAYERS_FOUND=0
 for file in $STAGED_FILES; do
   if [ ! -f "$file" ]; then continue; fi
+  if is_gate_pattern_source_file "$file"; then continue; fi
+  if ! is_normative_doc "$file"; then continue; fi
   if git diff --cached "$file" | grep -E "(^[+].*9 camadas|^[+].*nove camadas)" > /dev/null 2>&1; then
     GATE_LAYERS_FOUND=1
     break
@@ -256,6 +259,8 @@ echo "[11/14] Verificando gate documental: percentuais de autonomia..."
 GATE_AUTONOMY_PCT_FOUND=0
 for file in $STAGED_FILES; do
   if [ ! -f "$file" ]; then continue; fi
+  if is_gate_pattern_source_file "$file"; then continue; fi
+  if ! is_normative_doc "$file"; then continue; fi
   if git diff --cached "$file" | grep -iE "^[+].*autonomia.*[0-9]+\s*(%|perce?nt)" > /dev/null 2>&1; then
     GATE_AUTONOMY_PCT_FOUND=1
     break
@@ -272,6 +277,8 @@ echo "[12/14] Verificando gate documental: ADR silenciosa..."
 GATE_ADR_SILENT_FOUND=0
 for file in $STAGED_FILES; do
   if [ ! -f "$file" ]; then continue; fi
+  if is_gate_pattern_source_file "$file"; then continue; fi
+  if ! is_normative_doc "$file"; then continue; fi
   if git diff --cached "$file" | grep -iE "(Item de Ingestão foi renomeado|Documento substitui Item)" > /dev/null 2>&1; then
     GATE_ADR_SILENT_FOUND=1
     break

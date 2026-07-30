@@ -1,0 +1,188 @@
+name: Magnata OS — CI de Governança e Qualidade
+
+on:
+  pull_request:
+    branches:
+      - main
+      - feat/magnata-os-claude-powerpack
+  push:
+    branches:
+      - feat/magnata-os-claude-powerpack
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: "Referência base do intervalo a validar (commit SHA ou ref) — obrigatório"
+        required: true
+        type: string
+      head_ref:
+        description: "Referência head do intervalo a validar (commit SHA ou ref) — obrigatório"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BASH_VERSION: "5.x"
+  GIT_VERSION: "2.40+"
+  # Branch principal configurada — usada para calcular merge-base em push
+  # de branch nova (ver step "Determinar base e head do diff").
+  MAIN_BRANCH: "main"
+
+jobs:
+  governance:
+    name: Validação de Governança e Conformidade
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verificar ambiente
+        run: |
+          echo "Sistema: $(uname -a)"
+          echo "Bash: $(bash --version | head -1)"
+          echo "Git: $(git --version)"
+
+      - name: Determinar base e head do diff
+        id: diffrange
+        run: |
+          set -euo pipefail
+
+          # Contrato: todo evento de CI (pull_request, push, workflow_dispatch)
+          # DEVE terminar este step com base/head não-vazios e válidos, ou
+          # falhar aqui mesmo (nunca deixar um gate rodar em modo local).
+          case "${{ github.event_name }}" in
+            pull_request)
+              # PR inteiro (merge-base), nunca só o último commit.
+              BASE="${{ github.event.pull_request.base.sha }}"
+              HEAD="${{ github.event.pull_request.head.sha }}"
+              ;;
+            push)
+              BASE="${{ github.event.before }}"
+              HEAD="${{ github.sha }}"
+              if [[ "$BASE" =~ ^0+$ ]]; then
+                # Push de branch nova: sem commit anterior confiável.
+                # Determina merge-base com a branch principal configurada
+                # (MAIN_BRANCH) — nunca usa HEAD^ como base automática.
+                if ! git rev-parse --verify --quiet "origin/${MAIN_BRANCH}" >/dev/null; then
+                  echo "::error::Branch principal 'origin/${MAIN_BRANCH}' não encontrada — sem base confiável para push de branch nova."
+                  exit 1
+                fi
+                MERGE_BASE="$(git merge-base "origin/${MAIN_BRANCH}" "$HEAD" 2>/dev/null || true)"
+                if [[ -z "$MERGE_BASE" ]]; then
+                  echo "::error::Não foi possível determinar merge-base confiável com origin/${MAIN_BRANCH} para push de branch nova."
+                  exit 1
+                fi
+                BASE="$MERGE_BASE"
+              fi
+              ;;
+            workflow_dispatch)
+              BASE="${{ github.event.inputs.base_ref }}"
+              HEAD="${{ github.event.inputs.head_ref }}"
+              if [[ -z "$BASE" || -z "$HEAD" ]]; then
+                echo "::error::workflow_dispatch requer base_ref e head_ref válidos — execução manual sem esses inputs não é permitida."
+                exit 1
+              fi
+              if ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+                echo "::error::base_ref inválida ou inexistente: '$BASE'"
+                exit 1
+              fi
+              if ! git cat-file -e "${HEAD}^{commit}" 2>/dev/null; then
+                echo "::error::head_ref inválida ou inexistente: '$HEAD'"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::Evento não suportado para cálculo de base/head: ${{ github.event_name }}"
+              exit 1
+              ;;
+          esac
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "head=$HEAD" >> "$GITHUB_OUTPUT"
+          echo "Evento: ${{ github.event_name }}"
+          echo "Base: $BASE"
+          echo "Head: $HEAD"
+
+      - name: Gate 1 — Branch correta
+        run: |
+          ./scripts/ci/validate_governance.sh branch
+
+      - name: Gate 2 — app.py protegido
+        run: |
+          ./scripts/ci/validate_governance.sh protected_app_py "${{ steps.diffrange.outputs.base }}" "${{ steps.diffrange.outputs.head }}"
+
+      - name: Gate 3 — Migrations protegidas
+        run: |
+          ./scripts/ci/validate_governance.sh protected_migrations "${{ steps.diffrange.outputs.base }}" "${{ steps.diffrange.outputs.head }}"
+
+      - name: Gate 4 — Frontend protegido
+        run: |
+          ./scripts/ci/validate_governance.sh protected_frontend "${{ steps.diffrange.outputs.base }}" "${{ steps.diffrange.outputs.head }}"
+
+      - name: Gate 5 — Segredos
+        run: |
+          ./scripts/ci/validate_governance.sh secrets "${{ steps.diffrange.outputs.base }}" "${{ steps.diffrange.outputs.head }}"
+
+      - name: Gate 6 — Whitespace
+        run: |
+          ./scripts/ci/validate_governance.sh whitespace "${{ steps.diffrange.outputs.base }}" "${{ steps.diffrange.outputs.head }}"
+
+      - name: Gate 7 — Segurança não é 11º módulo
+        run: |
+          ./scripts/ci/validate_governance.sh 11_module "${{ steps.diffrange.outputs.base }}" "${{ steps.diffrange.outputs.head }}"
+
+      - name: Gate 8 — Arquitetura conforme especificação
+        run: |
+          ./scripts/ci/validate_governance.sh 9_layers "${{ steps.diffrange.outputs.base }}" "${{ steps.diffrange.outputs.head }}"
+
+      - name: Gate 9 — Autonomia sem percentual abstrato
+        run: |
+          ./scripts/ci/validate_governance.sh autonomy_percent "${{ steps.diffrange.outputs.base }}" "${{ steps.diffrange.outputs.head }}"
+
+      - name: Gate 10 — ADR não resolvida silenciosamente
+        run: |
+          ./scripts/ci/validate_governance.sh adr_silent "${{ steps.diffrange.outputs.base }}" "${{ steps.diffrange.outputs.head }}"
+
+      - name: Gate 11 — Documentos obrigatórios
+        run: |
+          ./scripts/ci/validate_governance.sh required_docs
+
+      - name: Gate 12 — CLAUDE.md hierarquia
+        run: |
+          ./scripts/ci/validate_governance.sh claude_hierarchy
+
+      - name: Gate 13 — Scripts com modo 755
+        run: |
+          ./scripts/ci/validate_governance.sh script_mode_755
+
+      - name: Gate 14 — Workflows/migrations modo 644
+        run: |
+          ./scripts/ci/validate_governance.sh config_mode_644
+
+      - name: Gate 15 — Suite de hooks aprovada
+        run: |
+          ./scripts/ci/validate_governance.sh hooks_suite
+
+      - name: Gate 16 — Relatório Final
+        # Roda mesmo se gates individuais bloquearem (para dar um relatório
+        # consolidado) — mas NUNCA se o próprio cálculo de base/head falhou
+        # (contrato inválido não pode virar execução em modo local silenciosa).
+        if: ${{ !cancelled() && steps.diffrange.outcome == 'success' }}
+        run: |
+          ./scripts/ci/validate_governance.sh report_final "${{ steps.diffrange.outputs.base }}" "${{ steps.diffrange.outputs.head }}"
+
+      - name: Resultado
+        if: ${{ !cancelled() && steps.diffrange.outcome == 'success' }}
+        run: |
+          echo "✓ Governança validada com sucesso"
+          echo "  CI de governança está operacional"
+          echo "  16 gates passaram validação"

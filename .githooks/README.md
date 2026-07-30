@@ -62,6 +62,15 @@ chmod +x .githooks/test-hooks.sh
 .githooks/test-hooks.sh
 ```
 
+## Fonte única de padrões (Etapa 6)
+
+`pre-commit` importa `.magnata/patterns.sh` — mesmo arquivo usado por
+`scripts/ci/validate_governance.sh` (CI de governança). Arquivos
+protegidos e escopo permitido vêm dessa fonte única; evita divergência
+entre o que o hook local bloqueia e o que o CI bloqueia.
+
 ## Referência Completa
 
-Ver: `docs/magnata-os/MAGNATA_AI_HOOKS_LOCAIS.md`
+Ver:
+- `docs/magnata-os/MAGNATA_AI_HOOKS_LOCAIS.md` — hooks locais (Etapa 5)
+- `docs/magnata-os/MAGNATA_AI_CI_GOVERNANCA.md` — CI de governança (Etapa 6)

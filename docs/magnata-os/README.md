@@ -204,26 +204,37 @@ agentes técnicos especializados para verificação, governança e validação.
 Nenhum acesso autônomo a produção. Nenhuma alteração de código. Nenhum
 MCP, hook ou agente contínuo instalado.
 
-## Camada técnica: CI de Governança (Etapa 6 — Plano)
+## Camada técnica: CI de Governança (Etapa 6)
 
-**Status:** Planejado (não implementado)
-**Documentação:** [`MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6_PLANO.md`](../../MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6_PLANO.md)
+**Status:** IMPLEMENTADO LOCALMENTE — não commitado, não enviado ao GitHub.
+Existe no working tree/stage local e passa nos testes locais; o
+workflow ainda não rodou no GitHub porque nada foi commitado nem
+enviado.
+
+**Documentação:**
+- [`MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6_PLANO.md`](../../MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6_PLANO.md) — plano original aprovado.
+- [`MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6.md`](../../MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6.md) — relatório da implementação, correções e limitação bloqueante encontrada.
+- [`MAGNATA_AI_CI_GOVERNANCA.md`](MAGNATA_AI_CI_GOVERNANCA.md) — arquitetura, fonte única de verdade, os 16 gates, limitações conhecidas.
 
 **Propósito:** Estabelecer validação automática de governança e conformidade
 documental via GitHub Actions, sem autonomia de produção.
 
 **Escopo:**
 - CI não invasivo em pull requests e pushes
-- 15 quality gates (segurança, proteção, conformidade, documentação)
-- Reutilização de validações dos hooks locais
+- 16 quality gates (segurança, proteção, conformidade, documentação, modos Git)
+- Fonte única de verdade (`.magnata/patterns.sh`) compartilhada entre hook local e CI
 - Read-only, sem secrets, sem deploy
 
 **Composição:**
-- `.github/workflows/magnata-governance.yml` — workflow principal
-- `scripts/ci/validate_governance.sh` — script de orquestração (se necessário)
-- `.magnata/patterns.sh` — padrões canônicos (se necessário)
+- `.github/workflows/magnata-governance.yml` — workflow principal (só orquestra)
+- `scripts/ci/validate_governance.sh` — os 16 gates
+- `scripts/ci/test_governance.sh` — suíte isolada (15/15 aprovados)
+- `.magnata/patterns.sh` — padrões canônicos
 
-**Status atual:** Plano aprovado pelas 5 revisões de subagentes (pendente).
+**Limitação bloqueante conhecida:** os gates que dependem do diff
+alterado usam um fallback (`git diff HEAD^..HEAD`) que, num checkout de
+CI real, só enxerga o último commit de um PR — não o PR inteiro contra
+a branch-base. Ver `MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6.md` §7.
 
 ## Por que os arquivos não foram movidos para cá
 

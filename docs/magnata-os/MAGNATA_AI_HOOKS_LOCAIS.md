@@ -94,12 +94,26 @@ git commit --no-verify -m "mensagem"
 
 ---
 
-## 6. Referências
+## 6. Fonte única de padrões (atualizado na Etapa 6)
+
+A partir da Etapa 6, `.git/hooks/pre-commit` (via `.githooks/`) importa
+`.magnata/patterns.sh` para arquivos protegidos e escopo permitido —
+a mesma fonte usada pelo CI de governança
+(`scripts/ci/validate_governance.sh`). Isso evita que o hook local e o
+CI divirjam sobre o que é permitido alterar. As demais validações do
+hook (segredo, gates documentais, arquivos de scratch) ainda mantêm
+listas próprias, não conectadas a essa fonte — ver
+`MAGNATA_AI_CI_GOVERNANCA.md` §6.2 para o detalhe dessa divergência
+residual.
+
+## 7. Referências
 
 - [Git Hooks Documentation](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks)
-- `MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA5.md` — Relatório completo
+- `MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA5.md` — Relatório completo (Etapa 5)
+- `MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6.md` — CI de Governança (Etapa 6)
+- `MAGNATA_AI_CI_GOVERNANCA.md` — arquitetura do CI e fonte única de verdade
 - `.git/hooks/pre-commit`, `.git/hooks/commit-msg`, `.git/hooks/pre-push`
 
 ---
 
-**Documento de governança local para Magnata OS — Etapa 5**
+**Documento de governança local para Magnata OS — Etapas 5 e 6**
