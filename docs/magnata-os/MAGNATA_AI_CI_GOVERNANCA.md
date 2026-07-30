@@ -82,23 +82,27 @@ scripts/ci/validate_governance.sh report_final
 
 `scripts/ci/test_governance.sh` cria um repositório Git **temporário**
 (`/tmp/magnata_governance_test`), copia para lá os arquivos
-necessários (`patterns.sh`, `validate_governance.sh`, um hook real, o
-workflow real) e simula 25 cenários — a maioria deve bloquear
+necessários (`patterns.sh`, `validate_governance.sh`, os 5 hooks reais,
+o workflow real) e simula 28 cenários — a maioria deve bloquear
 (violação, erro interno ou nome de arquivo sensível detectado), os
 demais devem passar (mudança válida / suíte limpa / intervalo limpo
-multi-commit / menção documental sem segredo real). Os cenários 16–19
-validam o contrato base/head: violação no primeiro de dois commits
-(16), intervalo limpo sem falso positivo (17), violação no commit
-intermediário de três (18), referência inválida como erro interno
-(19). Os cenários 20–22 validam a classificação segredo-vs-arquivo-sensível
-do hook (ver 6.1): menção documental sem falso positivo (20), arquivo
-`credentials.json` real ainda bloqueado (21), token real em doc
-permitido ainda bloqueado (22). Os cenários 23–25 validam a
-classificação documento-normativo-vs-técnico dos gates semânticos (ver
-6.1B): menção técnica sem falso positivo (23), redefinição normativa
-real ainda bloqueada (24), segredo real em doc técnico ainda bloqueado
-(25). Nunca toca no repositório real. Resultado na última execução:
-**25/25 aprovados**.
+multi-commit / menção documental sem segredo real / execução em
+condição de runner de CI). Os cenários 16–19 validam o contrato
+base/head: violação no primeiro de dois commits (16), intervalo limpo
+sem falso positivo (17), violação no commit intermediário de três
+(18), referência inválida como erro interno (19). Os cenários 20–22
+validam a classificação segredo-vs-arquivo-sensível do hook (ver 6.1):
+menção documental sem falso positivo (20), arquivo `credentials.json`
+real ainda bloqueado (21), token real em doc permitido ainda bloqueado
+(22). Os cenários 23–25 validam a classificação
+documento-normativo-vs-técnico dos gates semânticos (ver 6.1B): menção
+técnica sem falso positivo (23), redefinição normativa real ainda
+bloqueada (24), segredo real em doc técnico ainda bloqueado (25). Os
+cenários 26–28 validam condições reais de runner de CI (ver 6.5): Gate
+15 autossuficiente sem hooks pré-instalados (26), Gate 16 completa
+todos os gates sem abortar (27), gate de branch com HEAD destacado em
+PR/push (28). Nunca toca no repositório real. Resultado na última
+execução: **28/28 aprovados**.
 
 ---
 
@@ -213,6 +217,33 @@ usabilidade.
 Não existe suíte automatizada equivalente para `.githooks/pre-commit`
 isoladamente — a Etapa 5 validou o hook manualmente, sem harness
 automatizado próprio.
+
+### 6.5 Falhas reais no PR #12 (GitHub Actions) — corrigidas
+
+A primeira execução real do workflow (PR #12) revelou três problemas
+de divergência ambiente-local-vs-runner que nunca tinham sido
+exercitados pela suíte isolada:
+
+- **Gate 15:** `.githooks/test-hooks.sh` copiava `.git/hooks/` do
+  ambiente chamador (dependia de `install-hooks.sh` já ter rodado ali)
+  em vez da fonte versionada `.githooks/`. Num runner novo,
+  `.git/hooks/` só tem os `.sample` padrão do Git — os "hooks"
+  copiados não validavam nada, e 3 dos 6 testes internos (que esperam
+  bloqueio) reprovavam. Corrigido para copiar de `.githooks/`
+  diretamente, mais `.magnata/patterns.sh` (que o hook importa e
+  também faltava).
+- **Gate 16:** `report_final()` usava `((contador++))` — sob `set -e`,
+  o pós-incremento de uma variável começando em `0` aborta o script na
+  primeira ocorrência, exatamente após testar o primeiro gate. Trocado
+  por atribuição (`contador=$((contador + 1))`), imune a esse efeito
+  colateral.
+- **Gate de branch:** só usava `git rev-parse --abbrev-ref HEAD`, que
+  retorna `HEAD` literal com HEAD destacado — a condição padrão de
+  `actions/checkout` em eventos `pull_request`. Corrigido para usar
+  `GITHUB_HEAD_REF`/`GITHUB_REF_NAME` quando disponíveis.
+
+Ver `MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6.md` §7C (evidência:
+Testes 26–28).
 
 ---
 

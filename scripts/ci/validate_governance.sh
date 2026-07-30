@@ -107,7 +107,19 @@ WARNINGS=0
 # ============================================================================
 
 gate_branch() {
-  local branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "UNKNOWN")
+  local branch
+  if [[ -n "${GITHUB_HEAD_REF:-}" ]]; then
+    # pull_request: actions/checkout deixa o HEAD destacado (aponta para o
+    # merge commit), então git rev-parse --abbrev-ref HEAD retornaria "HEAD"
+    # literal. GITHUB_HEAD_REF é a branch de origem real do PR.
+    branch="$GITHUB_HEAD_REF"
+  elif [[ -n "${GITHUB_REF_NAME:-}" ]]; then
+    # push (ou outro evento de Actions com ref de branch real).
+    branch="$GITHUB_REF_NAME"
+  else
+    # Execução local/manual — usa o HEAD do git normalmente.
+    branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "UNKNOWN")
+  fi
 
   if [[ ! "$branch" =~ ^feat/magnata-os-claude-powerpack$ ]]; then
     echo -e "${RED}${MSG_BLOCKED}: Branch incorreta${NC}"
@@ -472,9 +484,11 @@ report_final() {
   for gate in "${gates[@]}"; do
     echo "[Gate] Testing $gate..."
     if gate_${gate} >/dev/null 2>&1; then
-      ((total_approved++))
+      # Forma de atribuição, não "((var++))": sob set -e, o pós-incremento
+      # de 0 avalia como falso e aborta o script no primeiro gate testado.
+      total_approved=$((total_approved + 1))
     else
-      ((total_blocked++))
+      total_blocked=$((total_blocked + 1))
     fi
   done
 
