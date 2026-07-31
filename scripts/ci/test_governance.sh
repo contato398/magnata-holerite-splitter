@@ -1,6 +1,6 @@
 #!/bin/bash
 # Magnata OS — Suíte de Testes de Governança
-# Executa 28 cenários em repositório temporário isolado
+# Executa 32 cenários em repositório temporário isolado
 # Não realiza testes destrutivos no repositório principal
 
 set -euo pipefail
@@ -684,6 +684,86 @@ test_28_gate_branch_context_aware() {
   test_result "$result"
 }
 
+# TEST 29: a branch antiga (feat/magnata-os-claude-powerpack) precisa
+# continuar autorizada depois da migração para fonte canônica de branches.
+test_29_authorized_branch_old() {
+  run_test 29 "Branch antiga autorizada (feat/magnata-os-claude-powerpack) aprova" "PASS"
+
+  cd "$TEST_REPO"
+  if GITHUB_HEAD_REF="feat/magnata-os-claude-powerpack" bash scripts/ci/validate_governance.sh branch >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+}
+
+# TEST 30: a branch nova da Etapa 6 (feat/magnata-os-etapa6-governanca)
+# precisa aprovar — inclusive no cenário real de PR (com base/head, como o
+# PR #13), não só numa checagem isolada de nome.
+test_30_authorized_branch_new_etapa6() {
+  run_test 30 "Branch nova da Etapa 6 (feat/magnata-os-etapa6-governanca) aprova, inclusive com base/head reais" "PASS"
+
+  cd "$TEST_REPO"
+  local base_sha head_sha
+  base_sha=$(git rev-parse HEAD)
+  head_sha=$(git rev-parse HEAD)
+
+  local result="PASS"
+  if ! GITHUB_HEAD_REF="feat/magnata-os-etapa6-governanca" bash scripts/ci/validate_governance.sh branch >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+  if ! GITHUB_HEAD_REF="feat/magnata-os-etapa6-governanca" bash scripts/ci/validate_governance.sh branch "$base_sha" "$head_sha" >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+
+  test_result "$result"
+}
+
+# TEST 31: branch arbitrária, não enumerada em AUTHORIZED_BRANCHES,
+# continua bloqueada — comprova que a fonte canônica é uma enumeração
+# fechada, não um regex genérico tipo "feat/*".
+test_31_arbitrary_branch_still_blocked() {
+  run_test 31 "Branch arbitrária não listada continua bloqueada (sem regex genérica)" "FAIL"
+
+  cd "$TEST_REPO"
+  if GITHUB_HEAD_REF="feat/branch-nao-autorizada" bash scripts/ci/validate_governance.sh branch >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+}
+
+# TEST 32: hook local (pre-commit) e validador (CI) precisam concordar
+# sobre a mesma branch nova autorizada — comprova que os dois consomem a
+# mesma fonte canônica (AUTHORIZED_BRANCHES em .magnata/patterns.sh), não
+# listas paralelas divergentes.
+test_32_hook_and_validator_agree_on_new_branch() {
+  run_test 32 "Hook local e validador concordam sobre feat/magnata-os-etapa6-governanca" "PASS"
+
+  cd "$TEST_REPO"
+  local original_branch
+  original_branch=$(git rev-parse --abbrev-ref HEAD)
+
+  git checkout -q -b feat/magnata-os-etapa6-governanca
+  echo "# doc permitido" > MAGNATA_OS_TEST32.md
+  git add MAGNATA_OS_TEST32.md
+
+  local result="PASS"
+  # Validador (CI): mesma branch, via GITHUB_HEAD_REF.
+  if ! GITHUB_HEAD_REF="feat/magnata-os-etapa6-governanca" bash scripts/ci/validate_governance.sh branch >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+  # Hook local: commit real na branch nova precisa passar pela VALIDAÇÃO 1.
+  if ! git commit -m "docs: teste 32 branch nova no hook" >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+
+  git checkout -q "$original_branch"
+  git branch -q -D feat/magnata-os-etapa6-governanca >/dev/null 2>&1 || true
+
+  test_result "$result"
+}
+
 # ============================================================================
 # MAIN EXECUTION
 # ============================================================================
@@ -732,6 +812,10 @@ main() {
   test_26_gate15_self_sufficient_no_installed_hooks || true
   test_27_gate16_report_final_completes || true
   test_28_gate_branch_context_aware || true
+  test_29_authorized_branch_old || true
+  test_30_authorized_branch_new_etapa6 || true
+  test_31_arbitrary_branch_still_blocked || true
+  test_32_hook_and_validator_agree_on_new_branch || true
 
   # Report
   echo ""

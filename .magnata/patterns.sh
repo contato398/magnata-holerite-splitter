@@ -4,6 +4,30 @@
 # Importado por: .githooks/pre-commit, scripts/ci/validate_governance.sh
 
 # ============================================================================
+# BRANCHES AUTORIZADAS — Trabalho de desenvolvimento do Magnata OS
+# ============================================================================
+# Enumeração fechada, não regex genérica (ex. "feat/*") — toda branch de
+# trabalho nova precisa ser adicionada aqui explicitamente. "main" não é
+# branch de desenvolvimento local; eventos de CI sobre main (pull_request,
+# push) já são tratados à parte, sem depender desta lista.
+
+AUTHORIZED_BRANCHES=(
+  "^feat/magnata-os-claude-powerpack$"
+  "^feat/magnata-os-etapa6-governanca$"
+)
+
+# Verifica se uma branch está na lista de branches de trabalho autorizadas
+is_authorized_branch() {
+  local branch="$1"
+  for pattern in "${AUTHORIZED_BRANCHES[@]}"; do
+    if [[ "$branch" =~ $pattern ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# ============================================================================
 # ARQUIVOS PROTEGIDOS — Não podem ser alterados sem autorização explícita
 # ============================================================================
 
@@ -246,7 +270,7 @@ is_normative_doc() {
 export PROTECTED_FILES SECRET_PATTERNS GATE_11_MODULE_PATTERNS
 export GATE_9_LAYERS_PATTERNS GATE_AUTONOMY_PERCENT_PATTERNS GATE_ADR_SILENT_PATTERNS
 export REQUIRED_DOCS CLAUDE_HIERARCHY EXECUTABLE_FILES NON_EXECUTABLE_FILES
-export ALLOWED_PATHS SCRATCH_PATTERNS NORMATIVE_DOC_PATTERNS
+export ALLOWED_PATHS SCRATCH_PATTERNS NORMATIVE_DOC_PATTERNS AUTHORIZED_BRANCHES
 export MSG_APPROVED MSG_BLOCKED MSG_WARNING MSG_INFO MSG_ERROR
 export EXIT_APPROVED EXIT_BLOCKED EXIT_WARNING EXIT_ERROR
-export -f is_protected_file has_secret_pattern get_file_mode is_normative_doc
+export -f is_protected_file has_secret_pattern get_file_mode is_normative_doc is_authorized_branch

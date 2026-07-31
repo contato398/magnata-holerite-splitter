@@ -5,11 +5,17 @@
 set -e
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
-EXPECTED_BRANCH="feat/magnata-os-claude-powerpack"
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
 NC='\033[0m'
+
+# Fonte única de verdade: .magnata/patterns.sh (AUTHORIZED_BRANCHES,
+# ALLOWED_PATHS, PROTECTED_FILES). Importada aqui no topo — a validação de
+# branch (VALIDAÇÃO 1) já precisa dela. Evita divergência entre o hook
+# local e o CI de governança da Etapa 6.
+REPO_ROOT=$(git rev-parse --show-toplevel)
+source "$REPO_ROOT/.magnata/patterns.sh"
 
 echo ""
 echo "================================"
@@ -31,10 +37,10 @@ is_gate_pattern_source_file() {
 
 # VALIDAÇÃO 1: Branch correta
 echo "[1/14] Verificando branch..."
-if [ "$BRANCH" != "$EXPECTED_BRANCH" ]; then
+if ! is_authorized_branch "$BRANCH"; then
   echo -e "${RED}✗ BLOQUEADO: Branch incorreta${NC}"
   echo "  Branch atual: $BRANCH"
-  echo "  Branch esperada: $EXPECTED_BRANCH"
+  echo "  Branches autorizadas: ${AUTHORIZED_BRANCHES[*]}"
   echo ""
   exit 1
 fi
@@ -138,10 +144,8 @@ fi
 # VALIDAÇÃO 6: Escopo permitido (padrões estruturais)
 echo "[6/14] Verificando escopo permitido..."
 
-# Fonte única de verdade: .magnata/patterns.sh (ALLOWED_PATHS, PROTECTED_FILES)
-# Evita divergência entre o hook local e o CI de governança da Etapa 6.
-REPO_ROOT=$(git rev-parse --show-toplevel)
-source "$REPO_ROOT/.magnata/patterns.sh"
+# .magnata/patterns.sh (ALLOWED_PATHS, PROTECTED_FILES) já foi importado
+# no topo do script (necessário desde a VALIDAÇÃO 1).
 
 SCRATCH_SCOPE_PATTERNS=(
   "^_"                                                         # scratch files

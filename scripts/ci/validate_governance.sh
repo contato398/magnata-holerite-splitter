@@ -121,10 +121,10 @@ gate_branch() {
     branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "UNKNOWN")
   fi
 
-  if [[ ! "$branch" =~ ^feat/magnata-os-claude-powerpack$ ]]; then
+  if ! is_authorized_branch "$branch"; then
     echo -e "${RED}${MSG_BLOCKED}: Branch incorreta${NC}"
     echo "  Branch atual: $branch"
-    echo "  Branch esperada: feat/magnata-os-claude-powerpack"
+    echo "  Branches autorizadas: ${AUTHORIZED_BRANCHES[*]}"
     return $EXIT_BLOCKED
   fi
 
