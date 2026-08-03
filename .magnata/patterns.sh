@@ -14,6 +14,7 @@
 AUTHORIZED_BRANCHES=(
   "^feat/magnata-os-claude-powerpack$"
   "^feat/magnata-os-etapa6-governanca$"
+  "^feat/magnata-os-etapa6-estabilizacao$"
 )
 
 # Verifica se uma branch está na lista de branches de trabalho autorizadas

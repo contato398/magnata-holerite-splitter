@@ -113,11 +113,22 @@ gate_branch() {
     # merge commit), então git rev-parse --abbrev-ref HEAD retornaria "HEAD"
     # literal. GITHUB_HEAD_REF é a branch de origem real do PR.
     branch="$GITHUB_HEAD_REF"
+  elif [[ "${GITHUB_EVENT_NAME:-}" == "push" && "${GITHUB_REF_NAME:-}" == "main" ]]; then
+    # Push pós-merge em main: reconhecido só quando as DUAS variáveis do
+    # Actions concordam (evento="push" E ref="main") — uma só, sozinha, não
+    # basta (evita spoof incompleto/incoerente). Contexto distinto de
+    # "branch de desenvolvimento autorizada": nunca passa por
+    # is_authorized_branch, e main nunca entra em AUTHORIZED_BRANCHES.
+    echo -e "${GREEN}${MSG_APPROVED}: push pós-merge em main (evento de CI legítimo)${NC}"
+    return $EXIT_APPROVED
   elif [[ -n "${GITHUB_REF_NAME:-}" ]]; then
-    # push (ou outro evento de Actions com ref de branch real).
+    # push (ou outro evento de Actions com ref de branch real) que não é
+    # o par push+main acima — segue como branch de desenvolvimento comum.
     branch="$GITHUB_REF_NAME"
   else
-    # Execução local/manual — usa o HEAD do git normalmente.
+    # Execução local/manual — usa o HEAD do git normalmente. Inclui
+    # execução local em main: main nunca está em AUTHORIZED_BRANCHES, então
+    # continua bloqueada aqui (nunca vira branch de desenvolvimento).
     branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "UNKNOWN")
   fi
 
