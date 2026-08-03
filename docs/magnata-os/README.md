@@ -206,35 +206,50 @@ MCP, hook ou agente contínuo instalado.
 
 ## Camada técnica: CI de Governança (Etapa 6)
 
-**Status:** IMPLEMENTADO LOCALMENTE — não commitado, não enviado ao GitHub.
-Existe no working tree/stage local e passa nos testes locais; o
-workflow ainda não rodou no GitHub porque nada foi commitado nem
-enviado.
+**Status:** MESCLADO EM `main` — PR #13, merge commit
+`d616d521082db5d97e1824daf14c6cfdb4618f31`. 47/47 testes da suíte
+isolada aprovados, 6/6 hooks reais aprovados, 15/15 gates aprovados
+numa simulação de checkout limpo do PR contra `origin/main` antes do
+merge. Nenhum deploy, nenhuma alteração de código funcional (`app.py`,
+frontend, `magnata_os/`, migrations reais) em nenhum commit da etapa.
 
 **Documentação:**
 - [`MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6_PLANO.md`](../../MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6_PLANO.md) — plano original aprovado.
-- [`MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6.md`](../../MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6.md) — relatório da implementação, correções e limitação bloqueante encontrada.
+- [`MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6.md`](../../MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6.md) — relatório da implementação, correções e fechamento final pós-merge.
 - [`MAGNATA_AI_CI_GOVERNANCA.md`](MAGNATA_AI_CI_GOVERNANCA.md) — arquitetura, fonte única de verdade, os 16 gates, limitações conhecidas.
 
 **Propósito:** Estabelecer validação automática de governança e conformidade
 documental via GitHub Actions, sem autonomia de produção.
 
 **Escopo:**
-- CI não invasivo em pull requests e pushes
+- CI não invasivo em pull requests, pushes na branch de desenvolvimento
+  histórica e push pós-merge em `main`
 - 16 quality gates (segurança, proteção, conformidade, documentação, modos Git)
 - Fonte única de verdade (`.magnata/patterns.sh`) compartilhada entre hook local e CI
+- Política canônica de branches autorizadas (`AUTHORIZED_BRANCHES`,
+  enumeração fechada) — `main` nunca entra nessa lista; push pós-merge
+  em `main` é reconhecido pelo Gate de branch como contexto distinto,
+  só quando `GITHUB_EVENT_NAME=push` e `GITHUB_REF_NAME=main` ocorrem
+  juntos (nunca por execução local ou por uma das duas variáveis
+  isolada)
+- Hierarquia dos 4 `CLAUDE.md` institucionais (`CLAUDE_HIERARCHY`)
+  liberada por igualdade exata de caminho, nunca por padrão amplo —
+  qualquer outro arquivo nos mesmos diretórios continua protegido
 - Read-only, sem secrets, sem deploy
 
 **Composição:**
 - `.github/workflows/magnata-governance.yml` — workflow principal (só orquestra)
 - `scripts/ci/validate_governance.sh` — os 16 gates
-- `scripts/ci/test_governance.sh` — suíte isolada (15/15 aprovados)
+- `scripts/ci/test_governance.sh` — suíte isolada (52/52 aprovados)
 - `.magnata/patterns.sh` — padrões canônicos
 
-**Limitação bloqueante conhecida:** os gates que dependem do diff
-alterado usam um fallback (`git diff HEAD^..HEAD`) que, num checkout de
-CI real, só enxerga o último commit de um PR — não o PR inteiro contra
-a branch-base. Ver `MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6.md` §7.
+**Correções aplicadas antes do merge:** o falso negativo do Gate 6
+(whitespace) sob `pipefail`, e a divergência entre `CLAUDE_HIERARCHY`/Gate
+12 e `ALLOWED_PATHS`/`PROTECTED_FILES` — ambas descritas com causa e
+correção em `MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6.md`. A antiga
+limitação do fallback `git diff HEAD^..HEAD` (só via o último commit de
+um PR) foi substituída pelo contrato explícito `base_ref...head_ref`,
+usado em todos os eventos de CI.
 
 ## Por que os arquivos não foram movidos para cá
 
