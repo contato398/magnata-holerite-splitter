@@ -1,6 +1,6 @@
 #!/bin/bash
 # Magnata OS — Suíte de Testes de Governança
-# Executa 40 cenários em repositório temporário isolado
+# Executa 45 cenários em repositório temporário isolado
 # Não realiza testes destrutivos no repositório principal
 
 set -euo pipefail
@@ -989,6 +989,113 @@ test_40_gates_11_12_approve_with_foundational_docs() {
   test_result "$result"
 }
 
+# TEST 41: os 4 caminhos EXATOS da hierarquia CLAUDE.md (CLAUDE_HIERARCHY)
+# precisam passar pela Validação 6 do pre-commit (commit real, sem
+# --no-verify) — comprova a exceção documental resolvendo a contradição
+# entre Gate 12 (exige que existam) e ALLOWED_PATHS/PROTECTED_FILES
+# (antes bloqueavam esses mesmos caminhos).
+test_41_claude_hierarchy_exact_paths_allowed() {
+  run_test 41 "Os 4 caminhos exatos da hierarquia CLAUDE.md passam pela Validação 6 (commit real)" "PASS"
+
+  cd "$TEST_REPO"
+  mkdir -p frontend magnata_os/documental/modulo01/migrations
+  echo "# CLAUDE.md raiz" > CLAUDE.md
+  echo "# CLAUDE.md frontend" > frontend/CLAUDE.md
+  echo "# CLAUDE.md magnata_os" > magnata_os/CLAUDE.md
+  echo "# CLAUDE.md migrations" > magnata_os/documental/modulo01/migrations/CLAUDE.md
+  git add CLAUDE.md frontend/CLAUDE.md magnata_os/CLAUDE.md magnata_os/documental/modulo01/migrations/CLAUDE.md
+
+  if git commit -m "docs: teste 41 hierarquia CLAUDE.md" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+}
+
+# TEST 42: um CLAUDE.md em caminho NÃO listado em CLAUDE_HIERARCHY precisa
+# continuar bloqueado — a exceção é por igualdade exata de caminho, nunca
+# por nome de arquivo genérico.
+test_42_other_claude_md_still_blocked() {
+  run_test 42 "CLAUDE.md fora dos 4 caminhos exatos continua bloqueado" "FAIL"
+
+  cd "$TEST_REPO"
+  mkdir -p magnata_os/documental
+  echo "# CLAUDE.md nao autorizado" > magnata_os/documental/CLAUDE.md
+  git add magnata_os/documental/CLAUDE.md
+
+  if git commit -m "docs: teste 42 claude md nao autorizado" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD magnata_os/documental/CLAUDE.md 2>/dev/null || true
+  rm -f magnata_os/documental/CLAUDE.md
+}
+
+# TEST 43: arquivo funcional em frontend/ (não CLAUDE.md) precisa continuar
+# bloqueado — a exceção documental não vira uma liberação do diretório
+# inteiro.
+test_43_frontend_functional_file_still_blocked() {
+  run_test 43 "Arquivo funcional em frontend/ (não CLAUDE.md) continua bloqueado" "FAIL"
+
+  cd "$TEST_REPO"
+  mkdir -p frontend
+  echo "console.log('x');" > frontend/app.js
+  git add frontend/app.js
+
+  if git commit -m "feat: teste 43 arquivo funcional frontend" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD frontend/app.js 2>/dev/null || true
+  rm -f frontend/app.js
+}
+
+# TEST 44: arquivo arbitrário em magnata_os/ (não CLAUDE.md) precisa
+# continuar bloqueado pelo escopo permitido.
+test_44_magnata_os_arbitrary_file_still_blocked() {
+  run_test 44 "Arquivo arbitrário em magnata_os/ (não CLAUDE.md) continua bloqueado" "FAIL"
+
+  cd "$TEST_REPO"
+  mkdir -p magnata_os
+  echo "print('x')" > magnata_os/dominio_novo.py
+  git add magnata_os/dominio_novo.py
+
+  if git commit -m "feat: teste 44 arquivo arbitrario magnata_os" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD magnata_os/dominio_novo.py 2>/dev/null || true
+  rm -f magnata_os/dominio_novo.py
+}
+
+# TEST 45: migration real dentro do diretório protegido precisa continuar
+# bloqueada pela Validação 6 do hook (não só pelo gate isolado do CI,
+# já coberto pelo Teste 3) — a exceção documental é só para o arquivo
+# CLAUDE.md exato dentro desse diretório, nunca para o diretório inteiro.
+test_45_real_migration_still_blocked_by_hook() {
+  run_test 45 "Migration real em magnata_os/.../migrations/ continua bloqueada pela Validação 6 do hook" "FAIL"
+
+  cd "$TEST_REPO"
+  mkdir -p magnata_os/documental/modulo01/migrations
+  echo "SELECT 1;" > magnata_os/documental/modulo01/migrations/0999_real.sql
+  git add magnata_os/documental/modulo01/migrations/0999_real.sql
+
+  if git commit -m "feat: teste 45 migration real" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD magnata_os/documental/modulo01/migrations/0999_real.sql 2>/dev/null || true
+  rm -f magnata_os/documental/modulo01/migrations/0999_real.sql
+}
+
 # ============================================================================
 # MAIN EXECUTION
 # ============================================================================
@@ -1049,6 +1156,11 @@ main() {
   test_38_gate6_precommit_and_ci_agree || true
   test_39_gate6_report_final_counts_block || true
   test_40_gates_11_12_approve_with_foundational_docs || true
+  test_41_claude_hierarchy_exact_paths_allowed || true
+  test_42_other_claude_md_still_blocked || true
+  test_43_frontend_functional_file_still_blocked || true
+  test_44_magnata_os_arbitrary_file_still_blocked || true
+  test_45_real_migration_still_blocked_by_hook || true
 
   # Report
   echo ""

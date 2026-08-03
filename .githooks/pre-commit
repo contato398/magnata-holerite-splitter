@@ -153,6 +153,17 @@ SCRATCH_SCOPE_PATTERNS=(
 )
 
 for file in $STAGED_FILES; do
+  # Exceção documental: os 4 caminhos EXATOS da hierarquia CLAUDE.md
+  # (CLAUDE_HIERARCHY, comparação de igualdade via is_claude_hierarchy_path
+  # — nunca um padrão amplo) atravessam tanto PROTECTED_FILES quanto
+  # ALLOWED_PATHS. Qualquer outro arquivo, inclusive outro CLAUDE.md fora
+  # desta lista, ou qualquer outro arquivo nos mesmos diretórios
+  # (frontend/, magnata_os/, migrations/), continua sujeito às regras
+  # normais abaixo sem exceção.
+  if is_claude_hierarchy_path "$file"; then
+    continue
+  fi
+
   # Verificar se está em lista de bloqueio (PROTECTED_FILES de .magnata/patterns.sh)
   BLOCKED=0
   for pattern in "${PROTECTED_FILES[@]}" "${SCRATCH_SCOPE_PATTERNS[@]}"; do

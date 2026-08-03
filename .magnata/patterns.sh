@@ -156,6 +156,23 @@ CLAUDE_HIERARCHY=(
   "magnata_os/documental/modulo01/migrations/CLAUDE.md"
 )
 
+# Verifica se um caminho é EXATAMENTE um dos 4 arquivos da hierarquia
+# CLAUDE.md — comparação de igualdade de string contra CLAUDE_HIERARCHY,
+# nunca por padrão/regex. É a única exceção documental reconhecida por
+# PROTECTED_FILES e ALLOWED_PATHS (Validação 6 do pre-commit): libera
+# exclusivamente estes 4 caminhos exatos, nunca um diretório inteiro nem
+# qualquer outro CLAUDE.md fora desta lista.
+is_claude_hierarchy_path() {
+  local file="$1"
+  local path
+  for path in "${CLAUDE_HIERARCHY[@]}"; do
+    if [[ "$file" == "$path" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 # ============================================================================
 # MODOS GIT — Permissões obrigatórias
 # ============================================================================
@@ -273,4 +290,4 @@ export REQUIRED_DOCS CLAUDE_HIERARCHY EXECUTABLE_FILES NON_EXECUTABLE_FILES
 export ALLOWED_PATHS SCRATCH_PATTERNS NORMATIVE_DOC_PATTERNS AUTHORIZED_BRANCHES
 export MSG_APPROVED MSG_BLOCKED MSG_WARNING MSG_INFO MSG_ERROR
 export EXIT_APPROVED EXIT_BLOCKED EXIT_WARNING EXIT_ERROR
-export -f is_protected_file has_secret_pattern get_file_mode is_normative_doc is_authorized_branch
+export -f is_protected_file has_secret_pattern get_file_mode is_normative_doc is_authorized_branch is_claude_hierarchy_path
