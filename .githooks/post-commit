@@ -1,0 +1,18 @@
+#!/bin/bash
+# Post-commit hook para Magnata OS — Informativo
+# Etapa 5: Hooks Locais de Segurança
+
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+HASH=$(git rev-parse --short HEAD)
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+echo ""
+echo -e "${GREEN}✓ Commit realizado com sucesso${NC}"
+echo "  Hash: $HASH"
+echo "  Branch: $BRANCH"
+echo "  Hooks: Validações de pré-commit aprovadas"
+echo ""
+
+exit 0

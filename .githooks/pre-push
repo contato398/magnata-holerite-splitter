@@ -1,0 +1,51 @@
+#!/bin/bash
+# Pre-push hook para Magnata OS — Autorização local de uso único
+# Etapa 5: Hooks Locais de Segurança
+# Mecanismo: arquivo .git/MAGNATA_PUSH_AUTHORIZED_ONCE (criado manualmente, removido automaticamente)
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+echo ""
+echo "================================"
+echo "PRE-PUSH VALIDATION"
+echo "================================"
+echo ""
+
+# Localizar diretório Git
+GIT_DIR=$(git rev-parse --git-dir)
+AUTH_FILE="$GIT_DIR/MAGNATA_PUSH_AUTHORIZED_ONCE"
+
+# Verificar se arquivo de autorização existe
+if [ -f "$AUTH_FILE" ]; then
+  echo -e "${GREEN}✓ AUTORIZADO: Push permitido por $AUTH_FILE${NC}"
+  echo "  Autorização será removida após este push"
+  echo ""
+
+  # Remover arquivo de autorização (antes de sair)
+  rm -f "$AUTH_FILE"
+  exit 0
+fi
+
+# BLOQUEIO PADRÃO: Push não é permitido sem autorização explícita
+echo -e "${RED}✗ BLOQUEADO: Push não autorizado na Etapa 5${NC}"
+echo ""
+echo "Mecanismo de autorização (arquivo local):"
+echo ""
+echo "  No PowerShell:"
+echo "    New-Item -ItemType File -Path \".git\\MAGNATA_PUSH_AUTHORIZED_ONCE\" -Force"
+echo "    git push origin feat/magnata-os-claude-powerpack"
+echo ""
+echo "  No Git Bash:"
+echo "    touch \"\$(git rev-parse --git-dir)/MAGNATA_PUSH_AUTHORIZED_ONCE\""
+echo "    git push origin feat/magnata-os-claude-powerpack"
+echo ""
+echo "Nota:"
+echo "  - Arquivo é criado localmente, nunca versionado"
+echo "  - Autorização é válida somente para um push"
+echo "  - Arquivo é removido automaticamente após o push"
+echo "  - Para novo push, recriar o arquivo"
+echo ""
+
+exit 1
