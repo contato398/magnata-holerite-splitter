@@ -1,6 +1,6 @@
 #!/bin/bash
 # Magnata OS — Suíte de Testes de Governança
-# Executa 45 cenários em repositório temporário isolado
+# Executa 47 cenários em repositório temporário isolado
 # Não realiza testes destrutivos no repositório principal
 
 set -euo pipefail
@@ -159,13 +159,17 @@ test_3_migration_altered() {
 }
 
 # TEST 4: Frontend funcional alterado
+# Fixture trocada de frontend/CLAUDE.md para frontend/assets/brand/ (Etapa 6
+# de alinhamento documental): frontend/CLAUDE.md agora é exceção documental
+# legítima e exata (CLAUDE_HIERARCHY/Gate 12) — não serve mais para testar
+# bloqueio de alteração funcional/de marca. Ver Teste 46 para a exceção em si.
 test_4_frontend_altered() {
   run_test 4 "Frontend funcional alterado" "FAIL"
 
   cd "$TEST_REPO"
-  mkdir -p frontend
-  echo "# Frontend" > frontend/CLAUDE.md
-  git add frontend/CLAUDE.md
+  mkdir -p frontend/assets/brand
+  echo "logo" > frontend/assets/brand/logo.svg
+  git add frontend/assets/brand/logo.svg
 
   if bash scripts/ci/validate_governance.sh protected_frontend >/dev/null 2>&1; then
     test_result "PASS"
@@ -1096,6 +1100,68 @@ test_45_real_migration_still_blocked_by_hook() {
   rm -f magnata_os/documental/modulo01/migrations/0999_real.sql
 }
 
+# TEST 46: gate_protected_frontend (CI) precisa liberar exclusivamente
+# frontend/CLAUDE.md — descoberto via simulação de checkout limpo do PR #13,
+# que mostrou este gate (reimplementação própria de PROTECTED_FILES,
+# independente do hook) ainda bloqueando o arquivo institucional. Continua
+# bloqueando qualquer alteração em frontend/assets/brand/.
+test_46_gate_protected_frontend_exception_scoped() {
+  run_test 46 "Gate protected_frontend (CI) libera só frontend/CLAUDE.md exato, continua bloqueando assets de marca" "PASS"
+
+  cd "$TEST_REPO"
+  mkdir -p frontend
+  echo "# CLAUDE.md frontend" > frontend/CLAUDE.md
+  git add frontend/CLAUDE.md
+
+  local result="PASS"
+  if ! bash scripts/ci/validate_governance.sh protected_frontend >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+  git reset -q HEAD frontend/CLAUDE.md 2>/dev/null || true
+  rm -f frontend/CLAUDE.md
+
+  mkdir -p frontend/assets/brand
+  echo "logo" > frontend/assets/brand/logo.svg
+  git add frontend/assets/brand/logo.svg
+  if bash scripts/ci/validate_governance.sh protected_frontend >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+  git reset -q HEAD frontend/assets/brand/logo.svg 2>/dev/null || true
+  rm -rf frontend/assets
+
+  test_result "$result"
+}
+
+# TEST 47: gate_protected_migrations (CI) precisa liberar exclusivamente
+# magnata_os/documental/modulo01/migrations/CLAUDE.md — mesma descoberta do
+# Teste 46, espelhada para o gate de migrations. Continua bloqueando
+# qualquer migration real no mesmo diretório.
+test_47_gate_protected_migrations_exception_scoped() {
+  run_test 47 "Gate protected_migrations (CI) libera só o CLAUDE.md exato, continua bloqueando migration real" "PASS"
+
+  cd "$TEST_REPO"
+  mkdir -p magnata_os/documental/modulo01/migrations
+  echo "# CLAUDE.md migrations" > magnata_os/documental/modulo01/migrations/CLAUDE.md
+  git add magnata_os/documental/modulo01/migrations/CLAUDE.md
+
+  local result="PASS"
+  if ! bash scripts/ci/validate_governance.sh protected_migrations >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+  git reset -q HEAD magnata_os/documental/modulo01/migrations/CLAUDE.md 2>/dev/null || true
+  rm -f magnata_os/documental/modulo01/migrations/CLAUDE.md
+
+  echo "SELECT 1;" > magnata_os/documental/modulo01/migrations/0999_real.sql
+  git add magnata_os/documental/modulo01/migrations/0999_real.sql
+  if bash scripts/ci/validate_governance.sh protected_migrations >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+  git reset -q HEAD magnata_os/documental/modulo01/migrations/0999_real.sql 2>/dev/null || true
+  rm -rf magnata_os
+
+  test_result "$result"
+}
+
 # ============================================================================
 # MAIN EXECUTION
 # ============================================================================
@@ -1161,6 +1227,8 @@ main() {
   test_43_frontend_functional_file_still_blocked || true
   test_44_magnata_os_arbitrary_file_still_blocked || true
   test_45_real_migration_still_blocked_by_hook || true
+  test_46_gate_protected_frontend_exception_scoped || true
+  test_47_gate_protected_migrations_exception_scoped || true
 
   # Report
   echo ""

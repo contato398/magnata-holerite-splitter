@@ -156,11 +156,21 @@ gate_protected_app_py() {
 gate_protected_migrations() {
   local changed=$(get_changed_files)
 
-  if echo "$changed" | grep -q "magnata_os/documental/modulo01/migrations/"; then
-    echo -e "${RED}${MSG_BLOCKED}: Migrations foram alteradas${NC}"
-    echo "  magnata_os/documental/modulo01/migrations/** é protegida"
-    return $EXIT_BLOCKED
-  fi
+  # Exceção documental (mesma is_claude_hierarchy_path de .magnata/patterns.sh
+  # usada pela Validação 6 do pre-commit): só o caminho EXATO
+  # magnata_os/documental/modulo01/migrations/CLAUDE.md atravessa — qualquer
+  # outro arquivo no diretório (migration real) continua bloqueado.
+  while IFS= read -r file; do
+    if [[ -z "$file" ]]; then continue; fi
+    if [[ "$file" == *"magnata_os/documental/modulo01/migrations/"* ]]; then
+      if is_claude_hierarchy_path "$file"; then
+        continue
+      fi
+      echo -e "${RED}${MSG_BLOCKED}: Migrations foram alteradas${NC}"
+      echo "  magnata_os/documental/modulo01/migrations/** é protegida"
+      return $EXIT_BLOCKED
+    fi
+  done <<< "$changed"
 
   echo -e "${GREEN}${MSG_APPROVED}: Migrations intactas${NC}"
   return $EXIT_APPROVED
@@ -173,11 +183,21 @@ gate_protected_migrations() {
 gate_protected_frontend() {
   local changed=$(get_changed_files)
 
-  if echo "$changed" | grep -qE "frontend/CLAUDE\.md|frontend/assets/brand/"; then
-    echo -e "${RED}${MSG_BLOCKED}: Frontend foi alterado${NC}"
-    echo "  frontend/CLAUDE.md e frontend/assets/brand/** são protegidas"
-    return $EXIT_BLOCKED
-  fi
+  # Exceção documental (mesma is_claude_hierarchy_path de .magnata/patterns.sh
+  # usada pela Validação 6 do pre-commit): só o caminho EXATO
+  # frontend/CLAUDE.md atravessa — frontend/assets/brand/** e qualquer outro
+  # arquivo continuam bloqueados.
+  while IFS= read -r file; do
+    if [[ -z "$file" ]]; then continue; fi
+    if [[ "$file" =~ (frontend/CLAUDE\.md|frontend/assets/brand/) ]]; then
+      if is_claude_hierarchy_path "$file"; then
+        continue
+      fi
+      echo -e "${RED}${MSG_BLOCKED}: Frontend foi alterado${NC}"
+      echo "  frontend/CLAUDE.md e frontend/assets/brand/** são protegidas"
+      return $EXIT_BLOCKED
+    fi
+  done <<< "$changed"
 
   echo -e "${GREEN}${MSG_APPROVED}: Frontend intacto${NC}"
   return $EXIT_APPROVED
