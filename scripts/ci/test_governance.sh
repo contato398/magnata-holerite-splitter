@@ -1,6 +1,6 @@
 #!/bin/bash
 # Magnata OS — Suíte de Testes de Governança
-# Executa 47 cenários em repositório temporário isolado
+# Executa 52 cenários em repositório temporário isolado
 # Não realiza testes destrutivos no repositório principal
 
 set -euo pipefail
@@ -1162,6 +1162,95 @@ test_47_gate_protected_migrations_exception_scoped() {
   test_result "$result"
 }
 
+# TEST 48: push legítimo em main (GITHUB_EVENT_NAME=push + GITHUB_REF_NAME=main
+# juntos) precisa ser aprovado pelo Gate de branch — estabilização pós-Etapa 6,
+# sem que main entre em AUTHORIZED_BRANCHES.
+test_48_gate_branch_push_main_approved() {
+  run_test 48 "Push legítimo em main (GITHUB_EVENT_NAME=push + GITHUB_REF_NAME=main) é aprovado" "PASS"
+
+  cd "$TEST_REPO"
+  if GITHUB_EVENT_NAME="push" GITHUB_REF_NAME="main" bash scripts/ci/validate_governance.sh branch >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+}
+
+# TEST 49: execução local em main (checkout real, sem nenhuma variável do
+# Actions) não pode ganhar autorização de branch de desenvolvimento — main
+# nunca entra em AUTHORIZED_BRANCHES.
+test_49_gate_branch_local_main_still_blocked() {
+  run_test 49 "Execução local em main (checkout real) continua bloqueada" "FAIL"
+
+  cd "$TEST_REPO"
+  local original_branch
+  original_branch=$(git rev-parse --abbrev-ref HEAD)
+  git checkout -q -b main
+
+  local result
+  if bash scripts/ci/validate_governance.sh branch >/dev/null 2>&1; then
+    result="PASS"
+  else
+    result="FAIL"
+  fi
+
+  git checkout -q "$original_branch"
+  git branch -q -D main >/dev/null 2>&1 || true
+
+  test_result "$result"
+}
+
+# TEST 50: spoof incompleto — só GITHUB_REF_NAME=main, sem
+# GITHUB_EVENT_NAME=push — não pode liberar main. As duas variáveis
+# precisam concordar juntas, nunca uma sozinha.
+test_50_gate_branch_incomplete_spoof_main_blocked() {
+  run_test 50 "Spoof incompleto (só GITHUB_REF_NAME=main, sem GITHUB_EVENT_NAME=push) continua bloqueado" "FAIL"
+
+  cd "$TEST_REPO"
+  if GITHUB_REF_NAME="main" bash scripts/ci/validate_governance.sh branch >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+}
+
+# TEST 51: push em branch arbitrária (não autorizada, e não main) continua
+# bloqueado — a exceção de push é exclusiva de main, não vira liberação
+# genérica de qualquer branch via push.
+test_51_gate_branch_arbitrary_push_still_blocked() {
+  run_test 51 "Push em branch arbitrária (não autorizada) continua bloqueado" "FAIL"
+
+  cd "$TEST_REPO"
+  if GITHUB_EVENT_NAME="push" GITHUB_REF_NAME="feat/branch-nao-autorizada" bash scripts/ci/validate_governance.sh branch >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+}
+
+# TEST 52: o workflow precisa conter exatamente os gatilhos esperados —
+# push agora inclui main (estabilização pós-Etapa 6) e continua incluindo
+# a branch de desenvolvimento histórica; pull_request continua intacto.
+test_52_workflow_triggers_present() {
+  run_test 52 "Workflow contém os gatilhos esperados (pull_request e push, incluindo main)" "PASS"
+
+  cd "$TEST_REPO"
+  local wf=".github/workflows/magnata-governance.yml"
+  local result="PASS"
+
+  local push_section
+  push_section=$(awk '/^  push:/{f=1;next}/^  [a-zA-Z_]+:/{f=0}f' "$wf")
+  echo "$push_section" | grep -q "main" || result="FAIL"
+  echo "$push_section" | grep -q "feat/magnata-os-claude-powerpack" || result="FAIL"
+
+  local pr_section
+  pr_section=$(awk '/^  pull_request:/{f=1;next}/^  [a-zA-Z_]+:/{f=0}f' "$wf")
+  echo "$pr_section" | grep -q "main" || result="FAIL"
+  echo "$pr_section" | grep -q "feat/magnata-os-claude-powerpack" || result="FAIL"
+
+  test_result "$result"
+}
+
 # ============================================================================
 # MAIN EXECUTION
 # ============================================================================
@@ -1229,6 +1318,11 @@ main() {
   test_45_real_migration_still_blocked_by_hook || true
   test_46_gate_protected_frontend_exception_scoped || true
   test_47_gate_protected_migrations_exception_scoped || true
+  test_48_gate_branch_push_main_approved || true
+  test_49_gate_branch_local_main_still_blocked || true
+  test_50_gate_branch_incomplete_spoof_main_blocked || true
+  test_51_gate_branch_arbitrary_push_still_blocked || true
+  test_52_workflow_triggers_present || true
 
   # Report
   echo ""

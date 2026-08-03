@@ -2,10 +2,12 @@
 
 **Relatório de Implementação: CI de Governança e Qualidade**
 
-**Data:** 2026-07-29
-**Status:** IMPLEMENTADO LOCALMENTE — não commitado, não enviado ao GitHub
+**Data:** 2026-07-29 (fechamento final em 2026-08-03 — ver seção 12)
+**Status:** MESCLADO EM `main` — PR #13, merge commit `d616d521082db5d97e1824daf14c6cfdb4618f31`
 **Escopo:** Automação de validação de governança e conformidade documental
-**Branch:** `feat/magnata-os-claude-powerpack`
+**Branch:** `feat/magnata-os-claude-powerpack` (implementação original) →
+`feat/magnata-os-etapa6-governanca` (PR #13, mesclado) →
+`feat/magnata-os-etapa6-estabilizacao` (estabilização pós-merge, seção 12)
 **HEAD-base preservado:** `2debc13ea0d6b869e6be93eded5effe87e45b8a1`
 
 ---
@@ -533,9 +535,15 @@ para a branch errada.
 
 ---
 
-## 10. Rollback
+## 10. Rollback (histórico — situação em 2026-07-29, superada)
 
-Nada foi commitado. Para descartar esta implementação por completo:
+**Esta seção descreve um estado que não existe mais.** Na época,
+nada tinha sido commitado. Desde então, a implementação foi commitada,
+teve dois defeitos reais corrigidos (Gate 6 e escopo documental — ver
+seção 12), foi mesclada em `main` via PR #13, e recebeu uma
+estabilização pós-merge própria. Reverter hoje exige `git revert` dos
+commits mesclados em `main`, não os comandos abaixo (mantidos só como
+registro do que teria sido usado naquele momento):
 
 ```bash
 git restore --staged .githooks/pre-commit .github/workflows .magnata scripts/ci
@@ -543,14 +551,17 @@ git checkout -- .githooks/pre-commit
 git clean -fd .github/workflows .magnata scripts/ci MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6.md docs/magnata-os/MAGNATA_AI_CI_GOVERNANCA.md
 ```
 
-(Comando de referência — **não executado nesta sessão**; a decisão de
-descartar é do usuário.)
+(Comando de referência da época — **não executado**; nunca foi usado.)
 
 ---
 
-## 11. Parecer final
+## 11. Parecer final (histórico — situação em 2026-07-29, superada)
 
-**ETAPA 6 VALIDADA E PRONTA PARA APROVAÇÃO DE COMMIT**
+**Este parecer descreve o estado da implementação antes do commit, do
+PR #13 e do merge.** O parecer vigente está na seção 12.
+
+**ETAPA 6 VALIDADA E PRONTA PARA APROVAÇÃO DE COMMIT** *(superado — ver
+seção 12 para o resultado real pós-commit e pós-merge)*
 
 O contrato base/head agora é completo e comprovado nos três eventos do
 CI (`pull_request`, `push` — incluindo criação de branch —,
@@ -568,16 +579,77 @@ corrigidas e comprovadas (seção 7C). 28/28 testes aprovados, 0 falhas,
 segredo, sem deploy, sem escrita. `app.py`, migrations e frontend
 intactos.
 
-**Risco remanescente declarado, não bloqueante:** divergência residual
-entre `.githooks/pre-commit` e `.magnata/patterns.sh` para os gates de
-segredo, scratch e parte dos gates documentais (seção 5.2) — não
-impede a aprovação desta etapa, mas fica registrado como trabalho
-futuro. Ausência de `GITHUB_STEP_SUMMARY` — lacuna de usabilidade, não
-de correção.
+**Risco declarado na época, resolvido em seguida:** divergência
+residual entre `.githooks/pre-commit` e `.magnata/patterns.sh` para os
+gates de segredo, scratch e parte dos gates documentais (seção 5.2).
+Ausência de `GITHUB_STEP_SUMMARY` — lacuna de usabilidade, não de
+correção, permanece em aberto (ver seção 12, riscos remanescentes).
+
+---
+
+## 12. Fechamento final — PR #13 mesclado + estabilização pós-merge
+
+**Data:** 2026-08-03
+
+**PR #13:** mesclado em `main`. Merge commit
+`d616d521082db5d97e1824daf14c6cfdb4618f31` (pais `f1c0edc9` — `main`
+anterior — e `5faf0c68` — tip de `feat/magnata-os-etapa6-governanca`).
+7 commits incorporados, 23 arquivos alterados. PR #12 (anterior) foi
+fechado sem merge.
+
+**Defeitos reais encontrados e corrigidos antes do merge:**
+- **Gate 6 (whitespace):** falso negativo por `git diff --check | grep -q`
+  sob `pipefail` — o exit code do `git diff` vazava e derrotava o
+  resultado do `grep`, mascarando violações reais. Corrigido capturando
+  saída/exit code de `get_changed_check()` diretamente (sem pipe), com
+  classificação por `case` (0=aprovado; 1|2=bloqueado; outro=erro
+  interno).
+- **Escopo documental:** `ALLOWED_PATHS`/`PROTECTED_FILES` nunca
+  previam os 4 `CLAUDE.md` institucionais exigidos pelo Gate 12
+  (`CLAUDE_HIERARCHY`). Corrigido com `is_claude_hierarchy_path()` —
+  igualdade exata de caminho (nunca padrão amplo) — aplicada na
+  Validação 6 do hook e nos gates `protected_frontend`/
+  `protected_migrations` do CI (esta segunda aplicação só foi descoberta
+  numa simulação de checkout limpo do PR, não no hook).
+
+**Testes:** suíte isolada com 47/47 aprovados no momento do merge (32
+da rodada anterior + 8 do Gate 6 + 5 da exceção da hierarquia CLAUDE.md
++ 2 dos gates de CI protected_frontend/protected_migrations).
+
+**Estabilização pós-merge (branch `feat/magnata-os-etapa6-estabilizacao`):**
+achados registrados nesta seção — workflow sem gatilho `push` para
+`main` (nenhuma revalidação automática rodava depois de um merge
+direto) e esta própria documentação desatualizada. Corrigidos: `push`
+passou a incluir `main`; `gate_branch()` reconhece push pós-merge em
+`main` só quando `GITHUB_EVENT_NAME=push` e `GITHUB_REF_NAME=main`
+ocorrem juntos (nunca isoladamente, nunca por execução local), sem que
+`main` entre em `AUTHORIZED_BRANCHES`. Suíte cresceu para 52/52
+aprovados (5 testes novos: push legítimo em main aprova; execução
+local em main continua bloqueada; spoof incompleto não libera main;
+branch arbitrária via push continua bloqueada; gatilhos do workflow
+conferidos estaticamente).
+
+**Riscos remanescentes declarados, não bloqueantes:**
+- Ausência de `GITHUB_STEP_SUMMARY` — lacuna de usabilidade, herdada
+  da rodada original (seção 11), ainda não corrigida.
+- Warning de depreciação do Node.js observado no GitHub Actions —
+  fonte exata não confirmada nesta sessão (sem acesso a log do
+  Actions); único action pinado no workflow é `actions/checkout@v4`
+  (versão major atual). Classificado como manutenção futura
+  recomendada, não correção urgente.
+- `git diff --check` limpo, nenhuma alteração funcional em `app.py`,
+  frontend, `magnata_os/` ou migrations reais em nenhum commit desta
+  etapa nem da estabilização.
+
+**Parecer final vigente:** ETAPA 6 ENCERRADA COM INTEGRIDADE, MAIN
+SINCRONIZADA, ESTABILIZAÇÃO PÓS-MERGE CONCLUÍDA.
 
 ---
 
 **Relatório preparado em:** 2026-07-29 (atualizado no mesmo dia, três
 vezes: implementação inicial, correção do escopo de diff, e
-fechamento completo do contrato base/head em todos os eventos — seção 7)
-**Commit:** nenhum — implementação permanece staged, aguardando decisão
+fechamento completo do contrato base/head em todos os eventos — seção
+7). Fechamento final e estabilização pós-merge registrados em
+2026-08-03 (seção 12).
+**Commit:** ver seção 12 — mesclado em `main` via PR #13
+(`d616d521082db5d97e1824daf14c6cfdb4618f31`)

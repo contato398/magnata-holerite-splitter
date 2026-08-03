@@ -7,6 +7,7 @@ on:
       - feat/magnata-os-claude-powerpack
   push:
     branches:
+      - main
       - feat/magnata-os-claude-powerpack
   workflow_dispatch:
     inputs:
