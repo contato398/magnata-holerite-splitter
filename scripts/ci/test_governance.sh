@@ -1,6 +1,6 @@
 #!/bin/bash
 # Magnata OS — Suíte de Testes de Governança
-# Executa 32 cenários em repositório temporário isolado
+# Executa 40 cenários em repositório temporário isolado
 # Não realiza testes destrutivos no repositório principal
 
 set -euo pipefail
@@ -764,6 +764,231 @@ test_32_hook_and_validator_agree_on_new_branch() {
   test_result "$result"
 }
 
+# TEST 33: correção do Gate 6 — trailing whitespace real precisa bloquear
+# através da própria função gate_whitespace (não apenas via git diff --check
+# cru, como o Teste 6 já fazia) — comprova o fim do falso negativo do pipe
+# sob pipefail.
+test_33_gate6_real_whitespace_blocks() {
+  run_test 33 "Gate 6 (gate_whitespace) bloqueia trailing whitespace real" "FAIL"
+
+  cd "$TEST_REPO"
+  printf "Linha com espaco no final   \n" > MAGNATA_OS_TEST33_WS.md
+  git add MAGNATA_OS_TEST33_WS.md
+
+  local output
+  local exit_code
+  output=$(bash scripts/ci/validate_governance.sh whitespace 2>&1)
+  exit_code=$?
+
+  # Precisa bloquear (exit != 0) E citar o arquivo (nao um bloqueio generico).
+  if [[ $exit_code -ne 0 && "$output" == *"MAGNATA_OS_TEST33_WS.md"* ]]; then
+    test_result "FAIL"
+  else
+    test_result "PASS"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST33_WS.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST33_WS.md
+}
+
+# TEST 34: whitespace introduzido num commit intermediário de um PR
+# multi-commit precisa ser detectado via base_ref...head_ref — o cenário
+# central que motivou a correção (comparar só o último commit mascararia
+# esta violação).
+test_34_gate6_intermediate_commit_whitespace() {
+  run_test 34 "Gate 6 detecta whitespace em commit intermediário via base_ref/head_ref" "FAIL"
+
+  cd "$TEST_REPO"
+  local base_sha
+  base_sha=$(git rev-parse HEAD)
+
+  echo "# doc permitido E" > MAGNATA_OS_TEST34_E.md
+  git add MAGNATA_OS_TEST34_E.md
+  git commit -q -m "commit 1: doc permitido" --no-verify
+
+  printf "Linha com espaco no final   \n" > MAGNATA_OS_TEST34_WS.md
+  git add MAGNATA_OS_TEST34_WS.md
+  git commit -q -m "commit 2 (intermediario): whitespace real" --no-verify
+
+  echo "# doc permitido F" > MAGNATA_OS_TEST34_F.md
+  git add MAGNATA_OS_TEST34_F.md
+  git commit -q -m "commit 3: doc permitido, nao toca whitespace" --no-verify
+
+  local head_sha
+  head_sha=$(git rev-parse HEAD)
+
+  local output
+  local exit_code
+  output=$(bash scripts/ci/validate_governance.sh whitespace "$base_sha" "$head_sha" 2>&1)
+  exit_code=$?
+
+  if [[ $exit_code -ne 0 && "$output" == *"MAGNATA_OS_TEST34_WS.md"* ]]; then
+    test_result "FAIL"
+  else
+    test_result "PASS"
+  fi
+}
+
+# TEST 35: diff limpo (sem nenhuma violação de whitespace) precisa ser
+# aprovado pelo Gate 6 — zero falso positivo.
+test_35_gate6_clean_diff_approved() {
+  run_test 35 "Gate 6 aprova diff limpo (sem violação de whitespace)" "PASS"
+
+  cd "$TEST_REPO"
+  echo "# doc limpo" > MAGNATA_OS_TEST35_CLEAN.md
+  git add MAGNATA_OS_TEST35_CLEAN.md
+
+  if bash scripts/ci/validate_governance.sh whitespace >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST35_CLEAN.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST35_CLEAN.md
+}
+
+# TEST 36: base_ref inexistente, testado especificamente contra o Gate 6,
+# precisa produzir erro interno distinto (exit 2, mensagem "ERRO INTERNO"
+# citando base_ref) — nunca aprovação silenciosa, nunca bloqueio comum.
+test_36_gate6_invalid_base_ref_internal_error() {
+  run_test 36 "Gate 6: base_ref inexistente produz erro interno distinto" "FAIL"
+
+  cd "$TEST_REPO"
+  local head_sha
+  head_sha=$(git rev-parse HEAD)
+
+  local output
+  local exit_code
+  output=$(bash scripts/ci/validate_governance.sh whitespace "ref-base-inexistente-xyz" "$head_sha" 2>&1)
+  exit_code=$?
+
+  if [[ $exit_code -eq 2 && "$output" == *"ERRO INTERNO"* && "$output" == *"base_ref"* ]]; then
+    test_result "FAIL"
+  else
+    test_result "PASS"
+  fi
+}
+
+# TEST 37: head_ref inexistente, testado especificamente contra o Gate 6,
+# precisa produzir erro interno distinto — mesma garantia do Teste 36,
+# espelhada para o outro extremo do intervalo.
+test_37_gate6_invalid_head_ref_internal_error() {
+  run_test 37 "Gate 6: head_ref inexistente produz erro interno distinto" "FAIL"
+
+  cd "$TEST_REPO"
+  local base_sha
+  base_sha=$(git rev-parse HEAD)
+
+  local output
+  local exit_code
+  output=$(bash scripts/ci/validate_governance.sh whitespace "$base_sha" "ref-head-inexistente-xyz" 2>&1)
+  exit_code=$?
+
+  if [[ $exit_code -eq 2 && "$output" == *"ERRO INTERNO"* && "$output" == *"head_ref"* ]]; then
+    test_result "FAIL"
+  else
+    test_result "PASS"
+  fi
+}
+
+# TEST 38: pre-commit (hook local) e validate_governance.sh (CI) precisam
+# concordar sobre o mesmo arquivo com trailing whitespace real — comprova
+# que a correção do Gate 6 não introduziu divergência entre os dois
+# consumidores (o hook já usava a forma sem pipe; agora o CI também usa).
+test_38_gate6_precommit_and_ci_agree() {
+  run_test 38 "Gate 6: pre-commit (hook) e CI (validate_governance.sh) bloqueiam o mesmo arquivo" "FAIL"
+
+  cd "$TEST_REPO"
+  local before_sha
+  before_sha=$(git rev-parse HEAD)
+
+  printf "Linha com espaco no final   \n" > MAGNATA_OS_TEST38_WS.md
+  git add MAGNATA_OS_TEST38_WS.md
+
+  local result="FAIL"
+
+  if bash scripts/ci/validate_governance.sh whitespace >/dev/null 2>&1; then
+    result="PASS"
+  fi
+
+  if git commit -m "docs: teste 38 whitespace" >/dev/null 2>&1; then
+    result="PASS"
+  fi
+
+  # Garante estado limpo para os testes seguintes, independente do resultado.
+  git reset -q --hard "$before_sha"
+  rm -f MAGNATA_OS_TEST38_WS.md
+
+  test_result "$result"
+}
+
+# TEST 39: report_final precisa contabilizar o bloqueio do Gate 6
+# isoladamente — uma violação de whitespace introduzida sozinha precisa
+# aumentar "Total gates bloqueados" em exatamente 1 frente à linha de base,
+# sem alterar o resultado dos outros 14 gates.
+test_39_gate6_report_final_counts_block() {
+  run_test 39 "report_final contabiliza corretamente o bloqueio isolado do Gate 6" "PASS"
+
+  cd "$TEST_REPO"
+
+  local baseline_output baseline_blocked
+  baseline_output=$(bash scripts/ci/validate_governance.sh report_final 2>&1 || true)
+  baseline_blocked=$(echo "$baseline_output" | grep "Total gates bloqueados:" | grep -oE '[0-9]+')
+
+  printf "Linha com espaco no final   \n" > MAGNATA_OS_TEST39_WS.md
+  git add MAGNATA_OS_TEST39_WS.md
+
+  local ws_output ws_blocked
+  ws_output=$(bash scripts/ci/validate_governance.sh report_final 2>&1 || true)
+  ws_blocked=$(echo "$ws_output" | grep "Total gates bloqueados:" | grep -oE '[0-9]+')
+
+  git reset -q HEAD MAGNATA_OS_TEST39_WS.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST39_WS.md
+
+  if [[ "$ws_output" == *"Testing whitespace"* && $((ws_blocked)) -eq $((baseline_blocked + 1)) ]]; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+}
+
+# TEST 40: Gates 11 (required_docs) e 12 (claude_hierarchy) precisam
+# aprovar quando os 9 arquivos fundacionais reais (copiados de
+# feat/magnata-os-claude-powerpack para esta branch) estão presentes —
+# comprova que a cópia byte-a-byte satisfaz os dois gates.
+test_40_gates_11_12_approve_with_foundational_docs() {
+  run_test 40 "Gates 11 e 12 aprovam com os 9 arquivos fundacionais presentes" "PASS"
+
+  cd "$TEST_REPO"
+  mkdir -p docs/magnata-os frontend magnata_os/documental/modulo01/migrations
+  cp "$PROJECT_ROOT/MAGNATA_OS_MANIFESTO.md" .
+  cp "$PROJECT_ROOT/docs/magnata-os/MAGNATA_OS_CAPACIDADES.md" docs/magnata-os/
+  cp "$PROJECT_ROOT/docs/magnata-os/MAGNATA_OS_MODULOS.md" docs/magnata-os/
+  cp "$PROJECT_ROOT/docs/magnata-os/MAGNATA_OS_ROADMAP.md" docs/magnata-os/
+  cp "$PROJECT_ROOT/docs/magnata-os/MAGNATA_OS_MATRIZ_ARQUITETURAL.md" docs/magnata-os/
+  cp "$PROJECT_ROOT/CLAUDE.md" .
+  cp "$PROJECT_ROOT/frontend/CLAUDE.md" frontend/
+  cp "$PROJECT_ROOT/magnata_os/CLAUDE.md" magnata_os/
+  cp "$PROJECT_ROOT/magnata_os/documental/modulo01/migrations/CLAUDE.md" magnata_os/documental/modulo01/migrations/
+
+  git add MAGNATA_OS_MANIFESTO.md docs/magnata-os CLAUDE.md frontend/CLAUDE.md magnata_os
+
+  local result="PASS"
+  if ! bash scripts/ci/validate_governance.sh required_docs >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+  if ! bash scripts/ci/validate_governance.sh claude_hierarchy >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_MANIFESTO.md docs/magnata-os CLAUDE.md frontend/CLAUDE.md magnata_os 2>/dev/null || true
+  rm -f MAGNATA_OS_MANIFESTO.md CLAUDE.md
+  rm -rf docs/magnata-os frontend magnata_os
+
+  test_result "$result"
+}
+
 # ============================================================================
 # MAIN EXECUTION
 # ============================================================================
@@ -816,6 +1041,14 @@ main() {
   test_30_authorized_branch_new_etapa6 || true
   test_31_arbitrary_branch_still_blocked || true
   test_32_hook_and_validator_agree_on_new_branch || true
+  test_33_gate6_real_whitespace_blocks || true
+  test_34_gate6_intermediate_commit_whitespace || true
+  test_35_gate6_clean_diff_approved || true
+  test_36_gate6_invalid_base_ref_internal_error || true
+  test_37_gate6_invalid_head_ref_internal_error || true
+  test_38_gate6_precommit_and_ci_agree || true
+  test_39_gate6_report_final_counts_block || true
+  test_40_gates_11_12_approve_with_foundational_docs || true
 
   # Report
   echo ""

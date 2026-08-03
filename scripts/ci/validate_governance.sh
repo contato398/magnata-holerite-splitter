@@ -210,24 +210,37 @@ gate_secrets() {
 # ============================================================================
 
 gate_whitespace() {
-  local changed=$(get_changed_files)
+  # Captura em variável, nunca em pipe: sob set -o pipefail, "git diff
+  # --check | grep" faria o exit code do git vazar e derrotar o
+  # resultado do grep, mascarando o bloqueio. Sem pipe, o código de
+  # saída de get_changed_check() é exatamente o de "git diff --check":
+  # 0 = limpo; 1 ou 2 = achou whitespace/marcador de conflito
+  # (confirmado empiricamente: esta versão do git usa 2); qualquer
+  # outro valor = falha real do git (erro interno, não bloqueio comum).
+  local check_output
+  local check_exit=0
+  # "|| check_exit=$?", não uma atribuição simples: sob set -e, uma
+  # atribuição simples cujo comando substituído falha aborta o script
+  # inteiro imediatamente (confirmado empiricamente). Como parte de um
+  # "||", a falha é isenta do gatilho do set -e — captura segura.
+  check_output=$(get_changed_check) || check_exit=$?
 
-  local has_trailing=0
-  while IFS= read -r file; do
-    if [[ -z "$file" ]]; then continue; fi
-    if get_changed_check | grep -q "^$file"; then
-      has_trailing=1
-      break
-    fi
-  done <<< "$changed"
-
-  if [ $has_trailing -eq 1 ]; then
-    echo -e "${RED}${MSG_BLOCKED}: Trailing whitespace detectado${NC}"
-    return $EXIT_BLOCKED
-  fi
-
-  echo -e "${GREEN}${MSG_APPROVED}: Whitespace válido${NC}"
-  return $EXIT_APPROVED
+  case "$check_exit" in
+    0)
+      echo -e "${GREEN}${MSG_APPROVED}: Whitespace válido${NC}"
+      return $EXIT_APPROVED
+      ;;
+    1|2)
+      echo -e "${RED}${MSG_BLOCKED}: Trailing whitespace detectado${NC}"
+      echo "$check_output"
+      return $EXIT_BLOCKED
+      ;;
+    *)
+      echo -e "${RED}${MSG_ERROR}: git diff --check falhou de forma inesperada (exit $check_exit)${NC}"
+      echo "$check_output"
+      return 2
+      ;;
+  esac
 }
 
 # ============================================================================
