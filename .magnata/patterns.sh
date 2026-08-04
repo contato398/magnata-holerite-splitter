@@ -6,15 +6,24 @@
 # ============================================================================
 # BRANCHES AUTORIZADAS — Trabalho de desenvolvimento do Magnata OS
 # ============================================================================
-# Enumeração fechada, não regex genérica (ex. "feat/*") — toda branch de
-# trabalho nova precisa ser adicionada aqui explicitamente. "main" não é
-# branch de desenvolvimento local; eventos de CI sobre main (pull_request,
-# push) já são tratados à parte, sem depender desta lista.
+# Enumeração fechada para branches "feat/..." — toda branch feat/ nova
+# precisa ser adicionada aqui explicitamente, um nome exato por vez. "main"
+# não é branch de desenvolvimento local; eventos de CI sobre main
+# (pull_request, push) já são tratados à parte, sem depender desta lista.
+#
+# Exceção restrita, registrada explicitamente (não em silêncio): branches
+# "fix/..." usam um padrão único, não uma lista de nomes exatos, porque
+# correções pontuais (como fix/remetente-dp-email-intake) são mais
+# numerosas e de vida mais curta que as branches feat/ de módulo. O padrão
+# abaixo é deliberadamente restrito — não é "^fix/.*$" — e não abre nenhum
+# outro prefixo (feat/, chore/, docs/, test/ continuam exigindo entrada
+# exata nesta lista, como antes).
 
 AUTHORIZED_BRANCHES=(
   "^feat/magnata-os-claude-powerpack$"
   "^feat/magnata-os-etapa6-governanca$"
   "^feat/magnata-os-etapa6-estabilizacao$"
+  "^fix/[a-z0-9][a-z0-9-]*$"
 )
 
 # Verifica se uma branch está na lista de branches de trabalho autorizadas
