@@ -34,7 +34,7 @@ var CAIXA_OFICIAL = 'contato@magnataservicos.com.br';
 // tanto envios diretos do contador quanto encaminhamentos da nossa própria caixa.
 var REMETENTES_CONFIAVEIS = [
   'contato@magnataservicos.com.br',          // nossa caixa (encaminhamentos)
-  'dp.contabilidade1@hotmail.com',           // contador novo (Departamento Pessoal)
+  'dpessoal.contabilidade1@hotmail.com',     // contador novo (Departamento Pessoal)
   'jaqueline@saviancontabilidade.com.br',    // contador Savian (legado — docs até Maio/2026)
   'dpfiscal.contabilidade2@hotmail.com',     // contador novo (Fiscal/Tributário — v2.67)
 ];
@@ -67,77 +67,374 @@ function processarEmails() {
     return;
   }
 
-  // Captura e-mails marcados com LABEL_ENTRADA OU vindos de QUALQUER remetente
-  // confiável (sem exigir label manual nesses casos). Sempre exclui o que já
-  // foi processado (LABEL_PROCESSADO), evitando reprocessamento/duplicação.
-  var condicoesRemetente = REMETENTES_CONFIAVEIS.map(function (e) {
-    return 'from:' + e;
-  }).join(' OR ');
-  var query = '(label:' + LABEL_ENTRADA + ' OR ' + condicoesRemetente + ') ' +
-              '-label:' + LABEL_PROCESSADO;
-  var threads = GmailApp.search(query);
-  Logger.log('Threads encontradas: ' + threads.length);
+  // LockService compartilhado com executarProcessamentoAdministrativo() —
+  // evita as duas rodarem ao mesmo tempo. Se o lock estiver ocupado, esta
+  // rodada é pulada com segurança: a query não tem filtro de data e só
+  // exclui por LABEL_PROCESSADO, então nada fica perdido — a próxima
+  // execução horária recaptura o que ficou de fora.
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    Logger.log('processarEmails: lock ocupado (provável execução administrativa em andamento) — pulando esta execução.');
+    return;
+  }
 
-  for (var t = 0; t < threads.length; t++) {
-    var thread = threads[t];
-    var messages = thread.getMessages();
+  try {
+    // Captura e-mails marcados com LABEL_ENTRADA OU vindos de QUALQUER remetente
+    // confiável (sem exigir label manual nesses casos). Sempre exclui o que já
+    // foi processado (LABEL_PROCESSADO), evitando reprocessamento/duplicação.
+    var condicoesRemetente = REMETENTES_CONFIAVEIS.map(function (e) {
+      return 'from:' + e;
+    }).join(' OR ');
+    var query = '(label:' + LABEL_ENTRADA + ' OR ' + condicoesRemetente + ') ' +
+                '-label:' + LABEL_PROCESSADO;
+    var threads = GmailApp.search(query);
+    Logger.log('Threads encontradas: ' + threads.length);
 
-    for (var m = 0; m < messages.length; m++) {
-      var msg = messages[m];
+    for (var t = 0; t < threads.length; t++) {
+      var thread = threads[t];
+      var messages = thread.getMessages();
 
-      // Só processa mensagens com pelo menos 1 anexo PDF
-      var attachments = msg.getAttachments({ includeInlineImages: false, includeAttachments: true });
-      var pdfAttachments = [];
-      for (var a = 0; a < attachments.length; a++) {
-        var att = attachments[a];
-        if (att.getContentType() === 'application/pdf' ||
-            att.getName().toLowerCase().endsWith('.pdf')) {
-          pdfAttachments.push(att);
+      for (var m = 0; m < messages.length; m++) {
+        var resultado = _processarMensagem(messages[m], DRY_RUN, apiKey);
+
+        // Defesa explícita: mesmo que a lógica de aplicarLabelPermitido
+        // tenha algum erro, dry-run nunca aplica label (dupla camada com
+        // a regra já embutida em interpretarRespostaWebhook_).
+        if (!DRY_RUN && resultado.aplicarLabelPermitido) {
+          thread.addLabel(GmailApp.getUserLabelByName(LABEL_PROCESSADO));
         }
       }
+    }
+  } finally {
+    lock.releaseLock();
+  }
+}
 
-      if (pdfAttachments.length === 0) {
-        Logger.log('Mensagem sem PDF, pulando: ' + msg.getSubject());
-        continue;
-      }
+/**
+ * Processa UMA mensagem: filtra anexos PDF, monta o payload, chama o Render
+ * e interpreta a resposta. NÃO decide nem aplica label — devolve um
+ * resultado estruturado (ver interpretarRespostaWebhook_) para o chamador
+ * decidir. Extraída do corpo original de processarEmails() sem alteração de
+ * lógica de filtragem/payload/headers — só reorganizada para ser reutilizável
+ * por processarMensagemPorId_() também.
+ */
+function _processarMensagem(msg, dryRun, apiKey) {
+  var attachments = msg.getAttachments({ includeInlineImages: false, includeAttachments: true });
+  var pdfAttachments = [];
+  for (var a = 0; a < attachments.length; a++) {
+    var att = attachments[a];
+    if (att.getContentType() === 'application/pdf' ||
+        att.getName().toLowerCase().endsWith('.pdf')) {
+      pdfAttachments.push(att);
+    }
+  }
 
-      var anexosPayload = [];
-      for (var p = 0; p < pdfAttachments.length; p++) {
-        var pdf = pdfAttachments[p];
-        anexosPayload.push({
-          nome_arquivo: pdf.getName(),
-          conteudo_base64: Utilities.base64Encode(pdf.getBytes()),
-        });
-      }
+  if (pdfAttachments.length === 0) {
+    Logger.log('Mensagem sem PDF, pulando: ' + msg.getSubject());
+    return {
+      messageId: msg.getId(), dryRun: dryRun, httpCode: null, jsonValido: false,
+      duplicidadeIdempotente: false, dryRunValido: false, sucessoIntegral: true,
+      sucessoParcial: false, pendencia: false, falha: false,
+      aplicarLabelPermitido: false, detalhe: 'Sem PDF — nada enviado ao Render.', anexos: [],
+    };
+  }
 
-      var payload = {
-        message_id: msg.getId(),
-        assunto: msg.getSubject(),
-        remetente: msg.getFrom(),
-        corpo: msg.getPlainBody().substring(0, 2000),
-        anexos: anexosPayload,
-        dry_run: DRY_RUN,
-      };
+  var anexosPayload = [];
+  for (var p = 0; p < pdfAttachments.length; p++) {
+    var pdf = pdfAttachments[p];
+    anexosPayload.push({
+      nome_arquivo: pdf.getName(),
+      conteudo_base64: Utilities.base64Encode(pdf.getBytes()),
+    });
+  }
 
-      Logger.log('Enviando para Render: ' + msg.getSubject() + ' (' + anexosPayload.length + ' PDF(s))');
+  var payload = {
+    message_id: msg.getId(),
+    assunto: msg.getSubject(),
+    remetente: msg.getFrom(),
+    corpo: msg.getPlainBody().substring(0, 2000),
+    anexos: anexosPayload,
+    dry_run: dryRun,
+  };
 
-      var response = UrlFetchApp.fetch(RENDER_URL, {
-        method: 'post',
-        contentType: 'application/json',
-        headers: { 'X-API-KEY': apiKey },
-        payload: JSON.stringify(payload),
-        muteHttpExceptions: true,
+  Logger.log('Enviando para Render: ' + msg.getSubject() + ' (' + anexosPayload.length + ' PDF(s))');
+
+  var response = UrlFetchApp.fetch(RENDER_URL, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'X-API-KEY': apiKey },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  });
+
+  var code = response.getResponseCode();
+  var body = response.getContentText();
+  Logger.log('HTTP ' + code);
+
+  var resultado = interpretarRespostaWebhook_(code, body, anexosPayload.length);
+  resultado.messageId = msg.getId();
+  resultado.dryRun = dryRun;
+  return resultado;
+}
+
+/**
+ * Interpreta a resposta HTTP de /email/webhook de forma conservadora — função
+ * pura, sem dependência de GmailApp/UrlFetchApp, para poder ser testada
+ * isoladamente. HTTP 200 sozinho NÃO significa sucesso: o corpo precisa ser
+ * JSON válido, com anexos_processados consistente com o que foi enviado, e
+ * sem estrutura inesperada. aplicarLabelPermitido preserva exatamente a
+ * política atual do fluxo automático (httpCode===200 && !dryRun), com uma
+ * única exceção: corpo estruturalmente inconsistente nunca libera label,
+ * mesmo com HTTP 200 (caso que o código original nunca detectava, por nunca
+ * fazer JSON.parse do corpo).
+ */
+function interpretarRespostaWebhook_(httpCode, bodyText, anexosEnviados) {
+  var r = {
+    httpCode: httpCode, dryRun: null, jsonValido: false, duplicidadeIdempotente: false,
+    dryRunValido: false, sucessoIntegral: false, sucessoParcial: false, pendencia: false,
+    falha: false, aplicarLabelPermitido: false, detalhe: '', anexos: [],
+  };
+
+  if (httpCode !== 200) {
+    r.falha = true;
+    r.detalhe = 'HTTP ' + httpCode + ' — resposta não-200.';
+    return r;
+  }
+
+  var json;
+  try {
+    json = JSON.parse(bodyText);
+    r.jsonValido = true;
+  } catch (erro) {
+    r.falha = true;
+    r.detalhe = 'HTTP 200 mas corpo não é JSON válido.';
+    return r;
+  }
+  if (typeof json !== 'object' || json === null) {
+    r.falha = true;
+    r.detalhe = 'Corpo JSON não é um objeto.';
+    return r;
+  }
+
+  r.dryRun = (json.dry_run === true);
+  r.aplicarLabelPermitido = (httpCode === 200 && r.dryRun === false);
+
+  if (json.email_savian && json.email_savian.acao === 'duplicado_message_id') {
+    r.duplicidadeIdempotente = true;
+    r.detalhe = 'Message-ID já processado anteriormente — não prova conclusão dos anexos desta chamada.';
+    return r;
+  }
+
+  if (!('anexos_processados' in json) || !Array.isArray(json.anexos_processados)) {
+    r.falha = true;
+    r.aplicarLabelPermitido = false;
+    r.detalhe = 'anexos_processados ausente ou não é array — estrutura inesperada.';
+    return r;
+  }
+  r.anexos = json.anexos_processados;
+
+  if (typeof anexosEnviados === 'number' && r.anexos.length !== anexosEnviados) {
+    r.falha = true;
+    r.aplicarLabelPermitido = false;
+    r.detalhe = 'Quantidade de anexos na resposta (' + r.anexos.length +
+                ') difere do enviado (' + anexosEnviados + ').';
+    return r;
+  }
+
+  if (r.dryRun) {
+    r.dryRunValido = true;
+    r.detalhe = 'dry-run — nenhuma gravação real ocorreu.';
+    return r;
+  }
+
+  var total = r.anexos.length, comErro = 0, comPendencia = 0;
+  for (var i = 0; i < total; i++) {
+    var item = r.anexos[i];
+    if (!item || typeof item !== 'object') {
+      r.falha = true;
+      r.aplicarLabelPermitido = false;
+      r.detalhe = 'Item de anexo com formato inesperado.';
+      return r;
+    }
+    if (item.erro) { comErro++; continue; }
+    if (item.pendencia || item.pendencia_record_id) comPendencia++;
+  }
+
+  if (comErro === total) {
+    r.falha = true;
+    r.detalhe = 'Todos os anexos falharam.';
+  } else if (comErro > 0) {
+    r.sucessoParcial = true;
+    r.detalhe = comErro + '/' + total + ' anexo(s) com erro.';
+  } else if (comPendencia > 0) {
+    r.pendencia = true;
+    r.detalhe = comPendencia + ' anexo(s) geraram pendência.';
+  } else {
+    r.sucessoIntegral = true;
+    r.detalhe = 'Todos os anexos processados sem erro nem pendência.';
+  }
+
+  return r;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// PROCESSAMENTO ADMINISTRATIVO POR MESSAGE ID — diagnóstico e reprocessamento
+// pontual de UMA mensagem, fora do fluxo automático. Nenhuma das funções
+// abaixo é referenciada por processarEmails() nem por gatilho — só chamadas
+// manualmente pelo editor do Apps Script.
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * Diagnóstico somente leitura: lê ADMIN_MESSAGE_ID de Script Properties,
+ * confirma que é um ID de mensagem válido e acessível, e lista as mensagens
+ * da mesma thread com contagem de PDFs — só para inspeção manual antes de
+ * decidir reconciliar um label. Sem parâmetros (o botão Executar do editor
+ * não permite passar argumentos). Não chama Render, não chama Airtable, não
+ * aplica label, não altera nenhuma Script Property, não exige
+ * ADMIN_EXECUTION_ENABLED (é só leitura, sem efeito colateral). Não registra
+ * corpo do e-mail, base64, CPF ou conteúdo documental — só metadados.
+ */
+function verificarMessageIdAdministrativo() {
+  var messageId = PropertiesService.getScriptProperties().getProperty('ADMIN_MESSAGE_ID');
+  if (!messageId) {
+    Logger.log('[VERIFICACAO] ADMIN_MESSAGE_ID ausente ou vazio.');
+    return;
+  }
+
+  var msg;
+  try {
+    msg = GmailApp.getMessageById(messageId);
+  } catch (erro) {
+    Logger.log('[VERIFICACAO] ID inválido ou inacessível: ' + erro.message);
+    return;
+  }
+
+  var pdfsMsg = msg.getAttachments({ includeInlineImages: false, includeAttachments: true })
+    .filter(function (att) {
+      return att.getContentType() === 'application/pdf' || att.getName().toLowerCase().endsWith('.pdf');
+    });
+
+  Logger.log('[VERIFICACAO] messageId=' + messageId +
+             ' | assunto=' + msg.getSubject() +
+             ' | de=' + msg.getFrom() +
+             ' | data=' + msg.getDate() +
+             ' | pdfs=' + pdfsMsg.length +
+             ' | threadId=' + msg.getThread().getId());
+
+  // Leitura complementar, ainda somente leitura: confirma se outras
+  // mensagens da mesma thread também têm PDF, para decidir com segurança se
+  // a thread pode receber o label Processado-Render mais adiante (decisão
+  // sempre manual — ver nota em executarProcessamentoAdministrativo).
+  var mensagensDaThread = msg.getThread().getMessages();
+  Logger.log('[VERIFICACAO] Thread tem ' + mensagensDaThread.length + ' mensagem(ns):');
+  for (var i = 0; i < mensagensDaThread.length; i++) {
+    var m = mensagensDaThread[i];
+    var pdfs = m.getAttachments({ includeInlineImages: false, includeAttachments: true })
+      .filter(function (att) {
+        return att.getContentType() === 'application/pdf' || att.getName().toLowerCase().endsWith('.pdf');
       });
+    Logger.log('  [' + i + '] id=' + m.getId() + ' | data=' + m.getDate() + ' | pdfs=' + pdfs.length);
+  }
+}
 
-      var code = response.getResponseCode();
-      var body = response.getContentText();
-      Logger.log('HTTP ' + code + ': ' + body);
+/**
+ * Processa UMA mensagem pelo ID, fora do fluxo automático. Nunca chamada por
+ * processarEmails() nem por gatilho. Não chama GmailApp.search, não chama
+ * thread.getMessages, não alcança respostas posteriores da mesma
+ * conversa — só a mensagem exata informada.
+ */
+function processarMensagemPorId_(messageId, dryRun) {
+  if (typeof messageId !== 'string' || messageId.trim() === '') {
+    throw new Error('processarMensagemPorId_: messageId deve ser string não vazia.');
+  }
+  if (typeof dryRun !== 'boolean') {
+    throw new Error('processarMensagemPorId_: dryRun deve ser informado explicitamente.');
+  }
 
-      // Só marca como processado se: sucesso (200) E não estamos em dry_run
-      if (code === 200 && !DRY_RUN) {
-        thread.addLabel(GmailApp.getUserLabelByName(LABEL_PROCESSADO));
+  var apiKey = PropertiesService.getScriptProperties().getProperty('EMAIL_WEBHOOK_KEY');
+  if (!apiKey) {
+    throw new Error('processarMensagemPorId_: EMAIL_WEBHOOK_KEY não configurada.');
+  }
+
+  var msg;
+  try {
+    msg = GmailApp.getMessageById(messageId);
+  } catch (erro) {
+    throw new Error('processarMensagemPorId_: falha ao obter mensagem "' + messageId + '": ' + erro.message);
+  }
+  if (!msg) {
+    throw new Error('processarMensagemPorId_: nenhuma mensagem retornada para "' + messageId + '".');
+  }
+
+  Logger.log('[ADMIN] Processando mensagem — messageId=' + messageId + ' | dryRun=' + dryRun);
+  var resultado = _processarMensagem(msg, dryRun, apiKey);
+  Logger.log('[ADMIN] Concluído — messageId=' + messageId + ' | httpCode=' + resultado.httpCode);
+  return resultado;
+}
+
+/**
+ * Executor administrativo sem parâmetros — chamável pelo botão Executar do
+ * editor. Lê configuração de Script Properties (ADMIN_MESSAGE_ID,
+ * ADMIN_DRY_RUN, ADMIN_EXECUTION_ENABLED). Nunca referenciada por
+ * processarEmails() nem por gatilho. Nunca aplica label — o resultado
+ * estruturado é só para revisão humana; a decisão de marcar
+ * Processado-Render manualmente (depois de reconciliar com
+ * verificarMessageIdAdministrativo) é sempre humana, fora deste script.
+ */
+function executarProcessamentoAdministrativo() {
+  var props = PropertiesService.getScriptProperties();
+  var lock = LockService.getScriptLock();
+  var gotLock = false;
+
+  try {
+    if (props.getProperty('ADMIN_EXECUTION_ENABLED') !== 'true') {
+      Logger.log('[ADMIN] Não habilitado (ADMIN_EXECUTION_ENABLED != "true"). Abortando.');
+      return;
+    }
+
+    var messageId = props.getProperty('ADMIN_MESSAGE_ID');
+    if (!messageId) {
+      Logger.log('[ADMIN] ADMIN_MESSAGE_ID ausente ou vazio. Abortando.');
+      return;
+    }
+
+    var dryRunRaw = props.getProperty('ADMIN_DRY_RUN');
+    if (dryRunRaw !== 'true' && dryRunRaw !== 'false') {
+      Logger.log('[ADMIN] ADMIN_DRY_RUN inválido (esperado "true" ou "false", recebido: "' + dryRunRaw + '"). Abortando.');
+      return;
+    }
+    var dryRun = (dryRunRaw === 'true');
+
+    // Segunda camada de proteção de concorrência: aborta se o gatilho
+    // automático de processarEmails ainda estiver instalado.
+    var gatilhos = ScriptApp.getProjectTriggers();
+    for (var g = 0; g < gatilhos.length; g++) {
+      if (gatilhos[g].getHandlerFunction() === 'processarEmails') {
+        Logger.log('[ADMIN] Gatilho automático de processarEmails ainda ativo — abortando por segurança. Desative com removerGatilhos() antes.');
+        return;
       }
     }
+
+    gotLock = lock.tryLock(5000);
+    if (!gotLock) {
+      Logger.log('[ADMIN] Lock indisponível — outra execução em andamento. Abortando sem processar.');
+      return;
+    }
+
+    Logger.log('[ADMIN] Iniciando execução administrativa — messageId=' + messageId + ' | dryRun=' + dryRun);
+    var resultado = processarMensagemPorId_(messageId, dryRun);
+    Logger.log('[ADMIN] Execução administrativa concluída — messageId=' + messageId +
+               ' | sucessoIntegral=' + resultado.sucessoIntegral +
+               ' | sucessoParcial=' + resultado.sucessoParcial +
+               ' | pendencia=' + resultado.pendencia +
+               ' | falha=' + resultado.falha +
+               ' | aplicarLabelPermitido=' + resultado.aplicarLabelPermitido);
+  } catch (erro) {
+    Logger.log('[ADMIN] Execução administrativa falhou — erro=' + erro.message);
+    throw erro;
+  } finally {
+    props.setProperty('ADMIN_EXECUTION_ENABLED', 'false');
+    if (gotLock) lock.releaseLock();
   }
 }
 

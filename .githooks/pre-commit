@@ -23,17 +23,11 @@ echo "PRE-COMMIT VALIDATION"
 echo "================================"
 echo ""
 
-# Arquivos que definem ou testam os próprios padrões proibidos (segredo,
-# 11º módulo, 9 camadas, autonomia %, ADR silenciosa) — não são violação
-# real, são a fonte canônica de detecção (.magnata/patterns.sh) ou
-# fixtures da suíte de testes do CI de governança (Etapa 6).
-is_gate_pattern_source_file() {
-  local file="$1"
-  [[ "$file" == .githooks/* ]] || \
-  [[ "$file" == ".magnata/patterns.sh" ]] || \
-  [[ "$file" == "scripts/ci/test_governance.sh" ]] || \
-  [[ "$file" == "scripts/ci/validate_governance.sh" ]]
-}
+# is_gate_pattern_source_file() agora vem de .magnata/patterns.sh (movida
+# de dentro deste hook durante a correção do gate de segredos — precisava
+# ser compartilhada com scripts/ci/validate_governance.sh também, para o
+# hook local e o CI nunca divergirem sobre o que é "fonte do próprio
+# padrão" vs. violação real).
 
 # VALIDAÇÃO 1: Branch correta
 echo "[1/14] Verificando branch..."
@@ -83,50 +77,37 @@ fi
 echo -e "${GREEN}✓ Nenhum arquivo protegido foi alterado${NC}"
 
 # VALIDAÇÃO 4: Detecção de segredos (excluindo .githooks/ — padrões de validação)
-# Detecta CONTEÚDO de segredo (token, chave, senha, assignment sensível) — não
-# nome de arquivo. Nome de arquivo sensível (.env, secrets.json,
+# Detecta VALOR literal de segredo real em linhas ADICIONADAS do índice
+# staged (git diff --cached, nunca o working tree) — não apenas o nome de
+# uma variável/header/propriedade sensível. Lógica em
+# linha_contem_segredo_real / arquivo_staged_tem_segredo
+# (.magnata/patterns.sh, fonte única de verdade, também usada por
+# scripts/ci/validate_governance.sh, para hook local e CI nunca
+# divergirem). Nome de arquivo sensível (.env, secrets.json,
 # credentials.json) é responsabilidade da VALIDAÇÃO 3 (bloqueia o arquivo em
 # si); listar o nome aqui também gerava falso positivo em documentação que só
 # *menciona* esses nomes em prosa, sem conter nenhum segredo real.
 echo "[4/14] Verificando presença de segredos..."
-SECRETS_PATTERNS=(
-  "BEGIN RSA PRIVATE KEY"
-  "BEGIN PRIVATE KEY"
-  "BEGIN OPENSSH PRIVATE KEY"
-  "api[_-]?key"
-  "secret[_-]?key"
-  "aws[_-]?access[_-]?key"
-  "aws[_-]?secret[_-]?access[_-]?key"
-  "github[_-]?token"
-  "GITHUB_TOKEN"
-  "GH_TOKEN"
-  "Authorization: Bearer"
-  "password.*="
-  "passwd.*="
-)
-
 FOUND_SECRETS=0
-for file in $STAGED_FILES; do
+while IFS= read -r -d '' file; do
   if is_gate_pattern_source_file "$file"; then
     continue
   fi
 
-  # Pular arquivos não-texto
-  if file "$file" | grep -q "binary"; then
+  # Pular arquivos não-texto (arquivo deletado não existe mais no working
+  # tree — "file" não roda sobre ele, e é isso mesmo: nada a escanear).
+  if [ -f "$file" ] && file "$file" | grep -q "binary"; then
     continue
   fi
 
-  for pattern in "${SECRETS_PATTERNS[@]}"; do
-    if git diff --cached "$file" | grep -iE "$pattern" > /dev/null 2>&1; then
-      echo -e "${RED}✗ BLOQUEADO: Possível segredo detectado${NC}"
-      echo "  Arquivo: $file"
-      echo "  Padrão: $pattern"
-      echo "  Remova o segredo antes de fazer commit"
-      FOUND_SECRETS=1
-    fi
-  done
-done
+  if arquivo_staged_tem_segredo "$file"; then
+    FOUND_SECRETS=1
+  fi
+done < <(git diff --cached --name-only -z)
+
 if [ $FOUND_SECRETS -eq 1 ]; then
+  echo -e "${RED}✗ BLOQUEADO: Possível segredo detectado (ver achados acima)${NC}"
+  echo "  Remova o segredo antes de fazer commit"
   exit 1
 fi
 echo -e "${GREEN}✓ Nenhum segredo detectado${NC}"
@@ -152,6 +133,31 @@ SCRATCH_SCOPE_PATTERNS=(
   "^test_"                                                     # test scratch
 )
 
+# Exceção nominal, exata e restrita (decisão registrada,
+# fix/remetente-dp-email-intake, 2026-08-04) — só estes dois arquivos de
+# teste permanentes, batidos por igualdade exata de caminho completo, não
+# por prefixo. NÃO afrouxa "^test_" de forma genérica: qualquer outro
+# arquivo test_*, inclusive variações com sufixo (.bak/.tmp), prefixo
+# extra, maiúscula diferente ou em subdiretório, continua bloqueado.
+# Reaproveitada também na VALIDAÇÃO 7, que tem seu próprio
+# SCRATCH_PATTERNS local — ver nota ali. Unificar as três definições
+# divergentes de "arquivo scratch" (aqui, VALIDAÇÃO 7, e
+# .magnata/patterns.sh) é melhoria futura registrada, não feita agora.
+ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
+  "test_apps_script_email_intake_remetentes.py"
+  "test_interpretar_resposta_webhook.js"
+)
+
+is_arquivo_teste_nominalmente_autorizado() {
+  local file="$1"
+  for af in "${ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS[@]}"; do
+    if [[ "$file" == "$af" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 for file in $STAGED_FILES; do
   # Exceção documental: os 4 caminhos EXATOS da hierarquia CLAUDE.md
   # (CLAUDE_HIERARCHY, comparação de igualdade via is_claude_hierarchy_path
@@ -166,12 +172,14 @@ for file in $STAGED_FILES; do
 
   # Verificar se está em lista de bloqueio (PROTECTED_FILES de .magnata/patterns.sh)
   BLOCKED=0
-  for pattern in "${PROTECTED_FILES[@]}" "${SCRATCH_SCOPE_PATTERNS[@]}"; do
-    if [[ "$file" =~ $pattern ]]; then
-      BLOCKED=1
-      break
-    fi
-  done
+  if ! is_arquivo_teste_nominalmente_autorizado "$file"; then
+    for pattern in "${PROTECTED_FILES[@]}" "${SCRATCH_SCOPE_PATTERNS[@]}"; do
+      if [[ "$file" =~ $pattern ]]; then
+        BLOCKED=1
+        break
+      fi
+    done
+  fi
 
   if [ $BLOCKED -eq 1 ]; then
     echo -e "${RED}✗ BLOQUEADO: Arquivo protegido não autorizado${NC}"
@@ -209,6 +217,12 @@ SCRATCH_PATTERNS=(
 
 FOUND_SCRATCH=0
 for file in $STAGED_FILES; do
+  # Mesma exceção nominal da VALIDAÇÃO 6 (ver comentário lá) — reaproveitada
+  # aqui porque esta validação tem seu próprio SCRATCH_PATTERNS local,
+  # independente do de lá e do de .magnata/patterns.sh.
+  if is_arquivo_teste_nominalmente_autorizado "$file"; then
+    continue
+  fi
   for pattern in "${SCRATCH_PATTERNS[@]}"; do
     if [[ "$file" =~ $pattern ]]; then
       echo -e "${YELLOW}⚠ AVISO: Arquivo de scratch detectado no commit${NC}"
