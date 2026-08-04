@@ -133,6 +133,31 @@ SCRATCH_SCOPE_PATTERNS=(
   "^test_"                                                     # test scratch
 )
 
+# Exceção nominal, exata e restrita (decisão registrada,
+# fix/remetente-dp-email-intake, 2026-08-04) — só estes dois arquivos de
+# teste permanentes, batidos por igualdade exata de caminho completo, não
+# por prefixo. NÃO afrouxa "^test_" de forma genérica: qualquer outro
+# arquivo test_*, inclusive variações com sufixo (.bak/.tmp), prefixo
+# extra, maiúscula diferente ou em subdiretório, continua bloqueado.
+# Reaproveitada também na VALIDAÇÃO 7, que tem seu próprio
+# SCRATCH_PATTERNS local — ver nota ali. Unificar as três definições
+# divergentes de "arquivo scratch" (aqui, VALIDAÇÃO 7, e
+# .magnata/patterns.sh) é melhoria futura registrada, não feita agora.
+ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
+  "test_apps_script_email_intake_remetentes.py"
+  "test_interpretar_resposta_webhook.js"
+)
+
+is_arquivo_teste_nominalmente_autorizado() {
+  local file="$1"
+  for af in "${ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS[@]}"; do
+    if [[ "$file" == "$af" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 for file in $STAGED_FILES; do
   # Exceção documental: os 4 caminhos EXATOS da hierarquia CLAUDE.md
   # (CLAUDE_HIERARCHY, comparação de igualdade via is_claude_hierarchy_path
@@ -147,12 +172,14 @@ for file in $STAGED_FILES; do
 
   # Verificar se está em lista de bloqueio (PROTECTED_FILES de .magnata/patterns.sh)
   BLOCKED=0
-  for pattern in "${PROTECTED_FILES[@]}" "${SCRATCH_SCOPE_PATTERNS[@]}"; do
-    if [[ "$file" =~ $pattern ]]; then
-      BLOCKED=1
-      break
-    fi
-  done
+  if ! is_arquivo_teste_nominalmente_autorizado "$file"; then
+    for pattern in "${PROTECTED_FILES[@]}" "${SCRATCH_SCOPE_PATTERNS[@]}"; do
+      if [[ "$file" =~ $pattern ]]; then
+        BLOCKED=1
+        break
+      fi
+    done
+  fi
 
   if [ $BLOCKED -eq 1 ]; then
     echo -e "${RED}✗ BLOQUEADO: Arquivo protegido não autorizado${NC}"
@@ -190,6 +217,12 @@ SCRATCH_PATTERNS=(
 
 FOUND_SCRATCH=0
 for file in $STAGED_FILES; do
+  # Mesma exceção nominal da VALIDAÇÃO 6 (ver comentário lá) — reaproveitada
+  # aqui porque esta validação tem seu próprio SCRATCH_PATTERNS local,
+  # independente do de lá e do de .magnata/patterns.sh.
+  if is_arquivo_teste_nominalmente_autorizado "$file"; then
+    continue
+  fi
   for pattern in "${SCRATCH_PATTERNS[@]}"; do
     if [[ "$file" =~ $pattern ]]; then
       echo -e "${YELLOW}⚠ AVISO: Arquivo de scratch detectado no commit${NC}"

@@ -1657,6 +1657,215 @@ EOF
 }
 
 # ============================================================================
+# TESTES 69-76 — Exceção nominal para os dois testes da correção de
+# ingestão (branch fix/remetente-dp-email-intake, 2026-08-04): 4 caminhos
+# exatos em ALLOWED_PATHS + exceção nominal exata em SCRATCH_SCOPE_PATTERNS
+# (Validação 6) e SCRATCH_PATTERNS (Validação 7). Inclui teste de
+# regressão para um bug real encontrado durante esta correção: falta de
+# restaurar nocasematch em linha_contem_segredo_real() deixava
+# comparações de nome de arquivo case-insensíveis nas validações
+# seguintes.
+# ============================================================================
+
+# TEST 69: os quatro caminhos exatos autorizados (2 novos em ALLOWED_PATHS
+# fora dos "test_", + os 2 testes com exceção nominal) commitam com
+# sucesso.
+test_69_ingestion_files_accepted() {
+  run_test 69 "Os 4 caminhos exatos da correção de ingestão são aceitos" "PASS"
+
+  cd "$TEST_REPO"
+  mkdir -p docs/decisoes
+  echo "var x = 1;" > apps_script_email_intake.gs
+  echo "# decisao" > docs/decisoes/remetentes-dp-fiscal.md
+  echo "print('t')" > test_apps_script_email_intake_remetentes.py
+  echo "// t" > test_interpretar_resposta_webhook.js
+  git add apps_script_email_intake.gs docs/decisoes/remetentes-dp-fiscal.md \
+          test_apps_script_email_intake_remetentes.py test_interpretar_resposta_webhook.js
+
+  if git commit -m "fix: teste 69 arquivos exatos autorizados" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD apps_script_email_intake.gs docs/decisoes/remetentes-dp-fiscal.md \
+             test_apps_script_email_intake_remetentes.py test_interpretar_resposta_webhook.js 2>/dev/null || true
+  git checkout -q -- apps_script_email_intake.gs docs/decisoes/remetentes-dp-fiscal.md \
+             test_apps_script_email_intake_remetentes.py test_interpretar_resposta_webhook.js 2>/dev/null || true
+  rm -f apps_script_email_intake.gs docs/decisoes/remetentes-dp-fiscal.md \
+        test_apps_script_email_intake_remetentes.py test_interpretar_resposta_webhook.js
+}
+
+# TEST 70: outros arquivos test_*.py/test_*.js (não nomeados na exceção)
+# continuam bloqueados — a exceção não abre o prefixo genérico.
+test_70_other_test_files_still_blocked() {
+  run_test 70 "test_outro.py e test_outro.js continuam bloqueados (exceção não é genérica)" "FAIL"
+
+  cd "$TEST_REPO"
+  echo "x" > test_outro.py
+  echo "x" > test_outro.js
+  git add test_outro.py test_outro.js
+
+  if git commit -m "fix: teste 70 outros arquivos test nao autorizados" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD test_outro.py test_outro.js 2>/dev/null || true
+  rm -f test_outro.py test_outro.js
+}
+
+# TEST 71: variações com sufixo (.bak/.tmp) dos dois arquivos nominalmente
+# autorizados continuam bloqueadas — exceção é por igualdade exata de
+# caminho, não por prefixo.
+test_71_suffix_variants_still_blocked() {
+  run_test 71 "Variações com sufixo (.bak/.tmp) dos arquivos autorizados continuam bloqueadas" "FAIL"
+
+  cd "$TEST_REPO"
+  echo "x" > test_apps_script_email_intake_remetentes.py.bak
+  echo "x" > test_interpretar_resposta_webhook.js.tmp
+  git add test_apps_script_email_intake_remetentes.py.bak test_interpretar_resposta_webhook.js.tmp
+
+  if git commit -m "fix: teste 71 sufixos bak e tmp" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD test_apps_script_email_intake_remetentes.py.bak test_interpretar_resposta_webhook.js.tmp 2>/dev/null || true
+  rm -f test_apps_script_email_intake_remetentes.py.bak test_interpretar_resposta_webhook.js.tmp
+}
+
+# TEST 72: prefixo "_" adicional continua bloqueado.
+test_72_underscore_prefix_variant_still_blocked() {
+  run_test 72 "Arquivo com prefixo _ adicional continua bloqueado" "FAIL"
+
+  cd "$TEST_REPO"
+  echo "x" > _test_apps_script_email_intake_remetentes.py
+  git add _test_apps_script_email_intake_remetentes.py
+
+  if git commit -m "fix: teste 72 prefixo underscore" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD _test_apps_script_email_intake_remetentes.py 2>/dev/null || true
+  rm -f _test_apps_script_email_intake_remetentes.py
+}
+
+# TEST 73: app.py permanece protegido — a exceção nominal não toca
+# PROTECTED_FILES nem abre nenhuma via indireta para ele.
+test_73_app_py_still_protected_after_exception() {
+  run_test 73 "app.py continua protegido depois da exceção nominal" "FAIL"
+
+  cd "$TEST_REPO"
+  echo "print('x')" > app.py
+  git add app.py
+
+  if bash scripts/ci/validate_governance.sh protected_app_py >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD app.py 2>/dev/null || true
+  rm -f app.py
+}
+
+# TEST 74: mesmo nome de arquivo em subdiretório não é abrangido pela
+# exceção — a exceção é por caminho completo, não por nome-base.
+test_74_same_basename_in_subdirectory_still_blocked() {
+  run_test 74 "Mesmo nome-base em subdiretório continua bloqueado (exceção é por caminho completo)" "FAIL"
+
+  cd "$TEST_REPO"
+  mkdir -p subdir
+  echo "x" > subdir/test_apps_script_email_intake_remetentes.py
+  git add subdir/test_apps_script_email_intake_remetentes.py
+
+  if git commit -m "fix: teste 74 mesmo nome em subdiretorio" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD subdir/test_apps_script_email_intake_remetentes.py 2>/dev/null || true
+  rm -rf subdir
+}
+
+# TEST 75: diferença de maiúsculas/minúsculas no nome do arquivo continua
+# bloqueada — teste de regressão para o bug real encontrado nesta correção
+# (nocasematch não restaurado em linha_contem_segredo_real() deixava a
+# comparação de nome de arquivo case-insensível a partir da Validação 4).
+test_75_case_sensitivity_regression() {
+  run_test 75 "Maiúsculas/minúsculas diferentes continuam bloqueadas (regressão nocasematch)" "FAIL"
+
+  cd "$TEST_REPO"
+  echo "x" > Test_apps_script_email_intake_remetentes.py
+  git add Test_apps_script_email_intake_remetentes.py
+
+  local result="PASS"
+  if git commit -m "fix: teste 75 maiuscula nao autorizada" >/dev/null 2>&1; then
+    result="PASS"
+  else
+    result="FAIL"
+  fi
+  git reset -q HEAD Test_apps_script_email_intake_remetentes.py 2>/dev/null || true
+  rm -f Test_apps_script_email_intake_remetentes.py
+
+  # Confirma também que nocasematch está desligado LOGO APÓS uma chamada
+  # real ao scanner de segredos (a causa raiz do bug) — não só o efeito
+  # observável via commit.
+  local estado_nocasematch
+  estado_nocasematch=$(bash -c 'source .magnata/patterns.sh; linha_contem_segredo_real "linha sem segredo" > /dev/null; shopt nocasematch' 2>/dev/null)
+  if [[ "$estado_nocasematch" != *"off"* ]]; then
+    result="FAIL"
+  fi
+
+  test_result "$result"
+}
+
+# TEST 76: regras antigas permanecem válidas depois de todas as mudanças
+# desta correção — branch arbitrária continua bloqueada, segredo real
+# continua bloqueado, apiKey/X-API-KEY legítimos continuam permitidos.
+test_76_old_rules_still_valid_after_all_changes() {
+  run_test 76 "Regras antigas (branch, segredo real, apiKey legítimo) permanecem válidas" "PASS"
+
+  cd "$TEST_REPO"
+  local result="PASS"
+
+  # Branch arbitrária continua bloqueada (CI).
+  if GITHUB_HEAD_REF="feat/branch-nao-autorizada-pos-correcao" bash scripts/ci/validate_governance.sh branch >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+
+  # Segredo real continua bloqueado (hook).
+  echo 'api_key = "valorRealPosCorrecao123456"' > MAGNATA_OS_TEST76_segredo.md
+  git add MAGNATA_OS_TEST76_segredo.md
+  if git commit -m "fix: teste 76 segredo real pos correcao" >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+  git reset -q HEAD MAGNATA_OS_TEST76_segredo.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST76_segredo.md
+
+  # apiKey/X-API-KEY legítimo continua permitido (hook) — dentro de um dos
+  # 4 caminhos exatos autorizados, para não ser barrado por escopo.
+  cat > apps_script_email_intake.gs <<'EOF'
+var apiKey = PropertiesService.getScriptProperties().getProperty('X');
+headers: { 'X-API-KEY': apiKey },
+EOF
+  git add apps_script_email_intake.gs
+  if ! git commit -m "fix: teste 76 apikey legitimo pos correcao" >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+  git reset -q HEAD apps_script_email_intake.gs 2>/dev/null || true
+  git checkout -q -- apps_script_email_intake.gs 2>/dev/null || rm -f apps_script_email_intake.gs
+
+  test_result "$result"
+}
+
+# ============================================================================
 # MAIN EXECUTION
 # ============================================================================
 
@@ -1744,6 +1953,14 @@ main() {
   test_66_secret_gate_binary_file_does_not_crash || true
   test_67_secret_gate_multiple_secrets_reported || true
   test_68_secret_gate_hook_and_ci_agree || true
+  test_69_ingestion_files_accepted || true
+  test_70_other_test_files_still_blocked || true
+  test_71_suffix_variants_still_blocked || true
+  test_72_underscore_prefix_variant_still_blocked || true
+  test_73_app_py_still_protected_after_exception || true
+  test_74_same_basename_in_subdirectory_still_blocked || true
+  test_75_case_sensitivity_regression || true
+  test_76_old_rules_still_valid_after_all_changes || true
 
   # Report
   echo ""

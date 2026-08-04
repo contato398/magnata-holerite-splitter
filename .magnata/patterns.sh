@@ -157,6 +157,15 @@ linha_contem_segredo_real() {
     fi
   fi
 
+  # Bug real encontrado e corrigido durante os testes desta correção:
+  # faltava restaurar nocasematch aqui — sem isso, uma vez chamada esta
+  # função (sempre, na Validação 4), nocasematch ficava ligado pelo resto
+  # da execução do hook, tornando case-sensível em outras validações
+  # (ex.: Validação 6/7, comparação de nome de arquivo) incorretamente
+  # case-insensível — "Test_....py" passava a bater com "^test_" e com a
+  # exceção nominal, quando não deveria.
+  [ $nocase_ja_ligado -eq 0 ] && shopt -u nocasematch
+
   return $achou
 }
 
@@ -337,6 +346,15 @@ ALLOWED_PATHS=(
   "^MAGNATA_OS_.*\.md$"
   "^\.github/README\.md$"
   "^\.githooks/README\.md$"
+  # Exceção exata e restrita (decisão registrada, branch
+  # fix/remetente-dp-email-intake, 2026-08-04) — só estes 4 caminhos
+  # exatos, não um padrão genérico. Não libera nenhum outro .gs, .py, .js
+  # ou docs/decisoes/* — cada um bate por igualdade de string completa via
+  # âncora $ no fim.
+  "^apps_script_email_intake\.gs$"
+  "^docs/decisoes/remetentes-dp-fiscal\.md$"
+  "^test_apps_script_email_intake_remetentes\.py$"
+  "^test_interpretar_resposta_webhook\.js$"
 )
 
 # ============================================================================
