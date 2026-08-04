@@ -49,31 +49,148 @@ PROTECTED_FILES=(
 )
 
 # ============================================================================
-# PADRÕES DE SEGREDO — Indicadores de chaves, tokens, credenciais
+# PADRÕES DE SEGREDO — segredo real vs. identificador/header/placeholder
 # ============================================================================
+# A versão anterior (SECRET_PATTERNS, bare grep -qi por arquivo inteiro)
+# bloqueava qualquer ocorrência do NOME de uma variável/header sensível
+# (ex.: "apiKey", "'X-API-KEY'", "DATABASE_URL" como identificador), mesmo
+# sem nenhum valor literal de segredo presente — falso positivo confirmado
+# em apps_script_email_intake.gs (branch fix/remetente-dp-email-intake,
+# 2026-08-03): a variável `apiKey` e o header `'X-API-KEY'` já existiam no
+# código original, sem nenhuma credencial real.
+#
+# Duas camadas, ambas operando só sobre CONTEÚDO STAGED e só linhas
+# ADICIONADAS (ver linha_contem_segredo_real, arquivo_staged_tem_segredo,
+# usadas por .githooks/pre-commit e por scripts/ci/validate_governance.sh
+# — mesma fonte, para hook local e CI nunca divergirem):
+#
+#   1. SECRET_PATTERNS_ABSOLUTOS — formato inequívoco (chave privada,
+#      formato reconhecível de credencial de provedor, Bearer com valor,
+#      URL com credencial embutida). Qualquer ocorrência já basta — não
+#      precisa de contexto de atribuição, o formato em si é a prova.
+#
+#   2. SECRET_CONTEXT_KEYWORDS — nomes sensíveis (api_key, token,
+#      password, secret, database_url, airtable_key etc. — inclui os
+#      mesmos termos que já estavam no SECRET_PATTERNS anterior) só
+#      bloqueiam quando atribuídos a um valor LITERAL (aspas ou token
+#      solto até o fim da linha) que não é vazio nem um placeholder
+#      conhecido (ver SECRET_PLACEHOLDER_REGEX). Nome de variável, header,
+#      chamada a getenv/getProperty, ou referência a outra variável nunca
+#      batem, porque o valor não é uma string literal.
 
-SECRET_PATTERNS=(
-  "private[_-]?key"
+SECRET_PATTERNS_ABSOLUTOS=(
   "BEGIN RSA PRIVATE KEY"
   "BEGIN PRIVATE KEY"
+  "BEGIN OPENSSH PRIVATE KEY"
   "-----BEGIN"
-  "api[_-]?key"
-  "GITHUB[_-]?TOKEN"
-  "github[_-]?token"
-  "access[_-]?token"
-  "secret[_-]?key"
-  "bearer[[:space:]]"
-  "password[[:space:]]*="
-  "passwd[[:space:]]*="
-  "credentials[[:space:]]*:"
-  "aws[_-]?secret"
-  "DATABASE[_-]?URL"
-  "AIRTABLE[_-]?KEY"
-  "SENDGRID[_-]?API"
-  "RENDER[_-]?API"
-  "stripe[_-]?secret"
-  "jwt[_-]?secret"
+  "AKIA[0-9A-Z]{16}"
+  "gh[posur]_[A-Za-z0-9]{20,}"
+  "Bearer[[:space:]]+[A-Za-z0-9._-]{8,}"
+  "://[^/[:space:]:]+:[^/[:space:]@]+@"
 )
+
+SECRET_CONTEXT_KEYWORDS='private[_-]?key|api[_-]?key|secret[_-]?key|access[_-]?key|access[_-]?token|client[_-]?secret|password|passwd|token|secret|credentials|aws[_-]?secret|database[_-]?url|airtable[_-]?key|sendgrid[_-]?api|render[_-]?api|stripe[_-]?secret|jwt[_-]?secret|github[_-]?token'
+
+# Placeholder/valor vazio — nunca é segredo real, mesmo em atribuição
+# literal. Âncorado (^...$) contra o VALOR capturado inteiro, não contra um
+# prefixo — cada alternativa casa o valor INTEIRO (exceto as com sufixo
+# [a-z0-9_-]* explícito, únicas com continuação livre, por já terem um
+# marcador de placeholder inequívoco no início). Nunca usar alternativa
+# vazia solta aqui — "()*"-like construções combinadas com sufixo genérico
+# greedy classificariam QUALQUER valor alfanumérico como placeholder
+# (armadilha real encontrada e corrigida durante os testes desta correção).
+SECRET_PLACEHOLDER_REGEX='^$|^(changeme|change_me|xxx+|placeholder|todo|fixme|exemplo|example|dummy|fake|test|sample)$|^(cole[_-]?aqui|your[_-][a-z_]*key)[a-z0-9_-]*$|^<[^>]*>$|^\*{3,}$|^\.{3,}$'
+
+# Verifica se um VALOR já capturado (sem aspas) é placeholder/vazio.
+# Retorno: 0 = é placeholder (seguro); 1 = não é (segue candidato a segredo).
+_valor_e_placeholder() {
+  local valor="$1"
+  local nocase_ja_ligado=0
+  shopt -q nocasematch && nocase_ja_ligado=1
+  shopt -s nocasematch
+  local resultado=1
+  if [[ "$valor" =~ $SECRET_PLACEHOLDER_REGEX ]]; then
+    resultado=0
+  fi
+  [ $nocase_ja_ligado -eq 0 ] && shopt -u nocasematch
+  return $resultado
+}
+
+# Verifica se UMA linha de conteúdo (sem prefixo "+"/"-" de diff) contém um
+# segredo real. Retorno: 0 = segredo real encontrado; 1 = linha limpa
+# (identificador, header, placeholder, ou valor vazio).
+linha_contem_segredo_real() {
+  local linha="$1"
+  local nocase_ja_ligado=0
+  shopt -q nocasematch && nocase_ja_ligado=1
+  shopt -s nocasematch
+
+  local achou=1
+
+  for pat in "${SECRET_PATTERNS_ABSOLUTOS[@]}"; do
+    if [[ "$linha" =~ $pat ]]; then
+      achou=0
+      break
+    fi
+  done
+
+  # Valor entre aspas: '"'"'chave'"'"' = '"'"'valor'"'"' ou "chave": "valor"
+  if [ $achou -ne 0 ]; then
+    local regex_aspas="['\"]?(${SECRET_CONTEXT_KEYWORDS})['\"]?[[:space:]]*[:=][[:space:]]*['\"]([^'\"]*)['\"]"
+    if [[ "$linha" =~ $regex_aspas ]]; then
+      if ! _valor_e_placeholder "${BASH_REMATCH[2]}"; then
+        achou=0
+      fi
+    fi
+  fi
+
+  # Valor sem aspas até o fim da linha (estilo .env / shell): CHAVE=valor —
+  # exige fim de linha logo após o token, para não capturar o início de uma
+  # chamada de função/expressão (ex.: "apiKey = Foo.getBar().getX('K');"
+  # não termina em token solto, continua com ".getBar()...").
+  if [ $achou -ne 0 ]; then
+    local regex_livre="['\"]?(${SECRET_CONTEXT_KEYWORDS})['\"]?[[:space:]]*[:=][[:space:]]*([A-Za-z0-9_+/=-]+)[[:space:]]*;?[[:space:]]*\$"
+    if [[ "$linha" =~ $regex_livre ]]; then
+      if ! _valor_e_placeholder "${BASH_REMATCH[2]}"; then
+        achou=0
+      fi
+    fi
+  fi
+
+  return $achou
+}
+
+# Escaneia um arquivo staged por segredo real — só conteúdo do índice
+# (git diff --cached), só linhas adicionadas. Imprime achados mascarados
+# (arquivo, linha, categoria — nunca o valor) em stdout.
+# Retorno: 0 = achou segredo; 1 = arquivo limpo.
+arquivo_staged_tem_segredo() {
+  local arquivo="$1"
+  local encontrou=1
+  local linha_num=0
+
+  while IFS= read -r linha_diff; do
+    if [[ "$linha_diff" =~ ^@@[[:space:]]-[0-9]+(,[0-9]+)?[[:space:]]\+([0-9]+) ]]; then
+      linha_num="${BASH_REMATCH[2]}"
+      continue
+    fi
+    if [[ "$linha_diff" == "+++"* ]]; then
+      continue
+    fi
+    if [[ "$linha_diff" == "+"* ]]; then
+      local conteudo="${linha_diff:1}"
+      if linha_contem_segredo_real "$conteudo"; then
+        echo "  Arquivo: $arquivo"
+        echo "  Linha: $linha_num"
+        echo "  Categoria: valor literal em campo sensível (ou formato de credencial reconhecível)"
+        encontrou=0
+      fi
+      linha_num=$((linha_num + 1))
+    fi
+  done < <(git diff --cached --unified=0 -- "$arquivo" 2>/dev/null)
+
+  return $encontrou
+}
 
 # ============================================================================
 # PADRÕES DOCUMENTAIS — Estruturas proibidas
@@ -265,15 +382,30 @@ is_protected_file() {
   return 1  # Não é protegido
 }
 
-# Verifica se arquivo contém segredo
+# Arquivos que definem ou testam os próprios padrões proibidos (segredo,
+# 11º módulo, 9 camadas, autonomia %, ADR silenciosa) — não são violação
+# real, são a fonte canônica de detecção (este arquivo) ou fixtures da
+# suíte de testes do CI de governança. Movida para cá (antes vivia só
+# dentro de .githooks/pre-commit) porque scripts/ci/validate_governance.sh
+# também precisa dela — hook local e CI não podem divergir sobre o que é
+# "fonte do próprio padrão" vs. violação real.
+is_gate_pattern_source_file() {
+  local file="$1"
+  [[ "$file" == .githooks/* ]] || \
+  [[ "$file" == ".magnata/patterns.sh" ]] || \
+  [[ "$file" == "scripts/ci/test_governance.sh" ]] || \
+  [[ "$file" == "scripts/ci/validate_governance.sh" ]]
+}
+
+# Verifica se um arquivo staged contém segredo real — alias mantido por
+# compatibilidade de nome; delega inteiramente a arquivo_staged_tem_segredo
+# (conteúdo do índice, só linhas adicionadas, valor literal não-placeholder).
+# A versão anterior desta função escaneava o arquivo inteiro no working
+# tree por bare match de identificador — substituída (ver cabeçalho da
+# seção PADRÕES DE SEGREDO acima para o porquê).
 has_secret_pattern() {
   local file="$1"
-  for pattern in "${SECRET_PATTERNS[@]}"; do
-    if grep -qi "$pattern" "$file" 2>/dev/null; then
-      return 0  # Contém segredo
-    fi
-  done
-  return 1  # Sem segredo
+  arquivo_staged_tem_segredo "$file" > /dev/null
 }
 
 # Verifica modo Git de arquivo
@@ -294,10 +426,10 @@ is_normative_doc() {
 }
 
 # Exporta funções e variáveis
-export PROTECTED_FILES SECRET_PATTERNS GATE_11_MODULE_PATTERNS
+export PROTECTED_FILES SECRET_PATTERNS_ABSOLUTOS SECRET_CONTEXT_KEYWORDS SECRET_PLACEHOLDER_REGEX GATE_11_MODULE_PATTERNS
 export GATE_9_LAYERS_PATTERNS GATE_AUTONOMY_PERCENT_PATTERNS GATE_ADR_SILENT_PATTERNS
 export REQUIRED_DOCS CLAUDE_HIERARCHY EXECUTABLE_FILES NON_EXECUTABLE_FILES
 export ALLOWED_PATHS SCRATCH_PATTERNS NORMATIVE_DOC_PATTERNS AUTHORIZED_BRANCHES
 export MSG_APPROVED MSG_BLOCKED MSG_WARNING MSG_INFO MSG_ERROR
 export EXIT_APPROVED EXIT_BLOCKED EXIT_WARNING EXIT_ERROR
-export -f is_protected_file has_secret_pattern get_file_mode is_normative_doc is_authorized_branch is_claude_hierarchy_path
+export -f is_protected_file is_gate_pattern_source_file has_secret_pattern _valor_e_placeholder linha_contem_segredo_real arquivo_staged_tem_segredo get_file_mode is_normative_doc is_authorized_branch is_claude_hierarchy_path

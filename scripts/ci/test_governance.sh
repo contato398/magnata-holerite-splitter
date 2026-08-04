@@ -1252,6 +1252,411 @@ test_52_workflow_triggers_present() {
 }
 
 # ============================================================================
+# TESTES 53-68 — Correção do falso positivo no gate de segredos
+# (branch fix/remetente-dp-email-intake, 2026-08-03). O gate anterior
+# bloqueava qualquer ocorrência do NOME "api_key"/"token"/etc. como
+# identificador, header ou nome de propriedade, mesmo sem valor literal
+# de segredo — falso positivo confirmado em apps_script_email_intake.gs
+# (var apiKey, header 'X-API-KEY'). A correção (linha_contem_segredo_real /
+# arquivo_staged_tem_segredo em .magnata/patterns.sh) exige valor literal
+# não-placeholder atribuído a um nome sensível, ou formato inequívoco
+# (chave privada, AKIA..., Bearer com valor, URL com credencial).
+# ============================================================================
+
+# TEST 53: identificador de variável (não valor literal) não bloqueia —
+# caso real que motivou a correção.
+test_53_secret_gate_variable_identifier_allowed() {
+  run_test 53 "apiKey como identificador (getProperty, sem valor literal) não é falso positivo" "PASS"
+
+  cd "$TEST_REPO"
+  cat > MAGNATA_OS_TEST53_apikey_identificador.md <<'EOF'
+var apiKey = PropertiesService.getScriptProperties().getProperty('EMAIL_WEBHOOK_KEY');
+if (!apiKey) { return; }
+EOF
+  git add MAGNATA_OS_TEST53_apikey_identificador.md
+
+  if git commit -m "fix: teste 53 identificador apiKey" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST53_apikey_identificador.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST53_apikey_identificador.md
+}
+
+# TEST 54: header nomeado 'X-API-KEY' com valor vindo de variável (não
+# literal) não bloqueia.
+test_54_secret_gate_header_name_with_variable_value_allowed() {
+  run_test 54 "Header 'X-API-KEY' com valor de variável não é falso positivo" "PASS"
+
+  cd "$TEST_REPO"
+  cat > MAGNATA_OS_TEST54_header_apikey.md <<'EOF'
+headers: { 'X-API-KEY': apiKey },
+EOF
+  git add MAGNATA_OS_TEST54_header_apikey.md
+
+  if git commit -m "fix: teste 54 header X-API-KEY com variavel" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST54_header_apikey.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST54_header_apikey.md
+}
+
+# TEST 55: valor vazio ou placeholder conhecido (COLE_AQUI, changeme,
+# <placeholder>) atribuído a nome sensível não bloqueia.
+test_55_secret_gate_placeholder_values_allowed() {
+  run_test 55 "Valores placeholder/vazio (COLE_AQUI, changeme, vazio) não bloqueiam" "PASS"
+
+  cd "$TEST_REPO"
+  cat > MAGNATA_OS_TEST55_placeholders.md <<'EOF'
+API_KEY = ""
+API_KEY = "COLE_AQUI_A_CHAVE"
+API_KEY = "changeme"
+API_KEY = "<placeholder>"
+EOF
+  git add MAGNATA_OS_TEST55_placeholders.md
+
+  if git commit -m "fix: teste 55 placeholders diversos" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST55_placeholders.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST55_placeholders.md
+}
+
+# TEST 56: valor literal realista atribuído a api_key/password/token/
+# client_secret continua bloqueado (CI gate) — a correção não pode virar
+# allowlist ampla.
+test_56_secret_gate_literal_values_still_blocked() {
+  run_test 56 "Valores literais realistas (api_key/password/token/client_secret) continuam bloqueados (CI)" "FAIL"
+
+  cd "$TEST_REPO"
+  cat > MAGNATA_OS_TEST56_literais_reais.md <<'EOF'
+api_key = "sk_live_9fH3kd82mQpLxZ71vNc"
+EOF
+  git add MAGNATA_OS_TEST56_literais_reais.md
+
+  if bash scripts/ci/validate_governance.sh secrets >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST56_literais_reais.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST56_literais_reais.md
+}
+
+# TEST 57: password literal (hook local, com espaçamento e maiúsculas
+# variados) continua bloqueado.
+test_57_secret_gate_password_literal_blocked_case_and_spacing() {
+  run_test 57 "PASSWORD literal, maiúsculo e sem espaço ao redor do = , continua bloqueado (hook)" "FAIL"
+
+  cd "$TEST_REPO"
+  cat > MAGNATA_OS_TEST57_password.md <<'EOF'
+PASSWORD="SenhaRealAqui123"
+EOF
+  git add MAGNATA_OS_TEST57_password.md
+
+  if git commit -m "fix: teste 57 password literal" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST57_password.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST57_password.md
+}
+
+# TEST 58: client_secret em sintaxe YAML/JSON (dois pontos, não igual)
+# continua bloqueado.
+test_58_secret_gate_yaml_style_blocked() {
+  run_test 58 "client_secret em sintaxe YAML/JSON continua bloqueado" "FAIL"
+
+  cd "$TEST_REPO"
+  cat > MAGNATA_OS_TEST58_yaml.md <<'EOF'
+client_secret: "9f8e7d6c5b4a3f2e1d0c"
+EOF
+  git add MAGNATA_OS_TEST58_yaml.md
+
+  if bash scripts/ci/validate_governance.sh secrets >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST58_yaml.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST58_yaml.md
+}
+
+# TEST 59: Bearer token literal em cabeçalho Authorization continua
+# bloqueado (padrão absoluto, não depende de contexto de atribuição).
+test_59_secret_gate_bearer_literal_blocked() {
+  run_test 59 "Authorization: Bearer <token real> continua bloqueado" "FAIL"
+
+  cd "$TEST_REPO"
+  cat > MAGNATA_OS_TEST59_bearer.md <<'EOF'
+headers = {"Authorization": "Bearer sk_live_9fH3kd82mQpLxZ71vNc"}
+EOF
+  git add MAGNATA_OS_TEST59_bearer.md
+
+  if git commit -m "fix: teste 59 bearer literal" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST59_bearer.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST59_bearer.md
+}
+
+# TEST 60: formato de chave privada PEM continua bloqueado — padrão
+# absoluto, sem precisar de nome de variável por perto.
+test_60_secret_gate_private_key_format_blocked() {
+  run_test 60 "Formato de chave privada PEM continua bloqueado" "FAIL"
+
+  cd "$TEST_REPO"
+  cat > MAGNATA_OS_TEST60_chave.md <<'EOF'
+-----BEGIN RSA PRIVATE KEY-----
+EOF
+  git add MAGNATA_OS_TEST60_chave.md
+
+  if git commit -m "fix: teste 60 chave privada" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST60_chave.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST60_chave.md
+}
+
+# TEST 61: formato reconhecível de AWS Access Key ID (AKIA...) bloqueia
+# mesmo sem nenhum nome de variável sensível na linha — formato absoluto.
+test_61_secret_gate_aws_key_format_blocked() {
+  run_test 61 "Formato de AWS Access Key ID (AKIA...) bloqueia sem contexto de variável" "FAIL"
+
+  cd "$TEST_REPO"
+  cat > MAGNATA_OS_TEST61_aws.md <<'EOF'
+AKIAABCDEFGHIJKLMNOP
+EOF
+  git add MAGNATA_OS_TEST61_aws.md
+
+  if git commit -m "fix: teste 61 aws key format" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST61_aws.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST61_aws.md
+}
+
+# TEST 62: segredo real em arquivo MODIFICADO (não só arquivo novo)
+# continua bloqueado.
+test_62_secret_gate_blocked_in_modified_file() {
+  run_test 62 "Segredo real em arquivo já existente, modificado, continua bloqueado" "FAIL"
+
+  cd "$TEST_REPO"
+  echo "conteudo inicial sem segredo" > MAGNATA_OS_TEST62_modificado.md
+  git add MAGNATA_OS_TEST62_modificado.md
+  git commit -q -m "chore: teste 62 arquivo base sem segredo"
+
+  echo 'token = "abcXYZ789tokenRealModificado456"' >> MAGNATA_OS_TEST62_modificado.md
+  git add MAGNATA_OS_TEST62_modificado.md
+
+  if git commit -m "fix: teste 62 segredo adicionado em modificacao" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST62_modificado.md 2>/dev/null || true
+  git checkout -q MAGNATA_OS_TEST62_modificado.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST62_modificado.md
+}
+
+# TEST 63: segredo alterado só no WORKING TREE (não staged) não bloqueia —
+# o gate lê o índice (git diff --cached), nunca o working tree solto.
+test_63_secret_gate_unstaged_change_not_checked() {
+  run_test 63 "Segredo presente só no working tree (não staged) não é verificado (ainda assim aprova o que ESTÁ staged)" "PASS"
+
+  cd "$TEST_REPO"
+  echo "linha limpa staged" > MAGNATA_OS_TEST63_unstaged.md
+  git add MAGNATA_OS_TEST63_unstaged.md
+  # Segredo adicionado só no working tree, DEPOIS do stage — nunca chega
+  # ao índice, então nunca deveria ser considerado por este commit.
+  echo 'api_key = "valorRealNuncaStaged123"' >> MAGNATA_OS_TEST63_unstaged.md
+
+  if git commit -m "fix: teste 63 segredo so no working tree" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST63_unstaged.md 2>/dev/null || true
+  git checkout -q MAGNATA_OS_TEST63_unstaged.md 2>/dev/null || rm -f MAGNATA_OS_TEST63_unstaged.md
+  rm -f MAGNATA_OS_TEST63_unstaged.md
+}
+
+# TEST 64: segredo removido do arquivo, mas ainda presente numa linha
+# NÃO alterada (contexto) de uma mudança maior no mesmo arquivo, não
+# bloqueia — só linha adicionada conta.
+test_64_secret_gate_unchanged_line_not_checked() {
+  run_test 64 "Segredo já existente numa linha não alterada (fora do escopo da mudança) não bloqueia" "PASS"
+
+  cd "$TEST_REPO"
+  printf 'linha 1 normal\napi_key = "valorAntigoJaExistenteReal123"\nlinha 3 normal\n' > MAGNATA_OS_TEST64_contexto.md
+  git add MAGNATA_OS_TEST64_contexto.md
+  # --no-verify aqui: este commit de setup estabelece histórico anterior
+  # (simulando um segredo já commitado antes desta correção existir) — não
+  # é o commit sob teste. Sem --no-verify o próprio hook bloquearia este
+  # setup (corretamente, já que introduz o segredo pela primeira vez),
+  # nunca chegando ao commit real que o teste quer exercitar.
+  git commit -q -m "chore: teste 64 base com segredo antigo (setup, não é o commit sob teste)" --no-verify
+
+  # Mudança real: só adiciona uma linha nova, sem tocar a linha do segredo.
+  printf 'linha 1 normal\napi_key = "valorAntigoJaExistenteReal123"\nlinha 3 normal\nlinha 4 nova sem segredo\n' > MAGNATA_OS_TEST64_contexto.md
+  git add MAGNATA_OS_TEST64_contexto.md
+
+  if git commit -m "fix: teste 64 mudanca nao toca linha do segredo antigo" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST64_contexto.md 2>/dev/null || true
+  git checkout -q MAGNATA_OS_TEST64_contexto.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST64_contexto.md
+}
+
+# TEST 65: arquivo com espaço no nome — segredo real dentro dele ainda é
+# detectado e bloqueado corretamente (hook não quebra nem ignora por causa
+# do espaço).
+test_65_secret_gate_filename_with_space_still_scanned() {
+  run_test 65 "Segredo em arquivo com espaço no nome é detectado (hook)" "FAIL"
+
+  cd "$TEST_REPO"
+  cat > "MAGNATA_OS_TEST65 arquivo com espaco.md" <<'EOF'
+API_KEY=valorRealComEspacoNoNome123
+EOF
+  git add "MAGNATA_OS_TEST65 arquivo com espaco.md"
+
+  if git commit -m "fix: teste 65 espaco no nome do arquivo" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD "MAGNATA_OS_TEST65 arquivo com espaco.md" 2>/dev/null || true
+  rm -f "MAGNATA_OS_TEST65 arquivo com espaco.md"
+}
+
+# TEST 66: arquivo binário staged não trava nem falsifica o hook — deve
+# passar pela Validação 4 sem erro (binário não tem "linha" de texto para
+# casar com o padrão).
+test_66_secret_gate_binary_file_does_not_crash() {
+  run_test 66 "Arquivo binário staged não trava o hook nem gera falso positivo" "PASS"
+
+  cd "$TEST_REPO"
+  # Determinístico, não /dev/urandom: precisa garantir byte NUL presente
+  # para o heurístico de binário do próprio git (e do "file") sempre
+  # classificar como binário de forma confiável — bytes aleatórios às
+  # vezes não contêm NUL nos primeiros bytes, o que faz git tratar como
+  # texto de uma linha só (flakiness real observada durante os testes
+  # desta correção: conteúdo verdadeiramente aleatório passava como texto
+  # em parte das execuções).
+  dd if=/dev/zero of=MAGNATA_OS_TEST66_binario.md bs=128 count=1 >/dev/null 2>&1
+  git add MAGNATA_OS_TEST66_binario.md
+
+  if git commit -m "fix: teste 66 arquivo binario" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST66_binario.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST66_binario.md
+}
+
+# TEST 67: múltiplos segredos na mesma alteração — todos precisam ser
+# reportados, e o commit precisa continuar bloqueado (não para no
+# primeiro achado).
+test_67_secret_gate_multiple_secrets_reported() {
+  run_test 67 "Múltiplos segredos na mesma alteração continuam bloqueando (hook)" "FAIL"
+
+  cd "$TEST_REPO"
+  cat > MAGNATA_OS_TEST67_multi.md <<'EOF'
+API_KEY=valorRealUm123456
+DB_PASSWORD=valorRealDois789012
+EOF
+  git add MAGNATA_OS_TEST67_multi.md
+
+  local saida
+  saida=$(git commit -m "fix: teste 67 multiplos segredos" 2>&1) && result="PASS" || result="FAIL"
+  # Ambos os achados precisam aparecer na saída do hook, não só o primeiro.
+  if [[ "$result" == "FAIL" ]] && echo "$saida" | grep -q "MAGNATA_OS_TEST67_multi.md" ; then
+    test_result "FAIL"
+  else
+    test_result "PASS"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST67_multi.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST67_multi.md
+}
+
+# TEST 68: hook local e validador CI concordam sobre o MESMO caso
+# (identificador apiKey permitido) — mesma lógica compartilhada
+# (linha_contem_segredo_real em .magnata/patterns.sh), não implementações
+# paralelas divergentes.
+test_68_secret_gate_hook_and_ci_agree() {
+  run_test 68 "Hook local e validador CI concordam (apiKey identificador permitido, segredo literal bloqueado)" "PASS"
+
+  cd "$TEST_REPO"
+  cat > MAGNATA_OS_TEST68_concordancia.md <<'EOF'
+var apiKey = PropertiesService.getScriptProperties().getProperty('X');
+EOF
+  git add MAGNATA_OS_TEST68_concordancia.md
+
+  local result="PASS"
+  # CI: deve aprovar.
+  if ! bash scripts/ci/validate_governance.sh secrets >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+  # Hook: commit real deve passar.
+  if ! git commit -m "fix: teste 68 concordancia hook e ci (permitido)" >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST68_concordancia.md 2>/dev/null || true
+  git checkout -q MAGNATA_OS_TEST68_concordancia.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST68_concordancia.md
+
+  # Agora o caso bloqueado: os dois precisam concordar em bloquear.
+  cat > MAGNATA_OS_TEST68B_concordancia_bloqueado.md <<'EOF'
+api_key = "sk_live_9fH3kd82mQpLxZ71vNcConcordancia"
+EOF
+  git add MAGNATA_OS_TEST68B_concordancia_bloqueado.md
+
+  if bash scripts/ci/validate_governance.sh secrets >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+  if git commit -m "fix: teste 68 concordancia hook e ci (bloqueado)" >/dev/null 2>&1; then
+    result="FAIL"
+  fi
+
+  git reset -q HEAD MAGNATA_OS_TEST68B_concordancia_bloqueado.md 2>/dev/null || true
+  rm -f MAGNATA_OS_TEST68B_concordancia_bloqueado.md
+
+  test_result "$result"
+}
+
+# ============================================================================
 # MAIN EXECUTION
 # ============================================================================
 
@@ -1323,6 +1728,22 @@ main() {
   test_50_gate_branch_incomplete_spoof_main_blocked || true
   test_51_gate_branch_arbitrary_push_still_blocked || true
   test_52_workflow_triggers_present || true
+  test_53_secret_gate_variable_identifier_allowed || true
+  test_54_secret_gate_header_name_with_variable_value_allowed || true
+  test_55_secret_gate_placeholder_values_allowed || true
+  test_56_secret_gate_literal_values_still_blocked || true
+  test_57_secret_gate_password_literal_blocked_case_and_spacing || true
+  test_58_secret_gate_yaml_style_blocked || true
+  test_59_secret_gate_bearer_literal_blocked || true
+  test_60_secret_gate_private_key_format_blocked || true
+  test_61_secret_gate_aws_key_format_blocked || true
+  test_62_secret_gate_blocked_in_modified_file || true
+  test_63_secret_gate_unstaged_change_not_checked || true
+  test_64_secret_gate_unchanged_line_not_checked || true
+  test_65_secret_gate_filename_with_space_still_scanned || true
+  test_66_secret_gate_binary_file_does_not_crash || true
+  test_67_secret_gate_multiple_secrets_reported || true
+  test_68_secret_gate_hook_and_ci_agree || true
 
   # Report
   echo ""

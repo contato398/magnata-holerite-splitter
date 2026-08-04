@@ -219,18 +219,40 @@ gate_protected_frontend() {
 # ============================================================================
 
 gate_secrets() {
-  local changed=$(get_changed_diff)
+  # Mesma lógica do hook local (linha_contem_segredo_real, fonte única em
+  # .magnata/patterns.sh): valor literal real, não bare match de
+  # identificador/header sensível. Exclui arquivo-fonte dos próprios
+  # padrões (is_protected... não, is_gate_pattern_source_file — os arrays
+  # de padrão citam literalmente as palavras que eles mesmos detectam) e
+  # considera só linhas ADICIONADAS de cada arquivo alterado.
+  local files
+  files=$(get_changed_files)
+  local encontrou=0
 
-  # Excluir linhas que são definições de padrões (não são segredos reais)
-  local filtered=$(echo "$changed" | grep -v "SECRET_PATTERNS=\|GATE_.*_PATTERNS=\|  \"" | grep "^[+-]")
-
-  for pattern in "${SECRET_PATTERNS[@]}"; do
-    if echo "$filtered" | grep -Eqi -- "$pattern" 2>/dev/null; then
-      echo -e "${RED}${MSG_BLOCKED}: Padrão de segredo detectado${NC}"
-      echo "  Padrão: $pattern"
-      return $EXIT_BLOCKED
+  while IFS= read -r file; do
+    [[ -z "$file" ]] && continue
+    if is_gate_pattern_source_file "$file"; then
+      continue
     fi
-  done
+
+    local diff_arquivo
+    diff_arquivo=$(get_changed_file_diff "$file")
+
+    while IFS= read -r linha; do
+      [[ "$linha" == "+++"* ]] && continue
+      [[ "$linha" == "+"* ]] || continue
+      local conteudo="${linha:1}"
+      if linha_contem_segredo_real "$conteudo"; then
+        echo "  Arquivo: $file"
+        encontrou=1
+      fi
+    done <<< "$diff_arquivo"
+  done <<< "$files"
+
+  if [ $encontrou -eq 1 ]; then
+    echo -e "${RED}${MSG_BLOCKED}: Padrão de segredo detectado (ver arquivo(s) acima)${NC}"
+    return $EXIT_BLOCKED
+  fi
 
   echo -e "${GREEN}${MSG_APPROVED}: Nenhum segredo detectado${NC}"
   return $EXIT_APPROVED
