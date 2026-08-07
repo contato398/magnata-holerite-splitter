@@ -317,6 +317,74 @@ def test_manifesto_valido_quantidade_variavel(tmp_path):
     assert 'RelatoriodeLiquidos_Fake.pdf' in relatorios
 
 
+def test_manifesto_generaliza_para_outra_competencia_sem_hardcode(tmp_path):
+    """Achado do Ultrareview, corrigido: a pasta raiz e o nome do
+    manifesto de holerites eram hard-coded para 'julho_2026'. Este teste
+    usa uma competência DIFERENTE, com pasta e nome de arquivo diferentes,
+    para provar que nenhuma alteração de código seria necessária."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w') as z:
+        z.writestr('documentos_agosto_2026_organizados/indice_holerites_agosto_2026.json',
+                    '[{"page": 1, "code": "1", "name": "FAKE AGOSTO", '
+                    '"client": "9 - CLIENTE FAKE AGOSTO", "filename": "h1.pdf", '
+                    '"cpf_mascarado": "***.***.001-00"}]')
+        z.writestr('documentos_agosto_2026_organizados/indice_extratos_por_cliente.json', '[]')
+        z.writestr('documentos_agosto_2026_organizados/holerites_por_cliente/9_FAKE/h1.pdf',
+                   PDF_SINTETICO_VALIDO)
+    caminho = tmp_path / 'pacote_agosto.zip'
+    caminho.write_bytes(buf.getvalue())
+
+    itens = pacote.ler_manifesto_holerites(str(caminho))
+    assert len(itens) == 1
+    assert itens[0].nome_manifesto == 'FAKE AGOSTO'
+    pdf = pacote.ler_pdf_holerite_bytes(str(caminho), 'h1.pdf')
+    assert pdf == PDF_SINTETICO_VALIDO
+
+
+def test_manifesto_ambiguo_dois_candidatos_nunca_escolhe_sozinho(tmp_path):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w') as z:
+        z.writestr('pasta_a/indice_holerites_julho_2026.json', '[]')
+        z.writestr('pasta_b/indice_holerites_agosto_2026.json', '[]')
+    caminho = tmp_path / 'pacote_ambiguo.zip'
+    caminho.write_bytes(buf.getvalue())
+    with pytest.raises(ValueError):
+        pacote.ler_manifesto_holerites(str(caminho))
+
+
+def test_entrada_zip_acima_do_limite_nao_e_lida(tmp_path):
+    """Defesa contra zip bomb: `file_size` declarado acima do teto nunca
+    é lido, mesmo que a leitura em si fosse pequena de verdade. Unitário
+    direto sobre `_ler_entrada_com_limite`, que é o ponto exato da defesa
+    — mutar `ZipInfo.file_size` depois de escrito no zip não persiste no
+    arquivo em disco, então testar via reescrita de zip seria enganoso."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w') as z:
+        z.writestr('pequeno.pdf', PDF_SINTETICO_VALIDO)
+    caminho = tmp_path / 'pacote.zip'
+    caminho.write_bytes(buf.getvalue())
+
+    with zipfile.ZipFile(caminho) as z:
+        info = z.getinfo('pequeno.pdf')
+        info.file_size = 100 * 1024 * 1024  # declarado 100 MB, > teto de 50 MB
+        resultado = pacote._ler_entrada_com_limite(z, info)
+    assert resultado is None
+
+
+def test_pdf_corrompido_estrutura_invalida_nao_derruba_lote():
+    """Achado do Ultrareview, corrigido: assinatura/tamanho válidos mas
+    estrutura interna do PDF corrompida fazia pdfplumber lançar exceção
+    sem tratamento, derrubando o lote inteiro. Agora vira `invalid` só
+    deste item."""
+    pdf_corrompido = b'%PDF-1.4\n' + b'\x00' * 500  # assinatura ok, conteudo lixo
+    candidatos = [CandidatoFuncionario('recFUNC700', '888.888.888-88', 'CORROMPIDO SINTETICO')]
+    item = ItemManifestoHolerite('holerite:700', '1', 'Corrompido Sintetico', '***.***.888-88', 'x.pdf', 1)
+    r = processar_holerite(item, pdf_corrompido, CONFIG, candidatos, set())
+    assert r.classificacao == ClassificacaoCorrespondencia.INVALID
+    assert r.motivo == MotivoSanitizado.PDF_ILEGIVEL
+    assert r.pronto_para_gravacao is False
+
+
 def test_manifesto_invalido_json_malformado(tmp_path):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w') as z:
@@ -333,6 +401,9 @@ def test_relatorios_gerais_corrige_mojibake_cp437(tmp_path):
     'ExtratoServi├ºo'). O nome correto precisa ser recuperado."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w') as z:
+        # raiz do pacote é derivada do manifesto de holerites — precisa
+        # existir mesmo neste teste focado só no relatório geral.
+        z.writestr('documentos_julho_2026_organizados/indice_holerites_julho_2026.json', '[]')
         # zipfile grava com flag UTF-8 automaticamente se detectar não-ASCII
         # no nome -- para reproduzir o caso real (flag_bits sem 0x800),
         # gravamos os bytes UTF-8 manualmente via ZipInfo sem a flag.

@@ -68,7 +68,20 @@ def processar_holerite(
     if validacao.valido:
         # extração em memória, só para resolver func_id — descartada ao
         # sair deste escopo de função, nunca propagada adiante.
-        texto = _extrair_texto_pdf(pdf_bytes)
+        # Achado do Ultrareview: um PDF com assinatura/tamanho válidos mas
+        # estrutura interna corrompida fazia pdfplumber lançar exceção
+        # sem tratamento, derrubando o lote inteiro — contraria "continuar
+        # os casos válidos quando um caso isolado falhar". Corrigido:
+        # falha de leitura vira classificação INVALID só deste item, o
+        # lote segue para os demais.
+        try:
+            texto = _extrair_texto_pdf(pdf_bytes)
+        except Exception:
+            from .contratos import ClassificacaoCorrespondencia, MotivoSanitizado
+            return ResultadoItem(
+                item.manifesto_item_id, TipoDocumental.HOLERITE,
+                ClassificacaoCorrespondencia.INVALID, False, None, None, None,
+                MotivoSanitizado.PDF_ILEGIVEL)
         cpf_extraido = dominio.extrair_cpf_de_texto(texto)
         del texto
 

@@ -35,6 +35,7 @@ class MotivoSanitizado(str, Enum):
     PDF_SEM_ASSINATURA = 'pdf_sem_assinatura'
     PDF_VAZIO = 'pdf_vazio'
     PDF_MIME_INESPERADO = 'pdf_mime_inesperado'
+    PDF_ILEGIVEL = 'pdf_ilegivel'  # assinatura/tamanho ok, mas conteúdo não pôde ser lido
     ARQUIVO_AUSENTE_NO_PACOTE = 'arquivo_ausente_no_pacote'
     CAMPO_MANIFESTO_AUSENTE = 'campo_manifesto_ausente'
     VERSAO_ANTIGA_BLOQUEADA = 'versao_antiga_bloqueada'
