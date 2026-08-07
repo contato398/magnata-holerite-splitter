@@ -213,3 +213,74 @@ equivalente), nunca "pronta com ressalva" apresentada como sucesso.
   texto.
 - Nunca ocultar falha encontrada, mesmo que não tenha sido perguntada.
 - Nunca afirmar sucesso sem ter testado.
+
+## 12. Autonomia operacional ampliada
+
+Esta seção é **aditiva** — não substitui, não enfraquece e não
+reinterpreta nenhuma regra de §1 a §11. Em qualquer conflito de leitura,
+as seções anteriores prevalecem.
+
+**Princípio:** uma vez que objetivo, escopo, limites e critérios de
+aceite de uma fase estejam aprovados, o trabalho técnico local,
+reversível e coberto por essa aprovação não precisa de confirmação a
+cada micro-passo. A autonomia vale **entre gates**, nunca **nos gates**.
+
+- **A. Autonomia entre gates.** Dentro de uma fase já aprovada, Claude
+  Code/CoWork/agentes podem inspecionar, planejar localmente,
+  implementar, testar, analisar, corrigir, retestar, revisar e
+  documentar sem retorno humano entre essas operações — desde que
+  nenhuma delas cruze um gate da lista do item I abaixo.
+- **B. Ciclo autônomo de referência:** inspecionar → planejar
+  localmente → implementar → testar → analisar → corrigir → retestar →
+  revisar → documentar → consolidar. Sem pausa humana entre essas
+  etapas quando não houver gate real no meio.
+- **C. Autonomia de ferramentas.** O agente escolhe autonomamente, entre
+  o que está de fato disponível na sessão (Claude Code, CoWork,
+  Browser, UltraPlan, Ultrareview, agentes/subagentes, skills, MCP,
+  shell, Git nas operações já autorizadas, testes, APIs, conectores,
+  ferramentas documentais e de dados), qual usar para o passo em
+  questão. **Nunca fingir capacidade inexistente** — antes de declarar
+  bloqueio, verificar alternativas reais disponíveis primeiro.
+- **D. Autonomia de orquestração.** Pode criar e coordenar
+  agentes/subagentes especializados quando trouxer ganho real, evitando
+  edição concorrente, trabalho duplicado ou decisão funcional paralela
+  não coordenada. Quem orquestra consolida tudo numa única entrega.
+- **E. Recuperação autônoma.** Falha local não encerra a fase sozinha:
+  diagnosticar → tentar correção segura → tentar alternativa → isolar o
+  caso → continuar o que for independente → só então escalar ao humano,
+  se realmente necessário.
+- **F. Automação da engenharia.** Verificação manual repetitiva é
+  candidata a virar capacidade permanente (ex.: conceitos como `magnata
+  gate`, `magnata dry-run`, `magnata review`, `magnata verify-prod`,
+  `magnata release-check`) — propor e especificar antes de implementar,
+  nunca implementar plataforma nova "de carona" numa fase que não pediu
+  isso.
+- **G. Não usar o humano como API.** Evitar pedir ao humano para copiar
+  dado entre agentes, escolher ferramenta técnica de rotina, mandar
+  rodar teste de novo, repetir ID já descoberto, autorizar arquivo por
+  arquivo, ou transportar artefato manualmente quando já existe
+  alternativa automatizada.
+- **H. Autorização por fase.** Preferir "autorizo a conclusão integral
+  da fase X dentro deste escopo" a autorizações por micro-ação — sem
+  que isso amplie o escopo aprovado em silêncio (§8, "nunca expandir
+  escopo em silêncio" continua valendo integralmente).
+- **I. Gates humanos que permanecem — nunca dispensados por esta
+  seção:** mudança funcional material; mudança de escopo; risco novo
+  relevante; operação destrutiva; produção; migration/schema relevante;
+  escrita externa não já abrangida pela autorização da fase;
+  commit/push/PR/merge/deploy sempre que §9 os exigir; decisão
+  empresarial ambígua; publicação. **Isto inclui, sem exceção, tudo que
+  §6, §7 e §9 já proíbem** — esta seção nunca autoriza o que essas
+  seções vedam.
+- **J. Princípio final:** máxima autonomia entre gates, mínima
+  intervenção humana no que é técnico e local, automação do produto, da
+  engenharia e da própria automação — sempre dentro dos limites de §1 a
+  §11.
+
+**Compatibilidade com o fluxo de tarefas complexas:** esta seção não
+substitui o fluxo já em uso para tarefas complexas (definição de
+escopo → UltraPlan quando a complexidade justificar → revisão →
+aprovação humana da implementação → execução → testes/gates →
+Ultrareview → aprovação humana nos gates de Git/produção aplicáveis). A
+mudança é só onde a fronteira de autonomia fica: **entre** os gates
+listados nesse fluxo, não **nos** gates em si.
