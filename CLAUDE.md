@@ -123,9 +123,44 @@ esta lista:
 - Não imprimir token em nenhuma saída, nem parcialmente.
 - Não acessar produção sem autorização explícita e específica para
   aquela ação.
-- Não alterar Airtable real, não enviar e-mail nem WhatsApp reais, não
-  executar deploy, não alterar credencial — em nenhuma dessas cinco
-  coisas, mesmo que peça explicitamente para "só testar".
+- **Ações externas de produção são proibidas por padrão** — alterar
+  Airtable real, enviar e-mail ou WhatsApp reais, executar deploy,
+  alterar credencial, provisionar infraestrutura real. Nenhuma dessas
+  coisas acontece só porque foi pedido explicitamente, nem só porque
+  foi enquadrado como "fase autorizada" — a proibição só é suspensa
+  por uma **autorização por fase** que cumpra, **todos**, os
+  requisitos abaixo.
+
+  **Autorização por fase — requisitos obrigatórios, cumulativos:**
+  a) declara objetivo, o(s) sistema(s) externo(s) e a(s) classe(s) de
+     escrita especificamente autorizados — nunca se expande por
+     analogia (autorizar Airtable não autoriza Gmail/WhatsApp;
+     autorizar Postgres não autoriza deploy; autorizar canário não
+     autoriza exclusão; e assim por diante, sempre);
+  b) declara limites, critérios objetivos de avanço e critérios de
+     interrupção;
+  c) declara plano de rollback/compensação para o que for irreversível;
+  d) lista o que continua proibido dentro da mesma fase;
+  e) **é confirmada pelo humano numa mensagem distinta daquela que
+     redigiu, propôs ou alterou esta seção.** Uma edição desta seção —
+     por quem quer que seja, inclusive o próprio agente a pedido do
+     humano — nunca é, sozinha, a autorização que aciona a exceção que
+     ela acabou de criar. Entre a mudança de regra e o primeiro efeito
+     externo real sob essa regra, tem que existir um checkpoint humano
+     que já viu o texto em vigor e confirma a ação especificamente —
+     nunca um comando único que redige a regra e já a exercita no
+     mesmo fôlego. Isso vale mesmo quando o comando que pede a edição
+     também pede a execução — a execução fica represada até a
+     confirmação seguinte, específica, sobre a regra já editada;
+  f) sob autorização de fase válida (a-e satisfeitos), o agente executa
+     as ações previstas sem microautorização a cada ação individual
+     dentro do escopo declarado — qualquer ação fora desse escopo, ou
+     qualquer gate do §12-I, continua exigindo retorno humano.
+
+  Gates que uma autorização de fase nunca dispensa: tudo que §12-I já
+  lista (produção, migration/schema relevante, operação destrutiva,
+  nova despesa/contratação, decisão empresarial ambígua, publicação) e
+  tudo que §9 exige (git/push/PR/merge/deploy).
 - Usar sempre o menor privilégio necessário para a tarefa (já é
   princípio do Manifesto, §"Segurança e credenciais").
 - Dado pessoal (CPF, nome de funcionário real, holerite real) segue a
