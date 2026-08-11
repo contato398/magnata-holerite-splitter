@@ -30,6 +30,7 @@ from magnata_os.documental.importacao_lote.contratos import (
     ClassificacaoCorrespondencia,
     ConfiguracaoExecucao,
     MotivoSanitizado,
+    ResultadoCompetencia,
     ResultadoItem,
     TipoDocumental,
 )
@@ -49,7 +50,12 @@ from magnata_os.documental.importacao_lote.dominio_versionamento import (
     determinar_vigente,
     verificar_nova_versao,
 )
-from magnata_os.documental.importacao_lote.escritor import escrever_item
+from magnata_os.documental.importacao_lote.escritor import (
+    DadosEscritaItem,
+    escrever_item,
+    executar_escrita_do_lote,
+)
+from magnata_os.documental.importacao_lote.orquestrador import RelatorioLote
 from magnata_os.documental.importacao_lote.repositorio_execucao import (
     RepositorioEventosItemExecucaoEmMemoria,
     RepositorioItensExecucaoEmMemoria,
@@ -148,9 +154,17 @@ class _Ambiente:
             self.versionamento, self.airtable,
         )
 
+    def executar_lote(self, relatorio, obter_dados_escrita, config, lote_id):
+        return executar_escrita_do_lote(
+            relatorio, obter_dados_escrita, config, lote_id,
+            self.documentos, self.historico, self.itens, self.eventos_item,
+            self.versionamento, self.airtable,
+        )
+
 
 def _resultado_exact(
     manifesto_item_id='holerite:1', entidade_id='funXYZ', tipo=TipoDocumental.HOLERITE,
+    resultado_competencia=ResultadoCompetencia.CONFIRMADA,
 ) -> ResultadoItem:
     return ResultadoItem(
         manifesto_item_id=manifesto_item_id,
@@ -162,6 +176,9 @@ def _resultado_exact(
         identidade_documental_truncada='a' * 12,
         motivo=MotivoSanitizado.OK,
         criterio_usado='cpf_exato',
+        resultado_competencia=resultado_competencia,
+        competencia_ano_mes_extraido=(2026, 7) if resultado_competencia == ResultadoCompetencia.CONFIRMADA else None,
+        competencia_estrategia='mm_aaaa_numerico' if resultado_competencia == ResultadoCompetencia.CONFIRMADA else None,
     )
 
 
@@ -218,6 +235,216 @@ def test_item_nao_exact_nunca_e_processado_automaticamente():
     assert resultado.situacao == SituacaoItemExecucao.IGNORADO_NAO_EXACT
     assert amb.airtable.chamadas_criar == 0
     assert amb.airtable.chamadas_anexar == 0
+
+
+# ============================================================================
+# 0.5. Defesa obrigatória (Macro 5): competência confirmada e igual à
+# esperada — independente da entidade estar corretamente resolvida
+# (EXACT + pronto_para_gravacao=True não bastam sozinhos). Bloqueia ANTES
+# de qualquer escrita, nenhum ItemExecucao chega a ser criado.
+# ============================================================================
+
+@pytest.mark.parametrize('resultado_competencia', [
+    ResultadoCompetencia.DIVERGENTE, ResultadoCompetencia.AMBIGUA,
+    ResultadoCompetencia.NAO_EXTRAIVEL, None,
+])
+def test_competencia_nao_confirmada_bloqueia_escrita_mesmo_com_exact_e_pronto(resultado_competencia):
+    amb = _Ambiente()
+    resultado_item = _resultado_exact(resultado_competencia=resultado_competencia)
+    # Defesa em profundidade: mesmo que um chamador (bug futuro) tenha
+    # marcado pronto_para_gravacao=True sem competência confirmada, o
+    # escritor nunca confia só nisso.
+    assert resultado_item.pronto_para_gravacao is True
+    assert resultado_item.classificacao == ClassificacaoCorrespondencia.EXACT
+
+    resultado = amb.escrever(resultado_item, _pdf_valido(), _config(), 'lote-1')
+    assert resultado.processado is False
+    assert resultado.situacao == SituacaoItemExecucao.IGNORADO_NAO_EXACT
+    assert resultado.item_importacao_id is None
+    assert amb.airtable.chamadas_criar == 0
+    assert amb.airtable.chamadas_anexar == 0
+    assert amb.itens.listar_por_lote('lote-1') == []
+    assert amb.eventos_item.listar_por_lote('lote-1') == []
+
+
+def test_competencia_confirmada_e_pre_requisito_necessario_mas_nao_suficiente_sozinho():
+    """Só CONFIRMADA passa do gate 0.5 -- o resto do fluxo (create/upload/
+    confirmação) continua exigido normalmente depois."""
+    amb = _Ambiente()
+    resultado = amb.escrever(_resultado_exact(), _pdf_valido(), _config(), 'lote-1')
+    assert resultado.situacao == SituacaoItemExecucao.SUCESSO
+    assert amb.airtable.chamadas_criar == 1
+
+
+# ── 0.5b: o gate NUNCA confia só no enum CONFIRMADA -- reconfirma por
+# valor a partir de competencia_ano_mes_extraido/competencia_estrategia,
+# mesmo quando resultado_competencia diz CONFIRMADA (revisão adversarial:
+# "status CONFIRMADA mas valores inconsistentes"). Cada teste começa de
+# um resultado com CONFIRMADA e corrompe só UM campo de evidência.
+
+def test_competencia_confirmada_mas_ano_mes_extraido_ausente_bloqueia():
+    amb = _Ambiente()
+    base = _resultado_exact()
+    assert base.resultado_competencia == ResultadoCompetencia.CONFIRMADA
+    resultado_item = dataclasses.replace(base, competencia_ano_mes_extraido=None)
+
+    resultado = amb.escrever(resultado_item, _pdf_valido(), _config(), 'lote-1')
+    assert resultado.processado is False
+    assert resultado.situacao == SituacaoItemExecucao.IGNORADO_NAO_EXACT
+    assert amb.airtable.chamadas_criar == 0
+
+
+def test_competencia_confirmada_mas_estrategia_ausente_bloqueia():
+    amb = _Ambiente()
+    base = _resultado_exact()
+    resultado_item = dataclasses.replace(base, competencia_estrategia=None)
+
+    resultado = amb.escrever(resultado_item, _pdf_valido(), _config(), 'lote-1')
+    assert resultado.processado is False
+    assert resultado.situacao == SituacaoItemExecucao.IGNORADO_NAO_EXACT
+    assert amb.airtable.chamadas_criar == 0
+
+
+def test_competencia_confirmada_mas_estrategia_invalida_bloqueia():
+    """Código de estratégia que este módulo nunca produz -- nunca aceito
+    mesmo com o resto consistente."""
+    amb = _Ambiente()
+    base = _resultado_exact()
+    resultado_item = dataclasses.replace(base, competencia_estrategia='estrategia_nao_reconhecida')
+
+    resultado = amb.escrever(resultado_item, _pdf_valido(), _config(), 'lote-1')
+    assert resultado.processado is False
+    assert resultado.situacao == SituacaoItemExecucao.IGNORADO_NAO_EXACT
+    assert amb.airtable.chamadas_criar == 0
+
+
+def test_competencia_confirmada_mas_ano_mes_extraido_diverge_do_config_bloqueia():
+    """O caso mais adversarial: resultado_competencia diz CONFIRMADA, mas
+    o valor extraído de fato não bate com `config.ano`/`config.mes` --
+    simula um enum calculado de forma inconsistente por outro caminho. O
+    gate reconfirma por valor e recusa mesmo assim."""
+    amb = _Ambiente()
+    base = _resultado_exact()
+    resultado_item = dataclasses.replace(base, competencia_ano_mes_extraido=(2026, 8))
+
+    config = _config(ano=2026, mes=7)
+    resultado = amb.escrever(resultado_item, _pdf_valido(), config, 'lote-1')
+    assert resultado.processado is False
+    assert resultado.situacao == SituacaoItemExecucao.IGNORADO_NAO_EXACT
+    assert amb.airtable.chamadas_criar == 0
+
+
+def test_competencia_esperada_ausente_do_config_bloqueia_mesmo_com_confirmada():
+    """Competência esperada implausível (mês/ano fora de faixa) na
+    ConfiguracaoExecucao nunca é aceita como base de confirmação, mesmo
+    que o item diga CONFIRMADA."""
+    amb = _Ambiente()
+    resultado_item = _resultado_exact()
+    config_invalida = _config(ano=2026, mes=0)
+
+    resultado = amb.escrever(resultado_item, _pdf_valido(), config_invalida, 'lote-1')
+    assert resultado.processado is False
+    assert resultado.situacao == SituacaoItemExecucao.IGNORADO_NAO_EXACT
+    assert amb.airtable.chamadas_criar == 0
+
+
+# ============================================================================
+# executar_escrita_do_lote — único ponto sancionado para escrever um LOTE
+# (Macro 5, requisito "relatório agregado completo antes de qualquer
+# escrita"). O gate é estrutural: só aceita um RelatorioLote já
+# construído (todo o manifesto já passou por processar_holerite/
+# processar_extrato) -- nunca escreve um item avulso fora dele.
+# ============================================================================
+
+def test_executar_escrita_do_lote_so_grava_itens_elegiveis_e_preserva_ordem():
+    amb = _Ambiente()
+    config = _config()
+
+    item_pronto = _resultado_exact(manifesto_item_id='holerite:1', entidade_id='fun1')
+    # Situação REAL que dominio.classificar_item produziria para um item
+    # com entidade resolvida mas competência divergente -- diferente de
+    # _resultado_exact() (que força pronto_para_gravacao=True para os
+    # testes de defesa em profundidade acima).
+    item_bloqueado_por_competencia = ResultadoItem(
+        manifesto_item_id='holerite:2', tipo_documental=TipoDocumental.HOLERITE,
+        classificacao=ClassificacaoCorrespondencia.EXACT, pronto_para_gravacao=False,
+        entidade_resolvida='fun2', identidade_documental='b' * 64,
+        identidade_documental_truncada='b' * 12, motivo=MotivoSanitizado.COMPETENCIA_DIVERGENTE,
+        criterio_usado='cpf_exato', resultado_competencia=ResultadoCompetencia.DIVERGENTE,
+        competencia_ano_mes_extraido=(2026, 6), competencia_estrategia='mm_aaaa_numerico',
+    )
+    item_nao_encontrado = _resultado_nao_exact()
+
+    relatorio = RelatorioLote(
+        itens=[item_pronto, item_bloqueado_por_competencia, item_nao_encontrado],
+        relatorios_gerais_excluidos=[],
+    )
+    dados_por_item = {
+        'holerite:1': DadosEscritaItem(_pdf_valido(), 'arq1.pdf', 'ref1'),
+        'holerite:2': DadosEscritaItem(_pdf_valido(b'-v2'), 'arq2.pdf', 'ref2'),
+        'holerite:99': DadosEscritaItem(_pdf_valido(b'-v99'), 'arq99.pdf', 'ref99'),
+    }
+
+    resultados = amb.executar_lote(
+        relatorio, lambda item: dados_por_item.get(item.manifesto_item_id), config, 'lote-1')
+
+    assert len(resultados) == 3
+    # ordem do relatório preservada
+    assert [r.manifesto_item_id for r in resultados] == ['holerite:1', 'holerite:2', 'holerite:99']
+    assert resultados[0].situacao == SituacaoItemExecucao.SUCESSO
+    assert resultados[1].situacao == SituacaoItemExecucao.IGNORADO_NAO_EXACT
+    assert resultados[2].situacao == SituacaoItemExecucao.IGNORADO_NAO_EXACT
+    # só o item elegível (EXACT + pronto + competência apta) tocou o Airtable
+    assert amb.airtable.chamadas_criar == 1
+
+
+def test_executar_escrita_do_lote_nunca_grava_item_fora_do_relatorio():
+    """Simula um dry-run que não terminou de processar o lote inteiro:
+    'holerite:2' nunca entrou em relatorio.itens. Mesmo que dados de
+    escrita 'estivessem disponíveis' para ele, a função nunca sequer
+    consulta nem grava um item que não faz parte do relatório completo."""
+    amb = _Ambiente()
+    config = _config()
+
+    item_no_relatorio = _resultado_exact(manifesto_item_id='holerite:1', entidade_id='fun1')
+    relatorio = RelatorioLote(itens=[item_no_relatorio], relatorios_gerais_excluidos=[])
+
+    consultados = []
+
+    def obter_dados(item):
+        consultados.append(item.manifesto_item_id)
+        dados = {
+            'holerite:1': DadosEscritaItem(_pdf_valido(), 'arq1.pdf', 'ref1'),
+            'holerite:2': DadosEscritaItem(_pdf_valido(b'-v2'), 'arq2.pdf', 'ref2'),
+        }
+        return dados.get(item.manifesto_item_id)
+
+    resultados = amb.executar_lote(relatorio, obter_dados, config, 'lote-1')
+
+    assert consultados == ['holerite:1']  # holerite:2 nunca foi sequer consultado
+    assert len(resultados) == 1
+    assert amb.airtable.chamadas_criar == 1
+
+
+def test_executar_escrita_do_lote_item_sem_dados_de_escrita_nunca_e_gravado():
+    amb = _Ambiente()
+    item = _resultado_exact(manifesto_item_id='holerite:1', entidade_id='fun1')
+    relatorio = RelatorioLote(itens=[item], relatorios_gerais_excluidos=[])
+
+    resultados = amb.executar_lote(relatorio, lambda _item: None, _config(), 'lote-1')
+
+    assert len(resultados) == 1
+    assert resultados[0].processado is False
+    assert resultados[0].situacao == SituacaoItemExecucao.IGNORADO_NAO_EXACT
+    assert amb.airtable.chamadas_criar == 0
+
+
+def test_executar_escrita_do_lote_relatorio_vazio_nao_escreve_nada():
+    amb = _Ambiente()
+    relatorio = RelatorioLote(itens=[], relatorios_gerais_excluidos=[])
+    resultados = amb.executar_lote(relatorio, lambda _item: None, _config(), 'lote-1')
+    assert resultados == []
+    assert amb.airtable.chamadas_criar == 0
 
 
 # ============================================================================

@@ -7,6 +7,13 @@ específica aqui — quem chama decide como obteve a leitura (adapter
 CPF completo é extraído do PDF (via pdfplumber) só em memória, usado
 imediatamente para resolver func_id e descartado — nunca retorna no
 resultado, nunca é logado.
+
+Competência (Macro 5) é extraída do MESMO texto já obtido do PDF — para
+holerite, reaproveita a única extração já feita para o CPF (nunca uma
+segunda leitura do mesmo item); para extrato, que antes não lia o
+conteúdo do PDF, esta é a única extração adicionada, seguindo o mesmo
+padrão de isolamento por item em caso de falha (PDF corrompido derruba
+só este item, nunca o lote inteiro).
 """
 
 from __future__ import annotations
@@ -18,9 +25,11 @@ from . import dominio
 from .contratos import (
     CandidatoCliente,
     CandidatoFuncionario,
+    ClassificacaoCorrespondencia,
     ConfiguracaoExecucao,
     ItemManifestoExtrato,
     ItemManifestoHolerite,
+    ResultadoCompetencia,
     ResultadoItem,
     TipoDocumental,
 )
@@ -47,6 +56,36 @@ class RelatorioLote:
             contagem[chave] = contagem.get(chave, 0) + 1
         return contagem
 
+    def contagem_competencia(self) -> dict[str, int]:
+        """Agregado da dimensão de COMPETÊNCIA — independente da
+        contagem por `classificacao` acima (Macro 5). Itens cujo PDF
+        nunca foi lido (já `INVALID` por outro motivo) entram em
+        'nao_computada', nunca num valor de `ResultadoCompetencia`
+        inventado. Faz parte do relatório agregado completo produzido
+        ANTES de qualquer escrita."""
+        contagem: dict[str, int] = {}
+        for item in self.itens:
+            chave = item.resultado_competencia.value if item.resultado_competencia else 'nao_computada'
+            contagem[chave] = contagem.get(chave, 0) + 1
+        return contagem
+
+    def itens_bloqueados_por_competencia(self) -> list[ResultadoItem]:
+        """Itens com entidade resolvida (EXACT) e sem duplicidade, mas
+        bloqueados só pela dimensão de competência — fila explícita para
+        revisão humana. Nesta primeira versão, nunca remapeados
+        automaticamente para a competência esperada."""
+        bloqueados = {
+            ResultadoCompetencia.DIVERGENTE,
+            ResultadoCompetencia.AMBIGUA,
+            ResultadoCompetencia.NAO_EXTRAIVEL,
+        }
+        return [
+            item for item in self.itens
+            if item.classificacao == ClassificacaoCorrespondencia.EXACT
+            and not item.pronto_para_gravacao
+            and item.resultado_competencia in bloqueados
+        ]
+
 
 def processar_holerite(
     item: ItemManifestoHolerite,
@@ -65,9 +104,12 @@ def processar_holerite(
     validacao = dominio.validar_pdf_bytes(pdf_bytes)
 
     cpf_extraido = None
+    competencia_extraida = None
     if validacao.valido:
-        # extração em memória, só para resolver func_id — descartada ao
-        # sair deste escopo de função, nunca propagada adiante.
+        # extração em memória, reaproveitada para CPF (só resolver
+        # func_id, descartado ao sair deste escopo) e para competência
+        # (Macro 5, requisito obrigatório: reutilizar a mesma extração
+        # quando o fluxo já lê o PDF — nunca uma segunda leitura).
         # Achado do Ultrareview: um PDF com assinatura/tamanho válidos mas
         # estrutura interna corrompida fazia pdfplumber lançar exceção
         # sem tratamento, derrubando o lote inteiro — contraria "continuar
@@ -83,6 +125,7 @@ def processar_holerite(
                 ClassificacaoCorrespondencia.INVALID, False, None, None, None,
                 MotivoSanitizado.PDF_ILEGIVEL)
         cpf_extraido = dominio.extrair_cpf_de_texto(texto)
+        competencia_extraida = dominio.extrair_competencia_de_texto(texto)
         del texto
 
     correspondencia = dominio.resolver_funcionario(
@@ -97,9 +140,14 @@ def processar_holerite(
     if correspondencia.entidade_id and func_ids_ja_com_holerite is not None:
         documento_ja_existe = correspondencia.entidade_id in func_ids_ja_com_holerite
 
+    resultado_competencia = None
+    if competencia_extraida is not None:
+        resultado_competencia = dominio.validar_competencia(competencia_extraida, config.ano, config.mes)
+
     return dominio.classificar_item(
         item.manifesto_item_id, TipoDocumental.HOLERITE, validacao,
-        correspondencia, identidades, documento_ja_existe)
+        correspondencia, identidades, documento_ja_existe,
+        competencia_extraida, resultado_competencia, config.ano, config.mes)
 
 
 def processar_extrato(
@@ -118,6 +166,25 @@ def processar_extrato(
 
     validacao = dominio.validar_pdf_bytes(pdf_bytes)
 
+    # Antes do Macro 5, este fluxo nunca lia o CONTEÚDO do PDF (só
+    # `linha_bruta` do manifesto, para correspondência de cliente). A
+    # competência exige o conteúdo — esta é a ÚNICA extração adicionada
+    # aqui, uma vez por item, com o mesmo isolamento de falha já usado em
+    # `processar_holerite`: PDF corrompido vira INVALID só deste item,
+    # nunca derruba o lote inteiro.
+    competencia_extraida = None
+    if validacao.valido:
+        try:
+            texto = _extrair_texto_pdf(pdf_bytes)
+        except Exception:
+            from .contratos import ClassificacaoCorrespondencia, MotivoSanitizado
+            return ResultadoItem(
+                item.manifesto_item_id, TipoDocumental.EXTRATO_CLIENTE,
+                ClassificacaoCorrespondencia.INVALID, False, None, None, None,
+                MotivoSanitizado.PDF_ILEGIVEL)
+        competencia_extraida = dominio.extrair_competencia_de_texto(texto)
+        del texto
+
     # Correspondência estrita: CNPJ extraído de `linha_bruta` SEMPRE
     # tentado primeiro, mesmo quando o nome do manifesto está truncado e
     # idêntico ao de outro item (caso real: num=20/21 desta execução).
@@ -133,6 +200,11 @@ def processar_extrato(
     if correspondencia.entidade_id and cliente_ids_ja_com_extrato is not None:
         documento_ja_existe = correspondencia.entidade_id in cliente_ids_ja_com_extrato
 
+    resultado_competencia = None
+    if competencia_extraida is not None:
+        resultado_competencia = dominio.validar_competencia(competencia_extraida, config.ano, config.mes)
+
     return dominio.classificar_item(
         item.manifesto_item_id, TipoDocumental.EXTRATO_CLIENTE, validacao,
-        correspondencia, identidades, documento_ja_existe)
+        correspondencia, identidades, documento_ja_existe,
+        competencia_extraida, resultado_competencia, config.ano, config.mes)

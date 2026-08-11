@@ -17,10 +17,13 @@ from .contratos import (
     CandidatoCliente,
     CandidatoFuncionario,
     ClassificacaoCorrespondencia,
+    CompetenciaExtraida,
     ConfiguracaoExecucao,
     Identidades,
     MotivoSanitizado,
+    ResultadoCompetencia,
     ResultadoCorrespondencia,
+    StatusExtracaoCompetencia,
     TipoDocumental,
     ValidacaoPdf,
 )
@@ -30,6 +33,32 @@ ASSINATURA_PDF = b'%PDF'
 
 _CNPJ_RE = re.compile(r'\d{2}[.\s]?\d{3}[.\s]?\d{3}[/\s]?\d{4}[-\s]?\d{2}')
 _CPF_RE = re.compile(r'\d{3}\.\d{3}\.\d{3}-\d{2}')
+
+# Competência numérica MM/AAAA (ex.: "07/2026", "07 / 2026"). Lookbehind
+# negativo evita capturar a cauda de uma data completa DD/MM/AAAA (ex.:
+# "05/07/2026") como se fosse a competência — mitigação adicional, não a
+# defesa principal (essa é o marcador semântico obrigatório, ver
+# `_MARCADOR_COMPETENCIA_RE` abaixo).
+_COMPETENCIA_NUMERICA_RE = re.compile(r'(?<!\d{2}/)(?<!\d{2}-)\b(0[1-9]|1[0-2])\s*[/\-]\s*(20\d{2})\b')
+
+_MESES_PT_COMPETENCIA = {
+    'janeiro': 1, 'fevereiro': 2, 'marco': 3, 'abril': 4, 'maio': 5, 'junho': 6,
+    'julho': 7, 'agosto': 8, 'setembro': 9, 'outubro': 10, 'novembro': 11, 'dezembro': 12,
+}
+_COMPETENCIA_NOME_MES_RE = re.compile(
+    r'\b(janeiro|fevereiro|mar[cç]o|abril|maio|junho|julho|agosto|setembro|'
+    r'outubro|novembro|dezembro)\s*(?:/|de|,)?\s*(20\d{2})\b',
+    re.IGNORECASE,
+)
+
+# Marcador semântico OBRIGATÓRIO (revisão adversarial desta rodada): uma
+# data MM/AAAA ou "mês por extenso + ano" só conta como candidata a
+# competência quando aparece na MESMA linha que um destes marcadores —
+# nunca por coincidência. Data de pagamento, admissão, período de
+# férias, data de impressão etc. nunca têm estas palavras — ficam de
+# fora por construção, mesmo que o formato MM/AAAA bata.
+_MARCADOR_COMPETENCIA_RE = re.compile(
+    r'compet[êe]ncia|m[êe]s\s+de\s+refer[êe]ncia', re.IGNORECASE)
 
 
 # ── Validação ─────────────────────────────────────────────────────────────
@@ -215,6 +244,163 @@ def truncar_hash(hash_hex: str | None, tamanho: int = 12) -> str | None:
     return hash_hex[:tamanho]
 
 
+# ── Competência documental (Macro 5) ─────────────────────────────────────
+#
+# Extração e validação de competência são passos PUROS e SEPARADOS:
+#   1. extrair_competencia_de_texto  — só olha o CONTEÚDO do PDF, nunca
+#      sabe qual competência é esperada.
+#   2. validar_competencia           — compara o resultado da extração
+#      contra a competência ESPERADA (`ConfiguracaoExecucao.ano`/`.mes`,
+#      nunca resolvida por este módulo sozinho).
+# Nunca fundidas com `resolver_funcionario`/`resolver_cliente` — mesma
+# disciplina de dimensões independentes do CLAUDE.md raiz §4. Nesta
+# primeira versão, uma execução tem exatamente UMA competência esperada;
+# item divergente/ambíguo/não-extraível fica isolado e bloqueado, nunca
+# remapeado automaticamente.
+
+def _normalizar_nome_mes(nome_mes: str) -> str:
+    s = unicodedata.normalize('NFKD', nome_mes)
+    s = ''.join(c for c in s if not unicodedata.combining(c))
+    return s.lower()
+
+
+def _datas_candidatas_na_linha(linha: str) -> list[tuple[int, int, str]]:
+    achados: list[tuple[int, int, str]] = []
+    for m in _COMPETENCIA_NUMERICA_RE.finditer(linha):
+        mes, ano = int(m.group(1)), int(m.group(2))
+        achados.append((ano, mes, 'mm_aaaa_numerico'))
+    for m in _COMPETENCIA_NOME_MES_RE.finditer(linha):
+        mes = _MESES_PT_COMPETENCIA.get(_normalizar_nome_mes(m.group(1)))
+        if mes is None:
+            continue
+        ano = int(m.group(2))
+        achados.append((ano, mes, 'nome_mes_pt'))
+    return achados
+
+
+def extrair_competencia_de_texto(texto: str) -> CompetenciaExtraida:
+    """Extrai a competência (mês/ano) do CONTEÚDO do PDF — nunca da
+    configuração, que é só a competência ESPERADA. Nunca retorna nem usa
+    o texto/trecho bruto no resultado — só (ano, mes) e um código de
+    estratégia sanitizado (auditoria).
+
+    Revisão adversarial (Macro 5): uma data só é candidata quando aparece
+    na MESMA linha de um marcador semântico explícito de competência
+    (`_MARCADOR_COMPETENCIA_RE`) — data de pagamento, admissão, período
+    de férias, impressão, ou qualquer MM/AAAA "solto" no texto NUNCA
+    vencem uma competência marcada, e nunca são aceitas sozinhas por
+    coincidência (o texto extraído de PDF já vem quebrado em linhas por
+    `pdfplumber`, uma por campo do documento — mesmo padrão usado para
+    granularidade aqui). Duas estratégias tentadas por linha marcada:
+    (1) numérica MM/AAAA; (2) nome do mês por extenso em português + ano.
+
+    Mais de um valor (ano, mes) DISTINTO encontrado em linhas marcadas —
+    mesma estratégia ou estratégias diferentes, mesma linha ou linhas
+    diferentes — nunca é decidido por aproximação: vira AMBIGUA. Nenhuma
+    linha marcada com data válida vira NAO_ENCONTRADA (inclusive quando
+    só existem datas genéricas sem marcador, ou quando a linha marcada
+    tem mês/ano fora do formato válido — nunca uma confirmação por mera
+    coincidência)."""
+    if not texto:
+        return CompetenciaExtraida(StatusExtracaoCompetencia.NAO_ENCONTRADA, None, None)
+
+    achados: list[tuple[int, int, str]] = []
+    for linha in texto.split('\n'):
+        if not _MARCADOR_COMPETENCIA_RE.search(linha):
+            continue
+        achados.extend(_datas_candidatas_na_linha(linha))
+
+    distintos = {(ano, mes) for ano, mes, _estrategia in achados}
+    if not distintos:
+        return CompetenciaExtraida(StatusExtracaoCompetencia.NAO_ENCONTRADA, None, None)
+    if len(distintos) > 1:
+        return CompetenciaExtraida(StatusExtracaoCompetencia.AMBIGUA, None, None)
+
+    ano_mes = next(iter(distintos))
+    estrategia = achados[0][2]
+    return CompetenciaExtraida(StatusExtracaoCompetencia.ENCONTRADA, ano_mes, estrategia)
+
+
+def validar_competencia(
+    extraida: CompetenciaExtraida, ano_esperado: int, mes_esperado: int,
+) -> ResultadoCompetencia:
+    """Compara a competência extraída do CONTEÚDO do PDF com a
+    competência ESPERADA — a configuração (`ConfiguracaoExecucao`) é
+    tratada só como o valor esperado, nunca como fonte de verdade do que
+    está no documento (requisito obrigatório Macro 5). Só `CONFIRMADA`
+    libera `pronto_para_gravacao`; qualquer outro resultado bloqueia a
+    gravação deste item, isolado, sem remapeamento automático."""
+    if extraida.status == StatusExtracaoCompetencia.NAO_ENCONTRADA:
+        return ResultadoCompetencia.NAO_EXTRAIVEL
+    if extraida.status == StatusExtracaoCompetencia.AMBIGUA:
+        return ResultadoCompetencia.AMBIGUA
+    if extraida.ano_mes == (ano_esperado, mes_esperado):
+        return ResultadoCompetencia.CONFIRMADA
+    return ResultadoCompetencia.DIVERGENTE
+
+
+# Únicos códigos de estratégia que `extrair_competencia_de_texto` pode
+# produzir — usado como lista branca pela defesa obrigatória do
+# escritor (`competencia_apta_para_gravacao`), nunca aceita um valor de
+# estratégia arbitrário vindo de um `ResultadoItem` construído por outro
+# caminho.
+ESTRATEGIAS_COMPETENCIA_VALIDAS = frozenset({'mm_aaaa_numerico', 'nome_mes_pt'})
+
+_ANO_MINIMO_PLAUSIVEL = 2000
+_ANO_MAXIMO_PLAUSIVEL = 2099
+
+
+def competencia_apta_para_gravacao(
+    resultado_competencia: ResultadoCompetencia | None,
+    ano_mes_extraido: tuple[int, int] | None,
+    estrategia: str | None,
+    ano_esperado: int,
+    mes_esperado: int,
+) -> bool:
+    """Defesa em profundidade (revisão adversarial Macro 5): NUNCA
+    confia só no enum `resultado_competencia` informado pelo chamador —
+    reconfirma aqui, a partir dos valores primitivos, que a competência
+    extraída é de fato igual à esperada, com evidência consistente.
+    Único ponto que decide "apto para gravar" — usado tanto por
+    `classificar_item` (decisão do dry-run) quanto por `escritor.py`
+    (defesa obrigatória, independente, no momento real da escrita).
+
+    Recusa (retorna False) quando QUALQUER uma destas condições vale —
+    mesmo que `resultado_competencia` diga CONFIRMADA:
+      * `resultado_competencia` não é CONFIRMADA (ausente, DIVERGENTE,
+        AMBIGUA ou NAO_EXTRAIVEL);
+      * a competência esperada (`ano_esperado`/`mes_esperado`) é
+        implausível (mês fora de 1-12, ano fora de uma faixa plausível)
+        — nunca confirma contra uma configuração claramente inválida;
+      * `ano_mes_extraido` está ausente — não há evidência extraída
+        para comprovar a igualdade;
+      * `estrategia` está ausente ou não é uma das estratégias que este
+        módulo sabe produzir (`ESTRATEGIAS_COMPETENCIA_VALIDAS`) —
+        nunca aceita um código de estratégia arbitrário;
+      * o mês/ano extraído está fora da faixa plausível;
+      * o valor extraído, comparado byte a byte com o esperado, diverge
+        — reconfirmação direta, nunca herdada do enum sozinho.
+    """
+    if resultado_competencia != ResultadoCompetencia.CONFIRMADA:
+        return False
+    if not (1 <= mes_esperado <= 12):
+        return False
+    if not (_ANO_MINIMO_PLAUSIVEL <= ano_esperado <= _ANO_MAXIMO_PLAUSIVEL):
+        return False
+    if ano_mes_extraido is None:
+        return False
+    if estrategia not in ESTRATEGIAS_COMPETENCIA_VALIDAS:
+        return False
+
+    ano_extraido, mes_extraido = ano_mes_extraido
+    if not (1 <= mes_extraido <= 12):
+        return False
+    if not (_ANO_MINIMO_PLAUSIVEL <= ano_extraido <= _ANO_MAXIMO_PLAUSIVEL):
+        return False
+
+    return (ano_extraido, mes_extraido) == (ano_esperado, mes_esperado)
+
+
 # ── Classificação final (combina validação + correspondência + duplicidade) ─
 
 def classificar_item(
@@ -224,6 +410,10 @@ def classificar_item(
     correspondencia: ResultadoCorrespondencia,
     identidades: Identidades,
     documento_ja_existe: bool | None,
+    competencia_extraida: CompetenciaExtraida | None = None,
+    resultado_competencia: ResultadoCompetencia | None = None,
+    ano_esperado: int | None = None,
+    mes_esperado: int | None = None,
 ) -> 'ResultadoItem':
     """Função pura de decisão — nunca grava nada, só classifica.
 
@@ -232,8 +422,24 @@ def classificar_item(
     feita (conector indisponível) — nesse caso o item nunca é elevado a
     EXACT/pronto-para-gravação; fica marcado como bloqueado por leitura
     ausente, nunca tratado como 'sem duplicidade' por omissão.
+
+    `competencia_extraida`/`resultado_competencia`/`ano_esperado`/
+    `mes_esperado` (Macro 5): dimensão independente da correspondência
+    de entidade — nunca fundida com `classificacao`. Os dois primeiros
+    são `None` só quando o PDF nunca chegou a ser lido (item já
+    `INVALID` por outro motivo); quando presentes, são sempre anexados
+    ao `ResultadoItem`, em qualquer ramo — para que o relatório agregado
+    tenha visibilidade completa da competência mesmo em itens bloqueados
+    por outro motivo (entidade, duplicidade, leitura ausente). Só o ramo
+    final (EXACT + sem duplicidade) decide `pronto_para_gravacao` — e
+    faz isso via `competencia_apta_para_gravacao` (revisão adversarial:
+    nunca confia só no enum `resultado_competencia`, reconfirma a
+    igualdade extraído==esperado a partir dos valores primitivos).
     """
     from .contratos import ResultadoItem  # import local evita ciclo
+
+    ano_mes_extraido = competencia_extraida.ano_mes if competencia_extraida is not None else None
+    estrategia_competencia = competencia_extraida.estrategia if competencia_extraida is not None else None
 
     if not validacao.valido:
         return ResultadoItem(
@@ -245,7 +451,8 @@ def classificar_item(
         # vai para a fila de exceções.
         return ResultadoItem(
             manifesto_item_id, tipo, correspondencia.classificacao, False,
-            None, None, None, correspondencia.motivo, correspondencia.criterio_usado)
+            None, None, None, correspondencia.motivo, correspondencia.criterio_usado,
+            resultado_competencia, ano_mes_extraido, estrategia_competencia)
 
     if documento_ja_existe is None:
         # EXACT na correspondência, mas sem confirmação de duplicidade —
@@ -254,20 +461,48 @@ def classificar_item(
             manifesto_item_id, tipo, ClassificacaoCorrespondencia.EXACT, False,
             correspondencia.entidade_id, identidades.identidade_documental,
             truncar_hash(identidades.identidade_documental),
-            MotivoSanitizado.LEITURA_AIRTABLE_INDISPONIVEL, correspondencia.criterio_usado)
+            MotivoSanitizado.LEITURA_AIRTABLE_INDISPONIVEL, correspondencia.criterio_usado,
+            resultado_competencia, ano_mes_extraido, estrategia_competencia)
 
     if documento_ja_existe:
         return ResultadoItem(
             manifesto_item_id, tipo, ClassificacaoCorrespondencia.DUPLICATE, False,
             correspondencia.entidade_id, identidades.identidade_documental,
             truncar_hash(identidades.identidade_documental),
-            MotivoSanitizado.DOCUMENTO_JA_EXISTENTE, correspondencia.criterio_usado)
+            MotivoSanitizado.DOCUMENTO_JA_EXISTENTE, correspondencia.criterio_usado,
+            resultado_competencia, ano_mes_extraido, estrategia_competencia)
 
-    # EXACT + validado + confirmado sem duplicidade prévia por leitura real
-    # → pronto para a fase de escrita. Este dry-run nunca grava — a
-    # gravação é uma fase futura, fora deste comando.
+    apto_por_competencia = (
+        ano_esperado is not None and mes_esperado is not None
+        and competencia_apta_para_gravacao(
+            resultado_competencia, ano_mes_extraido, estrategia_competencia,
+            ano_esperado, mes_esperado)
+    )
+    if apto_por_competencia:
+        # EXACT + validado + confirmado sem duplicidade prévia por leitura
+        # real + competência do PDF confirmada e igual à esperada (via
+        # `competencia_apta_para_gravacao`, reconfirmada por valor, nunca
+        # só pelo enum) → pronto para a fase de escrita. Este dry-run
+        # nunca grava — a gravação é uma fase futura, fora deste comando.
+        return ResultadoItem(
+            manifesto_item_id, tipo, ClassificacaoCorrespondencia.EXACT, True,
+            correspondencia.entidade_id, identidades.identidade_documental,
+            truncar_hash(identidades.identidade_documental),
+            MotivoSanitizado.OK, correspondencia.criterio_usado,
+            resultado_competencia, ano_mes_extraido, estrategia_competencia)
+
+    # EXACT, sem duplicidade — mas a competência não foi confirmada
+    # (não-extraível, ambígua ou divergente da esperada). Bloqueado só
+    # nesta dimensão: `classificacao` continua EXACT (a entidade FOI
+    # resolvida corretamente), só `pronto_para_gravacao` cai para False.
+    motivo_competencia = {
+        ResultadoCompetencia.DIVERGENTE: MotivoSanitizado.COMPETENCIA_DIVERGENTE,
+        ResultadoCompetencia.AMBIGUA: MotivoSanitizado.COMPETENCIA_AMBIGUA,
+    }.get(resultado_competencia, MotivoSanitizado.COMPETENCIA_NAO_EXTRAIVEL)
+
     return ResultadoItem(
-        manifesto_item_id, tipo, ClassificacaoCorrespondencia.EXACT, True,
+        manifesto_item_id, tipo, ClassificacaoCorrespondencia.EXACT, False,
         correspondencia.entidade_id, identidades.identidade_documental,
         truncar_hash(identidades.identidade_documental),
-        MotivoSanitizado.OK, correspondencia.criterio_usado)
+        motivo_competencia, correspondencia.criterio_usado,
+        resultado_competencia, ano_mes_extraido, estrategia_competencia)
