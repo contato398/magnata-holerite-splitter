@@ -1930,6 +1930,16 @@ test_79_modified_migration_never_authorized() {
   git clean -qfd
 }
 
+# TEST 80: referência entre variáveis sensíveis não é um literal de segredo.
+test_80_sensitive_variable_assignment_is_not_literal() {
+  run_test 80 "Atribuição api_key = api_key não é segredo literal" "PASS"
+  if linha_contem_segredo_real "self._api_key = api_key"; then
+    test_result "FAIL"
+  else
+    test_result "PASS"
+  fi
+}
+
 main() {
   echo -e "${BLUE}===================================="
   echo "SUÍTE DE TESTES DE GOVERNANÇA"
@@ -2025,6 +2035,7 @@ main() {
   test_77_new_migration_with_exact_authorization || true
   test_78_migration_authorization_hash_mismatch || true
   test_79_modified_migration_never_authorized || true
+  test_80_sensitive_variable_assignment_is_not_literal || true
 
   # Report
   echo ""

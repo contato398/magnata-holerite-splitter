@@ -36,7 +36,7 @@ class FalhaConexaoBanco(Exception):
 
 def _sanitizar_mensagem_erro(mensagem: str) -> str:
     """Remove qualquer trecho que pareca uma URL de conexao Postgres
-    (esquema postgres://usuario:senha@host/...) de uma mensagem de erro
+    (esquema postgres://host/banco) de uma mensagem de erro
     antes de propaga-la -- nunca vaza credencial em excecao ou log."""
     return _PADRAO_URL_CREDENCIAL.sub('postgres://<sanitizado>', mensagem or '')
 

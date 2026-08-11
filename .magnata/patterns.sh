@@ -151,7 +151,11 @@ linha_contem_segredo_real() {
   if [ $achou -ne 0 ]; then
     local regex_livre="['\"]?(${SECRET_CONTEXT_KEYWORDS})['\"]?[[:space:]]*[:=][[:space:]]*([A-Za-z0-9_+/=-]+)[[:space:]]*;?[[:space:]]*\$"
     if [[ "$linha" =~ $regex_livre ]]; then
-      if ! _valor_e_placeholder "${BASH_REMATCH[2]}"; then
+      local valor_livre="${BASH_REMATCH[2]}"
+      # Atribuição variável-a-variável não contém literal de segredo.
+      if [[ "$valor_livre" =~ ^(${SECRET_CONTEXT_KEYWORDS})$ ]]; then
+        :
+      elif ! _valor_e_placeholder "$valor_livre"; then
         achou=0
       fi
     fi
