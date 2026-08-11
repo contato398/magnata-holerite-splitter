@@ -122,6 +122,11 @@ Todos os listados acima estão em vigor. Dentro deles, nuances:
   este índice explicitamente não faz.
 - `MAGNATA_OS_MODULO_01_DECISOES_IMPLEMENTACAO.md` tem 12 decisões
   `APROVADA` e 1 `APROVADA POR CONTINUIDADE OPERACIONAL` (`DEC-MOD01-010`).
+- [`MAGNATA_OS_HANDOFF_ATIVACAO_JULHO2026.md`](MAGNATA_OS_HANDOFF_ATIVACAO_JULHO2026.md)
+  — runbook executável para a ativação real da esteira de importação em
+  lote (Postgres + Airtable, Julho/2026), preparado numa sessão sem
+  ferramenta de provisionamento Render/Postgres disponível; a execução
+  externa em si fica para uma sessão/ambiente com esse acesso.
 
 ## Documentos históricos
 

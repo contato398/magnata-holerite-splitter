@@ -39,6 +39,7 @@ NC='\033[0m'
 
 BASE_REF="${2:-}"
 HEAD_REF="${3:-}"
+MIGRATION_AUTHORIZATION_FILE="${4:-}"
 
 if [[ -n "$BASE_REF" && -n "$HEAD_REF" ]]; then
   if ! git cat-file -e "${BASE_REF}^{commit}" 2>/dev/null; then
@@ -64,6 +65,14 @@ get_changed_files() {
     git diff "${BASE_REF}...${HEAD_REF}" --name-only 2>/dev/null || echo ""
   else
     git diff --cached --name-only 2>/dev/null || git diff HEAD^..HEAD --name-only 2>/dev/null || echo ""
+  fi
+}
+
+get_changed_files_with_status() {
+  if [[ -n "$BASE_REF" && -n "$HEAD_REF" ]]; then
+    git diff "${BASE_REF}...${HEAD_REF}" --name-status 2>/dev/null || echo ""
+  else
+    git diff --cached --name-status 2>/dev/null || echo ""
   fi
 }
 
@@ -165,23 +174,48 @@ gate_protected_app_py() {
 # ============================================================================
 
 gate_protected_migrations() {
-  local changed=$(get_changed_files)
+  local changed_with_status
+  changed_with_status=$(get_changed_files_with_status)
 
-  # Exceção documental (mesma is_claude_hierarchy_path de .magnata/patterns.sh
-  # usada pela Validação 6 do pre-commit): só o caminho EXATO
-  # magnata_os/documental/modulo01/migrations/CLAUDE.md atravessa — qualquer
-  # outro arquivo no diretório (migration real) continua bloqueado.
-  while IFS= read -r file; do
+  local authorization_ready=0
+  if [[ -n "$MIGRATION_AUTHORIZATION_FILE" && -f "$PROJECT_ROOT/$MIGRATION_AUTHORIZATION_FILE" ]]; then
+    local authorization_status
+    authorization_status=$(printf '%s\n' "$changed_with_status" | awk -v file="$MIGRATION_AUTHORIZATION_FILE" '$1 == "A" && $2 == file { print $1 }')
+    if [[ "$authorization_status" == "A" ]]; then
+      authorization_ready=1
+    fi
+  fi
+
+  while IFS=$'\t' read -r status file; do
     if [[ -z "$file" ]]; then continue; fi
     if [[ "$file" == *"magnata_os/documental/modulo01/migrations/"* ]]; then
       if is_claude_hierarchy_path "$file"; then
         continue
       fi
+
+      # Somente migration nova, com manifesto novo no mesmo diff e hash exato.
+      # Modificação/remoção continua sempre bloqueada e manifesto antigo não
+      # pode ser reutilizado em outro PR.
+      if [[ "$status" == "A" && $authorization_ready -eq 1 ]]; then
+        local actual_blob expected_blob authorized_path
+        if [[ -n "$HEAD_REF" ]]; then
+          actual_blob=$(git rev-parse "${HEAD_REF}:$file")
+        else
+          actual_blob=$(git hash-object --filters --path="$file" "$PROJECT_ROOT/$file")
+        fi
+        while read -r expected_blob authorized_path; do
+          [[ -z "$expected_blob" || "$expected_blob" == \#* ]] && continue
+          if [[ "$authorized_path" == "$file" && "${expected_blob,,}" == "$actual_blob" ]]; then
+            continue 2
+          fi
+        done < "$PROJECT_ROOT/$MIGRATION_AUTHORIZATION_FILE"
+      fi
+
       echo -e "${RED}${MSG_BLOCKED}: Migrations foram alteradas${NC}"
-      echo "  magnata_os/documental/modulo01/migrations/** é protegida"
+      echo "  $file não possui autorização por objeto Git válida e nova neste diff"
       return $EXIT_BLOCKED
     fi
-  done <<< "$changed"
+  done <<< "$changed_with_status"
 
   echo -e "${GREEN}${MSG_APPROVED}: Migrations intactas${NC}"
   return $EXIT_APPROVED

@@ -7,6 +7,10 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: magnata-os-db
+          property: connectionString
 
   - type: worker
     name: magnata-holerite-worker
@@ -16,3 +20,24 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: magnata-os-db
+          property: connectionString
+
+# databases: bloco DECLARATIVO, preparado para o gate humano de
+# provisionamento real -- NAO executado/aplicado nesta fase (nenhum
+# Blueprint foi rodado). `plan: free` e um placeholder seguro (nao
+# implica compra nem decisao de custo) -- NAO e uma recomendacao para
+# producao: o tier gratuito do Postgres do Render expira automaticamente
+# apos um periodo e nao e adequado para persistencia durevel. A escolha
+# do plano real (starter/standard/etc.) e uma decisao financeira
+# explicitamente pendente -- ver relatorio desta fase, item "decisoes de
+# custo/infra pendentes". `postgresMajorVersion` fixado para
+# reprodutibilidade -- confirmar contra a versao real disponivel no
+# Render no momento do provisionamento (gate humano separado, fora desta
+# fase).
+databases:
+  - name: magnata-os-db
+    plan: free
+    postgresMajorVersion: 16
