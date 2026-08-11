@@ -66,8 +66,10 @@ jobs:
               # PR inteiro (merge-base), nunca só o último commit.
               BASE="${{ github.event.pull_request.base.sha }}"
               HEAD="${{ github.event.pull_request.head.sha }}"
+              MIGRATION_AUTHORIZATION=".magnata/migration-authorizations/pr-${{ github.event.pull_request.number }}.sha256"
               ;;
             push)
+              MIGRATION_AUTHORIZATION=""
               BASE="${{ github.event.before }}"
               HEAD="${{ github.sha }}"
               if [[ "$BASE" =~ ^0+$ ]]; then
@@ -87,6 +89,7 @@ jobs:
               fi
               ;;
             workflow_dispatch)
+              MIGRATION_AUTHORIZATION=""
               BASE="${{ github.event.inputs.base_ref }}"
               HEAD="${{ github.event.inputs.head_ref }}"
               if [[ -z "$BASE" || -z "$HEAD" ]]; then
@@ -109,6 +112,7 @@ jobs:
           esac
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
           echo "head=$HEAD" >> "$GITHUB_OUTPUT"
+          echo "migration_authorization=$MIGRATION_AUTHORIZATION" >> "$GITHUB_OUTPUT"
           echo "Evento: ${{ github.event_name }}"
           echo "Base: $BASE"
           echo "Head: $HEAD"
@@ -123,7 +127,7 @@ jobs:
 
       - name: Gate 3 — Migrations protegidas
         run: |
-          ./scripts/ci/validate_governance.sh protected_migrations "${{ steps.diffrange.outputs.base }}" "${{ steps.diffrange.outputs.head }}"
+          ./scripts/ci/validate_governance.sh protected_migrations "${{ steps.diffrange.outputs.base }}" "${{ steps.diffrange.outputs.head }}" "${{ steps.diffrange.outputs.migration_authorization }}"
 
       - name: Gate 4 — Frontend protegido
         run: |
@@ -179,7 +183,7 @@ jobs:
         # (contrato inválido não pode virar execução em modo local silenciosa).
         if: ${{ !cancelled() && steps.diffrange.outcome == 'success' }}
         run: |
-          ./scripts/ci/validate_governance.sh report_final "${{ steps.diffrange.outputs.base }}" "${{ steps.diffrange.outputs.head }}"
+          ./scripts/ci/validate_governance.sh report_final "${{ steps.diffrange.outputs.base }}" "${{ steps.diffrange.outputs.head }}" "${{ steps.diffrange.outputs.migration_authorization }}"
 
       - name: Resultado
         if: ${{ !cancelled() && steps.diffrange.outcome == 'success' }}

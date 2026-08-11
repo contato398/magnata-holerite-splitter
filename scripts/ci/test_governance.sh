@@ -1869,6 +1869,67 @@ EOF
 # MAIN EXECUTION
 # ============================================================================
 
+# TEST 77: migration nova com manifesto novo e hash exato é permitida.
+test_77_new_migration_with_exact_authorization() {
+  run_test 77 "Migration nova com autorização SHA-256 exata é aprovada" "PASS"
+  cd "$TEST_REPO"
+  mkdir -p magnata_os/documental/modulo01/migrations .magnata/migration-authorizations
+  local migration="magnata_os/documental/modulo01/migrations/0999_authorized.sql"
+  local authorization=".magnata/migration-authorizations/pr-test.sha256"
+  echo "SELECT 1;" > "$migration"
+  printf '%s  %s\n' "$(sha256sum "$migration" | awk '{print $1}')" "$migration" > "$authorization"
+  git add "$migration" "$authorization"
+  if bash scripts/ci/validate_governance.sh protected_migrations "" "" "$authorization" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+  git reset -q HEAD "$migration" "$authorization" 2>/dev/null || true
+  rm -rf magnata_os .magnata/migration-authorizations
+}
+
+# TEST 78: hash divergente não autoriza nem mesmo arquivo novo.
+test_78_migration_authorization_hash_mismatch() {
+  run_test 78 "Manifesto com hash divergente continua bloqueado" "FAIL"
+  cd "$TEST_REPO"
+  mkdir -p magnata_os/documental/modulo01/migrations .magnata/migration-authorizations
+  local migration="magnata_os/documental/modulo01/migrations/0999_wrong_hash.sql"
+  local authorization=".magnata/migration-authorizations/pr-test.sha256"
+  echo "SELECT 1;" > "$migration"
+  printf '%064d  %s\n' 0 "$migration" > "$authorization"
+  git add "$migration" "$authorization"
+  if bash scripts/ci/validate_governance.sh protected_migrations "" "" "$authorization" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+  git reset -q HEAD "$migration" "$authorization" 2>/dev/null || true
+  rm -rf magnata_os .magnata/migration-authorizations
+}
+
+# TEST 79: migration existente modificada permanece bloqueada, mesmo com hash.
+test_79_modified_migration_never_authorized() {
+  run_test 79 "Migration existente modificada permanece bloqueada" "FAIL"
+  cd "$TEST_REPO"
+  mkdir -p magnata_os/documental/modulo01/migrations
+  local migration="magnata_os/documental/modulo01/migrations/0999_existing.sql"
+  echo "SELECT 1;" > "$migration"
+  git add "$migration"
+  git commit -q -m "test: baseline migration" --no-verify
+  mkdir -p .magnata/migration-authorizations
+  local authorization=".magnata/migration-authorizations/pr-test.sha256"
+  echo "SELECT 2;" > "$migration"
+  printf '%s  %s\n' "$(sha256sum "$migration" | awk '{print $1}')" "$migration" > "$authorization"
+  git add "$migration" "$authorization"
+  if bash scripts/ci/validate_governance.sh protected_migrations "" "" "$authorization" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+  git reset -q --hard HEAD
+  git clean -qfd
+}
+
 main() {
   echo -e "${BLUE}===================================="
   echo "SUÍTE DE TESTES DE GOVERNANÇA"
@@ -1961,6 +2022,9 @@ main() {
   test_74_same_basename_in_subdirectory_still_blocked || true
   test_75_case_sensitivity_regression || true
   test_76_old_rules_still_valid_after_all_changes || true
+  test_77_new_migration_with_exact_authorization || true
+  test_78_migration_authorization_hash_mismatch || true
+  test_79_modified_migration_never_authorized || true
 
   # Report
   echo ""

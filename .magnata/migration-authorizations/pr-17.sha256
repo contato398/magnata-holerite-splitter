@@ -1,0 +1,4 @@
+# Autorização humana específica — PR 17 — 2026-08-10
+# Somente migrations novas; os hashes tornam qualquer alteração posterior inválida.
+b0b74a8fb5fcafa2e47c2cc559eab2456be69152dbbd54c9b08470a01291f5d8  magnata_os/documental/modulo01/migrations/0009_itens_importacao_lote.sql
+9c92a6051ff9f40f5042c424c50cb0895b848769cc38767ca290462924be82fc  magnata_os/documental/modulo01/migrations/0009_itens_importacao_lote_rollback.sql
