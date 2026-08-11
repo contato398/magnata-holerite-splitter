@@ -60,6 +60,16 @@ _COMPETENCIA_NOME_MES_RE = re.compile(
 _MARCADOR_COMPETENCIA_RE = re.compile(
     r'compet[êe]ncia|m[êe]s\s+de\s+refer[êe]ncia', re.IGNORECASE)
 
+# Layout real de holerite: a classificação do vínculo só é evidência quando
+# seguida IMEDIATAMENTE por mês por extenso + ano. Nunca pesquisa outra data
+# na linha e nunca aceita formato numérico, evitando confundir admissão.
+_COMPETENCIA_CABECALHO_VINCULO_RE = re.compile(
+    r'\b(?:mensalista|horista)\b\s*(?:[:\-–—]\s*)?'
+    r'(janeiro|fevereiro|mar[cç]o|abril|maio|junho|julho|agosto|setembro|'
+    r'outubro|novembro|dezembro)\s*(?:/|de|,)?\s*(20\d{2})\b',
+    re.IGNORECASE,
+)
+
 
 # ── Validação ─────────────────────────────────────────────────────────────
 
@@ -286,7 +296,9 @@ def extrair_competencia_de_texto(texto: str) -> CompetenciaExtraida:
 
     Revisão adversarial (Macro 5): uma data só é candidata quando aparece
     na MESMA linha de um marcador semântico explícito de competência
-    (`_MARCADOR_COMPETENCIA_RE`) — data de pagamento, admissão, período
+    (`_MARCADOR_COMPETENCIA_RE`). Os cabeçalhos reais ``Mensalista`` e
+    ``Horista`` usam uma estratégia separada de adjacência estrita. Data de
+    pagamento, admissão, período
     de férias, impressão, ou qualquer MM/AAAA "solto" no texto NUNCA
     vencem uma competência marcada, e nunca são aceitas sozinhas por
     coincidência (o texto extraído de PDF já vem quebrado em linhas por
@@ -306,9 +318,12 @@ def extrair_competencia_de_texto(texto: str) -> CompetenciaExtraida:
 
     achados: list[tuple[int, int, str]] = []
     for linha in texto.split('\n'):
-        if not _MARCADOR_COMPETENCIA_RE.search(linha):
-            continue
-        achados.extend(_datas_candidatas_na_linha(linha))
+        if _MARCADOR_COMPETENCIA_RE.search(linha):
+            achados.extend(_datas_candidatas_na_linha(linha))
+        for m in _COMPETENCIA_CABECALHO_VINCULO_RE.finditer(linha):
+            mes = _MESES_PT_COMPETENCIA.get(_normalizar_nome_mes(m.group(1)))
+            if mes is not None:
+                achados.append((int(m.group(2)), mes, 'cabecalho_vinculo_mes_pt'))
 
     distintos = {(ano, mes) for ano, mes, _estrategia in achados}
     if not distintos:
@@ -344,7 +359,9 @@ def validar_competencia(
 # escritor (`competencia_apta_para_gravacao`), nunca aceita um valor de
 # estratégia arbitrário vindo de um `ResultadoItem` construído por outro
 # caminho.
-ESTRATEGIAS_COMPETENCIA_VALIDAS = frozenset({'mm_aaaa_numerico', 'nome_mes_pt'})
+ESTRATEGIAS_COMPETENCIA_VALIDAS = frozenset({
+    'mm_aaaa_numerico', 'nome_mes_pt', 'cabecalho_vinculo_mes_pt',
+})
 
 _ANO_MINIMO_PLAUSIVEL = 2000
 _ANO_MAXIMO_PLAUSIVEL = 2099

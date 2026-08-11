@@ -275,6 +275,48 @@ def test_competencia_extraida_nome_do_mes_por_extenso():
     assert r.estrategia == 'nome_mes_pt'
 
 
+def test_competencia_extraida_do_cabecalho_mensalista_do_holerite():
+    r = dominio.extrair_competencia_de_texto(
+        'Mensalista Julho de 2026\nData de pagamento: 05/08/2026')
+    assert r.status == StatusExtracaoCompetencia.ENCONTRADA
+    assert r.ano_mes == (2026, 7)
+    assert r.estrategia == 'cabecalho_vinculo_mes_pt'
+
+
+def test_competencia_extraida_do_cabecalho_horista_do_holerite():
+    r = dominio.extrair_competencia_de_texto(
+        'Horista Julho de 2026\nData de pagamento: 05/08/2026')
+    assert r.status == StatusExtracaoCompetencia.ENCONTRADA
+    assert r.ano_mes == (2026, 7)
+    assert r.estrategia == 'cabecalho_vinculo_mes_pt'
+
+
+def test_cabecalho_vinculo_nunca_confunde_admissao_com_competencia():
+    rejeitados = [
+        'Mensalista desde 03/2015',
+        'Horista admitido em 07/2026',
+        'Mensalista - Admitido em 03/2015 - Julho de 2026',
+        'Mensalista 03/2015',
+        'Mensalista desde Julho de 2026',
+    ]
+    for texto in rejeitados:
+        r = dominio.extrair_competencia_de_texto(texto)
+        assert r.status == StatusExtracaoCompetencia.NAO_ENCONTRADA, texto
+
+
+def test_cabecalho_vinculo_aceita_apenas_mes_por_extenso_adjacente():
+    aceitos = [
+        'Mensalista Julho de 2026',
+        'Mensalista: Julho/2026',
+        'Horista - Julho de 2026',
+    ]
+    for texto in aceitos:
+        r = dominio.extrair_competencia_de_texto(texto)
+        assert r.status == StatusExtracaoCompetencia.ENCONTRADA, texto
+        assert r.ano_mes == (2026, 7)
+        assert r.estrategia == 'cabecalho_vinculo_mes_pt'
+
+
 def test_competencia_extraida_nome_do_mes_com_acento_e_separador_de():
     r = dominio.extrair_competencia_de_texto('Competencia de Março de 2026')
     assert r.status == StatusExtracaoCompetencia.ENCONTRADA
