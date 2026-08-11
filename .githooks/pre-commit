@@ -146,6 +146,14 @@ SCRATCH_SCOPE_PATTERNS=(
 ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_apps_script_email_intake_remetentes.py"
   "test_interpretar_resposta_webhook.js"
+  # Exceção exata (decisão registrada, branch
+  # fix/competencia-documental-confiavel, 2026-08-11) — os dois arquivos
+  # de teste da Macro 5, mesmo caminho exato usado em ALLOWED_PATHS
+  # (.magnata/patterns.sh). Sem isto, ficariam bloqueados por
+  # SCRATCH_SCOPE_PATTERNS/SCRATCH_PATTERNS (^test_) antes mesmo de
+  # chegar à checagem de ALLOWED_PATHS.
+  "test_importacao_lote.py"
+  "test_importacao_lote_escrita.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

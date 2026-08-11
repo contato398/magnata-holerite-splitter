@@ -1940,6 +1940,160 @@ test_80_sensitive_variable_assignment_is_not_literal() {
   fi
 }
 
+# ============================================================================
+# TESTES 81-86 — Exceção nominal da Macro 5 (branch
+# fix/competencia-documental-confiavel, 2026-08-11): 6 caminhos exatos
+# (4 em ALLOWED_PATHS + 2 com exceção nominal adicional em
+# ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS, .githooks/pre-commit — mesmo
+# mecanismo já usado pela exceção de fix/remetente-dp-email-intake,
+# reaproveitado aqui, não duplicado). Mesmo padrão dos testes 69-76:
+# commit real contra o hook real (core.hooksPath aponta para
+# .githooks/pre-commit dentro de TEST_REPO), fonte única de verdade
+# (.magnata/patterns.sh) compartilhada entre hook e suíte.
+#
+# Nota sobre item 6 do comando de correção ("a verificação usada pelo
+# pre-commit está coberta pela suíte oficial"): scripts/ci/
+# validate_governance.sh nunca leu ALLOWED_PATHS (confirmado por grep —
+# só .githooks/pre-commit o faz) e seus 15 gates nomeados não têm, e
+# nunca tiveram, um gate de "escopo permitido" equivalente à Validação 6
+# do hook — gap pré-existente, não introduzido nem escondido por esta
+# correção; integrá-lo aos 15 gates seria mudança arquitetural ampla,
+# fora do escopo de uma correção mínima. O TEST 81 abaixo fecha a
+# lacuna de COBERTURA DE TESTE que existia antes desta correção
+# (test-hooks.sh, de propósito, só usa fixtures sob docs/magnata-os/
+# para nunca exercitar a Validação 6 — ver seu próprio comentário) —
+# agora a suíte oficial exercita a Validação 6 de verdade, contra o
+# hook real, usando a mesma fonte (.magnata/patterns.sh) que o CI usa
+# para tudo o mais.
+# ============================================================================
+
+# TEST 81: os 6 caminhos exatos da Macro 5 são aceitos pelo hook real.
+test_81_macro5_files_accepted() {
+  run_test 81 "Os 6 caminhos exatos da Macro 5 são aceitos" "PASS"
+
+  cd "$TEST_REPO"
+  mkdir -p magnata_os/documental/importacao_lote
+  echo "# contratos" > magnata_os/documental/importacao_lote/contratos.py
+  echo "# dominio" > magnata_os/documental/importacao_lote/dominio.py
+  echo "# escritor" > magnata_os/documental/importacao_lote/escritor.py
+  echo "# orquestrador" > magnata_os/documental/importacao_lote/orquestrador.py
+  echo "# teste" > test_importacao_lote.py
+  echo "# teste escrita" > test_importacao_lote_escrita.py
+  git add magnata_os/documental/importacao_lote/contratos.py \
+          magnata_os/documental/importacao_lote/dominio.py \
+          magnata_os/documental/importacao_lote/escritor.py \
+          magnata_os/documental/importacao_lote/orquestrador.py \
+          test_importacao_lote.py test_importacao_lote_escrita.py
+
+  if git commit -m "fix: teste 81 seis arquivos exatos da macro 5" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD magnata_os test_importacao_lote.py test_importacao_lote_escrita.py 2>/dev/null || true
+  git checkout -q -- magnata_os test_importacao_lote.py test_importacao_lote_escrita.py 2>/dev/null || true
+  rm -rf magnata_os test_importacao_lote.py test_importacao_lote_escrita.py
+}
+
+# TEST 82: outro arquivo NÃO listado dentro do mesmo diretório
+# importacao_lote/ continua bloqueado — a exceção não abre o diretório
+# inteiro, só os 4 arquivos exatos.
+test_82_other_importacao_lote_file_still_blocked() {
+  run_test 82 "Outro arquivo não autorizado em magnata_os/ continua bloqueado" "FAIL"
+
+  cd "$TEST_REPO"
+  mkdir -p magnata_os/documental/importacao_lote
+  echo "# arquivo nao autorizado" > magnata_os/documental/importacao_lote/repositorio_execucao.py
+  git add magnata_os/documental/importacao_lote/repositorio_execucao.py
+
+  if git commit -m "fix: teste 82 arquivo nao autorizado em importacao_lote" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD magnata_os/documental/importacao_lote/repositorio_execucao.py 2>/dev/null || true
+  rm -rf magnata_os
+}
+
+# TEST 83: app.py continua protegido depois da exceção da Macro 5.
+test_83_app_py_still_protected_after_macro5_exception() {
+  run_test 83 "app.py continua bloqueado" "FAIL"
+
+  cd "$TEST_REPO"
+  echo "print('x')" > app.py
+  git add app.py
+
+  if git commit -m "fix: teste 83 app.py apos excecao macro5" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD app.py 2>/dev/null || true
+  rm -f app.py
+}
+
+# TEST 84: migration continua bloqueada depois da exceção da Macro 5.
+test_84_migration_still_blocked_after_macro5_exception() {
+  run_test 84 "Migrations continuam bloqueadas" "FAIL"
+
+  cd "$TEST_REPO"
+  mkdir -p magnata_os/documental/modulo01/migrations
+  echo "CREATE TABLE x (id INT);" > magnata_os/documental/modulo01/migrations/0999_teste84.sql
+  git add magnata_os/documental/modulo01/migrations/0999_teste84.sql
+
+  if git commit -m "fix: teste 84 migration apos excecao macro5" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD magnata_os/documental/modulo01/migrations/0999_teste84.sql 2>/dev/null || true
+  rm -rf magnata_os
+}
+
+# TEST 85: arquivo de teste não listado (mesmo prefixo test_importacao_)
+# continua bloqueado — exceção nominal é por igualdade exata de caminho,
+# não por prefixo comum com os 2 arquivos autorizados.
+test_85_unlisted_test_file_still_blocked() {
+  run_test 85 "Arquivo de teste não listado continua bloqueado" "FAIL"
+
+  cd "$TEST_REPO"
+  echo "# outro teste" > test_importacao_lote_outro_cenario.py
+  git add test_importacao_lote_outro_cenario.py
+
+  if git commit -m "fix: teste 85 arquivo de teste nao listado" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD test_importacao_lote_outro_cenario.py 2>/dev/null || true
+  rm -f test_importacao_lote_outro_cenario.py
+}
+
+# TEST 86: ALLOWED_PATHS continua com fonte única — só .magnata/patterns.sh
+# define o array; nem .githooks/pre-commit nem
+# scripts/ci/validate_governance.sh criam uma segunda lista paralela.
+# Guarda de regressão contra "duplicar lista em dois lugares".
+test_86_allowed_paths_single_source_of_truth() {
+  run_test 86 "ALLOWED_PATHS tem fonte única (sem lista duplicada)" "PASS"
+
+  local arquivos_com_definicao
+  arquivos_com_definicao=$(grep -l '^ALLOWED_PATHS=' \
+    "$PROJECT_ROOT/.magnata/patterns.sh" \
+    "$PROJECT_ROOT/.githooks/pre-commit" \
+    "$PROJECT_ROOT/scripts/ci/validate_governance.sh" 2>/dev/null | wc -l)
+
+  if [[ "$arquivos_com_definicao" -eq 1 ]]; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+}
+
 main() {
   echo -e "${BLUE}===================================="
   echo "SUÍTE DE TESTES DE GOVERNANÇA"
@@ -2036,6 +2190,12 @@ main() {
   test_78_migration_authorization_hash_mismatch || true
   test_79_modified_migration_never_authorized || true
   test_80_sensitive_variable_assignment_is_not_literal || true
+  test_81_macro5_files_accepted || true
+  test_82_other_importacao_lote_file_still_blocked || true
+  test_83_app_py_still_protected_after_macro5_exception || true
+  test_84_migration_still_blocked_after_macro5_exception || true
+  test_85_unlisted_test_file_still_blocked || true
+  test_86_allowed_paths_single_source_of_truth || true
 
   # Report
   echo ""
