@@ -1,0 +1,4 @@
+# Autorização humana específica — PR 17 — 2026-08-10
+# Somente migrations novas; os IDs canônicos do Git invalidam qualquer alteração posterior.
+6f59213f97ba15c6ac664a2b1c6116e40fb84aaf  magnata_os/documental/modulo01/migrations/0009_itens_importacao_lote.sql
+775405bd009008cf32261241e672859e560cf8c1  magnata_os/documental/modulo01/migrations/0009_itens_importacao_lote_rollback.sql

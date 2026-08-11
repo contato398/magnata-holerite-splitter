@@ -197,18 +197,22 @@ gate_protected_migrations() {
       # Modificação/remoção continua sempre bloqueada e manifesto antigo não
       # pode ser reutilizado em outro PR.
       if [[ "$status" == "A" && $authorization_ready -eq 1 ]]; then
-        local actual_hash expected_hash authorized_path
-        actual_hash=$(sha256sum "$PROJECT_ROOT/$file" | awk '{print tolower($1)}')
-        while read -r expected_hash authorized_path; do
-          [[ -z "$expected_hash" || "$expected_hash" == \#* ]] && continue
-          if [[ "$authorized_path" == "$file" && "${expected_hash,,}" == "$actual_hash" ]]; then
+        local actual_blob expected_blob authorized_path
+        if [[ -n "$HEAD_REF" ]]; then
+          actual_blob=$(git rev-parse "${HEAD_REF}:$file")
+        else
+          actual_blob=$(git hash-object --filters --path="$file" "$PROJECT_ROOT/$file")
+        fi
+        while read -r expected_blob authorized_path; do
+          [[ -z "$expected_blob" || "$expected_blob" == \#* ]] && continue
+          if [[ "$authorized_path" == "$file" && "${expected_blob,,}" == "$actual_blob" ]]; then
             continue 2
           fi
         done < "$PROJECT_ROOT/$MIGRATION_AUTHORIZATION_FILE"
       fi
 
       echo -e "${RED}${MSG_BLOCKED}: Migrations foram alteradas${NC}"
-      echo "  $file não possui autorização SHA-256 válida e nova neste diff"
+      echo "  $file não possui autorização por objeto Git válida e nova neste diff"
       return $EXIT_BLOCKED
     fi
   done <<< "$changed_with_status"

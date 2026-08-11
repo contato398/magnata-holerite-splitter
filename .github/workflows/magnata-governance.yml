@@ -66,7 +66,7 @@ jobs:
               # PR inteiro (merge-base), nunca só o último commit.
               BASE="${{ github.event.pull_request.base.sha }}"
               HEAD="${{ github.event.pull_request.head.sha }}"
-              MIGRATION_AUTHORIZATION=".magnata/migration-authorizations/pr-${{ github.event.pull_request.number }}.sha256"
+              MIGRATION_AUTHORIZATION=".magnata/migration-authorizations/pr-${{ github.event.pull_request.number }}.gitblob"
               ;;
             push)
               MIGRATION_AUTHORIZATION=""
