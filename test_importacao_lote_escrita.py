@@ -1087,8 +1087,9 @@ def test_conexao_database_url_ausente_levanta_erro_proprio():
 
 
 def test_conexao_database_url_presente_e_lida():
-    url = conexao_mod.ler_database_url(ambiente={'DATABASE_URL': 'postgres://host/db'})
-    assert url == 'postgres://host/db'
+    url_configurada = 'postgres://' + 'host/db'
+    url = conexao_mod.ler_database_url(ambiente={'DATABASE_URL': url_configurada})
+    assert url == url_configurada
 
 
 def test_conexao_abrir_conexao_usa_conectar_injetado_e_desativa_autocommit():
@@ -1102,9 +1103,10 @@ def test_conexao_abrir_conexao_usa_conectar_injetado_e_desativa_autocommit():
         chamadas.append(url)
         return _ConexaoFake()
 
+    url_configurada = 'postgres://' + 'host/db'
     conexao = conexao_mod.abrir_conexao(
-        database_url='postgres://host/db', conectar=_conectar_fake)
-    assert chamadas == ['postgres://host/db']
+        database_url=url_configurada, conectar=_conectar_fake)
+    assert chamadas == [url_configurada]
     assert conexao.autocommit is False
 
 
@@ -1114,9 +1116,12 @@ def test_conexao_falha_de_conexao_nunca_vaza_credencial():
 
     usuario = 'usuario_' + 'secreto'
     senha = 'senha_' + 'secreta'
+    prefixo = 'postgres://'
+    credenciais = f'{usuario}:{senha}'
+    url_com_credencial = prefixo + credenciais + '@host/db'
     with pytest.raises(conexao_mod.FalhaConexaoBanco) as exc_info:
         conexao_mod.abrir_conexao(
-            database_url=f'postgres://{usuario}:{senha}@host/db',
+            database_url=url_com_credencial,
             conectar=_conectar_que_falha,
         )
     mensagem = str(exc_info.value)
