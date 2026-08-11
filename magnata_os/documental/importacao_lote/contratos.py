@@ -47,6 +47,45 @@ class MotivoSanitizado(str, Enum):
     DOCUMENTO_JA_EXISTENTE = 'documento_ja_existente'
     RELATORIO_GERAL_EXCLUIDO = 'relatorio_geral_excluido_do_fluxo'
     LEITURA_AIRTABLE_INDISPONIVEL = 'leitura_airtable_indisponivel'
+    # Macro 5 — Competência documental confiável.
+    COMPETENCIA_NAO_EXTRAIVEL = 'competencia_nao_extraivel'
+    COMPETENCIA_AMBIGUA = 'competencia_ambigua'
+    COMPETENCIA_DIVERGENTE = 'competencia_divergente'
+
+
+class StatusExtracaoCompetencia(str, Enum):
+    """Resultado BRUTO da extração de competência do CONTEÚDO do PDF —
+    nunca envolve a competência esperada (essa comparação é
+    `ResultadoCompetencia`, um passo separado). Dimensão independente da
+    correspondência de entidade (CLAUDE.md raiz §4: nunca fundir
+    dimensões distintas num único campo)."""
+    ENCONTRADA = 'encontrada'
+    AMBIGUA = 'ambigua'
+    NAO_ENCONTRADA = 'nao_encontrada'
+
+
+class ResultadoCompetencia(str, Enum):
+    """Resultado da VALIDAÇÃO da competência extraída contra a
+    competência ESPERADA (`ConfiguracaoExecucao.ano`/`.mes`). Só
+    `CONFIRMADA` permite `pronto_para_gravacao=True` — item divergente,
+    ambíguo ou não-extraível fica isolado e bloqueado nesta primeira
+    versão, nunca remapeado automaticamente."""
+    CONFIRMADA = 'confirmada'
+    DIVERGENTE = 'divergente'
+    AMBIGUA = 'ambigua'
+    NAO_EXTRAIVEL = 'nao_extraivel'
+
+
+@dataclass(frozen=True)
+class CompetenciaExtraida:
+    """Resultado puro da extração de competência do texto do PDF.
+    `ano_mes` só é preenchido quando `status == ENCONTRADA` (exatamente
+    um valor distinto no texto). `estrategia` é um código sanitizado de
+    auditoria (ex.: 'mm_aaaa_numerico', 'nome_mes_pt') — nunca o texto
+    bruto nem qualquer trecho do PDF (requisito obrigatório Macro 5)."""
+    status: StatusExtracaoCompetencia
+    ano_mes: tuple[int, int] | None
+    estrategia: str | None
 
 
 @dataclass(frozen=True)
@@ -125,7 +164,14 @@ class ResultadoItem:
     pedido no comando (exact/duplicate/ambiguous/not_found/conflict/
     invalid) — é o campo primário do relatório. `pronto_para_gravacao`
     é só True quando EXACT + validado + confirmado sem duplicidade por
-    leitura real no Airtable (nunca por omissão de leitura)."""
+    leitura real no Airtable (nunca por omissão de leitura) + competência
+    do PDF confirmada e igual à esperada (Macro 5).
+
+    `resultado_competencia`/`competencia_ano_mes_extraido`/
+    `competencia_estrategia`: dimensão de competência — SEMPRE
+    independente de `classificacao` (correspondência de entidade), nunca
+    fundida com ela. Só valores de mês/ano e um código de estratégia
+    sanitizado são guardados aqui — nunca texto/trecho do PDF."""
     manifesto_item_id: str
     tipo_documental: TipoDocumental
     classificacao: ClassificacaoCorrespondencia
@@ -135,3 +181,6 @@ class ResultadoItem:
     identidade_documental_truncada: str | None
     motivo: MotivoSanitizado
     criterio_usado: str | None = None
+    resultado_competencia: ResultadoCompetencia | None = None
+    competencia_ano_mes_extraido: tuple[int, int] | None = None
+    competencia_estrategia: str | None = None

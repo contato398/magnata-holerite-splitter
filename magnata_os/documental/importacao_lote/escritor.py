@@ -34,6 +34,20 @@ trilha, sem depender de log.
 Airtable — nunca é persistido em `ItemExecucao`, nunca aparece em
 `ResultadoEscrita`, nunca é logado (mesma disciplina de `cpf_extraido`
 em orquestrador.py).
+
+Relatório agregado ANTES de qualquer escrita (Macro 5, requisito
+obrigatório): `escrever_item` é uma função de UM item — nunca decide
+batch. `executar_escrita_do_lote`, no fim deste arquivo, é o ÚNICO
+ponto sancionado para escrever um LOTE inteiro, e o gate é estrutural,
+não um `if`: sua assinatura exige um `orquestrador.RelatorioLote` já
+construído — por definição, isso só existe depois que TODO o manifesto
+passou por `processar_holerite`/`processar_extrato` (ver
+`orquestrador.py`). Não existe, e não deve existir, uma variante que
+grave um item conforme ele é classificado — é sempre "classifica tudo,
+depois grava o que for elegível do relatório completo", nunca o
+inverso. `escrever_item` nunca é chamado fora deste arquivo com um
+`ResultadoItem` que não veio de dentro de um `RelatorioLote.itens` já
+concluído.
 """
 
 from __future__ import annotations
@@ -57,6 +71,7 @@ from .contratos_execucao import (
     VersionamentoLogico,
 )
 from .dominio_versionamento import ResultadoVerificacaoVersao
+from .orquestrador import RelatorioLote
 from .repositorio_execucao import (
     RepositorioEventosItemExecucao,
     RepositorioItensExecucao,
@@ -144,6 +159,41 @@ def escrever_item(
             situacao=SituacaoItemExecucao.IGNORADO_NAO_EXACT, documento_id=None,
             external_record_id=None, processado=False,
             motivo=f'classificacao={resultado.classificacao.value} nao e candidato automatico',
+        )
+
+    # ── 0.5 Defesa obrigatória (Macro 5, revisão adversarial): competência
+    # confirmada e igual à esperada. NUNCA confia só no enum
+    # `resultado_competencia` informado pelo `ResultadoItem` (que pode ter
+    # vindo de qualquer chamador) — reconfirma diretamente aqui, a partir
+    # dos valores primitivos (`competencia_ano_mes_extraido`,
+    # `competencia_estrategia`) contra `config.ano`/`config.mes`, via
+    # `dominio.competencia_apta_para_gravacao` (mesma função usada por
+    # `dominio.classificar_item`, chamada de novo aqui de forma
+    # independente — defesa em profundidade real, não decorativa).
+    # Recusa também quando `resultado_competencia` diz CONFIRMADA mas os
+    # valores de evidência estão ausentes/inconsistentes/fora de faixa,
+    # ou a estratégia não é uma das que este módulo sabe produzir.
+    # Bloqueia ANTES de qualquer escrita (nenhum ItemExecucao é sequer
+    # criado neste ramo), mesma forma do gate 0 acima. Reaproveita
+    # `IGNORADO_NAO_EXACT` (vocabulário fechado de `SituacaoItemExecucao`,
+    # migration 0009 já aplicada — não é alterada nesta fase) — o
+    # `motivo` deixa explícito que o bloqueio é por competência, nunca
+    # por classificação de entidade.
+    if not dominio.competencia_apta_para_gravacao(
+        resultado.resultado_competencia, resultado.competencia_ano_mes_extraido,
+        resultado.competencia_estrategia, config.ano, config.mes,
+    ):
+        valor_competencia = resultado.resultado_competencia.value if resultado.resultado_competencia else None
+        return ResultadoEscrita(
+            item_importacao_id=None, manifesto_item_id=resultado.manifesto_item_id,
+            situacao=SituacaoItemExecucao.IGNORADO_NAO_EXACT, documento_id=None,
+            external_record_id=None, processado=False,
+            motivo=(
+                f'resultado_competencia={valor_competencia} '
+                f'ano_mes_extraido={resultado.competencia_ano_mes_extraido} '
+                f'estrategia={resultado.competencia_estrategia} '
+                f'nao apto para gravacao -- bloqueado antes de qualquer escrita'
+            ),
         )
 
     agora = relogio()
@@ -432,3 +482,77 @@ def _resultado_de(item: ItemExecucao, resultado: ResultadoItem, processado: bool
         processado=processado,
         motivo=item.ultimo_erro_sanitizado,
     )
+
+
+# ============================================================================
+# Escrita do LOTE — único ponto sancionado (Macro 5, requisito "relatório
+# agregado completo antes de qualquer escrita")
+# ============================================================================
+
+@dataclasses.dataclass(frozen=True)
+class DadosEscritaItem:
+    """Dados de UM item que `ResultadoItem` nunca guarda por desenho —
+    `pdf_bytes` (conteúdo físico) e os dois campos de manifesto que são
+    PII (`nome_arquivo`, `nome_referencia`) e por isso nunca ficam no
+    relatório agregado, só existem em memória no momento da escrita."""
+    pdf_bytes: bytes
+    nome_arquivo: str
+    nome_referencia: str
+
+
+def executar_escrita_do_lote(
+    relatorio: RelatorioLote,
+    obter_dados_escrita: Callable[[ResultadoItem], Optional[DadosEscritaItem]],
+    config: ConfiguracaoExecucao,
+    lote_id: str,
+    repositorio_documentos: RepositorioDocumentos,
+    repositorio_historico: RepositorioHistorico,
+    repositorio_itens: RepositorioItensExecucao,
+    repositorio_eventos_item: RepositorioEventosItemExecucao,
+    repositorio_versionamento: RepositorioVersionamentoLogico,
+    escritor_airtable: EscritorAirtable,
+    gerador_item_execucao_id: Callable[[], str] = gerar_item_execucao_id,
+    gerador_documento_id: Callable[[], str] = gerar_documento_id,
+    relogio: Callable[[], datetime] = _relogio_padrao,
+) -> list[ResultadoEscrita]:
+    """ÚNICO ponto sancionado para escrever um LOTE inteiro.
+
+    O GATE "relatório agregado completo antes de qualquer escrita" é
+    ESTRUTURAL, não um `if` que se possa esquecer de chamar: esta função
+    só aceita um `orquestrador.RelatorioLote` já construído como
+    primeiro parâmetro — por definição, um `RelatorioLote` só existe
+    depois que TODO o manifesto do lote passou por
+    `processar_holerite`/`processar_extrato` (é assim que `.itens` é
+    populado, inteiramente fora deste módulo, antes de chegar aqui).
+    Não existe, e este módulo nunca oferece, uma variante que grave um
+    item conforme ele vai sendo classificado — sempre "classifica tudo
+    primeiro, grava o que for elegível do relatório já completo depois".
+
+    Itera só `relatorio.itens` (nunca um `ResultadoItem` avulso) e
+    preserva a ordem do relatório. Cada item passa por `escrever_item`,
+    que já tem seus dois gates (0: EXACT+pronto_para_gravacao; 0.5:
+    competência apta) — itens não elegíveis (qualquer motivo: entidade,
+    duplicidade, competência) nunca chegam a tocar o Airtable, mesmo
+    fazendo parte do relatório. Um item do relatório para o qual
+    `obter_dados_escrita` não consegue fornecer PDF (ex.: já descartado
+    da memória entre o dry-run e a escrita) também nunca é escrito —
+    fica marcado, nunca escrito "às cegas".
+    """
+    resultados: list[ResultadoEscrita] = []
+    for item in relatorio.itens:
+        dados = obter_dados_escrita(item)
+        if dados is None:
+            resultados.append(ResultadoEscrita(
+                item_importacao_id=None, manifesto_item_id=item.manifesto_item_id,
+                situacao=SituacaoItemExecucao.IGNORADO_NAO_EXACT, documento_id=None,
+                external_record_id=None, processado=False,
+                motivo='dados de escrita (pdf_bytes) indisponiveis para este item do relatorio',
+            ))
+            continue
+        resultados.append(escrever_item(
+            item, dados.pdf_bytes, dados.nome_arquivo, dados.nome_referencia, config, lote_id,
+            repositorio_documentos, repositorio_historico, repositorio_itens,
+            repositorio_eventos_item, repositorio_versionamento, escritor_airtable,
+            gerador_item_execucao_id, gerador_documento_id, relogio,
+        ))
+    return resultados

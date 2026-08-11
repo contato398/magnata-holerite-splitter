@@ -359,6 +359,20 @@ ALLOWED_PATHS=(
   "^docs/decisoes/remetentes-dp-fiscal\.md$"
   "^test_apps_script_email_intake_remetentes\.py$"
   "^test_interpretar_resposta_webhook\.js$"
+  # Exceção exata e restrita (decisão registrada, branch
+  # fix/competencia-documental-confiavel, 2026-08-11) — Macro 5,
+  # competência documental confiável. Só estes 6 caminhos exatos, não um
+  # padrão genérico — não libera "^magnata_os/" nem "^test_" de forma
+  # ampla; qualquer outro arquivo em magnata_os/ (inclusive outro arquivo
+  # do mesmo diretório importacao_lote/) ou outro test_*.py continua
+  # bloqueado, cada um batido por igualdade de string completa via
+  # âncora $ no fim.
+  "^magnata_os/documental/importacao_lote/contratos\.py$"
+  "^magnata_os/documental/importacao_lote/dominio\.py$"
+  "^magnata_os/documental/importacao_lote/escritor\.py$"
+  "^magnata_os/documental/importacao_lote/orquestrador\.py$"
+  "^test_importacao_lote\.py$"
+  "^test_importacao_lote_escrita\.py$"
 )
 
 # ============================================================================

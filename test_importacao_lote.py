@@ -20,10 +20,13 @@ from magnata_os.documental.importacao_lote.contratos import (
     CandidatoCliente,
     CandidatoFuncionario,
     ClassificacaoCorrespondencia,
+    CompetenciaExtraida,
     ConfiguracaoExecucao,
     ItemManifestoExtrato,
     ItemManifestoHolerite,
     MotivoSanitizado,
+    ResultadoCompetencia,
+    StatusExtracaoCompetencia,
     TipoDocumental,
 )
 from magnata_os.documental.importacao_lote.adapters import pacote
@@ -59,13 +62,23 @@ def test_leitura_existentes_percorre_paginacao_airtable():
 def _gerar_pdf_real_sintetico(texto: str = 'documento sintetico de teste') -> bytes:
     """PDF de verdade (estrutura válida, parseável por pdfplumber), com
     texto sintético embutido — usado nos testes que passam pela
-    orquestração (que extrai texto do PDF). Nunca contém dado real."""
+    orquestração (que extrai texto do PDF). Nunca contém dado real.
+    `multi_cell` (em vez de `cell`) preserva quebras de linha (`\\n`) no
+    texto extraído por pdfplumber -- necessário para os testes de
+    competência que dependem de campos em linhas separadas (mesmo padrão
+    de layout de um holerite/extrato real)."""
     from fpdf import FPDF
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font('Helvetica', size=12)
-    pdf.cell(0, 10, text=texto)
+    pdf.multi_cell(0, 10, text=texto)
     return bytes(pdf.output())
+
+
+def _gerar_pdf_com_linhas(*linhas: str) -> bytes:
+    """Atalho para montar um PDF sintético com um campo por linha —
+    mesma granularidade que `pdfplumber` produz de um documento real."""
+    return _gerar_pdf_real_sintetico('\n'.join(linhas))
 
 
 CONFIG = ConfiguracaoExecucao(
@@ -227,13 +240,351 @@ def test_repeticao_do_dry_run_produz_mesmo_resultado():
     a mesma classificação e as mesmas identidades — sem duplicar."""
     candidatos = [CandidatoFuncionario('recFUNC100', '444.444.444-44', 'REPETICAO SINTETICA')]
     item = ItemManifestoHolerite('holerite:100', '1', 'Repetição Sintética', '***.***.444-44', 'x.pdf', 1)
-    pdf_bytes = _gerar_pdf_real_sintetico('CPF 444.444.444-44 dado sintetico de teste')
+    pdf_bytes = _gerar_pdf_real_sintetico(
+        'CPF 444.444.444-44 dado sintetico de teste - Competencia: 07/2026')
 
     r1 = processar_holerite(item, pdf_bytes, CONFIG, candidatos, set())
     r2 = processar_holerite(item, pdf_bytes, CONFIG, candidatos, set())
     assert r1.classificacao == r2.classificacao == ClassificacaoCorrespondencia.EXACT
     assert r1.identidade_documental == r2.identidade_documental
     assert r1.pronto_para_gravacao == r2.pronto_para_gravacao is True
+    assert r1.resultado_competencia == r2.resultado_competencia == ResultadoCompetencia.CONFIRMADA
+
+
+# ── Competência documental (Macro 5) ─────────────────────────────────────
+#
+# Revisão adversarial: uma data só conta como candidata a competência
+# quando aparece na MESMA LINHA de um marcador semântico explícito
+# ('competência'/'mês de referência'). Data de pagamento, admissão,
+# período de férias, impressão etc. nunca têm essas palavras — ficam de
+# fora por construção, mesmo em formato MM/AAAA. Texto extraído de PDF
+# já vem quebrado em linhas por `pdfplumber` — mesma granularidade usada
+# aqui (`_gerar_pdf_com_linhas`).
+
+def test_competencia_extraida_formato_numerico():
+    r = dominio.extrair_competencia_de_texto('Holerite sintetico - Competencia: 07/2026')
+    assert r.status == StatusExtracaoCompetencia.ENCONTRADA
+    assert r.ano_mes == (2026, 7)
+    assert r.estrategia == 'mm_aaaa_numerico'
+
+
+def test_competencia_extraida_nome_do_mes_por_extenso():
+    r = dominio.extrair_competencia_de_texto('Competencia: Julho/2026 - documento sintetico')
+    assert r.status == StatusExtracaoCompetencia.ENCONTRADA
+    assert r.ano_mes == (2026, 7)
+    assert r.estrategia == 'nome_mes_pt'
+
+
+def test_competencia_extraida_do_cabecalho_mensalista_do_holerite():
+    r = dominio.extrair_competencia_de_texto(
+        'Mensalista Julho de 2026\nData de pagamento: 05/08/2026')
+    assert r.status == StatusExtracaoCompetencia.ENCONTRADA
+    assert r.ano_mes == (2026, 7)
+    assert r.estrategia == 'cabecalho_vinculo_mes_pt'
+
+
+def test_competencia_extraida_do_cabecalho_horista_do_holerite():
+    r = dominio.extrair_competencia_de_texto(
+        'Horista Julho de 2026\nData de pagamento: 05/08/2026')
+    assert r.status == StatusExtracaoCompetencia.ENCONTRADA
+    assert r.ano_mes == (2026, 7)
+    assert r.estrategia == 'cabecalho_vinculo_mes_pt'
+
+
+def test_cabecalho_vinculo_nunca_confunde_admissao_com_competencia():
+    rejeitados = [
+        'Mensalista desde 03/2015',
+        'Horista admitido em 07/2026',
+        'Mensalista - Admitido em 03/2015 - Julho de 2026',
+        'Mensalista 03/2015',
+        'Mensalista desde Julho de 2026',
+    ]
+    for texto in rejeitados:
+        r = dominio.extrair_competencia_de_texto(texto)
+        assert r.status == StatusExtracaoCompetencia.NAO_ENCONTRADA, texto
+
+
+def test_cabecalho_vinculo_aceita_apenas_mes_por_extenso_adjacente():
+    aceitos = [
+        'Mensalista Julho de 2026',
+        'Mensalista: Julho/2026',
+        'Horista - Julho de 2026',
+    ]
+    for texto in aceitos:
+        r = dominio.extrair_competencia_de_texto(texto)
+        assert r.status == StatusExtracaoCompetencia.ENCONTRADA, texto
+        assert r.ano_mes == (2026, 7)
+        assert r.estrategia == 'cabecalho_vinculo_mes_pt'
+
+
+def test_competencia_extraida_nome_do_mes_com_acento_e_separador_de():
+    r = dominio.extrair_competencia_de_texto('Competencia de Março de 2026')
+    assert r.status == StatusExtracaoCompetencia.ENCONTRADA
+    assert r.ano_mes == (2026, 3)
+
+
+def test_competencia_nao_encontrada_quando_texto_nao_tem_padrao():
+    r = dominio.extrair_competencia_de_texto('documento sintetico sem nenhuma data reconhecivel')
+    assert r.status == StatusExtracaoCompetencia.NAO_ENCONTRADA
+    assert r.ano_mes is None
+
+
+def test_competencia_texto_vazio_e_nao_encontrada():
+    r = dominio.extrair_competencia_de_texto('')
+    assert r.status == StatusExtracaoCompetencia.NAO_ENCONTRADA
+
+
+def test_competencia_ambigua_quando_duas_linhas_marcadas_divergem():
+    texto = 'Competencia: 07/2026\nCompetencia: 08/2026'
+    r = dominio.extrair_competencia_de_texto(texto)
+    assert r.status == StatusExtracaoCompetencia.AMBIGUA
+    assert r.ano_mes is None
+
+
+def test_competencia_mesmo_valor_repetido_na_mesma_linha_nao_e_ambigua():
+    r = dominio.extrair_competencia_de_texto('Competencia 07/2026, Julho/2026 conforme contrato')
+    assert r.status == StatusExtracaoCompetencia.ENCONTRADA
+    assert r.ano_mes == (2026, 7)
+
+
+def test_competencia_data_de_pagamento_dd_mm_aaaa_nunca_conta_sozinha():
+    """Data de pagamento não tem marcador — nunca é tratada como
+    competência por coincidência de formato, mesmo sendo a única data do
+    texto."""
+    r = dominio.extrair_competencia_de_texto('Data de pagamento: 05/07/2026, sem outra referencia')
+    assert r.status == StatusExtracaoCompetencia.NAO_ENCONTRADA
+
+
+def test_competencia_e_data_de_pagamento_diferentes_extrai_so_a_marcada():
+    texto = 'Competencia: 07/2026\nData de pagamento: 05/08/2026'
+    r = dominio.extrair_competencia_de_texto(texto)
+    assert r.status == StatusExtracaoCompetencia.ENCONTRADA
+    assert r.ano_mes == (2026, 7)
+
+
+def test_competencia_e_data_de_admissao_extrai_so_a_marcada():
+    texto = 'Competencia: 07/2026\nData de admissao: 15/03/2019'
+    r = dominio.extrair_competencia_de_texto(texto)
+    assert r.status == StatusExtracaoCompetencia.ENCONTRADA
+    assert r.ano_mes == (2026, 7)
+
+
+def test_competencia_e_periodo_de_ferias_extrai_so_a_marcada():
+    texto = 'Periodo de ferias: 01/2026 a 02/2026\nCompetencia: 07/2026'
+    r = dominio.extrair_competencia_de_texto(texto)
+    assert r.status == StatusExtracaoCompetencia.ENCONTRADA
+    assert r.ano_mes == (2026, 7)
+
+
+def test_competencia_varios_mm_aaaa_alheios_mas_somente_uma_marcada():
+    texto = (
+        'Periodo de ferias: 01/2026 a 02/2026\n'
+        'Data de pagamento: 05/08/2026\n'
+        'Data de admissao: 03/2015\n'
+        'Competencia: 07/2026'
+    )
+    r = dominio.extrair_competencia_de_texto(texto)
+    assert r.status == StatusExtracaoCompetencia.ENCONTRADA
+    assert r.ano_mes == (2026, 7)
+    assert r.estrategia == 'mm_aaaa_numerico'
+
+
+def test_competencia_mes_por_extenso_em_texto_que_nao_indica_competencia():
+    """'Julho de 2026' aparece no texto, mas sem nenhum marcador
+    semântico na mesma linha (é uma data de impressão, não competência)
+    — nunca vira uma confirmação por coincidência."""
+    texto = 'Este contracheque foi impresso em Julho de 2026 apenas para conferencia interna.'
+    r = dominio.extrair_competencia_de_texto(texto)
+    assert r.status == StatusExtracaoCompetencia.NAO_ENCONTRADA
+
+
+def test_competencia_duas_competencias_explicitamente_marcadas_e_divergentes():
+    texto = 'Competencia: Julho/2026\nCompetencia: Agosto/2026'
+    r = dominio.extrair_competencia_de_texto(texto)
+    assert r.status == StatusExtracaoCompetencia.AMBIGUA
+
+
+def test_competencia_ano_fora_do_intervalo_valido_nunca_e_aceito():
+    r = dominio.extrair_competencia_de_texto('Competencia: 07/1899')
+    assert r.status == StatusExtracaoCompetencia.NAO_ENCONTRADA
+
+
+def test_competencia_mes_invalido_nunca_e_aceito():
+    r = dominio.extrair_competencia_de_texto('Competencia: 13/2026')
+    assert r.status == StatusExtracaoCompetencia.NAO_ENCONTRADA
+
+
+def test_competencia_variacoes_de_caixa_acento_e_espacos():
+    variantes = [
+        'COMPETÊNCIA: 07/2026',
+        'competência:07/2026',
+        'CoMpEtEnCiA :  07 / 2026',
+        '  competencia   07/2026  ',
+    ]
+    for texto in variantes:
+        r = dominio.extrair_competencia_de_texto(texto)
+        assert r.status == StatusExtracaoCompetencia.ENCONTRADA, f'falhou para: {texto!r}'
+        assert r.ano_mes == (2026, 7), f'falhou para: {texto!r}'
+
+
+def test_competencia_marcador_mes_de_referencia_tambem_e_reconhecido():
+    r = dominio.extrair_competencia_de_texto('Mes de referencia: Julho/2026')
+    assert r.status == StatusExtracaoCompetencia.ENCONTRADA
+    assert r.ano_mes == (2026, 7)
+
+
+def test_validar_competencia_confirmada():
+    extraida = CompetenciaExtraida(StatusExtracaoCompetencia.ENCONTRADA, (2026, 7), 'mm_aaaa_numerico')
+    assert dominio.validar_competencia(extraida, 2026, 7) == ResultadoCompetencia.CONFIRMADA
+
+
+def test_validar_competencia_divergente():
+    extraida = CompetenciaExtraida(StatusExtracaoCompetencia.ENCONTRADA, (2026, 6), 'mm_aaaa_numerico')
+    assert dominio.validar_competencia(extraida, 2026, 7) == ResultadoCompetencia.DIVERGENTE
+
+
+def test_validar_competencia_ambigua_repassada():
+    extraida = CompetenciaExtraida(StatusExtracaoCompetencia.AMBIGUA, None, None)
+    assert dominio.validar_competencia(extraida, 2026, 7) == ResultadoCompetencia.AMBIGUA
+
+
+def test_validar_competencia_nao_extraivel_repassada():
+    extraida = CompetenciaExtraida(StatusExtracaoCompetencia.NAO_ENCONTRADA, None, None)
+    assert dominio.validar_competencia(extraida, 2026, 7) == ResultadoCompetencia.NAO_EXTRAIVEL
+
+
+# ── competencia_apta_para_gravacao (defesa em profundidade, revisão
+# adversarial) — nunca confia só no enum, reconfirma por valor ─────────
+
+def test_apta_quando_tudo_consistente_e_confirmado():
+    assert dominio.competencia_apta_para_gravacao(
+        ResultadoCompetencia.CONFIRMADA, (2026, 7), 'mm_aaaa_numerico', 2026, 7) is True
+
+
+def test_nao_apta_quando_resultado_competencia_ausente():
+    assert dominio.competencia_apta_para_gravacao(
+        None, (2026, 7), 'mm_aaaa_numerico', 2026, 7) is False
+
+
+def test_nao_apta_quando_resultado_competencia_divergente():
+    assert dominio.competencia_apta_para_gravacao(
+        ResultadoCompetencia.DIVERGENTE, (2026, 6), 'mm_aaaa_numerico', 2026, 7) is False
+
+
+def test_nao_apta_quando_ano_mes_extraido_ausente_mesmo_com_confirmada():
+    """Defesa em profundidade: mesmo que um chamador tenha (incorretamente)
+    marcado CONFIRMADA sem preencher o valor extraído, a função nunca
+    confia só no enum."""
+    assert dominio.competencia_apta_para_gravacao(
+        ResultadoCompetencia.CONFIRMADA, None, 'mm_aaaa_numerico', 2026, 7) is False
+
+
+def test_nao_apta_quando_estrategia_ausente_mesmo_com_confirmada():
+    assert dominio.competencia_apta_para_gravacao(
+        ResultadoCompetencia.CONFIRMADA, (2026, 7), None, 2026, 7) is False
+
+
+def test_nao_apta_quando_estrategia_invalida_mesmo_com_confirmada():
+    """Código de estratégia arbitrário (fora da lista branca do que este
+    módulo sabe produzir) nunca é aceito, mesmo com todo o resto
+    consistente."""
+    assert dominio.competencia_apta_para_gravacao(
+        ResultadoCompetencia.CONFIRMADA, (2026, 7), 'estrategia_inventada', 2026, 7) is False
+
+
+def test_nao_apta_quando_confirmada_mas_valor_extraido_diverge_do_esperado():
+    """O caso mais adversarial: status CONFIRMADA, mas o valor extraído
+    de fato não bate com o esperado (ex.: enum calculado com dados
+    trocados por outro caminho) — a reconfirmação direta por valor pega
+    essa inconsistência mesmo com o enum dizendo o contrário."""
+    assert dominio.competencia_apta_para_gravacao(
+        ResultadoCompetencia.CONFIRMADA, (2026, 8), 'mm_aaaa_numerico', 2026, 7) is False
+
+
+def test_nao_apta_quando_mes_esperado_fora_de_faixa():
+    assert dominio.competencia_apta_para_gravacao(
+        ResultadoCompetencia.CONFIRMADA, (2026, 7), 'mm_aaaa_numerico', 2026, 13) is False
+
+
+def test_nao_apta_quando_mes_esperado_zero():
+    assert dominio.competencia_apta_para_gravacao(
+        ResultadoCompetencia.CONFIRMADA, (2026, 7), 'mm_aaaa_numerico', 2026, 0) is False
+
+
+def test_nao_apta_quando_ano_esperado_implausivel():
+    assert dominio.competencia_apta_para_gravacao(
+        ResultadoCompetencia.CONFIRMADA, (1899, 7), 'mm_aaaa_numerico', 1899, 7) is False
+
+
+def test_nao_apta_quando_mes_extraido_fora_de_faixa():
+    assert dominio.competencia_apta_para_gravacao(
+        ResultadoCompetencia.CONFIRMADA, (2026, 0), 'mm_aaaa_numerico', 2026, 0) is False
+
+
+def test_holerite_bloqueado_por_competencia_divergente_mas_entidade_continua_exact():
+    """Requisito obrigatório: identificação da entidade e validação da
+    competência são dimensões independentes — a entidade foi resolvida
+    corretamente (classificacao continua EXACT), só pronto_para_gravacao
+    cai por causa da competência divergente."""
+    candidatos = [CandidatoFuncionario('recFUNC900', '900.900.900-90', 'COMPETENCIA DIVERGENTE SINTETICO')]
+    item = ItemManifestoHolerite('holerite:900', '1', 'Competencia Divergente Sintetico', '***.***.900-90', 'x.pdf', 1)
+    pdf_bytes = _gerar_pdf_real_sintetico('CPF 900.900.900-90 - Competencia: 06/2026')
+    r = processar_holerite(item, pdf_bytes, CONFIG, candidatos, set())
+    assert r.classificacao == ClassificacaoCorrespondencia.EXACT
+    assert r.pronto_para_gravacao is False
+    assert r.resultado_competencia == ResultadoCompetencia.DIVERGENTE
+    assert r.motivo == MotivoSanitizado.COMPETENCIA_DIVERGENTE
+    assert r.competencia_ano_mes_extraido == (2026, 6)
+
+
+def test_holerite_bloqueado_por_competencia_nao_extraivel():
+    candidatos = [CandidatoFuncionario('recFUNC901', '901.901.901-91', 'SEM COMPETENCIA SINTETICO')]
+    item = ItemManifestoHolerite('holerite:901', '1', 'Sem Competencia Sintetico', '***.***.901-91', 'x.pdf', 1)
+    pdf_bytes = _gerar_pdf_real_sintetico('CPF 901.901.901-91 sem nenhuma data reconhecivel')
+    r = processar_holerite(item, pdf_bytes, CONFIG, candidatos, set())
+    assert r.classificacao == ClassificacaoCorrespondencia.EXACT
+    assert r.pronto_para_gravacao is False
+    assert r.resultado_competencia == ResultadoCompetencia.NAO_EXTRAIVEL
+    assert r.motivo == MotivoSanitizado.COMPETENCIA_NAO_EXTRAIVEL
+
+
+def test_holerite_bloqueado_por_competencia_ambigua():
+    candidatos = [CandidatoFuncionario('recFUNC902', '902.902.902-92', 'COMPETENCIA AMBIGUA SINTETICO')]
+    item = ItemManifestoHolerite('holerite:902', '1', 'Competencia Ambigua Sintetico', '***.***.902-92', 'x.pdf', 1)
+    pdf_bytes = _gerar_pdf_real_sintetico(
+        'CPF 902.902.902-92 - Competencia 07/2026 ... reimpresso em 08/2026')
+    r = processar_holerite(item, pdf_bytes, CONFIG, candidatos, set())
+    assert r.classificacao == ClassificacaoCorrespondencia.EXACT
+    assert r.pronto_para_gravacao is False
+    assert r.resultado_competencia == ResultadoCompetencia.AMBIGUA
+    assert r.motivo == MotivoSanitizado.COMPETENCIA_AMBIGUA
+    assert r.competencia_ano_mes_extraido is None
+
+
+def test_extrato_bloqueado_por_competencia_divergente():
+    candidatos = [CandidatoCliente('recCLI901', '90.111.000/0001-09', 'CLIENTE COMPETENCIA DIVERGENTE')]
+    item = ItemManifestoExtrato(
+        'extrato:901', '901', 'CLIENTE COMPETENCIA DIVERGENTE',
+        'Serviço: 901 - CLIENTE COMPETENCIA DIVERGENTE - CNPJ: 90.111.000/0001-09', 'x.pdf', (1,))
+    pdf_bytes = _gerar_pdf_real_sintetico('Extrato sintetico - Competencia: 12/2025')
+    r = processar_extrato(item, pdf_bytes, CONFIG, candidatos, set())
+    assert r.classificacao == ClassificacaoCorrespondencia.EXACT
+    assert r.pronto_para_gravacao is False
+    assert r.resultado_competencia == ResultadoCompetencia.DIVERGENTE
+
+
+def test_competencia_nunca_carrega_texto_bruto_do_pdf():
+    """Requisito obrigatório: nunca texto integral nem trecho do PDF —
+    só (ano, mes) e um código de estratégia sanitizado."""
+    candidatos = [CandidatoFuncionario('recFUNC903', '903.903.903-93', 'PESSOA SINTETICA COMPETENCIA')]
+    item = ItemManifestoHolerite('holerite:903', '1', 'Pessoa Sintetica Competencia', '***.***.903-93', 'x.pdf', 1)
+    texto_embutido = 'CPF 903.903.903-93 dado sintetico de teste - Competencia: 07/2026'
+    pdf_bytes = _gerar_pdf_real_sintetico(texto_embutido)
+    r = processar_holerite(item, pdf_bytes, CONFIG, candidatos, set())
+    campos = {f: getattr(r, f) for f in r.__dataclass_fields__}
+    for valor in campos.values():
+        assert texto_embutido not in str(valor)
+        assert '903.903.903-93' not in str(valor)
 
 
 # ── Orquestração ponta a ponta (dados sintéticos) ────────────────────────
@@ -271,9 +622,13 @@ def test_extrato_exact_e_pronto_quando_sem_duplicidade():
     item = ItemManifestoExtrato(
         'extrato:500', '500', 'CLIENTE EXTRATO SINTETICO',
         'Serviço: 500 - CLIENTE EXTRATO SINTETICO - CNPJ: 50.000.000/0001-06', 'x.pdf', (1, 2))
-    r = processar_extrato(item, PDF_SINTETICO_VALIDO, CONFIG, candidatos, set())
+    # PDF real (parseável) — necessário desde o Macro 5: processar_extrato
+    # agora lê o conteúdo para extrair competência, não só `linha_bruta`.
+    pdf_bytes = _gerar_pdf_real_sintetico('Extrato sintetico de teste - Competencia: 07/2026')
+    r = processar_extrato(item, pdf_bytes, CONFIG, candidatos, set())
     assert r.classificacao == ClassificacaoCorrespondencia.EXACT
     assert r.pronto_para_gravacao is True
+    assert r.resultado_competencia == ResultadoCompetencia.CONFIRMADA
 
 
 # ── Ausência de PII no resultado ─────────────────────────────────────────
