@@ -305,6 +305,24 @@ def escrever_item(
 
     # ── 5. Upload + confirmação por releitura (pulado se já confirmado) ────
     if not item.attachment_confirmado:
+        # Uma tentativa anterior pode ter concluído o upload e caído antes
+        # de persistir o checkpoint de confirmação. Releia primeiro para
+        # que a retomada nunca acrescente o mesmo anexo uma segunda vez.
+        try:
+            ja_confirmado = escritor_airtable.confirmar_attachment(
+                resultado.tipo_documental, external_id)
+        except Exception:
+            ja_confirmado = False
+
+        if ja_confirmado:
+            item = dataclasses.replace(
+                item, situacao=SituacaoItemExecucao.SUCESSO,
+                attachment_confirmado=True, atualizado_em=relogio())
+            _persistir_item(item, lote_id, repositorio_itens, repositorio_eventos_item)
+            _registrar_evento_se_aplicavel(
+                item, resultado, lote_id, repositorio_historico, relogio())
+            return _resultado_de(item, resultado, processado=True)
+
         try:
             escritor_airtable.anexar_pdf(resultado.tipo_documental, external_id, pdf_bytes, nome_arquivo)
         except Exception as exc:

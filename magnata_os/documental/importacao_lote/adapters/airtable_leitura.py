@@ -83,37 +83,34 @@ class LeitorAirtableSomenteLeitura:
         """Retorna o conjunto de func_id que já têm holerite criado nesta
         folha — mesma checagem de `_buscar_holerite_existente` do app.py,
         reimplementada aqui só-leitura, sem importar o legado."""
-        r = requests.get(
-            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_HOL}',
-            headers=self._headers,
-            params={
-                'filterByFormula': f'{{Folha Mensal}}="{folha_mensal}"',
-                'returnFieldsByFieldId': 'true',
-                'fields[]': [F_HOL_FUNC],
-            },
-            timeout=self._timeout,
-        )
-        r.raise_for_status()
-        func_ids = set()
-        for rec in r.json().get('records', []):
-            for link in (rec.get('fields', {}).get(F_HOL_FUNC) or []):
-                func_ids.add(link['id'] if isinstance(link, dict) else link)
-        return func_ids
+        return self._listar_vinculos_na_folha(TABLE_HOL, F_HOL_FUNC, folha_mensal)
 
     def extratos_existentes_na_folha(self, folha_mensal: str) -> set[str]:
-        r = requests.get(
-            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_EXTRATO}',
-            headers=self._headers,
-            params={
+        return self._listar_vinculos_na_folha(TABLE_EXTRATO, F_EXT_CLIENTE, folha_mensal)
+
+    def _listar_vinculos_na_folha(self, table_id: str, field_id: str, folha_mensal: str) -> set[str]:
+        """Percorre todas as páginas. Sem isso, a reconciliação ficava
+        silenciosamente limitada aos primeiros 100 registros do Airtable."""
+        ids: set[str] = set()
+        offset = None
+        while True:
+            params = {
                 'filterByFormula': f'{{Folha Mensal}}="{folha_mensal}"',
                 'returnFieldsByFieldId': 'true',
-                'fields[]': [F_EXT_CLIENTE],
-            },
-            timeout=self._timeout,
-        )
-        r.raise_for_status()
-        cliente_ids = set()
-        for rec in r.json().get('records', []):
-            for link in (rec.get('fields', {}).get(F_EXT_CLIENTE) or []):
-                cliente_ids.add(link['id'] if isinstance(link, dict) else link)
-        return cliente_ids
+                'fields[]': [field_id],
+                'pageSize': 100,
+            }
+            if offset:
+                params['offset'] = offset
+            r = requests.get(
+                f'https://api.airtable.com/v0/{BASE_ID}/{table_id}',
+                headers=self._headers, params=params, timeout=self._timeout,
+            )
+            r.raise_for_status()
+            data = r.json()
+            for rec in data.get('records', []):
+                for link in (rec.get('fields', {}).get(field_id) or []):
+                    ids.add(link['id'] if isinstance(link, dict) else link)
+            offset = data.get('offset')
+            if not offset:
+                return ids

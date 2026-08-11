@@ -13,6 +13,7 @@ import io
 import zipfile
 
 import pytest
+from unittest.mock import Mock, patch
 
 from magnata_os.documental.importacao_lote import dominio
 from magnata_os.documental.importacao_lote.contratos import (
@@ -26,12 +27,33 @@ from magnata_os.documental.importacao_lote.contratos import (
     TipoDocumental,
 )
 from magnata_os.documental.importacao_lote.adapters import pacote
+from magnata_os.documental.importacao_lote.adapters.airtable_leitura import LeitorAirtableSomenteLeitura
 from magnata_os.documental.importacao_lote.orquestrador import (
     processar_extrato,
     processar_holerite,
 )
 
 PDF_SINTETICO_VALIDO = b'%PDF-1.4\n' + b'x' * 200
+
+
+def test_leitura_existentes_percorre_paginacao_airtable():
+    primeira = Mock()
+    primeira.raise_for_status.return_value = None
+    primeira.json.return_value = {
+        'records': [{'fields': {'fldTXMjeHfgyDas9f': [{'id': 'recFUNC1'}]}}],
+        'offset': 'pagina-2',
+    }
+    segunda = Mock()
+    segunda.raise_for_status.return_value = None
+    segunda.json.return_value = {
+        'records': [{'fields': {'fldTXMjeHfgyDas9f': [{'id': 'recFUNC2'}]}}],
+    }
+    with patch('magnata_os.documental.importacao_lote.adapters.airtable_leitura.requests.get',
+               side_effect=[primeira, segunda]) as get:
+        ids = LeitorAirtableSomenteLeitura('token-sintetico').holerites_existentes_na_folha('Julho 2026')
+    assert ids == {'recFUNC1', 'recFUNC2'}
+    assert get.call_count == 2
+    assert get.call_args_list[1].kwargs['params']['offset'] == 'pagina-2'
 
 
 def _gerar_pdf_real_sintetico(texto: str = 'documento sintetico de teste') -> bytes:

@@ -185,7 +185,7 @@ class EscritorAirtable:
         r = requests.get(
             f'https://api.airtable.com/v0/{BASE_ID}/{tabela}/{record_id}',
             headers=self._headers_get(),
-            params={'returnFieldsByFieldId': 'true', 'fields[]': [field_id]},
+            params={'returnFieldsByFieldId': 'true'},
             timeout=self._timeout_escrita,
         )
         _levantar_se_erro(r, f'releitura confirmação {tipo.value} {record_id}')

@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from magnata_os.documental.importacao_lote import dominio_versionamento
+from magnata_os.documental.importacao_lote.adapters import airtable_escrita
 from magnata_os.documental.importacao_lote.contratos import (
     ClassificacaoCorrespondencia,
     ConfiguracaoExecucao,
@@ -182,6 +183,28 @@ def _config(mes_cont_id='recMesCont1', ano=2026, mes=7, message_id='msg-abc', pk
         mes_cont_id=mes_cont_id, ano=ano, mes=mes,
         message_id_estavel=message_id, package_sha256=pkg,
     )
+
+
+def test_confirmar_attachment_em_registro_individual_nao_envia_fields(monkeypatch):
+    chamadas = []
+
+    class _Resposta:
+        ok = True
+        status_code = 200
+        text = ''
+
+        def json(self):
+            return {'fields': {airtable_escrita.F_HOL_PDF: [{'id': 'att-sintetico'}]}}
+
+    def _get(url, headers, params, timeout):
+        chamadas.append(params)
+        return _Resposta()
+
+    monkeypatch.setattr(airtable_escrita.requests, 'get', _get)
+    adapter = airtable_escrita.EscritorAirtable('token-sintetico')
+
+    assert adapter.confirmar_attachment(TipoDocumental.HOLERITE, 'rec-sintetico') is True
+    assert chamadas == [{'returnFieldsByFieldId': 'true'}]
 
 
 # ============================================================================
@@ -376,6 +399,30 @@ def test_H_crash_apos_create_pula_direto_para_upload():
     assert resultado.situacao == SituacaoItemExecucao.SUCESSO
     assert amb.airtable.chamadas_criar == 0  # nunca recriou
     assert amb.airtable.chamadas_anexar == 1
+
+
+def test_H_retomada_confirma_upload_existente_sem_duplicar_anexo():
+    amb = _Ambiente()
+    resultado_item = _resultado_exact()
+    config = _config()
+    pdf = _pdf_valido()
+
+    amb.airtable.pre_registrar('rec-preexistente', TipoDocumental.HOLERITE, anexo=True)
+    agora = datetime.now(timezone.utc)
+    amb.itens.criar_se_ausente('lote-1', resultado_item.manifesto_item_id, lambda: ItemExecucao(
+        item_importacao_id='item-1', lote_id='lote-1', manifesto_item_id=resultado_item.manifesto_item_id,
+        tipo_documental=TipoDocumental.HOLERITE, documento_id=None, identidade_ingestao='ident-1',
+        situacao=SituacaoItemExecucao.EM_PROCESSAMENTO, tentativas=1,
+        external_record_id='rec-preexistente', external_criado_por_esta_execucao=True,
+        attachment_confirmado=False, ultimo_erro_sanitizado=None, criado_em=agora, atualizado_em=agora,
+    ))
+
+    resultado = amb.escrever(resultado_item, pdf, config, 'lote-1')
+    item = amb.itens.buscar_por_lote_e_manifesto('lote-1', resultado_item.manifesto_item_id)
+    assert resultado.situacao == SituacaoItemExecucao.SUCESSO
+    assert item.attachment_confirmado is True
+    assert amb.airtable.chamadas_criar == 0
+    assert amb.airtable.chamadas_anexar == 0
 
 
 # ============================================================================
