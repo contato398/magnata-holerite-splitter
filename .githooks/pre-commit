@@ -154,6 +154,18 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # chegar à checagem de ALLOWED_PATHS.
   "test_importacao_lote.py"
   "test_importacao_lote_escrita.py"
+  # Exceção exata (decisão registrada, branch claude/macro-6a-commit-recovery-k7rsly,
+  # 2026-08-12) — oito arquivos de teste de Macro 6A: auditoria e esteira documental.
+  # Mesmo padrão de autorização nominal que Macro 5. Sem isto, ficariam bloqueados
+  # por SCRATCH_SCOPE_PATTERNS/SCRATCH_PATTERNS (^test_) antes de chegar a ALLOWED_PATHS.
+  "test_competencia_fiscal.py"
+  "test_fase_c_async_separar.py"
+  "test_fila_envios_v2_23.py"
+  "test_idempotencia_esteira.py"
+  "test_idempotencia_pendencia_kit.py"
+  "test_kit_admissao_identidade.py"
+  "test_sanitizacao_v2_20.py"
+  "test_seguranca_rotas_dp_fiscal.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
@@ -190,9 +202,39 @@ for file in $STAGED_FILES; do
   fi
 
   if [ $BLOCKED -eq 1 ]; then
-    echo -e "${RED}✗ BLOQUEADO: Arquivo protegido não autorizado${NC}"
-    echo "  Arquivo: $file"
-    exit 1
+    # Exceção: app.py pode ser autorizado por blob exato
+    if [[ "$file" == "app.py" ]]; then
+      local authorization_found=0
+      local actual_blob=$(git hash-object --filters --path="app.py" "$file" 2>/dev/null || echo "")
+
+      # Procurar em todos os arquivos de autorização de app.py
+      if [[ -d ".magnata/app-py-authorizations" ]]; then
+        while IFS= read -r auth_file; do
+          if [[ -z "$auth_file" ]] || [[ ! -f "$auth_file" ]]; then
+            continue
+          fi
+          while read -r expected_blob authorized_path; do
+            [[ -z "$expected_blob" || "$expected_blob" == \#* ]] && continue
+            if [[ "$authorized_path" == "app.py" && "${expected_blob,,}" == "$actual_blob" ]]; then
+              authorization_found=1
+              break 2
+            fi
+          done < "$auth_file"
+        done < <(find ".magnata/app-py-authorizations" -name "*.gitblob" -type f 2>/dev/null)
+      fi
+
+      if [[ $authorization_found -eq 0 ]]; then
+        echo -e "${RED}✗ BLOQUEADO: Arquivo protegido não autorizado${NC}"
+        echo "  Arquivo: $file"
+        echo "  Blob atual: $actual_blob"
+        echo "  Nenhuma autorização válida por blob exato encontrada"
+        exit 1
+      fi
+    else
+      echo -e "${RED}✗ BLOQUEADO: Arquivo protegido não autorizado${NC}"
+      echo "  Arquivo: $file"
+      exit 1
+    fi
   fi
 
   # Verificar se está em lista de permissão (ALLOWED_PATHS de .magnata/patterns.sh)

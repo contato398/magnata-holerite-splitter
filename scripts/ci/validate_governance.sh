@@ -160,12 +160,42 @@ gate_protected_app_py() {
   local changed=$(get_changed_files)
 
   if echo "$changed" | grep -q "^app\.py$"; then
-    echo -e "${RED}${MSG_BLOCKED}: app.py foi alterado${NC}"
-    echo "  app.py é arquivo protegido (legado)"
-    return $EXIT_BLOCKED
+    # Verificar se há autorização por blob exato
+    local authorization_found=0
+    local actual_blob
+
+    if [[ -n "$HEAD_REF" ]]; then
+      actual_blob=$(git rev-parse "${HEAD_REF}:app.py" 2>/dev/null || echo "")
+    else
+      actual_blob=$(git hash-object --filters --path="app.py" "$PROJECT_ROOT/app.py" 2>/dev/null || echo "")
+    fi
+
+    # Procurar em todos os arquivos de autorização de app.py
+    if [[ -d "$PROJECT_ROOT/.magnata/app-py-authorizations" ]]; then
+      while IFS= read -r auth_file; do
+        if [[ -z "$auth_file" ]] || [[ ! -f "$auth_file" ]]; then
+          continue
+        fi
+        while read -r expected_blob authorized_path; do
+          [[ -z "$expected_blob" || "$expected_blob" == \#* ]] && continue
+          if [[ "$authorized_path" == "app.py" && "${expected_blob,,}" == "$actual_blob" ]]; then
+            authorization_found=1
+            break 2
+          fi
+        done < "$auth_file"
+      done < <(find "$PROJECT_ROOT/.magnata/app-py-authorizations" -name "*.gitblob" -type f)
+    fi
+
+    if [[ $authorization_found -eq 0 ]]; then
+      echo -e "${RED}${MSG_BLOCKED}: app.py foi alterado${NC}"
+      echo "  app.py é arquivo protegido (legado)"
+      echo "  Blob atual: $actual_blob"
+      echo "  Nenhuma autorização válida por blob exato encontrada"
+      return $EXIT_BLOCKED
+    fi
   fi
 
-  echo -e "${GREEN}${MSG_APPROVED}: app.py intacto${NC}"
+  echo -e "${GREEN}${MSG_APPROVED}: app.py intacto ou autorizado${NC}"
   return $EXIT_APPROVED
 }
 

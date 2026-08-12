@@ -373,6 +373,20 @@ ALLOWED_PATHS=(
   "^magnata_os/documental/importacao_lote/orquestrador\.py$"
   "^test_importacao_lote\.py$"
   "^test_importacao_lote_escrita\.py$"
+  # Exceção exata e restrita (decisão registrada, branch
+  # claude/macro-6a-commit-recovery-k7rsly, 2026-08-12) — Macro 6A,
+  # auditoria e esteira documental. Somente estes 8 caminhos exatos de
+  # teste, não um padrão genérico — não libera "^test_" de forma ampla;
+  # qualquer outro test_*.py continua bloqueado, cada um batido por
+  # igualdade de string completa via âncora $ no fim.
+  "^test_competencia_fiscal\.py$"
+  "^test_fase_c_async_separar\.py$"
+  "^test_fila_envios_v2_23\.py$"
+  "^test_idempotencia_esteira\.py$"
+  "^test_idempotencia_pendencia_kit\.py$"
+  "^test_kit_admissao_identidade\.py$"
+  "^test_sanitizacao_v2_20\.py$"
+  "^test_seguranca_rotas_dp_fiscal\.py$"
 )
 
 # ============================================================================
