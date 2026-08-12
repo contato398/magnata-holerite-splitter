@@ -1702,9 +1702,17 @@ def _atualizar_status_processar(record_id: str, status: str):
     return r.json()
 
 
-def _criar_pendencia(arquivo_id: str, tipo_problema: str, observacao: str):
+def _criar_pendencia(arquivo_id: str, tipo_problema: str, observacao: str, nome: str = None):
+    """`nome` (opcional, Macro 6A — idempotência das Pendências do Kit de
+    Admissão): permite substituir o rótulo default (f'{tipo_problema}:
+    {arquivo_id}') por uma chave determinística própria de quem chama —
+    usado por _criar_ou_reaproveitar_pendencia_kit_identidade para poder
+    buscar essa mesma Pendência depois (F_PEND_NOME é texto livre, sem
+    campo dedicado de chave, e não há alteração de schema nesta fase).
+    Todos os chamadores existentes continuam com o comportamento default
+    (sem passar `nome`) — mudança aditiva, não quebra nada."""
     return _criar_registro(TABLE_PENDENCIAS, {
-        F_PEND_NOME:   f'{tipo_problema}: {arquivo_id}',
+        F_PEND_NOME:   nome if nome else f'{tipo_problema}: {arquivo_id}',
         F_PEND_STATUS: 'Pendente',
         F_PEND_TIPO:   tipo_problema,
         F_PEND_ORIGEM: [arquivo_id],
@@ -2422,10 +2430,32 @@ def _buscar_documentos_irmaos_kit_admissao(ctx: dict):
     cujo tipo esteja em TIPOS_KIT_ADMISSAO — heurística para "mesmo e-mail,
     mesmo Kit de Admissão" (ver comentário acima).
 
+    Correção final (Macro 6A — revisão independente do patch, achado
+    material): o vínculo com a mensagem de origem deixou de ser "reforço
+    quando disponível" e passou a ser OBRIGATÓRIO. A janela de tempo
+    sozinha NUNCA prova pertencimento — só restringe o universo de busca.
+    Sem `ctx['email_savian_id']` (origem determinística ausente), não há
+    como confirmar que QUALQUER candidato pertence à mesma mensagem: a
+    função devolve lista vazia, em vez de cair de volta para a janela de
+    tempo desprotegida como na versão anterior desta correção. Chamadores
+    que não fornecem `email_savian_id` (antigos ou de teste) passam a
+    nunca agrupar nada — comportamento seguro por padrão ("origem de
+    e-mail ausente → rejeita"), nunca mais permissivo por omissão.
+
+    Mesma disciplina para cada candidato: sem Arquivo vinculado, ou sem
+    conseguir confirmar o e-mail de origem dele (falha de leitura, campo
+    vazio, ou apontando para OUTRA mensagem), o candidato nunca entra na
+    lista — silenciosamente descartado AQUI só significa "não é irmão
+    confirmado desta mensagem", nunca "documento perdido": ele segue seu
+    próprio processamento normal via /processar-fila como documento
+    independente.
+
     Retorna lista de dicts: {proc_id, tipo_documento, status, arquivo_id, nome_arquivo}.
     Nunca inclui o próprio ctx['proc_id'].
     """
-    data_processo = ctx.get('data_holerite')  # não é o campo certo; buscamos via API abaixo
+    email_savian_id_atual = ctx.get('email_savian_id')
+    if not email_savian_id_atual:
+        return []
     _at_throttle()
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}/{ctx["proc_id"]}',
@@ -2468,6 +2498,26 @@ def _buscar_documentos_irmaos_kit_admissao(ctx: dict):
             continue
         arquivos_link = fields.get('Arquivos 2') or []
         arquivo_id = arquivos_link[0]['id'] if arquivos_link and isinstance(arquivos_link[0], dict) else (arquivos_link[0] if arquivos_link else None)
+        if not arquivo_id:
+            continue  # sem Arquivo vinculado -- nunca confirma origem, nunca inclui
+
+        _at_throttle()
+        r_arq_irmao = requests.get(
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ARQUIVOS}/{arquivo_id}',
+            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            params={'returnFieldsByFieldId': 'true'},
+            timeout=15,
+        )
+        if not r_arq_irmao.ok:
+            continue  # sem confirmação de origem -- nunca inclui por omissão
+        email_links_irmao = r_arq_irmao.json().get('fields', {}).get(F_ARQ_EMAILS) or []
+        email_id_irmao = (
+            email_links_irmao[0]['id'] if email_links_irmao and isinstance(email_links_irmao[0], dict)
+            else (email_links_irmao[0] if email_links_irmao else None)
+        )
+        if email_id_irmao != email_savian_id_atual:
+            continue  # candidato de OUTRA mensagem de origem -- nunca agrupa
+
         irmaos.append({
             'proc_id': rec['id'],
             'tipo_documento': tipo,
@@ -2665,17 +2715,180 @@ def _classificar_papel_kit_por_conteudo(texto: str) -> str:
 
 
 def _baixar_e_classificar_papel_kit(arquivo_id: str):
-    """Baixa o PDF de um Arquivo e devolve (papel, conteudo_bytes) — papel
-    via _classificar_papel_kit_por_conteudo. (None, None) se falhar."""
+    """Baixa o PDF de um Arquivo e devolve (papel, conteudo_bytes, texto) —
+    papel via _classificar_papel_kit_por_conteudo. `texto` é devolvido para
+    permitir checagem de identidade (CPF, ver _cpf_compativel_com_kit) por
+    quem chama, sem baixar/extrair o PDF de novo. (None, None, '') se
+    falhar."""
     conteudo, _ = _baixar_pdf_arquivo(arquivo_id)
     if not conteudo:
-        return None, None
+        return None, None, ''
     try:
         with pdfplumber.open(io.BytesIO(conteudo)) as pdf:
             texto = '\n'.join((p.extract_text() or '') for p in pdf.pages)
     except Exception:
         texto = ''
-    return _classificar_papel_kit_por_conteudo(texto), conteudo
+    return _classificar_papel_kit_por_conteudo(texto), conteudo, texto
+
+
+def _cpf_compativel_com_kit(cpf_extraido, cpf_esperado):
+    """Identidade forte e OBRIGATÓRIA para o agrupamento do Kit de Admissão.
+
+    Correção final (Macro 6A — revisão independente do patch, achado
+    material): a versão anterior devolvia True ("compatível, pode
+    vincular") quando qualquer um dos dois CPFs estava ausente — sob a
+    lógica de "sem como provar divergência". Isso contradiz a regra de
+    identidade forte aprovada: ausência de contradição NUNCA é confirmação
+    positiva. A regra agora exige confirmação POSITIVA dos dois lados —
+    só devolve True quando `cpf_extraido` E `cpf_esperado` estão presentes
+    E são iguais (comparação só de dígitos, formato ignorado). Qualquer
+    ausência (candidato sem CPF legível, ou funcionário-alvo sem CPF
+    cadastrado) ou divergência devolve False — o candidato nunca é
+    vinculado nem incorporado ao Kit nesses casos, mas também nunca é
+    descartado silenciosamente: quem chama (_montar_e_disparar_kit_admissao)
+    encaminha para revisão humana com motivo sanitizado. CPF é a única
+    base de decisão aqui — nunca nome aproximado."""
+    if not cpf_extraido or not cpf_esperado:
+        return False
+    return re.sub(r'\D', '', cpf_extraido) == re.sub(r'\D', '', cpf_esperado)
+
+
+def _chave_pendencia_kit_identidade(func_id: str, proc_id: str, arquivo_id: str, motivo_sanitizado: str) -> str:
+    """Chave determinística para idempotência da Pendência de rejeição de
+    identidade do Kit de Admissão (Macro 6A — último fechamento).
+
+    Formada só por IDs técnicos + a categoria sanitizada da rejeição —
+    NUNCA CPF, nome ou trecho de PDF. A MESMA combinação (funcionário-alvo,
+    processo/registro de origem, arquivo rejeitado, categoria) produz
+    SEMPRE a mesma chave. Reaproveitada como valor de F_PEND_NOME — não há
+    campo dedicado de "chave de idempotência" em Pendências, e criar um
+    exigiria alterar o schema do Airtable (fora do escopo desta fase);
+    F_PEND_NOME já é texto livre e serve aos dois propósitos: rótulo
+    legível por humano E identidade determinística para busca."""
+    return (
+        f'Kit de Admissão — identidade não confirmada [{motivo_sanitizado}] '
+        f'funcionario={func_id} origem={proc_id} arquivo={arquivo_id}'
+    )
+
+
+def _buscar_pendencia_kit_identidade_existente(chave: str):
+    """Busca (somente leitura) uma Pendência já existente com a MESMA
+    chave determinística — base da idempotência: nunca deixa criar uma
+    segunda Pendência para a mesma rejeição.
+
+    Não usa filterByFormula: o nome de EXIBIÇÃO real do campo F_PEND_NOME
+    nesta base não é conhecido com segurança nesta sessão (sem conector
+    Airtable habilitado para confirmar o schema), e uma fórmula com o nome
+    errado falharia silenciosamente ou de forma imprevisível. Em vez
+    disso, pagina a tabela usando Field IDs (`returnFieldsByFieldId=true`,
+    já conhecidos e estáveis — os mesmos usados em toda a leitura desta
+    base) e compara a chave no lado do Python.
+
+    Se houver mais de uma Pendência com a mesma chave (ex.: sobra de uma
+    corrida concorrente antiga, antes desta correção), devolve a PRIMEIRA
+    encontrada de forma determinística — nunca tenta mesclar as duas nem
+    associa a rejeição à Pendência errada.
+
+    Falha de leitura (rede, HTTP, JSON) devolve None — o chamador trata
+    como "não encontrada" e segue para criar uma nova. Prioridade
+    deliberada: nunca deixar a rejeição sem NENHUM registro por causa de
+    uma falha nesta busca (ver _criar_ou_reaproveitar_pendencia_kit_identidade)."""
+    offset = None
+    while True:
+        params = {'returnFieldsByFieldId': 'true'}
+        if offset:
+            params['offset'] = offset
+        _at_throttle()
+        try:
+            r = requests.get(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PENDENCIAS}',
+                headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                params=params, timeout=30,
+            )
+        except Exception:
+            return None
+        if not r.ok:
+            return None
+        try:
+            data = r.json()
+        except Exception:
+            return None
+        for rec in data.get('records', []):
+            if rec.get('fields', {}).get(F_PEND_NOME) == chave:
+                return rec['id']
+        offset = data.get('offset')
+        if not offset:
+            return None
+
+
+def _marcar_pendencia_kit_identidade_vista_novamente(pendencia_id: str) -> bool:
+    """Atualização NÃO destrutiva de uma Pendência já existente,
+    reaproveitada por idempotência: só o carimbo de data/hora (F_PEND_DATA)
+    é tocado — Status, Tipo, Nome e Observação continuam exatamente como
+    estavam. Nunca reabre nem sobrescreve uma decisão humana já registrada
+    em Status (ex.: um revisor já pode ter marcado como resolvida). Serve
+    só para sinalizar "esta rejeição ainda está acontecendo" sem duplicar
+    o registro. Não-bloqueante: qualquer falha devolve False, nunca levanta."""
+    try:
+        _at_throttle()
+        r = requests.patch(
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PENDENCIAS}/{pendencia_id}',
+            headers=_at_headers(),
+            json={'fields': {F_PEND_DATA: datetime.now().isoformat()}, 'typecast': True},
+            timeout=15,
+        )
+        return r.ok
+    except Exception:
+        return False
+
+
+def _criar_ou_reaproveitar_pendencia_kit_identidade(func_id: str, proc_id: str, arquivo_id: str,
+                                                      motivo_sanitizado: str) -> dict:
+    """Idempotência da Pendência de rejeição de identidade do Kit de
+    Admissão (Macro 6A — último fechamento, achado do Ultrareview:
+    reprocessar o mesmo documento rejeitado podia criar Pendências
+    duplicadas).
+
+    Antes de criar: procura uma Pendência já existente com a MESMA chave
+    determinística (funcionário-alvo + processo de origem + arquivo
+    rejeitado + categoria — nunca CPF/nome/texto do PDF). Se existir,
+    REAPROVEITA o mesmo pendencia_id (só atualiza o carimbo de data, de
+    forma não destrutiva) — nunca cria uma segunda. Se não existir, cria
+    uma nova.
+
+    Qualquer falha (busca ou criação) é não-bloqueante: log sanitizado
+    (só IDs técnicos) e devolve pendencia_id=None — nunca derruba o
+    processamento dos demais documentos do Kit (mesma disciplina já
+    usada em todo o resto desta função).
+
+    Devolve {'pendencia_id': str | None, 'reaproveitada': bool}."""
+    chave = _chave_pendencia_kit_identidade(func_id, proc_id, arquivo_id, motivo_sanitizado)
+
+    pendencia_existente_id = _buscar_pendencia_kit_identidade_existente(chave)
+    if pendencia_existente_id:
+        _marcar_pendencia_kit_identidade_vista_novamente(pendencia_existente_id)
+        return {'pendencia_id': pendencia_existente_id, 'reaproveitada': True}
+
+    try:
+        pendencia_id = _criar_pendencia(
+            arquivo_id,
+            'Kit de Admissão — identidade não confirmada',
+            (
+                f'Documento com o mesmo e-mail de origem do Kit de {func_id} '
+                f'(Processar: {proc_id}, Arquivo: {arquivo_id}), mas a identidade '
+                f'por CPF não pôde ser confirmada (motivo: {motivo_sanitizado}). '
+                'NÃO vinculado nem incorporado ao Kit — revisar manualmente e '
+                'vincular/anexar com decisão humana.'
+            ),
+            nome=chave,
+        )
+        return {'pendencia_id': pendencia_id, 'reaproveitada': False}
+    except Exception as exc:
+        logger.warning(
+            f'[KIT] Falha ao criar Pendência de identidade para '
+            f'{proc_id}/{arquivo_id}: {exc} — não bloqueante.'
+        )
+        return {'pendencia_id': None, 'reaproveitada': False}
 
 
 def _montar_e_disparar_kit_admissao(ctx: dict, func_id: str, dry_run: bool,
@@ -2693,10 +2906,14 @@ def _montar_e_disparar_kit_admissao(ctx: dict, func_id: str, dry_run: bool,
     Renúncia de VT nativamente se não houver uma irmã preenchida) e
     dispara a Assinatura Nativa via WhatsApp automaticamente.
 
-    Idempotente: não repete nada se o Funcionário já tiver Kit Admissão
-    Consolidado. Chamado tanto por _processar_ficha_registro_stub quanto
-    por _processar_contrato_stub — qualquer um dos documentos do Kit que
-    for processado primeiro pelo /processar-fila completa o trabalho.
+    Idempotente: a MONTAGEM/DISPARO do Kit nunca repete se o Funcionário já
+    tiver Kit Admissão Consolidado — mas o documento atual É SEMPRE
+    vinculado ao funcionário (mesmo nesse caso, ver
+    'documento_atual_vinculado_tardiamente' no retorno), para nunca deixar
+    um anexo atrasado órfão (Macro 6A — fechamento autônomo, §6). Chamado
+    tanto por _processar_ficha_registro_stub quanto por
+    _processar_contrato_stub — qualquer um dos documentos do Kit que for
+    processado primeiro pelo /processar-fila completa o trabalho.
     """
     resultado = {'kit_montado': False, 'assinatura_disparada': False, 'motivo': None}
     if dry_run or not func_id:
@@ -2716,24 +2933,96 @@ def _montar_e_disparar_kit_admissao(ctx: dict, func_id: str, dry_run: bool,
         headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
         params={'returnFieldsByFieldId': 'true'}, timeout=15,
     )
+
+    # Vincula o documento ATUAL ao funcionário incondicionalmente, antes de
+    # checar se o Kit já foi concluído (Macro 6A — fechamento autônomo,
+    # revisão adversarial §6, achado "anexos atrasados"): antes desta
+    # correção, quando o Kit já estava concluído (ex.: Ficha assemblou o
+    # Kit sozinha, dentro da janela, e o Contrato real chegou depois,
+    # fora da janela ou simplesmente processado depois), o documento
+    # atrasado NUNCA era vinculado ao funcionário — ficava silenciosamente
+    # sem nenhum rastro no cadastro correto, mesmo sendo o documento real
+    # (ex.: o Contrato assinado de verdade, quando o Kit já foi montado só
+    # com Ficha + Declaração de VT gerada automaticamente). Vincular aqui é
+    # uma operação separada, idempotente por nome de arquivo (ver
+    # _vincular_documento_ao_funcionario) e não depende de o Kit ainda
+    # estar em aberto — sempre seguro, mesmo que o Kit já tenha sido
+    # concluído ou disparado.
+    _vincular_documento_ao_funcionario(func_id, ctx['arquivo_id'])
+
     if r_func.ok and (r_func.json().get('fields', {}).get(F_FUNC_KIT_CONSOLIDADO) or []):
-        resultado['motivo'] = 'Kit já existente — nada a fazer (idempotente)'
+        resultado['motivo'] = (
+            'Kit já existente — nada a fazer na montagem/disparo, mas o '
+            'documento atual foi vinculado ao funcionário para não ficar '
+            'órfão (chegada tardia).'
+        )
+        resultado['documento_atual_vinculado_tardiamente'] = True
         return resultado
+
+    # CPF do funcionário-alvo, já disponível na mesma leitura acima — base
+    # de comparação para _cpf_compativel_com_kit (Macro 6A, correção de
+    # auditoria: nunca vincula documento de OUTRA pessoa por coincidência
+    # de janela de tempo).
+    cpf_esperado = r_func.json().get('fields', {}).get(F_FUNC_CPF) if r_func.ok else None
 
     docs = {}
     papel_atual = _classificar_papel_kit_por_conteudo(ctx.get('texto', ''))
     if ctx.get('pdf_bytes'):
         docs[papel_atual] = (ctx['arquivo_id'], ctx['pdf_bytes'], ctx['proc_id'])
 
-    _vincular_documento_ao_funcionario(func_id, ctx['arquivo_id'])
-
+    irmaos_rejeitados_por_cpf = []
+    pendencias_identidade_kit = []
     for irmao in _buscar_documentos_irmaos_kit_admissao(ctx):
         if not irmao.get('arquivo_id'):
             continue
+        papel, conteudo, texto_irmao = _baixar_e_classificar_papel_kit(irmao['arquivo_id'])
+        if not (papel and conteudo):
+            continue
+        cpf_irmao = extrair_cpf(texto_irmao)
+        if not _cpf_compativel_com_kit(cpf_irmao, cpf_esperado):
+            # Correção final (Macro 6A — revisão independente do patch,
+            # achado material): candidato com o MESMO e-mail de origem
+            # confirmado, mas identidade por CPF não comprovada (CPF do
+            # candidato ausente, CPF do funcionário-alvo ausente, ou os
+            # dois divergentes) — nunca vinculado, nunca incorporado ao
+            # Kit, e NUNCA descartado silenciosamente: encaminhado para
+            # revisão humana com motivo sanitizado (classificação
+            # genérica, nunca o valor do CPF nem trecho do PDF) e
+            # referência aos IDs técnicos (proc_id/arquivo_id/func_id)
+            # para rastreabilidade.
+            if not cpf_irmao:
+                motivo_sanitizado = 'cpf_candidato_ausente'
+            elif not cpf_esperado:
+                motivo_sanitizado = 'cpf_esperado_ausente'
+            else:
+                motivo_sanitizado = 'cpf_divergente'
+            logger.warning(
+                f'[KIT] Documento irmão {irmao["proc_id"]}/{irmao["arquivo_id"]} '
+                f'rejeitado do Kit de {func_id}: identidade não confirmada '
+                f'({motivo_sanitizado}).'
+            )
+            irmaos_rejeitados_por_cpf.append(irmao['proc_id'])
+            # Idempotência (Macro 6A — último fechamento, achado do
+            # Ultrareview): reprocessar o mesmo documento/rejeição nunca
+            # cria uma segunda Pendência — ver
+            # _criar_ou_reaproveitar_pendencia_kit_identidade.
+            pendencia_resultado = _criar_ou_reaproveitar_pendencia_kit_identidade(
+                func_id, irmao['proc_id'], irmao['arquivo_id'], motivo_sanitizado,
+            )
+            pendencias_identidade_kit.append({
+                'proc_id': irmao['proc_id'], 'arquivo_id': irmao['arquivo_id'],
+                'pendencia_id': pendencia_resultado['pendencia_id'],
+                'reaproveitada': pendencia_resultado['reaproveitada'],
+                'motivo': motivo_sanitizado,
+            })
+            continue
         _vincular_documento_ao_funcionario(func_id, irmao['arquivo_id'])
-        papel, conteudo = _baixar_e_classificar_papel_kit(irmao['arquivo_id'])
-        if papel and conteudo and papel not in docs:
+        if papel not in docs:
             docs[papel] = (irmao['arquivo_id'], conteudo, irmao['proc_id'])
+    if irmaos_rejeitados_por_cpf:
+        resultado['irmaos_rejeitados_por_cpf'] = irmaos_rejeitados_por_cpf
+    if pendencias_identidade_kit:
+        resultado['pendencias_identidade_kit'] = pendencias_identidade_kit
 
     if 'ficha' not in docs:
         resultado['motivo'] = (
@@ -4968,21 +5257,84 @@ def corrigir_valores():
     })
 
 
-def _detectar_competencia_fiscal(texto: str) -> str:
-    """v2.96 — Extrai a competência (mês/ano) de um documento fiscal a partir
-    de padrões 'Competência MM/AAAA' ou 'Período de Apuração MM/AAAA'. Se não
-    encontrar, assume o mês anterior ao recebimento — padrão real observado:
-    Extrato/FGTS/DCTFWeb de um mês sempre chegam no mês seguinte."""
-    m = re.search(r'(?:Compet[êe]ncia|Per[íi]odo\s+de\s+Apura[çc][ãa]o)\D{0,10}(\d{2})/(\d{4})',
-                  texto, re.IGNORECASE)
-    if m:
+def _detectar_competencia_fiscal(texto: str):
+    """v2.96 (Macro 6A — correção de auditoria, achado #2) — Extrai a
+    competência (mês/ano) de um documento fiscal a partir de marcadores
+    semânticos explícitos: 'Competência MM/AAAA', 'Período de Apuração
+    MM/AAAA' / 'Período de Referência MM/AAAA', ou a mesma família por
+    extenso ('Competência: Maio de 2026' — mesmo padrão já reconhecido em
+    extrair_competencia_holerite, aqui restrito à proximidade do marcador
+    para nunca casar com um mês solto no meio do texto).
+
+    NUNCA usa vencimento/pagamento/emissão/recebimento como substituto de
+    competência — são datas diferentes e podem apontar para outro mês.
+    NUNCA usa nome do arquivo, data do e-mail ou mês corrente como
+    confirmação isolada.
+
+    Antes desta correção, a ausência de marcador explícito fazia esta
+    função assumir silenciosamente 'mês anterior ao recebimento' — a
+    competência então gravada em TODOS os registros de cliente fatiados a
+    partir do mesmo PDF (ver _processar_doc_cliente_master) podia ficar
+    errada sem nenhum sinal de revisão. Agora, na ausência de marcador
+    comprovado, devolve None — quem chama (_processar_anexo_fiscal) DEVE
+    tratar isso como competência não comprovada e rotear para revisão
+    manual, nunca gravar um mês adivinhado.
+
+    Ambiguidade (Macro 6A — fechamento autônomo, revisão adversarial):
+    quando o texto tem MAIS DE UM marcador de competência com valores
+    DIVERGENTES (ex.: um PDF consolidado com "Competência: 05/2026" numa
+    página e "Competência: 08/2026" noutra), a versão anterior desta
+    correção usava `re.search` (só o primeiro achado) e escolheria um dos
+    dois silenciosamente — mesmo risco de "adivinhar" que a correção
+    original eliminou para o caso de ausência total de marcador. Agora
+    todos os achados (numérico + por extenso) são coletados; se houver mais
+    de um valor (mês, ano) DISTINTO entre eles, é tratado como ambíguo —
+    devolve None e registra um aviso sanitizado (sem nenhum trecho do PDF)
+    para auditoria. Repetições do MESMO valor (ex.: cabeçalho + rodapé) não
+    são ambíguas."""
+    if not texto:
+        return None
+
+    marcador = r'(?:Compet[êe]ncia|Per[íi]odo\s+de\s+(?:Apura[çc][ãa]o|Refer[êe]ncia))'
+    nomes_meses = ['janeiro', 'fevereiro', 'marco', 'abril', 'maio', 'junho',
+                   'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro']
+
+    valores_encontrados = []  # lista de (mes_num, ano_str), na ordem em que aparecem
+
+    # Formato numérico — "Competência: 05/2026" / "Período de Apuração 05/2026"
+    for m in re.finditer(marcador + r'\D{0,10}(\d{2})/(\d{4})', texto, re.IGNORECASE):
         mes_num, ano = int(m.group(1)), m.group(2)
         if 1 <= mes_num <= 12:
-            return f'{MESES_PT[mes_num - 1]} {ano}'
-    hoje = datetime.now()
-    mes_anterior = hoje.month - 1 or 12
-    ano_anterior = hoje.year if hoje.month > 1 else hoje.year - 1
-    return f'{MESES_PT[mes_anterior - 1]} {ano_anterior}'
+            valores_encontrados.append((mes_num, ano))
+
+    # Formato por extenso — "Competência: Maio de 2026" / "Período de
+    # Referência Maio/2026" — mesma lista de meses de extrair_competencia_holerite.
+    for m in re.finditer(
+        marcador + r'\D{0,15}(Janeiro|Fevereiro|Mar[çc]o|Abril|Maio|Junho|Julho|Agosto|'
+        r'Setembro|Outubro|Novembro|Dezembro)(?:\s+de)?\s+(\d{4})',
+        texto, re.IGNORECASE,
+    ):
+        nome_norm = m.group(1).lower().replace('ç', 'c')
+        if nome_norm in nomes_meses:
+            valores_encontrados.append((nomes_meses.index(nome_norm) + 1, m.group(2)))
+
+    if not valores_encontrados:
+        # Nenhum marcador semântico de competência encontrado — não adivinha.
+        return None
+
+    distintos = sorted(set(valores_encontrados))
+    if len(distintos) > 1:
+        logger.warning(
+            '[FISCAL] Competência ambígua: %d valores distintos encontrados no '
+            'mesmo documento (%s) — não é possível determinar qual prevalece, '
+            'tratado como não comprovada.',
+            len(distintos),
+            ', '.join(f'{mes:02d}/{ano}' for mes, ano in distintos),
+        )
+        return None
+
+    mes_num, ano = distintos[0]
+    return f'{MESES_PT[mes_num - 1]} {ano}'
 
 
 def _processar_anexo_fiscal(conteudo: bytes, nome_arquivo: str, tipo_doc: str, texto: str) -> dict:
@@ -4992,6 +5344,31 @@ def _processar_anexo_fiscal(conteudo: bytes, nome_arquivo: str, tipo_doc: str, t
     (DCTFWeb), em vez do fluxo de Processar Arquivos do Departamento Pessoal
     (Kit Admissão etc.), que não se aplica a documentos fiscais da empresa."""
     folha_mensal = _detectar_competencia_fiscal(texto)
+
+    # Competência não comprovada (Macro 6A, achado #2): antes, a ausência de
+    # marcador explícito era coberta com um "mês anterior" adivinhado, que
+    # seria gravado em TODOS os registros de cliente fatiados a partir deste
+    # PDF (Extrato/FGTS) ou no comprovante de Guia — sem nenhum sinal de
+    # revisão. Agora, sem competência comprovada, o documento NÃO é
+    # processado automaticamente; vai para Pendência, igual ao tratamento já
+    # existente para "tipo não reconhecido" logo abaixo.
+    if not folha_mensal:
+        pendencia_id = _criar_registro(TABLE_PENDENCIAS, {
+            F_PEND_NOME:   f'Competência fiscal não detectada: {nome_arquivo}',
+            F_PEND_STATUS: 'Pendente',
+            F_PEND_TIPO:   'Competência fiscal não detectada',
+            F_PEND_OBS: (
+                f'Tipo: {tipo_doc}. Não foi encontrado marcador explícito de '
+                'competência ("Competência MM/AAAA" ou "Período de Apuração/'
+                'Referência MM/AAAA", numérico ou por extenso) no texto '
+                'extraído do PDF. NÃO processado automaticamente, para não '
+                'gravar competência errada em registros de cliente/guia — '
+                'revisar manualmente e reprocessar.'
+            ),
+            F_PEND_DATA:   datetime.now().isoformat(),
+        })
+        return {'acao': 'competencia_fiscal_nao_detectada', 'tipo_documento': tipo_doc,
+                'pendencia_record_id': pendencia_id}
 
     if tipo_doc in ('Extrato da Folha de Pagamento', 'FGTS'):
         tipo_fatiador = 'extrato' if tipo_doc == 'Extrato da Folha de Pagamento' else 'fgts'
@@ -5506,6 +5883,15 @@ def processar_fila():
 
             status_atual = fields.get(F_PROC_STATUS, 'Processando')
 
+            # Vínculo determinístico com a mensagem de origem (Macro 6A —
+            # correção de auditoria do agrupamento do Kit de Admissão):
+            # já lido em arquivo_fields acima, sem chamada extra à API.
+            email_links = arquivo_fields.get(F_ARQ_EMAILS) or []
+            email_savian_id = (
+                email_links[0]['id'] if email_links and isinstance(email_links[0], dict)
+                else (email_links[0] if email_links else None)
+            )
+
             ctx = {
                 'proc_id': proc_id,
                 'arquivo_id': arquivo_id,
@@ -5518,6 +5904,7 @@ def processar_fila():
                 'data_holerite': data_holerite,
                 'tipo_documento': tipo_documento,
                 'status_atual': status_atual,
+                'email_savian_id': email_savian_id,
             }
 
             resultado_handler = handler(ctx, dry_run)
@@ -6926,11 +7313,20 @@ def processar_doc_cliente():
       - pdf: arquivo mestre
       - tipo: 'extrato' | 'fgts'
       - folha_mensal: ex. "Maio 2026"
-    Não exige X-API-KEY (só a AIRTABLE_API_KEY do servidor) — igual ao
-    /processar-folha-ponto. Cria 1 registro por cliente na aba respectiva.
+    Protegido por X-API-KEY (EMAIL_WEBHOOK_KEY) — Macro 6A, correção de
+    auditoria (achado #4): esta rota escrevia em Extrato Mensal/FGTS de
+    CLIENTES aceitando qualquer chamador que soubesse a URL, sem nenhuma
+    credencial própria (só a checagem de que o SERVIDOR tem AIRTABLE_API_KEY
+    configurada — isso não autentica o chamador). Reaproveita o mesmo
+    mecanismo e a mesma variável já usados por /email/webhook e
+    /processar-fila — sem segredo novo. Cria 1 registro por cliente na aba
+    respectiva.
     """
     if request.method == 'OPTIONS':
         return jsonify({}), 200
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
     if not AIRTABLE_API_KEY:
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
@@ -7779,7 +8175,7 @@ def _gerar_fila_envios_email(folha_mensal=None, folha_mensal_d2=None,
                 F_ENVIO_DEST: email,
                 F_ENVIO_EMAIL: email,
                 F_ENVIO_CLIENTE: [cid],
-                F_ENVIO_TEXTO: _corpo_maggie(nome, folha_cli),   # saudação Maggie + competência
+                F_ENVIO_TEXTO: _corpo_maggie(nome, folha_cli),   # saudação (Bia) + competência
             }
             if hol:
                 campos[F_ENVIO_HOLERITES] = hol
@@ -8341,7 +8737,7 @@ def _disparar_fila_email(limit=None, dry_run=True, email_teste=None):
             anexos = [(fn, _baixar_attachment_bytes(u)) for fn, u in anexos_meta]
             assunto = (f'Documentos da Folha de Pagamento'
                        f'{(" — " + cli_nome) if cli_nome else ""} — Grupo Magnata')
-            # Corpo = saudação Maggie (vem do gerador c/ competência) + manifesto
+            # Corpo = saudação (Bia, vem do gerador c/ competência) + manifesto
             # dos anexos + Protocolo de Entrega + rodapé/LGPD.
             corpo_base = f.get('Texto do Email') or _corpo_maggie(cli_nome, '')
             corpo = (corpo_base
@@ -8427,10 +8823,16 @@ def processar_guia():
       - tipo: opcional (ex.: "DCTFWeb", "FGTS", "VR Benefícios")
       - nome: opcional (Nome documento)
       - campo: 'guia' (padrão) ou 'comprovante' — onde anexar (PDF GUIA vs PDF COMPROVANTE)
-    Não exige X-API-KEY. Retorna record_id — use em guias_ids no broadcast.
+    Protegido por X-API-KEY (EMAIL_WEBHOOK_KEY) — Macro 6A, correção de
+    auditoria (achado #4): mesma lacuna e mesma correção de
+    /processar-doc-cliente (ver docstring lá). Retorna record_id — use em
+    guias_ids no broadcast.
     """
     if request.method == 'OPTIONS':
         return jsonify({}), 200
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
     if not AIRTABLE_API_KEY:
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
@@ -8512,11 +8914,19 @@ def processar_recibos():
       - pdf: arquivo mestre (1 colaborador por página)
       - tipo: rótulo (ex.: "Salário", "Assiduidade", "Almoço e Janta")
       - folha_mensal: ex. "Abril 2026"
-    Não exige X-API-KEY (só a AIRTABLE_API_KEY do servidor).
-    ATENÇÃO: rode 1x por tipo (re-rodar duplica os anexos no colaborador).
+    Protegido por X-API-KEY (EMAIL_WEBHOOK_KEY) — Macro 6A, correção de
+    auditoria (achado #4): mesma lacuna e mesma correção de
+    /processar-doc-cliente (ver docstring lá).
+    ATENÇÃO: rode 1x por tipo (re-rodar duplica os anexos no colaborador) —
+    risco de idempotência pré-existente, registrado separadamente no
+    relatório da Macro 6A; não corrigido nesta rodada (fora do achado
+    específico de autenticação desta tarefa).
     """
     if request.method == 'OPTIONS':
         return jsonify({}), 200
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
     if not AIRTABLE_API_KEY:
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 

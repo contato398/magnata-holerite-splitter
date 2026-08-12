@@ -501,6 +501,15 @@ var GUIA_URL     = 'https://magnata-holerite-splitter.onrender.com/processar-gui
 // esse texto (ex.: "extrato da folha") — mira cirúrgica no documento mestre.
 // Utilities.sleep de 2s entre chamadas evita o 503 do Render grátis.
 function fatiarDocsHistorico(query, tipo, folhaMensal, filtroNome) {
+  // Macro 6A (correção de auditoria, achado #4): /processar-doc-cliente
+  // passou a exigir X-API-KEY (mesma chave EMAIL_WEBHOOK_KEY já usada por
+  // processarEmails() acima — sem segredo novo). Sem isso, a chamada abaixo
+  // passa a devolver HTTP 401.
+  var apiKey = PropertiesService.getScriptProperties().getProperty('EMAIL_WEBHOOK_KEY');
+  if (!apiKey) {
+    Logger.log('ERRO: API key não configurada. Rode runSetup() primeiro.');
+    return;
+  }
   var alvo = filtroNome ? filtroNome.toLowerCase() : null;
   var threads = GmailApp.search(query);
   Logger.log('Query: ' + query + ' | threads: ' + threads.length + (alvo ? ' | filtroNome: "' + alvo + '"' : ''));
@@ -516,6 +525,7 @@ function fatiarDocsHistorico(query, tipo, folhaMensal, filtroNome) {
         if (alvo && nome.indexOf(alvo) === -1) continue;   // mira por nome do arquivo
         var resp = UrlFetchApp.fetch(FATIADOR_URL, {
           method: 'post',
+          headers: { 'X-API-KEY': apiKey },
           payload: { pdf: att.copyBlob(), tipo: tipo, folha_mensal: folhaMensal },
           muteHttpExceptions: true,
         });
@@ -560,6 +570,15 @@ function fatiarExtrato_Abril() {
  * usar em "guias_ids" no /gerar-fila-envios-email.
  */
 function capturarGuias(query, tipoGuia, folhaMensal) {
+  // Macro 6A (correção de auditoria, achado #4): /processar-guia passou a
+  // exigir X-API-KEY (mesma chave EMAIL_WEBHOOK_KEY já usada por
+  // processarEmails() acima — sem segredo novo). Sem isso, a chamada abaixo
+  // passa a devolver HTTP 401.
+  var apiKey = PropertiesService.getScriptProperties().getProperty('EMAIL_WEBHOOK_KEY');
+  if (!apiKey) {
+    Logger.log('ERRO: API key não configurada. Rode runSetup() primeiro.');
+    return;
+  }
   var threads = GmailApp.search(query);
   Logger.log('Query: ' + query + ' | threads: ' + threads.length);
   var ids = [];
@@ -573,6 +592,7 @@ function capturarGuias(query, tipoGuia, folhaMensal) {
         if (att.getContentType() !== 'application/pdf' && !nome.endsWith('.pdf')) continue;
         var resp = UrlFetchApp.fetch(GUIA_URL, {
           method: 'post',
+          headers: { 'X-API-KEY': apiKey },
           payload: { pdf: att.copyBlob(), tipo: tipoGuia || '', nome: att.getName(), folha_mensal: folhaMensal || '' },
           muteHttpExceptions: true,
         });
