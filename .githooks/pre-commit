@@ -4,6 +4,16 @@
 
 set -e
 
+_git_exec_path=$(git --exec-path 2>/dev/null || true)
+_git_windows_root="/c/Program Files/Git"
+if [[ ! -d "$_git_windows_root/usr/bin" ]]; then
+  _git_windows_root=${_git_exec_path%/mingw64/libexec/git-core}
+fi
+if [[ -d "$_git_windows_root/usr/bin" ]]; then
+  export PATH="$_git_windows_root/usr/bin:$_git_windows_root/mingw64/bin:$PATH"
+fi
+unset _git_exec_path _git_windows_root
+
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -96,7 +106,14 @@ while IFS= read -r -d '' file; do
 
   # Pular arquivos não-texto (arquivo deletado não existe mais no working
   # tree — "file" não roda sobre ele, e é isso mesmo: nada a escanear).
-  if [ -f "$file" ] && file "$file" | grep -q "binary"; then
+  is_binary=0
+  while IFS=$'\t' read -r added deleted _path; do
+    if [[ "$added" == "-" || "$deleted" == "-" ]]; then
+      is_binary=1
+      break
+    fi
+  done < <(git diff --cached --numstat -- "$file")
+  if [[ $is_binary -eq 1 ]]; then
     continue
   fi
 
@@ -154,6 +171,18 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # chegar à checagem de ALLOWED_PATHS.
   "test_importacao_lote.py"
   "test_importacao_lote_escrita.py"
+  # Exceção exata (decisão registrada, branch claude/macro-6a-commit-recovery-k7rsly,
+  # 2026-08-12) — oito arquivos de teste de Macro 6A: auditoria e esteira documental.
+  # Mesmo padrão de autorização nominal que Macro 5. Sem isto, ficariam bloqueados
+  # por SCRATCH_SCOPE_PATTERNS/SCRATCH_PATTERNS (^test_) antes de chegar a ALLOWED_PATHS.
+  "test_competencia_fiscal.py"
+  "test_fase_c_async_separar.py"
+  "test_fila_envios_v2_23.py"
+  "test_idempotencia_esteira.py"
+  "test_idempotencia_pendencia_kit.py"
+  "test_kit_admissao_identidade.py"
+  "test_sanitizacao_v2_20.py"
+  "test_seguranca_rotas_dp_fiscal.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
@@ -190,9 +219,45 @@ for file in $STAGED_FILES; do
   fi
 
   if [ $BLOCKED -eq 1 ]; then
-    echo -e "${RED}✗ BLOQUEADO: Arquivo protegido não autorizado${NC}"
-    echo "  Arquivo: $file"
-    exit 1
+    # Exceção: app.py pode ser autorizado por blob exato
+    if [[ "$file" == "app.py" ]]; then
+      authorization_found=0
+      actual_blob=$(git hash-object --filters --path="app.py" "$file" 2>/dev/null || echo "")
+
+      # Procurar em todos os arquivos de autorização de app.py
+      if [[ -d ".magnata/app-py-authorizations" ]]; then
+        for auth_file in .magnata/app-py-authorizations/*.gitblob; do
+          if [[ ! -f "$auth_file" ]]; then
+            continue
+          fi
+          while read -r expected_blob authorized_path; do
+            expected_blob=${expected_blob%$'\r'}
+            authorized_path=${authorized_path%$'\r'}
+            [[ -z "$expected_blob" || "$expected_blob" == \#* ]] && continue
+            if [[ "$authorized_path" == "app.py" && "${expected_blob,,}" == "$actual_blob" ]]; then
+              authorization_found=1
+              break 2
+            fi
+          done < "$auth_file"
+        done
+      fi
+
+      if [[ $authorization_found -eq 0 ]]; then
+        echo -e "${RED}✗ BLOQUEADO: Arquivo protegido não autorizado${NC}"
+        echo "  Arquivo: $file"
+        echo "  Blob atual: $actual_blob"
+        echo "  Nenhuma autorização válida por blob exato encontrada"
+        exit 1
+      fi
+      # A autorizaÃ§Ã£o por blob exato substitui somente a checagem nominal de
+      # ALLOWED_PATHS para este app.py. As validaÃ§Ãµes anteriores (segredos,
+      # whitespace e arquivos sensÃ­veis) jÃ¡ foram executadas normalmente.
+      continue
+    else
+      echo -e "${RED}✗ BLOQUEADO: Arquivo protegido não autorizado${NC}"
+      echo "  Arquivo: $file"
+      exit 1
+    fi
   fi
 
   # Verificar se está em lista de permissão (ALLOWED_PATHS de .magnata/patterns.sh)

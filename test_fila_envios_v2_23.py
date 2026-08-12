@@ -822,11 +822,22 @@ def test_recibos_pdfs_por_cliente():
 
 
 def test_corpo_maggie_com_competencia():
+    """
+    Correção (Macro 6A — fechamento autônomo, achado: expectativa antiga
+    substituída por decisão já aprovada): a persona do e-mail foi renomeada
+    de "Maggie" para "Bia" (ver _corpo_maggie: "estilo humanizado assinado
+    pela Bia", e _rodape_email, que assina "Bia" de fato) — o texto real
+    NUNCA contém a palavra "Maggie", só o nome da função/comentários
+    internos ainda carregam o nome antigo. Assertion atualizada para o
+    comportamento real e atual (não há mais ninguém chamado "Maggie" em
+    nenhum texto renderizado); o nome da função em si não foi alterado
+    nesta correção (fora do escopo desta falha específica).
+    """
     txt = app._corpo_maggie('CONDOMINIO MORADAS', 'Maio 2026')
-    assert 'Maggie' in txt
+    assert 'Maggie' not in txt
     assert 'competência Maio 2026' in txt
     assert 'CONDOMINIO MORADAS' in txt
-    print('OK: _corpo_maggie traz saudação Maggie + competência + cliente')
+    print('OK: _corpo_maggie traz competência + cliente (sem persona "Maggie" obsoleta no texto)')
 
 
 def test_manifesto_e_rodape():

@@ -3,6 +3,16 @@
 # Etapa 5: Hooks Locais de Segurança
 # Mecanismo: arquivo .git/MAGNATA_PUSH_AUTHORIZED_ONCE (criado manualmente, removido automaticamente)
 
+_git_exec_path=$(git --exec-path 2>/dev/null || true)
+_git_windows_root="/c/Program Files/Git"
+if [[ ! -d "$_git_windows_root/usr/bin" ]]; then
+  _git_windows_root=${_git_exec_path%/mingw64/libexec/git-core}
+fi
+if [[ -d "$_git_windows_root/usr/bin" ]]; then
+  export PATH="$_git_windows_root/usr/bin:$_git_windows_root/mingw64/bin:$PATH"
+fi
+unset _git_exec_path _git_windows_root
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'

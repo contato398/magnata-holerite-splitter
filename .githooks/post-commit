@@ -2,6 +2,16 @@
 # Post-commit hook para Magnata OS — Informativo
 # Etapa 5: Hooks Locais de Segurança
 
+_git_exec_path=$(git --exec-path 2>/dev/null || true)
+_git_windows_root="/c/Program Files/Git"
+if [[ ! -d "$_git_windows_root/usr/bin" ]]; then
+  _git_windows_root=${_git_exec_path%/mingw64/libexec/git-core}
+fi
+if [[ -d "$_git_windows_root/usr/bin" ]]; then
+  export PATH="$_git_windows_root/usr/bin:$_git_windows_root/mingw64/bin:$PATH"
+fi
+unset _git_exec_path _git_windows_root
+
 GREEN='\033[0;32m'
 NC='\033[0m'
 
