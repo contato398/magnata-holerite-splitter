@@ -24,6 +24,7 @@ AUTHORIZED_BRANCHES=(
   "^feat/magnata-os-etapa6-governanca$"
   "^feat/magnata-os-etapa6-estabilizacao$"
   "^fix/[a-z0-9][a-z0-9-]*$"
+  "^claude/macro-6a-[a-z0-9-]*$"
 )
 
 # Verifica se uma branch está na lista de branches de trabalho autorizadas
