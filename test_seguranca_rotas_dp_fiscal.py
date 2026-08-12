@@ -58,7 +58,7 @@ def test_processar_doc_cliente_com_x_api_key_errada_e_rejeitado_com_401():
             '/processar-doc-cliente',
             data={'tipo': 'extrato', 'folha_mensal': 'Maio 2026',
                   'pdf': (io.BytesIO(PDF_SINTETICO), 'mestre.pdf')},
-            headers={'X-API-KEY': 'chave-errada'},
+            headers={'X-API-KEY': 'dummy'},
             content_type='multipart/form-data',
         )
     assert resp.status_code == 401
