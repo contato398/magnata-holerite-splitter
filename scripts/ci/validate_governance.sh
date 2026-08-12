@@ -172,18 +172,20 @@ gate_protected_app_py() {
 
     # Procurar em todos os arquivos de autorização de app.py
     if [[ -d "$PROJECT_ROOT/.magnata/app-py-authorizations" ]]; then
-      while IFS= read -r auth_file; do
-        if [[ -z "$auth_file" ]] || [[ ! -f "$auth_file" ]]; then
+      for auth_file in "$PROJECT_ROOT"/.magnata/app-py-authorizations/*.gitblob; do
+        if [[ ! -f "$auth_file" ]]; then
           continue
         fi
         while read -r expected_blob authorized_path; do
+          expected_blob=${expected_blob%$'\r'}
+          authorized_path=${authorized_path%$'\r'}
           [[ -z "$expected_blob" || "$expected_blob" == \#* ]] && continue
           if [[ "$authorized_path" == "app.py" && "${expected_blob,,}" == "$actual_blob" ]]; then
             authorization_found=1
             break 2
           fi
         done < "$auth_file"
-      done < <(find "$PROJECT_ROOT/.magnata/app-py-authorizations" -name "*.gitblob" -type f)
+      done
     fi
 
     if [[ $authorization_found -eq 0 ]]; then

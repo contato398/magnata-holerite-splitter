@@ -29,6 +29,7 @@ import hashlib
 import secrets
 import unicodedata
 import logging
+import tempfile
 import requests
 from collections import Counter
 from calendar import monthrange
@@ -1284,7 +1285,7 @@ def extrair_pdf_do_request(campo: str = 'pdf') -> str:
         if not arq and campo == 'pdf':
             arq = next(iter(request.files.values()), None) if request.files else None
         if arq:
-            caminho = f'/tmp/holerite_{_uuid.uuid4().hex}.pdf'
+            caminho = os.path.join(tempfile.gettempdir(), f'holerite_{_uuid.uuid4().hex}.pdf')
             arq.save(caminho)
             tamanho = os.path.getsize(caminho)
             logger.info(f'[PDF] Salvo em disco: {caminho} | {tamanho // 1024} KB')
@@ -1293,7 +1294,7 @@ def extrair_pdf_do_request(campo: str = 'pdf') -> str:
         data = request.get_json(force=True, silent=True) or {}
         if 'pdf_base64' in data:
             try:
-                caminho = f'/tmp/holerite_{_uuid.uuid4().hex}.pdf'
+                caminho = os.path.join(tempfile.gettempdir(), f'holerite_{_uuid.uuid4().hex}.pdf')
                 with open(caminho, 'wb') as f:
                     f.write(base64.b64decode(data['pdf_base64']))
                 return caminho
@@ -5195,7 +5196,7 @@ def corrigir_valores():
         try:
             resp = requests.get(pdf_url, timeout=30)
             resp.raise_for_status()
-            tmp_path = f'/tmp/corr_{_uuid.uuid4().hex}.pdf'
+            tmp_path = os.path.join(tempfile.gettempdir(), f'corr_{_uuid.uuid4().hex}.pdf')
             with open(tmp_path, 'wb') as f:
                 f.write(resp.content)
 
@@ -5372,7 +5373,7 @@ def _processar_anexo_fiscal(conteudo: bytes, nome_arquivo: str, tipo_doc: str, t
 
     if tipo_doc in ('Extrato da Folha de Pagamento', 'FGTS'):
         tipo_fatiador = 'extrato' if tipo_doc == 'Extrato da Folha de Pagamento' else 'fgts'
-        tmp_path = f'/tmp/fiscal_{_uuid.uuid4().hex}.pdf'
+        tmp_path = os.path.join(tempfile.gettempdir(), f'fiscal_{_uuid.uuid4().hex}.pdf')
         try:
             with open(tmp_path, 'wb') as f:
                 f.write(conteudo)
@@ -5514,7 +5515,7 @@ def email_webhook():
         # Extrair texto (só PDFs) e classificar
         texto = ''
         if nome_arquivo.lower().endswith('.pdf'):
-            tmp_path = f'/tmp/email_{_uuid.uuid4().hex}.pdf'
+            tmp_path = os.path.join(tempfile.gettempdir(), f'email_{_uuid.uuid4().hex}.pdf')
             try:
                 with open(tmp_path, 'wb') as f:
                     f.write(conteudo)
@@ -5873,7 +5874,7 @@ def processar_fila():
             pdf_bytes = requests.get(pdf_url, timeout=60).content
 
             # Extrair texto do PDF
-            tmp_path = f'/tmp/fila_{_uuid.uuid4().hex}.pdf'
+            tmp_path = os.path.join(tempfile.gettempdir(), f'fila_{_uuid.uuid4().hex}.pdf')
             with open(tmp_path, 'wb') as f:
                 f.write(pdf_bytes)
             texto = ''
