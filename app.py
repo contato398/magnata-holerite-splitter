@@ -9092,8 +9092,18 @@ def _ip_real_da_requisicao() -> str:
     return request.remote_addr or 'desconhecido'
 
 
-def _pagina_assinatura_html(hash_token: str, nome_doc: str, erro: str = None) -> str:
+def _pagina_assinatura_html(hash_token: str, nome_doc: str, erro: str = None, mostrar_formulario: bool = True) -> str:
     erro_html = f'<p style="color:#c0392b;font-weight:bold;">{erro}</p>' if erro else ''
+    # mostrar_formulario=False: usado para status terminais em que reenviar o
+    # CPF nunca teria efeito (ex.: pacote Cancelado por vínculo não mais
+    # ativo) -- evita sugerir uma ação que a idempotência já bloqueia por
+    # dentro, sem alterar o comportamento existente de Expirado/erro genérico.
+    form_html = f"""
+    <form method="POST" action="/assinatura/{hash_token}">
+      <input type="text" name="cpf" inputmode="numeric" pattern="\\d{{4}}" placeholder="Últimos 4 números do CPF" maxlength="4" required>
+      <p class="termo">Ao clicar abaixo, concordo eletronicamente com o recebimento e os termos do documento acima, sob as penas da lei.</p>
+      <button type="submit">Confirmar e Assinar</button>
+    </form>""" if mostrar_formulario else ''
     return f"""<!DOCTYPE html>
 <html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9116,12 +9126,7 @@ def _pagina_assinatura_html(hash_token: str, nome_doc: str, erro: str = None) ->
   <div class="card">
     <h1>Confirmação de Recebimento — {nome_doc}</h1>
     <p>Para confirmar que você é o(a) destinatário(a) deste documento, digite os <strong>4 últimos números</strong> do seu CPF abaixo.</p>
-    {erro_html}
-    <form method="POST" action="/assinatura/{hash_token}">
-      <input type="text" name="cpf" inputmode="numeric" pattern="\\d{{4}}" placeholder="Últimos 4 números do CPF" maxlength="4" required>
-      <p class="termo">Ao clicar abaixo, concordo eletronicamente com o recebimento e os termos do documento acima, sob as penas da lei.</p>
-      <button type="submit">Confirmar e Assinar</button>
-    </form>
+    {erro_html}{form_html}
     <p class="aviso">Ao confirmar, você declara ter recebido e tomado conhecimento do documento. Data, hora e IP de acesso serão registrados como comprovação.</p>
   </div>
 </body></html>"""
@@ -9164,6 +9169,51 @@ def _buscar_funcionario_nome_whatsapp(func_id: str):
     nome = fields.get('Nome Completo')
     whatsapp = _normalizar_numero_evolution(fields.get('WhatsApp'))
     return nome, whatsapp
+
+
+# Único valor de Status que autoriza assinatura -- comparação exata, nunca
+# por lista de nomes/telefones. Qualquer outro valor real (Inativo, Empresa,
+# Pessoal, Outro) ou ausência de valor bloqueia. "Status desconhecido" (uma
+# string que não é nem "Ativo" nem nenhum dos valores conhecidos -- ex.: erro
+# de digitação futuro no Airtable) é tratado como indeterminado, nunca como
+# aprovado por omissão.
+STATUS_FUNCIONARIO_ATIVO = 'Ativo'
+STATUS_FUNCIONARIO_CONHECIDOS = {'Ativo', 'Inativo', 'Empresa', 'Pessoal', 'Outro'}
+
+
+def _status_funcionario_elegivel(funcionario_id: str):
+    """Confere o vínculo ativo do colaborador antes de qualquer preparação,
+    disparo ou conclusão de assinatura -- exigência desta Macro (correção
+    indispensável antes de qualquer piloto/publicação, não depois).
+
+    Retorna (elegivel: bool, motivo_sanitizado: str|None). O motivo nunca
+    contém nome, telefone, CPF ou qualquer outro dado pessoal -- só uma das
+    3 categorias abaixo, adequadas para log e para o campo de erro (nunca
+    expõem quem é o colaborador, só o estado do vínculo):
+      - 'vinculo_nao_ativo'    -> Status é um valor conhecido, mas != Ativo
+      - 'vinculo_indeterminado' -> Status ausente ou valor não reconhecido
+      - None                   -> elegível (Status == Ativo, exato)
+    """
+    if not funcionario_id:
+        return False, 'vinculo_indeterminado'
+
+    _at_throttle()
+    r = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{funcionario_id}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        params={'returnFieldsByFieldId': 'true', 'fields[]': [F_FUNC_STATUS]},
+        timeout=30,
+    )
+    if not r.ok:
+        return False, 'vinculo_indeterminado'
+
+    status = (r.json().get('fields', {}) or {}).get(F_FUNC_STATUS)
+
+    if status == STATUS_FUNCIONARIO_ATIVO:
+        return True, None
+    if status in STATUS_FUNCIONARIO_CONHECIDOS:
+        return False, 'vinculo_nao_ativo'
+    return False, 'vinculo_indeterminado'
 
 
 def _montar_mensagem_assinatura(nome: str, tipo_documento: str, link: str) -> str:
@@ -9820,19 +9870,26 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
 
     Falhas parciais — todas explícitas, nenhuma silenciosamente
     "concluída" (ver auditoria prévia desta Macro, §8):
+      - vínculo do colaborador não Ativo -> erro 403, nada criado (checado
+        AQUI na preparação/dry-run, de novo imediatamente antes do
+        disparo, e de novo em _confirmar_assinatura_pacote_holerite_ponto
+        imediatamente antes de concluir a assinatura — 3 checkpoints,
+        nenhum depende de lista fixa de nome/telefone)
       - arquivo ausente / não-PDF / de outro funcionário -> erro 4xx, nada criado
       - competência ausente em qualquer um dos 2 docs -> erro 422, nada criado
       - competências divergentes entre os 2 docs -> erro 409, nada criado
-      - idempotência cobre TODOS os estados (corrige a lacuna encontrada
-        na auditoria, onde EXPIRADO/FALHA_ENVIO/CANCELADO caíam sem
-        tratamento explícito e permitiam duplicar a chave):
-          PREPARADO/AGUARDANDO_ENVIO/ENVIANDO      -> 409 duplicado
-          ENVIADO_AGUARDANDO_ASSINATURA            -> 200 link existente
-          ASSINADO                                  -> 409 já assinado
-          FALHA_ENVIO                               -> 200 link existente p/ reenviar (não duplica)
-          EXPIRADO/CANCELADO                        -> 409 bloqueia recriação automática,
-                                                        exige o fluxo humano de reenvio já
-                                                        existente (/assinatura/processar-reenvios)
+      - idempotência cobre TODOS os estados alcançáveis de verdade (corrige
+        a lacuna encontrada na auditoria — a versão anterior comparava
+        contra nomes ALL-CAPS que a própria gravação nunca escreve; ver
+        revisão adversarial desta Macro de fechamento):
+          PREPARADO         -> 409 duplicado (criado, ainda sem envio confirmado)
+          Pendente          -> 200 link existente (WhatsApp já enviado, aguardando assinatura)
+          FALHA_ENVIO       -> 200 link existente p/ reenviar (não duplica)
+          Assinado          -> 409 já assinado
+          Expirado/Cancelado -> 409 bloqueia recriação automática, exige o
+                                 fluxo humano de reenvio já existente
+                                 (/assinatura/processar-reenvios, agora
+                                 também estendido a este tipo)
 
     Risco residual declarado (não escondido): Airtable não tem transação
     nem constraint único — duas chamadas concorrentes com o MESMO par de
@@ -9869,6 +9926,17 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
             'erro': 'arquivo_holerite_record_id e arquivo_folha_ponto_record_id não podem ser o mesmo arquivo',
             'request_id': request_id,
         }, 400
+
+    # Checkpoint 1/3 de vínculo ativo: na preparação/dry-run. Bloqueia antes
+    # de tocar em qualquer documento — nunca depende de nome/telefone.
+    elegivel, motivo_vinculo = _status_funcionario_elegivel(funcionario_id)
+    if not elegivel:
+        logger.warning(f'[PACOTE HOL+PONTO] Bloqueado na preparação — motivo={motivo_vinculo}')
+        return {
+            'status': 'erro', 'erro': motivo_vinculo,
+            'mensagem': 'Colaborador não está com vínculo ativo confirmado — pacote não pode ser preparado.',
+            'request_id': request_id,
+        }, 403
 
     nome_func, whatsapp = _buscar_funcionario_nome_whatsapp(funcionario_id)
 
@@ -9973,19 +10041,27 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
             existente_id = rec_existente['id']
             logger.info(f'[PACOTE HOL+PONTO] Idempotência: {existente_id} (status: {status_existente})')
 
-            if status_existente in ('PREPARADO', 'AGUARDANDO_ENVIO', 'ENVIANDO'):
+            # Casing real (não o nome ALL-CAPS aspiracional de ESTADOS_ASSINATURA):
+            # 'PREPARADO' é o único all-caps que a criação de fato escreve;
+            # 'Pendente'/'Assinado'/'Expirado' são Title-Case porque é isso
+            # que o handler de confirmação (compartilhado, não desta Macro)
+            # e o reenvio genérico de fato gravam — comparar contra o
+            # all-caps aspiracional aqui faria essas 3 ramificações nunca
+            # baterem contra um registro real (achado da revisão adversarial
+            # desta macro de fechamento).
+            if status_existente == 'PREPARADO':
                 return {
                     'status': 'duplicado', 'assinatura_id': existente_id,
-                    'motivo': f'idempotência: pacote já em preparação ({status_existente})',
+                    'motivo': 'idempotência: pacote já criado, aguardando confirmação de envio',
                     'idempotency_key': idempotency_key, 'request_id': request_id,
                 }, 409
-            if status_existente == 'ENVIADO_AGUARDANDO_ASSINATURA':
+            if status_existente == 'Pendente':
                 return {
                     'status': 'ok', 'assinatura_id': existente_id,
                     'link': f'{RECIBO_BASE_URL}/assinatura/{rec_existente["fields"].get(F_ASS_HASH)}',
                     'motivo': 'retornando link existente', 'request_id': request_id,
                 }, 200
-            if status_existente == 'ASSINADO':
+            if status_existente == 'Assinado':
                 return {
                     'status': 'erro', 'erro': 'pacote_ja_assinado', 'assinatura_id': existente_id,
                     'request_id': request_id,
@@ -9997,14 +10073,14 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
                     'motivo': 'falha_envio_anterior — reenviar o mesmo link, não recriar pacote',
                     'request_id': request_id,
                 }, 200
-            if status_existente in ('EXPIRADO', 'CANCELADO'):
+            if status_existente in ('Expirado', 'Cancelado'):
                 return {
                     'status': 'erro', 'erro': 'pacote_expirado_ou_cancelado', 'assinatura_id': existente_id,
                     'mensagem': (
                         'Pacote com estes 2 documentos já expirou ou foi cancelado. '
                         'Reenvio automático bloqueado — use o fluxo humano de reenvio '
-                        '(Status="Reenviar" em Assinaturas Digitais, mesmo processo já '
-                        'existente para os demais tipos) antes de tentar novamente.'
+                        '(Status="Reenviar" em Assinaturas Digitais, agora também disponível '
+                        'para este tipo) antes de tentar novamente.'
                     ),
                     'request_id': request_id,
                 }, 409
@@ -10051,6 +10127,30 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
 
     disparo_resultado = None
     if disparar_whatsapp:
+        # Checkpoint 2/3 de vínculo ativo: imediatamente antes do disparo,
+        # não reaproveita a checagem do início da função — é uma nova
+        # consulta, cobrindo o caso real de desligamento no intervalo
+        # (mesmo que hoje esse intervalo seja curto dentro da mesma
+        # chamada; o reenvio, que pode ocorrer dias depois, reusa este
+        # mesmo padrão de checkpoint — ver assinatura_processar_reenvios).
+        elegivel_no_disparo, motivo_no_disparo = _status_funcionario_elegivel(funcionario_id)
+        if not elegivel_no_disparo:
+            logger.warning(f'[PACOTE HOL+PONTO] Disparo abortado — vínculo mudou antes do envio: '
+                            f'{assinatura_id} | motivo={motivo_no_disparo}')
+            _at_throttle()
+            requests.patch(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{assinatura_id}',
+                headers=_at_headers(),
+                json={'fields': {F_ASS_STATUS: 'Cancelado'}, 'typecast': True}, timeout=15,
+            )
+            return {
+                'status': 'ok', 'dry_run': False, 'acao': 'pacote_criado_e_cancelado',
+                'assinatura_id': assinatura_id, 'erro': motivo_no_disparo,
+                'mensagem': 'Pacote criado, mas cancelado antes do disparo — vínculo não mais ativo.',
+                'tipo_documento': TIPO_PACOTE_HOLERITE_PONTO, 'competencia': competencia,
+                'idempotency_key': idempotency_key, 'request_id': request_id,
+            }, 200
+
         try:
             mensagem = (
                 f'Olá{(" " + nome_func) if nome_func else ""}! Você tem 2 documentos pendentes de '
@@ -10063,9 +10163,28 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
             _evolution_enviar_texto(whatsapp, mensagem)
             disparo_resultado = 'enviado'
             logger.info(f'[PACOTE HOL+PONTO] WhatsApp enviado: {assinatura_id} | WhatsApp: {whatsapp}')
+            _at_throttle()
+            requests.patch(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{assinatura_id}',
+                headers=_at_headers(),
+                json={'fields': {F_ASS_STATUS: 'Pendente'}, 'typecast': True}, timeout=15,
+            )
         except Exception as exc:
+            # Log do servidor pode conter o detalhe completo (erro da
+            # Evolution API às vezes inclui o próprio número no texto) --
+            # o campo persistido no Airtable, exigido "sem PII" por esta
+            # Macro, guarda só uma categoria sanitizada.
             logger.error(f'[PACOTE HOL+PONTO] Falha ao disparar WhatsApp: {assinatura_id} | Erro: {exc}')
-            disparo_resultado = f'falha: {exc}'
+            disparo_resultado = 'falha'
+            _at_throttle()
+            requests.patch(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{assinatura_id}',
+                headers=_at_headers(),
+                json={'fields': {
+                    F_ASS_STATUS: 'FALHA_ENVIO',
+                    F_ASS_EVIDENCIAS: 'Falha no envio WhatsApp (Evolution API) — ver logs do servidor para detalhe técnico.',
+                }, 'typecast': True}, timeout=15,
+            )
     else:
         logger.info(f'[PACOTE HOL+PONTO] Criado sem disparo automático: {assinatura_id}')
 
@@ -10274,6 +10393,175 @@ def admissao_consolidar_kit():
     })
 
 
+MAX_REENVIOS_PACOTE = 5  # mesmo teto de MAX_TENTATIVAS_ASSINATURA, por consistência
+
+_REENVIO_PACOTE_REGEX = re.compile(r'Reenvios do pacote:\s*(\d+)')
+
+
+def _contar_reenvios_pacote(evidencias_texto: str) -> int:
+    m = _REENVIO_PACOTE_REGEX.search(evidencias_texto or '')
+    return int(m.group(1)) if m else 0
+
+
+def _reenviar_pacote_holerite_ponto(rec: dict, fields: dict, func_id: str, dry_run: bool, disparar_whatsapp: bool) -> dict:
+    """
+    Extensão mínima do mecanismo de reenvio já existente
+    (/assinatura/processar-reenvios) para o tipo HOLERITE_FOLHA_PONTO.
+
+    Reaproveita a MESMA transação e chave de idempotência (nunca cria um
+    registro novo — só faz PATCH no registro existente, então nunca gera
+    uma segunda assinatura para o mesmo pacote). Isolado do reenvio
+    genérico: chamado a partir de um branch por tipo, sem alterar
+    nenhuma linha do reenvio de Kit Admissão/Rescisão/EPI/Contratos/
+    Folha de Ponto isolada.
+    """
+    item = {'assinatura_id': rec['id'], 'nome': fields.get('Nome')}
+
+    # Revalida vínculo ativo antes de reenviar -- nunca ressuscita pacote
+    # de colaborador que deixou de ser elegível desde a preparação.
+    elegivel, motivo_vinculo = _status_funcionario_elegivel(func_id)
+    if not elegivel:
+        item['erro'] = motivo_vinculo
+        item['acao'] = 'cancelado_vinculo_nao_ativo'
+        if not dry_run:
+            _at_throttle()
+            requests.patch(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{rec["id"]}',
+                headers=_at_headers(), json={'fields': {F_ASS_STATUS: 'Cancelado'}, 'typecast': True}, timeout=15,
+            )
+        return item
+
+    nome_func, whatsapp = _buscar_funcionario_nome_whatsapp(func_id)
+    if not whatsapp:
+        item['erro'] = 'whatsapp_ausente'
+        if not dry_run:
+            _at_throttle()
+            requests.patch(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{rec["id"]}',
+                headers=_at_headers(), json={'fields': {F_ASS_STATUS: 'FALHA_ENVIO'}, 'typecast': True}, timeout=15,
+            )
+        return item
+
+    # Limite de tentativas de reenvio (contador embutido em Evidencias_
+    # Assinatura -- sem campo novo no Airtable, ver decisão registrada em
+    # docs/decisoes/pacote-holerite-folha-ponto.md). Checado ANTES de
+    # revalidar documentos -- um pacote já esgotado nunca precisa baixar
+    # nada de novo para ser bloqueado.
+    reenvios_ate_agora = _contar_reenvios_pacote(fields.get('Evidencias_Assinatura'))
+    if reenvios_ate_agora >= MAX_REENVIOS_PACOTE:
+        item['erro'] = 'limite_de_reenvios_excedido'
+        item['acao'] = 'bloqueado_para_revisao'
+        if not dry_run:
+            _at_throttle()
+            requests.patch(
+                f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{rec["id"]}',
+                headers=_at_headers(), json={'fields': {F_ASS_STATUS: 'Expirado'}, 'typecast': True}, timeout=15,
+            )
+        return item
+
+    # Revalida os 2 Record IDs e hashes: os anexos ORIGINAIS ainda
+    # precisam corresponder ao par gravado na criação. Um pacote em
+    # reenvio nunca deveria ter sido assinado (chegaria aqui só se
+    # Status="Reenviar", nunca "Assinado"), então os originais devem
+    # continuar lá -- mas se algo os alterou por fora (documento
+    # corrigido depois da preparação), o reenvio é bloqueado, não
+    # silenciosamente aceito.
+    doc_atual = fields.get('Documento PDF') or []
+    anexos_originais = [a for a in doc_atual if not a['filename'].startswith('Comprovante Assinatura')
+                         and ' - ASSINADO' not in a['filename']]
+    hashes_gravados = (fields.get('PDF SHA-256') or '').split(_SEPARADOR_PACOTE)
+    if len(anexos_originais) != 2 or len(hashes_gravados) != 2:
+        item['erro'] = 'estrutura_inesperada'
+        item['acao'] = 'bloqueado_para_revisao'
+        return item
+
+    if not dry_run:
+        try:
+            hashes_atuais = set()
+            for att in anexos_originais:
+                r_doc = requests.get(att['url'], timeout=60)
+                if not r_doc.ok:
+                    raise RuntimeError('download falhou')
+                hashes_atuais.add(hashlib.sha256(r_doc.content).hexdigest())
+            if hashes_atuais != set(hashes_gravados):
+                item['erro'] = 'documento_alterado_apos_preparacao'
+                item['acao'] = 'bloqueado_documento_trocado'
+                return item
+        except Exception as exc:
+            logger.error(f'[PACOTE HOL+PONTO] Reenvio: falha ao revalidar documentos de {rec["id"]}: {exc}')
+            item['erro'] = 'falha_ao_revalidar_documentos'
+            return item
+
+    novo_hash = _gerar_hash_assinatura()
+    link = f'{RECIBO_BASE_URL}/assinatura/{novo_hash}'
+    item['novo_hash'] = novo_hash
+    item['link'] = link
+    item['reenvios_apos_este'] = reenvios_ate_agora + 1
+
+    if dry_run:
+        item['acao'] = 'reenviaria_pacote'
+        item['disparar_whatsapp'] = disparar_whatsapp
+        return item
+
+    competencia_pacote = (fields.get('Nome') or '').replace('Holerite + Folha de Ponto - ', '')
+    mensagem = (
+        f'Olá{(" " + nome_func) if nome_func else ""}! Você tem 2 documentos pendentes de '
+        f'confirmação — Holerite e Folha de Ponto de {competencia_pacote}.\n\nPara confirmar o '
+        f'recebimento dos dois, acesse o link abaixo e informe os 4 últimos números do seu '
+        f'CPF:\n{link}\n\nMagnata Portaria e Serviços.'
+    )
+
+    # Concorrência best-effort: relê o Status imediatamente antes de
+    # gravar, reduzindo (não eliminando -- mesma limitação já declarada
+    # do resto do pacote) a janela de corrida com outra execução do
+    # mesmo reenvio.
+    _at_throttle()
+    r_recheck = requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{rec["id"]}',
+        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'}, timeout=15,
+    )
+    if r_recheck.ok and r_recheck.json().get('fields', {}).get('Status') != 'Reenviar':
+        item['acao'] = 'ja_processado_outra_instancia'
+        item['status_atual'] = r_recheck.json().get('fields', {}).get('Status')
+        return item
+
+    whatsapp_enviado = False
+    try:
+        if disparar_whatsapp:
+            _evolution_enviar_texto(whatsapp, mensagem)
+            whatsapp_enviado = True
+        evidencias_novas = f'Reenvios do pacote: {reenvios_ate_agora + 1}'
+        _at_throttle()
+        requests.patch(
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{rec["id"]}',
+            headers=_at_headers(),
+            json={'fields': {
+                F_ASS_HASH: novo_hash,
+                F_ASS_STATUS: 'Pendente' if whatsapp_enviado or not disparar_whatsapp else 'FALHA_ENVIO',
+                F_ASS_TENTATIVAS: 0,
+                F_ASS_EVIDENCIAS: evidencias_novas,
+            }, 'typecast': True}, timeout=15,
+        )
+        item['acao'] = 'reenviado'
+        item['disparar_whatsapp'] = disparar_whatsapp
+        item['whatsapp_enviado'] = whatsapp_enviado
+        logger.info(f'[PACOTE HOL+PONTO] Reenvio OK — {rec["id"]} novo_hash={novo_hash[:8]}...')
+    except Exception as exc:
+        logger.error(f'[PACOTE HOL+PONTO] falha no reenvio {rec["id"]}: {exc}')
+        item['erro'] = 'falha_ao_reenviar'
+        _at_throttle()
+        requests.patch(
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{rec["id"]}',
+            headers=_at_headers(),
+            json={'fields': {
+                F_ASS_STATUS: 'FALHA_ENVIO',
+                F_ASS_EVIDENCIAS: f'Reenvios do pacote: {reenvios_ate_agora + 1}\nÚltimo erro (reenvio): falha_ao_reenviar',
+            }, 'typecast': True}, timeout=15,
+        )
+
+    return item
+
+
 @app.route('/assinatura/processar-reenvios', methods=['POST', 'OPTIONS'])
 def assinatura_processar_reenvios():
     """
@@ -10343,6 +10631,15 @@ def assinatura_processar_reenvios():
             resultado['processados'].append(item)
             continue
 
+        # Pacote Holerite + Folha de Ponto: branch isolado, não altera
+        # nenhuma linha do reenvio genérico abaixo (usado por Kit
+        # Admissão/Rescisão/EPI/Contratos/Folha de Ponto isolada).
+        if fields.get('Tipo de Documento') == TIPO_PACOTE_HOLERITE_PONTO:
+            resultado['processados'].append(
+                _reenviar_pacote_holerite_ponto(rec, fields, func_id, dry_run, disparar_whatsapp)
+            )
+            continue
+
         nome_func, whatsapp = _buscar_funcionario_nome_whatsapp(func_id)
         if not whatsapp:
             item['erro'] = 'whatsapp_ausente'
@@ -10397,6 +10694,175 @@ def assinatura_processar_reenvios():
     return jsonify(resultado)
 
 
+def _confirmar_assinatura_pacote_holerite_ponto(registro, fields, hash_token, nome_doc, func_id,
+                                                 cpf_informado, ip_captura, user_agent, agora_brt_dt,
+                                                 nome_func=''):
+    """
+    Confirmação de assinatura do PACOTE Holerite + Folha de Ponto — ordem de
+    escrita DIFERENTE do fluxo de documento único (esse fluxo, compartilhado
+    por Kit Admissão/Rescisão/EPI/Contratos/Folha de Ponto isolada,
+    permanece inalterado): só grava Status="Assinado" DEPOIS que os 2
+    documentos foram revalidados, carimbados e o comprovante único foi
+    gerado e persistido — nunca antes.
+
+    Correção desta Macro de fechamento (revisão adversarial encontrou o
+    problema): a versão anterior gravava "Assinado" incondicionalmente
+    ANTES de tentar carimbar (código compartilhado, no topo da rota) e só
+    depois tentava o carimbo/comprovante em bloco isolado — uma falha
+    parcial ali (documento trocado, exceção no carimbo, falha ao persistir
+    o comprovante) deixava o pacote marcado como concluído mesmo sem ter
+    concluído nada. Agora a escrita de "Assinado" é uma ÚNICA chamada,
+    feita só no fim, junto com a lista final de anexos e as evidências —
+    se essa chamada não for alcançada ou falhar, nada fica marcado como
+    assinado (fica no status anterior, seguro para nova tentativa).
+    """
+    agora_brt = agora_brt_dt.isoformat()
+    dt_fmt = agora_brt_dt.strftime('%d/%m/%Y %H:%M')
+
+    erro_generico = _pagina_assinatura_html(
+        hash_token, nome_doc,
+        erro='Não foi possível concluir a confirmação agora. Tente novamente em alguns minutos ou contate o RH.'
+    )
+
+    # Checkpoint 3/3 de vínculo ativo: imediatamente antes de concluir a
+    # assinatura. Mudança de status entre preparação/envio e este clique
+    # invalida o pacote em vez de assinar — a mesma idempotência que já
+    # bloqueia Expirado/Cancelado impede que uma reexecução ressuscite ou
+    # reenvie automaticamente este pacote depois disso.
+    elegivel, motivo_vinculo = _status_funcionario_elegivel(func_id)
+    if not elegivel:
+        logger.warning(f'[PACOTE HOL+PONTO] Assinatura bloqueada — vínculo não ativo: '
+                        f'{registro["id"]} | motivo={motivo_vinculo}')
+        _at_throttle()
+        requests.patch(
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{registro["id"]}',
+            headers=_at_headers(), json={'fields': {F_ASS_STATUS: 'Cancelado'}, 'typecast': True}, timeout=15,
+        )
+        return _pagina_assinatura_html(hash_token, nome_doc, erro='Não foi possível concluir a confirmação. Contate o RH.',
+                                        mostrar_formulario=False)
+
+    doc_atual = fields.get('Documento PDF') or []
+    anexos_originais = [a for a in doc_atual if not a['filename'].startswith('Comprovante Assinatura')
+                         and ' - ASSINADO' not in a['filename']]
+    hashes_gravados = (fields.get('PDF SHA-256') or '').split(_SEPARADOR_PACOTE)
+
+    if len(anexos_originais) != 2 or len(hashes_gravados) != 2:
+        logger.error(
+            f'[PACOTE HOL+PONTO] Estrutura inesperada no registro {registro["id"]}: '
+            f'{len(anexos_originais)} anexo(s) original(is), {len(hashes_gravados)} hash(es) gravado(s) '
+            f'— esperado 2 e 2. Assinatura NÃO registrada — caso isolado, requer revisão manual, '
+            f'não bloqueia outros colaboradores.'
+        )
+        return erro_generico
+
+    # nome_func vem do próprio r_func já buscado pela rota que chamou esta
+    # função (validação de CPF) — evita uma 2ª chamada redundante à mesma
+    # Funcionário para o mesmo request.
+
+    try:
+        baixados = {}
+        for att in anexos_originais:
+            r_doc_pacote = requests.get(att['url'], timeout=60)
+            if not r_doc_pacote.ok:
+                raise RuntimeError(f'download falhou para anexo do pacote {registro["id"]}')
+            conteudo = r_doc_pacote.content
+            sha_real = hashlib.sha256(conteudo).hexdigest()
+            baixados[sha_real] = {'bytes': conteudo, 'filename': att['filename'], 'id': att['id']}
+
+        # Bloqueio contra documento trocado: os 2 hashes baixados AGORA
+        # precisam ser exatamente os 2 gravados na criação do pacote.
+        if set(baixados.keys()) != set(hashes_gravados):
+            logger.error(
+                f'[PACOTE HOL+PONTO] BLOQUEIO — hash dos anexos não corresponde ao par gravado '
+                f'na criação do pacote {registro["id"]}. Assinatura NÃO registrada (documento '
+                f'possivelmente trocado após a preparação).'
+            )
+            return erro_generico
+
+        holerite_dl = baixados[hashes_gravados[0]]
+        ponto_dl = baixados[hashes_gravados[1]]
+
+        def _nome_carimbado(nome_original):
+            return (nome_original[:-4] + ' - ASSINADO.pdf'
+                    if nome_original.lower().endswith('.pdf') else nome_original + ' - ASSINADO')
+
+        pdf_hol_carimbado = _carimbar_pdf_assinado(holerite_dl['bytes'], nome_func, cpf_informado, dt_fmt)
+        pdf_ponto_carimbado = _carimbar_pdf_assinado(ponto_dl['bytes'], nome_func, cpf_informado, dt_fmt)
+        nome_hol_carimbado = _nome_carimbado(holerite_dl['filename'])
+        nome_ponto_carimbado = _nome_carimbado(ponto_dl['filename'])
+
+        competencia_pacote = nome_doc.replace('Holerite + Folha de Ponto - ', '') if nome_doc else ''
+        pdf_comprovante_pacote = _gerar_comprovante_assinatura_pacote_pdf(
+            competencia=competencia_pacote, func_nome=nome_func, ip=ip_captura, user_agent=user_agent,
+            dt_str=dt_fmt, cpf4=cpf_informado,
+            doc1_bytes=holerite_dl['bytes'], doc1_nome=holerite_dl['filename'],
+            doc2_bytes=ponto_dl['bytes'], doc2_nome=ponto_dl['filename'],
+        )
+        nome_comprovante_pacote = f'Comprovante Assinatura - {(nome_func or "Colaborador").title()} - {competencia_pacote}.pdf'
+
+        upload_hol = _anexar_attachment(TABLE_ASSINATURAS, registro['id'], F_ASS_DOCUMENTO_PDF, pdf_hol_carimbado, nome_hol_carimbado)
+        upload_ponto = _anexar_attachment(TABLE_ASSINATURAS, registro['id'], F_ASS_DOCUMENTO_PDF, pdf_ponto_carimbado, nome_ponto_carimbado)
+        upload_comp = _anexar_attachment(TABLE_ASSINATURAS, registro['id'], F_ASS_DOCUMENTO_PDF, pdf_comprovante_pacote, nome_comprovante_pacote)
+
+        lista_pos_upload = (upload_comp.get('fields', {}) or {}).get(F_ASS_DOCUMENTO_PDF) or []
+        nomes_manter = (nome_hol_carimbado, nome_ponto_carimbado, nome_comprovante_pacote)
+        ids_novos = [a['id'] for a in lista_pos_upload if a['filename'] in nomes_manter]
+        if len(ids_novos) != 3:
+            logger.error(f'[PACOTE HOL+PONTO] upload dos 3 anexos finais incompleto: {registro["id"]} '
+                         f'({len(ids_novos)}/3) — Assinatura NÃO registrada.')
+            return erro_generico
+
+        ids_originais = {holerite_dl['id'], ponto_dl['id']}
+        lista_final = ids_novos + [a['id'] for a in doc_atual if a['id'] not in ids_originais]
+
+        evidencias = (
+            f'IP: {ip_captura}\n'
+            f'Timestamp: {dt_fmt} (horário de Brasília)\n'
+            f'User-Agent: {user_agent}\n'
+            f'CPF confirmado (4 últimos dígitos): {cpf_informado}\n'
+            f'Declaração: "Ao clicar, concordo eletronicamente com o recebimento e os termos '
+            f'dos dois documentos (Holerite e Folha de Ponto), sob as penas da lei."'
+        )
+
+        # Escrita ÚNICA e atômica do lado da aplicação: Status="Assinado"
+        # só é gravado JUNTO com a lista final de anexos e as evidências —
+        # nunca em passo separado (isso é o que corrige o achado de §4).
+        _at_throttle()
+        r_patch_final = requests.patch(
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{registro["id"]}',
+            headers=_at_headers(),
+            json={'fields': {
+                F_ASS_STATUS: 'Assinado',
+                F_ASS_CPF_INFORMADO: cpf_informado,
+                F_ASS_IP: ip_captura,
+                F_ASS_USER_AGENT: user_agent,
+                F_ASS_DATA_ASSINATURA: agora_brt,
+                F_ASS_EVIDENCIAS: evidencias,
+                F_ASS_DOCUMENTO_PDF: [{'id': i} for i in lista_final],
+            }, 'typecast': True}, timeout=30,
+        )
+        if not r_patch_final.ok:
+            logger.error(f'[PACOTE HOL+PONTO] falha ao gravar assinatura final {registro["id"]}: {r_patch_final.text[:300]}')
+            return erro_generico
+
+        # Cópia para o Funcionário — melhor esforço; não afeta o que já foi
+        # gravado como fonte da verdade (Assinaturas Digitais).
+        try:
+            _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_DOCUMENTOS, pdf_hol_carimbado, nome_hol_carimbado)
+            _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_DOCUMENTOS, pdf_ponto_carimbado, nome_ponto_carimbado)
+            _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_DOCUMENTOS, pdf_comprovante_pacote, nome_comprovante_pacote)
+        except Exception as exc:
+            logger.warning(f'[PACOTE HOL+PONTO] assinado, mas cópia para o Funcionário falhou (não bloqueante): '
+                            f'{registro["id"]} | {exc}')
+
+        logger.info(f'[PACOTE HOL+PONTO] Assinado com sucesso: {registro["id"]}')
+        return _pagina_assinatura_sucesso_html(nome_doc, _fmt_quando(agora_brt))
+
+    except Exception as exc:
+        logger.warning(f'[PACOTE HOL+PONTO] falha ao processar assinatura do pacote {registro["id"]}: {exc}')
+        return erro_generico
+
+
 @app.route('/assinatura/<hash_token>', methods=['GET', 'POST'])
 def assinatura_pagina(hash_token):
     """Página pública de assinatura nativa — GET mostra o formulário de CPF,
@@ -10422,6 +10888,13 @@ def assinatura_pagina(hash_token):
         return _pagina_assinatura_html(
             hash_token, nome_doc,
             erro='Link expirado por excesso de tentativas incorretas. Contate o RH para gerar um novo link.'
+        )
+
+    if status_atual == 'Cancelado':
+        return _pagina_assinatura_html(
+            hash_token, nome_doc,
+            erro='Não foi possível concluir a confirmação. Contate o RH.',
+            mostrar_formulario=False,
         )
 
     if request.method == 'GET':
@@ -10491,6 +10964,20 @@ def assinatura_pagina(hash_token):
         quando = _fmt_quando(r_recheck.json().get('fields', {}).get('Data/Hora Assinatura'))
         return _pagina_assinatura_sucesso_html(nome_doc, quando)
 
+    # Pacote Holerite + Folha de Ponto: ordem de escrita própria (nunca
+    # grava "Assinado" antes de concluir carimbo + comprovante dos 2
+    # documentos — ver docstring de _confirmar_assinatura_pacote_holerite_
+    # ponto). Sai daqui ANTES do bloco compartilhado abaixo, que grava
+    # "Assinado" incondicionalmente — esse bloco compartilhado continua
+    # exatamente como estava para os demais tipos.
+    if fields.get('Tipo de Documento') == TIPO_PACOTE_HOLERITE_PONTO:
+        return _confirmar_assinatura_pacote_holerite_ponto(
+            registro=registro, fields=fields, hash_token=hash_token, nome_doc=nome_doc,
+            func_id=func_id, cpf_informado=cpf_informado, ip_captura=ip_captura,
+            user_agent=user_agent, agora_brt_dt=agora_brt_dt,
+            nome_func=r_func.json().get('fields', {}).get('Nome Completo', ''),
+        )
+
     evidencias = (
         f'IP: {ip_captura}\n'
         f'Timestamp: {agora_brt_dt.strftime("%d/%m/%Y %H:%M:%S")} (horário de Brasília)\n'
@@ -10528,21 +11015,17 @@ def assinatura_pagina(hash_token):
     #     Digitais), e (4) copiar ambos para o campo "Documentos" do
     #     Funcionário — automático, sem depender de script manual.
     #
-    # EXCLUI explicitamente o tipo HOLERITE_FOLHA_PONTO: esse tipo tem 2
-    # documentos no mesmo campo "Documento PDF" (não 1), e este bloco usa
-    # next(...) para pegar só o PRIMEIRO — se rodasse aqui, carimbaria e
-    # geraria comprovante de só 1 dos 2 documentos, misturando/perdendo o
-    # outro (exatamente o risco que esta Macro pede para bloquear). O
-    # pacote tem seu próprio bloco isolado, abaixo — daí o "and" na
-    # condição seguinte em vez de envolver o try/except inteiro (evita
-    # reindentar ~50 linhas só para excluir 1 tipo).
-    _e_pacote_hol_ponto = fields.get('Tipo de Documento') == TIPO_PACOTE_HOLERITE_PONTO
+    # Tipo HOLERITE_FOLHA_PONTO nunca chega até aqui: retorna antes, mais
+    # acima nesta mesma rota, via _confirmar_assinatura_pacote_holerite_
+    # ponto (esse tipo tem 2 documentos no mesmo campo "Documento PDF", e
+    # este bloco universal usa next(...) para pegar só o PRIMEIRO — se
+    # rodasse aqui, carimbaria e geraria comprovante de só 1 dos 2).
     try:
         doc_atual = fields.get('Documento PDF') or []
         original_att = next(
             (a for a in doc_atual if not a['filename'].startswith('Comprovante Assinatura')), None
         )
-        if original_att and not _e_pacote_hol_ponto:
+        if original_att:
             nome_func = r_func.json().get('fields', {}).get('Nome Completo', '')
             r_doc = requests.get(original_att['url'], timeout=60)
             if r_doc.ok:
@@ -10584,101 +11067,6 @@ def assinatura_pagina(hash_token):
                 _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_DOCUMENTOS, pdf_comprovante, nome_comprovante)
     except Exception as exc:
         logger.warning(f'[ASSINATURA] falha ao carimbar/gerar comprovante/salvar no funcionário {registro["id"]}: {exc}')
-
-    # ── Pacote Holerite + Folha de Ponto ─────────────────────────────────────
-    # Bloco ISOLADO: só executa quando Tipo de Documento == HOLERITE_FOLHA_PONTO.
-    # Não reaproveita `original_att`/`doc_bytes_original` do bloco universal
-    # (que ficou explicitamente pulado acima para este tipo) — busca e
-    # identifica os 2 documentos por conta própria, e verifica o hash de
-    # CADA um contra o par gravado em "PDF SHA-256" na criação do pacote
-    # antes de carimbar (bloqueio contra documento trocado — exigência
-    # desta Macro, item 7.7). Nunca mistura com Kit/Rescisão/EPI/Folha de
-    # Ponto isolada — não toca em nenhum dos blocos acima ou abaixo.
-    if _e_pacote_hol_ponto:
-        try:
-            doc_atual = fields.get('Documento PDF') or []
-            anexos_originais = [a for a in doc_atual if not a['filename'].startswith('Comprovante Assinatura')
-                                 and ' - ASSINADO' not in a['filename']]
-            hashes_gravados = (fields.get('PDF SHA-256') or '').split(_SEPARADOR_PACOTE)
-
-            if len(anexos_originais) != 2 or len(hashes_gravados) != 2:
-                logger.error(
-                    f'[PACOTE HOL+PONTO] Estrutura inesperada no registro {registro["id"]}: '
-                    f'{len(anexos_originais)} anexo(s) original(is), {len(hashes_gravados)} hash(es) gravado(s) '
-                    f'— esperado 2 e 2. Assinatura foi registrada, mas carimbo/comprovante NÃO foram gerados. '
-                    f'Requer revisão manual — caso isolado, não bloqueia outros colaboradores.'
-                )
-            else:
-                nome_func = r_func.json().get('fields', {}).get('Nome Completo', '')
-                dt_fmt = agora_brt_dt.strftime('%d/%m/%Y %H:%M')
-
-                baixados = {}
-                for att in anexos_originais:
-                    r_doc_pacote = requests.get(att['url'], timeout=60)
-                    if not r_doc_pacote.ok:
-                        raise RuntimeError(f'download falhou para {att["filename"]}')
-                    conteudo = r_doc_pacote.content
-                    sha_real = hashlib.sha256(conteudo).hexdigest()
-                    baixados[sha_real] = {'bytes': conteudo, 'filename': att['filename'], 'id': att['id']}
-
-                # Bloqueio contra documento trocado: os 2 hashes baixados
-                # AGORA precisam ser exatamente os 2 hashes gravados na
-                # criação do pacote — se não forem, algo mudou o attachment
-                # entre a geração do link e a assinatura, e o processo é
-                # abortado sem carimbar nada (nunca carimba "o que tiver lá").
-                if set(baixados.keys()) != set(hashes_gravados):
-                    logger.error(
-                        f'[PACOTE HOL+PONTO] BLOQUEIO — hash dos anexos não corresponde ao par gravado '
-                        f'na criação do pacote {registro["id"]}. Assinatura registrada, mas carimbo/comprovante '
-                        f'abortados por segurança (documento possivelmente trocado após a preparação).'
-                    )
-                else:
-                    holerite_dl = baixados[hashes_gravados[0]]
-                    ponto_dl = baixados[hashes_gravados[1]]
-
-                    def _nome_carimbado(nome_original):
-                        return (nome_original[:-4] + ' - ASSINADO.pdf'
-                                if nome_original.lower().endswith('.pdf') else nome_original + ' - ASSINADO')
-
-                    pdf_hol_carimbado = _carimbar_pdf_assinado(holerite_dl['bytes'], nome_func, cpf_informado, dt_fmt)
-                    pdf_ponto_carimbado = _carimbar_pdf_assinado(ponto_dl['bytes'], nome_func, cpf_informado, dt_fmt)
-                    nome_hol_carimbado = _nome_carimbado(holerite_dl['filename'])
-                    nome_ponto_carimbado = _nome_carimbado(ponto_dl['filename'])
-
-                    competencia_pacote = nome_doc.replace('Holerite + Folha de Ponto - ', '') if nome_doc else ''
-                    pdf_comprovante_pacote = _gerar_comprovante_assinatura_pacote_pdf(
-                        competencia=competencia_pacote, func_nome=nome_func, ip=ip_captura, user_agent=user_agent,
-                        dt_str=dt_fmt, cpf4=cpf_informado,
-                        doc1_bytes=holerite_dl['bytes'], doc1_nome=holerite_dl['filename'],
-                        doc2_bytes=ponto_dl['bytes'], doc2_nome=ponto_dl['filename'],
-                    )
-                    nome_comprovante_pacote = f'Comprovante Assinatura - {(nome_func or "Colaborador").title()} - {competencia_pacote}.pdf'
-
-                    _anexar_attachment(TABLE_ASSINATURAS, registro['id'], F_ASS_DOCUMENTO_PDF, pdf_hol_carimbado, nome_hol_carimbado)
-                    _anexar_attachment(TABLE_ASSINATURAS, registro['id'], F_ASS_DOCUMENTO_PDF, pdf_ponto_carimbado, nome_ponto_carimbado)
-                    upload_comp_pacote = _anexar_attachment(
-                        TABLE_ASSINATURAS, registro['id'], F_ASS_DOCUMENTO_PDF, pdf_comprovante_pacote, nome_comprovante_pacote,
-                    )
-                    lista_pos_upload_pacote = (upload_comp_pacote.get('fields', {}) or {}).get(F_ASS_DOCUMENTO_PDF) or []
-                    nomes_manter = (nome_hol_carimbado, nome_ponto_carimbado, nome_comprovante_pacote)
-                    ids_novos_pacote = [a['id'] for a in lista_pos_upload_pacote if a['filename'] in nomes_manter]
-                    if ids_novos_pacote:
-                        ids_originais = {holerite_dl['id'], ponto_dl['id']}
-                        manter_pacote = ids_novos_pacote + [a['id'] for a in doc_atual if a['id'] not in ids_originais]
-                        _at_throttle()
-                        requests.patch(
-                            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{registro["id"]}',
-                            headers=_at_headers(),
-                            json={'fields': {F_ASS_DOCUMENTO_PDF: [{'id': i} for i in manter_pacote]}, 'typecast': True},
-                            timeout=30,
-                        )
-
-                    _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_DOCUMENTOS, pdf_hol_carimbado, nome_hol_carimbado)
-                    _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_DOCUMENTOS, pdf_ponto_carimbado, nome_ponto_carimbado)
-                    _anexar_attachment(TABLE_FUNC, func_id, F_FUNC_DOCUMENTOS, pdf_comprovante_pacote, nome_comprovante_pacote)
-                    logger.info(f'[PACOTE HOL+PONTO] Carimbo + comprovante concluídos: {registro["id"]}')
-        except Exception as exc:
-            logger.warning(f'[PACOTE HOL+PONTO] falha ao carimbar/gerar comprovante do pacote {registro["id"]}: {exc}')
 
     # ── Fase Definitiva da Folha de Ponto (v3.00) ────────────────────────────
     # Bloco ISOLADO: só executa quando Tipo de Documento == 'Folha de Ponto'.

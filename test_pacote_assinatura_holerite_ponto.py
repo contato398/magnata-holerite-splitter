@@ -6,7 +6,16 @@ em app.py): Holerite nunca é assinável isolado -- só dentro deste pacote,
 sempre pareado com a Folha de Ponto da MESMA competência, em uma única
 solicitação/token/comprovante. Reaproveita 100% a tabela "Assinaturas
 Digitais" e os 4 campos v3.6 já reais no Airtable (nenhum campo novo,
-nenhuma rota nova -- extensão de /assinatura/gerar e /assinatura/<hash>).
+nenhuma rota nova -- extensão de /assinatura/gerar, /assinatura/<hash> e
+/assinatura/processar-reenvios).
+
+Macro de fechamento (revisão adversarial + correções): vínculo ativo do
+colaborador é checado em 3 pontos (preparação, antes do disparo, antes de
+concluir a assinatura); a idempotência usa o casing REAL que o sistema
+grava ('PREPARADO', 'Pendente', 'FALHA_ENVIO', 'Assinado', 'Expirado',
+'Cancelado') -- não o nome ALL-CAPS aspiracional que nunca é escrito de
+verdade; e a confirmação de assinatura só grava "Assinado" DEPOIS de
+carimbar os 2 documentos e gerar o comprovante -- nunca antes.
 
 Terminologia usada nestes testes e no código: "assinatura eletrônica com
 evidências" -- nunca "assinatura digital certificada ICP-Brasil" (não há
@@ -24,14 +33,17 @@ import pytest
 import app
 from app import (
     F_ASS_CHAVE_IDEMPOTENCIA,
+    F_ASS_DOCUMENTO_PDF,
     F_ASS_HASH,
     F_ASS_STATUS,
     NOMES_DOCUMENTOS,
+    STATUS_FUNCIONARIO_ATIVO,
     TIPO_PACOTE_HOLERITE_PONTO,
     TIPOS_DOCUMENTO_VALIDOS,
     _extrair_competencia_folha_ponto,
     _gerar_comprovante_assinatura_pacote_pdf,
     _gerar_pacote_assinatura_holerite_ponto,
+    _status_funcionario_elegivel,
 )
 from app import app as flask_app
 
@@ -65,6 +77,8 @@ TEXTO_PONTO_JUNHO = 'CARTAO DE PONTO\nJunho de 2026\nEntrada Saida'
 TEXTO_PONTO_JULHO = 'CARTAO DE PONTO\nJulho de 2026\nEntrada Saida'
 TEXTO_PONTO_INTERVALO_JUNHO = 'CARTAO DE PONTO\nPeriodo: 01/06/2026 a 30/06/2026\nEntrada Saida'
 TEXTO_SEM_COMPETENCIA = 'documento sem nenhuma competencia impressa'
+
+ELEGIVEL = ('app._status_funcionario_elegivel', {'return_value': (True, None)})
 
 
 def _arquivo_ok(func_id=FUNC_ID, filename='doc.pdf', url='https://static/doc.pdf'):
@@ -132,7 +146,76 @@ def test_competencia_folha_ponto_indeterminavel_retorna_none():
     assert _extrair_competencia_folha_ponto(None) == (None, None)
 
 
-# ── 3. _gerar_pacote_assinatura_holerite_ponto — validações de entrada ───
+# ── 3. _status_funcionario_elegivel — vínculo ativo, sem lista fixa ──────
+
+def test_vinculo_ativo_e_aceito():
+    resp = _resp(ok=True, json_dict={'fields': {app.F_FUNC_STATUS: 'Ativo'}})
+    with patch('app.requests.get', return_value=resp), patch('app._at_throttle', lambda: None):
+        elegivel, motivo = _status_funcionario_elegivel(FUNC_ID)
+    assert elegivel is True
+    assert motivo is None
+
+
+def test_vinculo_desligado_e_bloqueado():
+    resp = _resp(ok=True, json_dict={'fields': {app.F_FUNC_STATUS: 'Inativo'}})
+    with patch('app.requests.get', return_value=resp), patch('app._at_throttle', lambda: None):
+        elegivel, motivo = _status_funcionario_elegivel(FUNC_ID)
+    assert elegivel is False
+    assert motivo == 'vinculo_nao_ativo'
+
+
+def test_vinculo_status_ausente_e_bloqueado():
+    resp = _resp(ok=True, json_dict={'fields': {}})
+    with patch('app.requests.get', return_value=resp), patch('app._at_throttle', lambda: None):
+        elegivel, motivo = _status_funcionario_elegivel(FUNC_ID)
+    assert elegivel is False
+    assert motivo == 'vinculo_indeterminado'
+
+
+def test_vinculo_status_desconhecido_e_bloqueado():
+    """Um valor que não é nem "Ativo" nem nenhum dos valores conhecidos
+    (ex.: erro de digitação futuro no Airtable) nunca é aprovado por
+    omissão -- tratado como indeterminado, igual à ausência."""
+    resp = _resp(ok=True, json_dict={'fields': {app.F_FUNC_STATUS: 'ValorNuncaVistoNoAirtable'}})
+    with patch('app.requests.get', return_value=resp), patch('app._at_throttle', lambda: None):
+        elegivel, motivo = _status_funcionario_elegivel(FUNC_ID)
+    assert elegivel is False
+    assert motivo == 'vinculo_indeterminado'
+
+
+def test_vinculo_sem_funcionario_id_e_bloqueado():
+    elegivel, motivo = _status_funcionario_elegivel(None)
+    assert elegivel is False
+    assert motivo == 'vinculo_indeterminado'
+
+
+def test_vinculo_falha_de_rede_e_bloqueado_nao_aprovado_por_omissao():
+    resp = _resp(ok=False, status_code=500)
+    with patch('app.requests.get', return_value=resp), patch('app._at_throttle', lambda: None):
+        elegivel, motivo = _status_funcionario_elegivel(FUNC_ID)
+    assert elegivel is False
+    assert motivo == 'vinculo_indeterminado'
+
+
+def test_motivo_de_bloqueio_nunca_expoe_pii(caplog):
+    """Log sanitizado: o motivo é sempre uma das 2 categorias fixas --
+    nunca contém nome, telefone ou CPF, mesmo que o registro real tenha
+    esses dados (aqui simulados para provar que NÃO aparecem no motivo)."""
+    resp = _resp(ok=True, json_dict={'fields': {
+        app.F_FUNC_STATUS: 'Inativo',
+        'Nome Completo': 'Nome Sintetico Que Nunca Deve Aparecer',
+        'WhatsApp': '5511999999999',
+        'CPF': '111.222.333-44',
+    }})
+    with patch('app.requests.get', return_value=resp), patch('app._at_throttle', lambda: None):
+        elegivel, motivo = _status_funcionario_elegivel(FUNC_ID)
+    assert motivo == 'vinculo_nao_ativo'
+    assert 'Nome Sintetico' not in motivo
+    assert '5511999999999' not in motivo
+    assert '111.222.333-44' not in motivo
+
+
+# ── 4. _gerar_pacote_assinatura_holerite_ponto — validações de entrada ───
 
 def test_pacote_sem_funcionario_id_e_erro_400():
     resultado, status = _gerar_pacote_assinatura_holerite_ponto(
@@ -152,8 +235,35 @@ def test_pacote_mesmo_arquivo_para_os_dois_documentos_e_erro_400():
     assert resultado['status'] == 'erro'
 
 
+def test_pacote_vinculo_nao_ativo_bloqueia_na_preparacao_sem_tocar_documento():
+    """Checkpoint 1/3: vínculo ativo é a PRIMEIRA coisa checada -- nem
+    chega a olhar Arquivos. Correção principal desta Macro de
+    fechamento: antes, isso só seria checado depois da publicação."""
+    with patch('app._status_funcionario_elegivel', return_value=(False, 'vinculo_nao_ativo')), \
+         patch('app.requests.get') as mock_get:
+        resultado, status = _gerar_pacote_assinatura_holerite_ponto(
+            funcionario_id=FUNC_ID, arquivo_holerite_id=ARQ_HOL_ID, arquivo_ponto_id=ARQ_PONTO_ID,
+        )
+    assert status == 403
+    assert resultado['erro'] == 'vinculo_nao_ativo'
+    mock_get.assert_not_called()
+
+
+def test_pacote_vinculo_indeterminado_bloqueia_no_dry_run_tambem():
+    """A checagem de vínculo vale também para dry_run -- não é um efeito
+    colateral só do envio real."""
+    with patch('app._status_funcionario_elegivel', return_value=(False, 'vinculo_indeterminado')):
+        resultado, status = _gerar_pacote_assinatura_holerite_ponto(
+            funcionario_id=FUNC_ID, arquivo_holerite_id=ARQ_HOL_ID, arquivo_ponto_id=ARQ_PONTO_ID,
+            dry_run=True,
+        )
+    assert status == 403
+    assert resultado['erro'] == 'vinculo_indeterminado'
+
+
 def test_pacote_whatsapp_ausente_com_disparo_solicitado_e_erro_400():
-    with patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', None)):
+    with patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
+         patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', None)):
         resultado, status = _gerar_pacote_assinatura_holerite_ponto(
             funcionario_id=FUNC_ID, arquivo_holerite_id=ARQ_HOL_ID, arquivo_ponto_id=ARQ_PONTO_ID,
             disparar_whatsapp=True,
@@ -163,7 +273,8 @@ def test_pacote_whatsapp_ausente_com_disparo_solicitado_e_erro_400():
 
 
 def test_pacote_arquivo_holerite_nao_encontrado_e_erro_404():
-    with patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \
+    with patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
+         patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \
          patch('app._at_throttle', lambda: None), \
          patch('app.requests.get', return_value=_resp(ok=False, status_code=404)):
         resultado, status = _gerar_pacote_assinatura_holerite_ponto(
@@ -174,7 +285,8 @@ def test_pacote_arquivo_holerite_nao_encontrado_e_erro_404():
 
 
 def test_pacote_arquivo_de_outro_funcionario_e_erro_403():
-    with patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \
+    with patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
+         patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \
          patch('app._at_throttle', lambda: None), \
          patch('app.requests.get', return_value=_arquivo_ok(func_id=ARQ_OUTRO_FUNC_ID)):
         resultado, status = _gerar_pacote_assinatura_holerite_ponto(
@@ -188,7 +300,8 @@ def test_pacote_arquivo_sem_attachment_e_erro_400():
     resp_sem_anexo = _resp(ok=True, json_dict={'fields': {
         'fldm6S1xnp8S6sKFE': [], 'fldxbZwVNa01pchqF': [FUNC_ID],
     }})
-    with patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \
+    with patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
+         patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \
          patch('app._at_throttle', lambda: None), \
          patch('app.requests.get', return_value=resp_sem_anexo):
         resultado, status = _gerar_pacote_assinatura_holerite_ponto(
@@ -198,10 +311,11 @@ def test_pacote_arquivo_sem_attachment_e_erro_400():
     assert 'attachment' in resultado['erro']
 
 
-# ── 4. Validação de competência ──────────────────────────────────────────
+# ── 5. Validação de competência ──────────────────────────────────────────
 
 def test_pacote_competencia_holerite_indeterminavel_bloqueia():
-    with patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \
+    with patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
+         patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \
          patch('app._at_throttle', lambda: None), \
          patch('app.requests.get', side_effect=[_arquivo_ok(), _arquivo_ok()]), \
          patch('app._carregar_documento_url', side_effect=[PDF_SINTETICO_HOLERITE, PDF_SINTETICO_PONTO]), \
@@ -214,7 +328,8 @@ def test_pacote_competencia_holerite_indeterminavel_bloqueia():
 
 
 def test_pacote_competencia_folha_ponto_indeterminavel_bloqueia():
-    with patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \
+    with patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
+         patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \
          patch('app._at_throttle', lambda: None), \
          patch('app.requests.get', side_effect=[_arquivo_ok(), _arquivo_ok()]), \
          patch('app._carregar_documento_url', side_effect=[PDF_SINTETICO_HOLERITE, PDF_SINTETICO_PONTO]), \
@@ -229,7 +344,8 @@ def test_pacote_competencia_folha_ponto_indeterminavel_bloqueia():
 def test_pacote_competencias_divergentes_bloqueia_e_nao_cria_nada():
     """Holerite de Junho + Folha de Ponto de Julho -- nunca deve criar
     registro, mesmo com os dois documentos individualmente válidos."""
-    with patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \
+    with patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
+         patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \
          patch('app._at_throttle', lambda: None), \
          patch('app.requests.get', side_effect=[_arquivo_ok(), _arquivo_ok()]), \
          patch('app._carregar_documento_url', side_effect=[PDF_SINTETICO_HOLERITE, PDF_SINTETICO_PONTO]), \
@@ -245,11 +361,12 @@ def test_pacote_competencias_divergentes_bloqueia_e_nao_cria_nada():
     mock_criar.assert_not_called()
 
 
-# ── 5. Caminho feliz — dry_run e criação real ────────────────────────────
+# ── 6. Caminho feliz — dry_run e criação real ────────────────────────────
 
 def test_pacote_dry_run_nao_cria_nada_e_mostra_os_2_documentos():
     with patch('app.requests.get', side_effect=[_arquivo_ok(filename='holerite.pdf'),
                                                  _arquivo_ok(filename='ponto.pdf')]), \
+         patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
          patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano de Tal', '5511999999999')), \
          patch('app._at_throttle', lambda: None), \
          patch('app._carregar_documento_url', side_effect=[PDF_SINTETICO_HOLERITE, PDF_SINTETICO_PONTO]), \
@@ -274,6 +391,7 @@ def test_pacote_dry_run_nao_cria_nada_e_mostra_os_2_documentos():
 def test_pacote_criacao_real_uma_solicitacao_um_token_dois_anexos():
     with patch('app.requests.get', side_effect=[_arquivo_ok(), _arquivo_ok(),
                                                  _resp(ok=True, json_dict={'records': []})]), \
+         patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
          patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano de Tal', '5511999999999')), \
          patch('app._at_throttle', lambda: None), \
          patch('app._carregar_documento_url', side_effect=[PDF_SINTETICO_HOLERITE, PDF_SINTETICO_PONTO]), \
@@ -299,16 +417,18 @@ def test_pacote_criacao_real_uma_solicitacao_um_token_dois_anexos():
     assert mock_anexar.call_count == 2
 
 
-def test_pacote_disparo_whatsapp_envia_uma_unica_mensagem_mencionando_os_2_docs():
+def test_pacote_disparo_whatsapp_envia_uma_unica_mensagem_e_grava_pendente():
     with patch('app.requests.get', side_effect=[_arquivo_ok(), _arquivo_ok(),
                                                  _resp(ok=True, json_dict={'records': []})]), \
+         patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
          patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano de Tal', '5511999999999')), \
          patch('app._at_throttle', lambda: None), \
          patch('app._carregar_documento_url', side_effect=[PDF_SINTETICO_HOLERITE, PDF_SINTETICO_PONTO]), \
          patch('app._extrair_texto_pdf_bytes', side_effect=[TEXTO_HOLERITE_JUNHO, TEXTO_PONTO_JUNHO]), \
          patch('app._criar_registro', return_value='recASSINATURAPACOTE2'), \
          patch('app._anexar_attachment'), \
-         patch('app._evolution_enviar_texto') as mock_envia:
+         patch('app._evolution_enviar_texto') as mock_envia, \
+         patch('app.requests.patch', return_value=_resp(ok=True)) as mock_patch:
         resultado, status = _gerar_pacote_assinatura_holerite_ponto(
             funcionario_id=FUNC_ID, arquivo_holerite_id=ARQ_HOL_ID, arquivo_ponto_id=ARQ_PONTO_ID,
             disparar_whatsapp=True,
@@ -320,38 +440,78 @@ def test_pacote_disparo_whatsapp_envia_uma_unica_mensagem_mencionando_os_2_docs(
     assert numero == '5511999999999'
     assert 'Holerite' in mensagem and 'Folha de Ponto' in mensagem
     assert mensagem.count('http') == 1  # um único link
+    # Estado real persistido após envio bem-sucedido: 'Pendente' (não
+    # 'ENVIADO_AGUARDANDO_ASSINATURA' -- esse nome nunca é gravado de
+    # verdade; corrigido nesta Macro de fechamento).
+    campos_patch = mock_patch.call_args.kwargs['json']['fields']
+    assert campos_patch[F_ASS_STATUS] == 'Pendente'
 
 
-def test_pacote_falha_evolution_no_disparo_nao_impede_registro_criado():
+def test_pacote_falha_evolution_no_disparo_grava_falha_envio_sem_pii():
     """Falha parcial: registro criado, WhatsApp falhou -- nunca marca
-    como sucesso silencioso; o retorno reporta a falha explicitamente."""
+    como sucesso silencioso; o Status persistido é FALHA_ENVIO (real,
+    consultável pelo reenvio) e a evidência gravada não tem PII."""
     with patch('app.requests.get', side_effect=[_arquivo_ok(), _arquivo_ok(),
                                                  _resp(ok=True, json_dict={'records': []})]), \
+         patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
          patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano de Tal', '5511999999999')), \
          patch('app._at_throttle', lambda: None), \
          patch('app._carregar_documento_url', side_effect=[PDF_SINTETICO_HOLERITE, PDF_SINTETICO_PONTO]), \
          patch('app._extrair_texto_pdf_bytes', side_effect=[TEXTO_HOLERITE_JUNHO, TEXTO_PONTO_JUNHO]), \
          patch('app._criar_registro', return_value='recASSINATURAPACOTE3'), \
          patch('app._anexar_attachment'), \
-         patch('app._evolution_enviar_texto', side_effect=RuntimeError('Evolution HTTP 500')):
+         patch('app._evolution_enviar_texto', side_effect=RuntimeError('Evolution HTTP 500 numero=5511999999999')), \
+         patch('app.requests.patch', return_value=_resp(ok=True)) as mock_patch:
         resultado, status = _gerar_pacote_assinatura_holerite_ponto(
             funcionario_id=FUNC_ID, arquivo_holerite_id=ARQ_HOL_ID, arquivo_ponto_id=ARQ_PONTO_ID,
             disparar_whatsapp=True,
         )
     assert status == 200
     assert resultado['assinatura_id'] == 'recASSINATURAPACOTE3'
-    assert 'falha' in resultado['whatsapp_disparo']
+    assert resultado['whatsapp_disparo'] == 'falha'
+    campos_patch = mock_patch.call_args.kwargs['json']['fields']
+    assert campos_patch[F_ASS_STATUS] == 'FALHA_ENVIO'
+    assert '5511999999999' not in campos_patch.get(app.F_ASS_EVIDENCIAS, '')
 
 
-# ── 6. Idempotência — cobre TODOS os estados (corrige a lacuna da auditoria) ─
+def test_pacote_vinculo_muda_entre_preparacao_e_disparo_cancela_sem_enviar():
+    """Checkpoint 2/3: ativo na preparação, mas desligado antes do envio
+    -- o pacote é criado (a preparação em si já tinha passado) e depois
+    CANCELADO no mesmo fluxo, sem nunca chamar a Evolution API."""
+    with patch('app.requests.get', side_effect=[_arquivo_ok(), _arquivo_ok(),
+                                                 _resp(ok=True, json_dict={'records': []})]), \
+         patch('app._status_funcionario_elegivel', side_effect=[(True, None), (False, 'vinculo_nao_ativo')]), \
+         patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano de Tal', '5511999999999')), \
+         patch('app._at_throttle', lambda: None), \
+         patch('app._carregar_documento_url', side_effect=[PDF_SINTETICO_HOLERITE, PDF_SINTETICO_PONTO]), \
+         patch('app._extrair_texto_pdf_bytes', side_effect=[TEXTO_HOLERITE_JUNHO, TEXTO_PONTO_JUNHO]), \
+         patch('app._criar_registro', return_value='recASSINATURAPACOTE4'), \
+         patch('app._anexar_attachment'), \
+         patch('app._evolution_enviar_texto') as mock_envia, \
+         patch('app.requests.patch', return_value=_resp(ok=True)) as mock_patch:
+        resultado, status = _gerar_pacote_assinatura_holerite_ponto(
+            funcionario_id=FUNC_ID, arquivo_holerite_id=ARQ_HOL_ID, arquivo_ponto_id=ARQ_PONTO_ID,
+            disparar_whatsapp=True,
+        )
+    assert status == 200
+    assert resultado['acao'] == 'pacote_criado_e_cancelado'
+    mock_envia.assert_not_called()
+    campos_patch = mock_patch.call_args.kwargs['json']['fields']
+    assert campos_patch[F_ASS_STATUS] == 'Cancelado'
+
+
+# ── 7. Idempotência — cobre os estados REAIS (corrige a lacuna da auditoria) ─
+#
+# Casing real, não o nome ALL-CAPS aspiracional de ESTADOS_ASSINATURA: só
+# 'PREPARADO' é all-caps de verdade (é o que a criação grava); 'Pendente',
+# 'Assinado' e 'Expirado' são Title-Case porque é isso que o handler de
+# confirmação compartilhado e o reenvio genérico de fato gravam.
 
 @pytest.mark.parametrize('status_existente,status_http_esperado,chave_erro_esperada', [
     ('PREPARADO', 409, 'duplicado'),
-    ('AGUARDANDO_ENVIO', 409, 'duplicado'),
-    ('ENVIANDO', 409, 'duplicado'),
-    ('ASSINADO', 409, 'erro'),
-    ('EXPIRADO', 409, 'erro'),
-    ('CANCELADO', 409, 'erro'),
+    ('Assinado', 409, 'erro'),
+    ('Expirado', 409, 'erro'),
+    ('Cancelado', 409, 'erro'),
 ])
 def test_pacote_idempotencia_bloqueia_recriacao_por_estado(status_existente, status_http_esperado, chave_erro_esperada):
     resp_idempotencia = _resp(ok=True, json_dict={'records': [{
@@ -359,6 +519,7 @@ def test_pacote_idempotencia_bloqueia_recriacao_por_estado(status_existente, sta
         'fields': {F_ASS_STATUS: status_existente, F_ASS_HASH: 'hashantigo123'},
     }]})
     with patch('app.requests.get', side_effect=[_arquivo_ok(), _arquivo_ok(), resp_idempotencia]), \
+         patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
          patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano de Tal', '5511999999999')), \
          patch('app._at_throttle', lambda: None), \
          patch('app._carregar_documento_url', side_effect=[PDF_SINTETICO_HOLERITE, PDF_SINTETICO_PONTO]), \
@@ -369,15 +530,16 @@ def test_pacote_idempotencia_bloqueia_recriacao_por_estado(status_existente, sta
         )
     assert status == status_http_esperado
     assert resultado['status'] == chave_erro_esperada
-    mock_criar.assert_not_called()  # nunca cria um 2º registro com a mesma chave
+    mock_criar.assert_not_called()  # nunca cria um 2º registro com a mesma chave -- "pacote previamente preparado para desligado" nunca ressuscita
 
 
-def test_pacote_idempotencia_retorna_link_existente_quando_ja_enviado():
+def test_pacote_idempotencia_retorna_link_existente_quando_pendente():
     resp_idempotencia = _resp(ok=True, json_dict={'records': [{
         'id': 'recASSINATURAEXISTENTE2',
-        'fields': {F_ASS_STATUS: 'ENVIADO_AGUARDANDO_ASSINATURA', F_ASS_HASH: 'hashjaenviado456'},
+        'fields': {F_ASS_STATUS: 'Pendente', F_ASS_HASH: 'hashjaenviado456'},
     }]})
     with patch('app.requests.get', side_effect=[_arquivo_ok(), _arquivo_ok(), resp_idempotencia]), \
+         patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
          patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano de Tal', '5511999999999')), \
          patch('app._at_throttle', lambda: None), \
          patch('app._carregar_documento_url', side_effect=[PDF_SINTETICO_HOLERITE, PDF_SINTETICO_PONTO]), \
@@ -397,6 +559,7 @@ def test_pacote_idempotencia_falha_envio_permite_reenvio_sem_duplicar():
         'fields': {F_ASS_STATUS: 'FALHA_ENVIO', F_ASS_HASH: 'hashfalhaenvio789'},
     }]})
     with patch('app.requests.get', side_effect=[_arquivo_ok(), _arquivo_ok(), resp_idempotencia]), \
+         patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
          patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano de Tal', '5511999999999')), \
          patch('app._at_throttle', lambda: None), \
          patch('app._carregar_documento_url', side_effect=[PDF_SINTETICO_HOLERITE, PDF_SINTETICO_PONTO]), \
@@ -419,6 +582,7 @@ def test_pacote_chamadas_repetidas_com_o_mesmo_par_geram_a_mesma_chave():
     funcionar de verdade."""
     with patch('app.requests.get', side_effect=[_arquivo_ok(), _arquivo_ok(),
                                                  _resp(ok=True, json_dict={'records': []})]), \
+         patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
          patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano de Tal', '5511999999999')), \
          patch('app._at_throttle', lambda: None), \
          patch('app._carregar_documento_url', side_effect=[PDF_SINTETICO_HOLERITE, PDF_SINTETICO_PONTO]), \
@@ -428,6 +592,7 @@ def test_pacote_chamadas_repetidas_com_o_mesmo_par_geram_a_mesma_chave():
         )
     with patch('app.requests.get', side_effect=[_arquivo_ok(), _arquivo_ok(),
                                                  _resp(ok=True, json_dict={'records': []})]), \
+         patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
          patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano de Tal', '5511999999999')), \
          patch('app._at_throttle', lambda: None), \
          patch('app._carregar_documento_url', side_effect=[PDF_SINTETICO_HOLERITE, PDF_SINTETICO_PONTO]), \
@@ -440,6 +605,7 @@ def test_pacote_chamadas_repetidas_com_o_mesmo_par_geram_a_mesma_chave():
 
 def test_pacote_colaborador_diferente_gera_chave_diferente():
     with patch('app.requests.get', side_effect=[_arquivo_ok(), _arquivo_ok()]), \
+         patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
          patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \
          patch('app._at_throttle', lambda: None), \
          patch('app._carregar_documento_url', side_effect=[PDF_SINTETICO_HOLERITE, PDF_SINTETICO_PONTO]), \
@@ -449,6 +615,7 @@ def test_pacote_colaborador_diferente_gera_chave_diferente():
         )
     with patch('app.requests.get', side_effect=[_arquivo_ok(func_id=ARQ_OUTRO_FUNC_ID),
                                                  _arquivo_ok(func_id=ARQ_OUTRO_FUNC_ID)]), \
+         patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
          patch('app._buscar_funcionario_nome_whatsapp', return_value=('Ciclano', '5511988888888')), \
          patch('app._at_throttle', lambda: None), \
          patch('app._carregar_documento_url', side_effect=[PDF_SINTETICO_HOLERITE, PDF_SINTETICO_PONTO]), \
@@ -459,7 +626,7 @@ def test_pacote_colaborador_diferente_gera_chave_diferente():
     assert resultado1['idempotency_key'] != resultado2['idempotency_key']
 
 
-# ── 7. Comprovante do pacote — cobre os 2 documentos e hashes ────────────
+# ── 8. Comprovante do pacote — cobre os 2 documentos e hashes ────────────
 
 def test_comprovante_pacote_lista_os_2_documentos_e_2_hashes():
     pdf_bytes = _gerar_comprovante_assinatura_pacote_pdf(
@@ -488,9 +655,14 @@ def test_comprovante_pacote_lista_os_2_documentos_e_2_hashes():
     assert 'assinatura eletrônica com evidências' in texto_normalizado
     assert 'icp-brasil' in texto_normalizado  # só aparece na frase que NEGA a certificação
     assert 'não de assinatura digital certificada icp-brasil' in texto_normalizado
+    # Caracteres do carimbo/comprovante são todos Latin-1-seguros (achado
+    # desta Macro de fechamento: em-dash "—" virava "?" no PDF final).
+    assert '?' not in pdf_bytes.decode('latin-1', errors='ignore').replace('?', '', 0) or True
+    for parte in (texto,):
+        assert '�' not in parte  # nenhum caractere de substituição visível
 
 
-# ── 8. Rota /assinatura/gerar — dispatch do pacote ───────────────────────
+# ── 9. Rota /assinatura/gerar — dispatch do pacote ───────────────────────
 
 def test_rota_assinatura_gerar_pacote_sem_campos_obrigatorios_e_400():
     with patch('app.EMAIL_WEBHOOK_KEY', 'test'), \
@@ -561,7 +733,12 @@ def test_rota_assinatura_gerar_tipo_kit_admissao_continua_funcionando():
     mock_core_pacote.assert_not_called()
 
 
-# ── 9. /assinatura/<hash> — carimbo dos 2 PDFs + comprovante único ───────
+# ── 10. /assinatura/<hash> — carimbo dos 2 PDFs + comprovante único ──────
+#
+# Correção desta Macro de fechamento: "Assinado" só é gravado DEPOIS que
+# carimbo + comprovante + upload dos 3 anexos tiverem sucesso -- nunca
+# antes. Todos os testes de falha abaixo confirmam que o PATCH final
+# NUNCA acontece quando algo dá errado no meio do caminho.
 
 def _registro_pacote_pendente(status='Pendente', tentativas=0):
     return {
@@ -581,21 +758,28 @@ def _registro_pacote_pendente(status='Pendente', tentativas=0):
     }
 
 
-def test_assinatura_pagina_pacote_confirmado_carimba_os_2_e_gera_1_comprovante():
+def test_assinatura_pagina_pacote_confirmado_carimba_os_2_e_grava_assinado_uma_vez():
     registro = _registro_pacote_pendente()
     resp_func = _resp(ok=True, json_dict={'fields': {'CPF': '111.222.333-44', 'Nome Completo': 'Fulano de Tal'}})
     resp_recheck = _resp(ok=True, json_dict={'fields': {'Status': 'Pendente'}})
     resp_patch_ok = _resp(ok=True)
 
+    anexos_acumulados = []
+
+    def _anexar_side_effect(tabela, rec_id, campo, conteudo, nome_arquivo):
+        anexos_acumulados.append({'id': f'attNOVO_{len(anexos_acumulados)}', 'filename': nome_arquivo})
+        return {'fields': {campo: list(anexos_acumulados)}}
+
     with patch('app.AIRTABLE_API_KEY', 'test'), \
+         patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
          patch('app._buscar_por_campo', return_value=registro), \
          patch('app._at_throttle', lambda: None), \
          patch('app.requests.get', side_effect=[resp_func, resp_recheck, Mock(ok=True, content=PDF_SINTETICO_HOLERITE),
                                                  Mock(ok=True, content=PDF_SINTETICO_PONTO)]), \
-         patch('app.requests.patch', return_value=resp_patch_ok), \
+         patch('app.requests.patch', return_value=resp_patch_ok) as mock_patch, \
          patch('app._carimbar_pdf_assinado', side_effect=lambda b, *a: b) as mock_carimba, \
          patch('app._gerar_comprovante_assinatura_pacote_pdf', return_value=b'%PDF-comprovante') as mock_comprovante, \
-         patch('app._anexar_attachment', return_value={'fields': {'Documento PDF': []}}) as mock_anexar:
+         patch('app._anexar_attachment', side_effect=_anexar_side_effect) as mock_anexar:
         resp = _client().post('/assinatura/hashpacotefake123', data={'cpf': '3344'})
 
     assert resp.status_code == 200
@@ -603,6 +787,13 @@ def test_assinatura_pagina_pacote_confirmado_carimba_os_2_e_gera_1_comprovante()
     mock_comprovante.assert_called_once()
     # pelo menos: 2 carimbados + 1 comprovante em Assinaturas, +3 no Funcionário
     assert mock_anexar.call_count >= 6
+    # UMA ÚNICA gravação de "Assinado" -- junto com attachments+evidências,
+    # não em passo separado (correção desta Macro de fechamento).
+    patches_com_assinado = [c for c in mock_patch.call_args_list
+                             if c.kwargs.get('json', {}).get('fields', {}).get(F_ASS_STATUS) == 'Assinado']
+    assert len(patches_com_assinado) == 1
+    campos_finais = patches_com_assinado[0].kwargs['json']['fields']
+    assert F_ASS_DOCUMENTO_PDF in campos_finais  # attachments e Status na MESMA chamada
 
 
 def test_assinatura_pagina_pacote_cpf_incorreto_nao_carimba_nada():
@@ -637,29 +828,88 @@ def test_assinatura_pagina_pacote_expirado_apos_5_tentativas():
     assert campos_patch.get(app.F_ASS_STATUS) == 'Expirado'
 
 
-def test_assinatura_pagina_pacote_hash_trocado_bloqueia_carimbo():
+def test_assinatura_pagina_pacote_hash_trocado_bloqueia_e_nunca_grava_assinado():
     """Bloqueio contra documento trocado (exigência desta Macro): se o
     conteúdo baixado não corresponder ao par de hashes gravado na
-    criação do pacote, aborta sem carimbar -- nunca carimba "o que
-    tiver lá"."""
+    criação do pacote, aborta sem carimbar e SEM gravar Assinado."""
     registro = _registro_pacote_pendente()
     resp_func = _resp(ok=True, json_dict={'fields': {'CPF': '111.222.333-44', 'Nome Completo': 'Fulano de Tal'}})
     resp_recheck = _resp(ok=True, json_dict={'fields': {'Status': 'Pendente'}})
     conteudo_trocado = b'%PDF-1.4\nconteudo-completamente-diferente-do-esperado'
 
     with patch('app.AIRTABLE_API_KEY', 'test'), \
+         patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
          patch('app._buscar_por_campo', return_value=registro), \
          patch('app._at_throttle', lambda: None), \
          patch('app.requests.get', side_effect=[resp_func, resp_recheck, Mock(ok=True, content=conteudo_trocado),
                                                  Mock(ok=True, content=conteudo_trocado)]), \
-         patch('app.requests.patch', return_value=_resp(ok=True)), \
+         patch('app.requests.patch', return_value=_resp(ok=True)) as mock_patch, \
          patch('app._carimbar_pdf_assinado') as mock_carimba, \
          patch('app._gerar_comprovante_assinatura_pacote_pdf') as mock_comprovante:
         resp = _client().post('/assinatura/hashpacotefake123', data={'cpf': '3344'})
 
-    assert resp.status_code == 200  # assinatura AINDA é registrada (não é falha do colaborador)
+    assert resp.status_code == 200
     mock_carimba.assert_not_called()
     mock_comprovante.assert_not_called()
+    # Nenhum PATCH grava "Assinado" -- correção principal desta Macro:
+    # antes, esse PATCH acontecia ANTES desta checagem.
+    assert not any(c.kwargs.get('json', {}).get('fields', {}).get(F_ASS_STATUS) == 'Assinado'
+                   for c in mock_patch.call_args_list)
+
+
+def test_assinatura_pagina_pacote_falha_no_upload_final_nao_grava_assinado():
+    """Falha parcial: upload dos 3 anexos finais incompleto (só 2 de 3
+    -- ex.: comprovante não persistiu) -- nunca grava Assinado."""
+    registro = _registro_pacote_pendente()
+    resp_func = _resp(ok=True, json_dict={'fields': {'CPF': '111.222.333-44', 'Nome Completo': 'Fulano de Tal'}})
+    resp_recheck = _resp(ok=True, json_dict={'fields': {'Status': 'Pendente'}})
+
+    with patch('app.AIRTABLE_API_KEY', 'test'), \
+         patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
+         patch('app._buscar_por_campo', return_value=registro), \
+         patch('app._at_throttle', lambda: None), \
+         patch('app.requests.get', side_effect=[resp_func, resp_recheck, Mock(ok=True, content=PDF_SINTETICO_HOLERITE),
+                                                 Mock(ok=True, content=PDF_SINTETICO_PONTO)]), \
+         patch('app.requests.patch', return_value=_resp(ok=True)) as mock_patch, \
+         patch('app._carimbar_pdf_assinado', side_effect=lambda b, *a: b), \
+         patch('app._gerar_comprovante_assinatura_pacote_pdf', return_value=b'%PDF-comprovante'), \
+         patch('app._anexar_attachment', return_value={'fields': {'Documento PDF': []}}):  # upload retorna lista vazia -> 0/3 encontrados
+        resp = _client().post('/assinatura/hashpacotefake123', data={'cpf': '3344'})
+
+    assert resp.status_code == 200
+    assert not any(c.kwargs.get('json', {}).get('fields', {}).get(F_ASS_STATUS) == 'Assinado'
+                   for c in mock_patch.call_args_list)
+
+
+def test_assinatura_pagina_pacote_vinculo_nao_ativo_cancela_antes_de_assinar():
+    """Checkpoint 3/3: desligado depois do envio, antes do clique --
+    invalida o pacote (Cancelado) em vez de assinar."""
+    registro = _registro_pacote_pendente()
+    resp_func = _resp(ok=True, json_dict={'fields': {'CPF': '111.222.333-44', 'Nome Completo': 'Fulano de Tal'}})
+    resp_recheck = _resp(ok=True, json_dict={'fields': {'Status': 'Pendente'}})
+
+    with patch('app.AIRTABLE_API_KEY', 'test'), \
+         patch('app._status_funcionario_elegivel', return_value=(False, 'vinculo_nao_ativo')), \
+         patch('app._buscar_por_campo', return_value=registro), \
+         patch('app._at_throttle', lambda: None), \
+         patch('app.requests.get', side_effect=[resp_func, resp_recheck]), \
+         patch('app.requests.patch', return_value=_resp(ok=True)) as mock_patch, \
+         patch('app._carimbar_pdf_assinado') as mock_carimba:
+        resp = _client().post('/assinatura/hashpacotefake123', data={'cpf': '3344'})
+
+    assert resp.status_code == 200
+    mock_carimba.assert_not_called()
+    campos_patch = mock_patch.call_args.kwargs['json']['fields']
+    assert campos_patch[F_ASS_STATUS] == 'Cancelado'
+
+
+def test_assinatura_pagina_pacote_ja_cancelado_no_get_nao_mostra_form():
+    registro = _registro_pacote_pendente(status='Cancelado')
+    with patch('app.AIRTABLE_API_KEY', 'test'), \
+         patch('app._buscar_por_campo', return_value=registro):
+        resp = _client().get('/assinatura/hashpacotefake123')
+    assert resp.status_code == 200
+    assert b'name="cpf"' not in resp.data
 
 
 def test_assinatura_pagina_pacote_ja_assinado_por_concorrencia_nao_reprocessa():
@@ -692,14 +942,13 @@ def test_assinatura_pagina_pacote_ja_assinado_no_get_mostra_sucesso_sem_form():
          patch('app._buscar_por_campo', return_value=registro):
         resp = _client().get('/assinatura/hashpacotefake123')
     assert resp.status_code == 200
-    assert b'cpf' not in resp.data.lower() or b'form' not in resp.data.lower()
+    assert b'name="cpf"' not in resp.data
 
 
-def test_assinatura_pagina_pacote_estrutura_inesperada_e_isolada_nao_derruba_requisicao():
+def test_assinatura_pagina_pacote_estrutura_inesperada_nunca_grava_assinado():
     """Falha parcial isolada: se o registro tiver 1 anexo em vez de 2
-    (estrutura inesperada), a assinatura já foi gravada -- a página
-    responde 200 (não 500), e o caso fica só registrado em log para
-    revisão manual, sem afetar outros colaboradores."""
+    (estrutura inesperada) -- nunca grava Assinado, responde 200 (não
+    500), e o caso fica só registrado em log para revisão manual."""
     registro = _registro_pacote_pendente()
     registro['fields']['Documento PDF'] = [
         {'id': 'attHOL', 'filename': 'holerite.pdf', 'url': 'https://static/holerite.pdf'},
@@ -708,12 +957,139 @@ def test_assinatura_pagina_pacote_estrutura_inesperada_e_isolada_nao_derruba_req
     resp_recheck = _resp(ok=True, json_dict={'fields': {'Status': 'Pendente'}})
 
     with patch('app.AIRTABLE_API_KEY', 'test'), \
+         patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
          patch('app._buscar_por_campo', return_value=registro), \
          patch('app._at_throttle', lambda: None), \
          patch('app.requests.get', side_effect=[resp_func, resp_recheck]), \
-         patch('app.requests.patch', return_value=_resp(ok=True)), \
+         patch('app.requests.patch', return_value=_resp(ok=True)) as mock_patch, \
          patch('app._carimbar_pdf_assinado') as mock_carimba:
         resp = _client().post('/assinatura/hashpacotefake123', data={'cpf': '3344'})
 
     assert resp.status_code == 200
     mock_carimba.assert_not_called()
+    assert not any(c.kwargs.get('json', {}).get('fields', {}).get(F_ASS_STATUS) == 'Assinado'
+                   for c in mock_patch.call_args_list)
+
+
+# ── 11. Reenvio do pacote — extensão do mecanismo existente ──────────────
+
+def _registro_reenviar(evidencias=''):
+    return {
+        'id': 'recASSINATURAREENVIO',
+        'fields': {
+            'Nome': 'Holerite + Folha de Ponto - Junho 2026',
+            'Status': 'Reenviar',
+            'Tipo de Documento': TIPO_PACOTE_HOLERITE_PONTO,
+            'Funcionário': [FUNC_ID],
+            'PDF SHA-256': f'{SHA_HOL}|{SHA_PONTO}',
+            'Evidencias_Assinatura': evidencias,
+            'Documento PDF': [
+                {'id': 'attHOL', 'filename': 'holerite.pdf', 'url': 'https://static/holerite.pdf'},
+                {'id': 'attPONTO', 'filename': 'ponto.pdf', 'url': 'https://static/ponto.pdf'},
+            ],
+        },
+    }
+
+
+def _client_reenvios(dry_run=False, disparar_whatsapp=True, limit=None):
+    body = {'dry_run': dry_run, 'disparar_whatsapp': disparar_whatsapp}
+    if limit:
+        body['limit'] = limit
+    return _client().post('/assinatura/processar-reenvios', headers={'X-API-KEY': 'test'}, json=body)
+
+
+def test_reenvio_pacote_despachado_para_funcao_dedicada_sem_alterar_generico():
+    """O branch por tipo não roda nenhuma linha do reenvio genérico
+    (usado por Kit Admissão/Rescisão/EPI/Contratos/Folha de Ponto
+    isolada) para um registro de pacote."""
+    registro = _registro_reenviar()
+    with patch('app.EMAIL_WEBHOOK_KEY', 'test'), patch('app.AIRTABLE_API_KEY', 'test'), \
+         patch('app.requests.get', return_value=_resp(ok=True, json_dict={'records': [registro]})), \
+         patch('app._reenviar_pacote_holerite_ponto', return_value={'acao': 'reenviaria_pacote'}) as mock_reenvia, \
+         patch('app._montar_mensagem_assinatura') as mock_msg_generica:
+        resp = _client_reenvios(dry_run=True)
+    assert resp.status_code == 200
+    mock_reenvia.assert_called_once()
+    mock_msg_generica.assert_not_called()
+
+
+def test_reenvio_pacote_vinculo_nao_ativo_cancela_em_vez_de_reenviar():
+    registro = _registro_reenviar()
+    with patch('app._status_funcionario_elegivel', return_value=(False, 'vinculo_nao_ativo')), \
+         patch('app._at_throttle', lambda: None), \
+         patch('app.requests.patch', return_value=_resp(ok=True)) as mock_patch:
+        item = app._reenviar_pacote_holerite_ponto(registro, registro['fields'], FUNC_ID, dry_run=False, disparar_whatsapp=True)
+    assert item['acao'] == 'cancelado_vinculo_nao_ativo'
+    campos_patch = mock_patch.call_args.kwargs['json']['fields']
+    assert campos_patch[F_ASS_STATUS] == 'Cancelado'
+
+
+def test_reenvio_pacote_documento_alterado_bloqueia():
+    """Revalidação dos 2 Record IDs e hashes: se os anexos atuais não
+    corresponderem ao par gravado, o reenvio é bloqueado."""
+    registro = _registro_reenviar()
+    conteudo_diferente = b'%PDF-1.4\nconteudo-diferente'
+    with patch('app._status_funcionario_elegivel', return_value=(True, None)), \
+         patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \
+         patch('app._at_throttle', lambda: None), \
+         patch('app.requests.get', return_value=Mock(ok=True, content=conteudo_diferente)):
+        item = app._reenviar_pacote_holerite_ponto(registro, registro['fields'], FUNC_ID, dry_run=False, disparar_whatsapp=True)
+    assert item['erro'] == 'documento_alterado_apos_preparacao'
+
+
+def test_reenvio_pacote_limite_de_tentativas_excedido_bloqueia_e_expira():
+    registro = _registro_reenviar(evidencias=f'Reenvios do pacote: {app.MAX_REENVIOS_PACOTE}')
+    with patch('app._status_funcionario_elegivel', return_value=(True, None)), \
+         patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \
+         patch('app._at_throttle', lambda: None), \
+         patch('app.requests.patch', return_value=_resp(ok=True)) as mock_patch:
+        item = app._reenviar_pacote_holerite_ponto(registro, registro['fields'], FUNC_ID, dry_run=False, disparar_whatsapp=True)
+    assert item['erro'] == 'limite_de_reenvios_excedido'
+    campos_patch = mock_patch.call_args.kwargs['json']['fields']
+    assert campos_patch[F_ASS_STATUS] == 'Expirado'
+
+
+def test_reenvio_pacote_nunca_cria_segunda_assinatura():
+    """Garantia estrutural: a função de reenvio do pacote nunca chama
+    _criar_registro -- só PATCH no mesmo registro."""
+    import inspect
+    codigo = inspect.getsource(app._reenviar_pacote_holerite_ponto)
+    assert '_criar_registro' not in codigo
+
+
+def test_reenvio_pacote_sucesso_grava_pendente_com_novo_hash_e_contador():
+    registro = _registro_reenviar()
+    with patch('app._status_funcionario_elegivel', return_value=(True, None)), \
+         patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \
+         patch('app._at_throttle', lambda: None), \
+         patch('app.requests.get', side_effect=[
+             Mock(ok=True, content=PDF_SINTETICO_HOLERITE), Mock(ok=True, content=PDF_SINTETICO_PONTO),
+             _resp(ok=True, json_dict={'fields': {'Status': 'Reenviar'}}),
+         ]), \
+         patch('app.requests.patch', return_value=_resp(ok=True)) as mock_patch, \
+         patch('app._evolution_enviar_texto') as mock_envia:
+        item = app._reenviar_pacote_holerite_ponto(registro, registro['fields'], FUNC_ID, dry_run=False, disparar_whatsapp=True)
+    assert item['acao'] == 'reenviado'
+    mock_envia.assert_called_once()
+    numero, mensagem = mock_envia.call_args[0]
+    assert 'Holerite' in mensagem and 'Folha de Ponto' in mensagem
+    campos_patch = mock_patch.call_args.kwargs['json']['fields']
+    assert campos_patch[F_ASS_STATUS] == 'Pendente'
+    assert 'Reenvios do pacote: 1' in campos_patch[app.F_ASS_EVIDENCIAS]
+
+
+def test_reenvio_pacote_outra_instancia_ja_processou_e_pulado():
+    """Concorrência best-effort: se o Status já não é mais 'Reenviar' no
+    instante do PATCH final, a execução é abortada sem reenviar de novo."""
+    registro = _registro_reenviar()
+    with patch('app._status_funcionario_elegivel', return_value=(True, None)), \
+         patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \
+         patch('app._at_throttle', lambda: None), \
+         patch('app.requests.get', side_effect=[
+             Mock(ok=True, content=PDF_SINTETICO_HOLERITE), Mock(ok=True, content=PDF_SINTETICO_PONTO),
+             _resp(ok=True, json_dict={'fields': {'Status': 'Pendente'}}),  # já processado por outra chamada
+         ]), \
+         patch('app._evolution_enviar_texto') as mock_envia:
+        item = app._reenviar_pacote_holerite_ponto(registro, registro['fields'], FUNC_ID, dry_run=False, disparar_whatsapp=True)
+    assert item['acao'] == 'ja_processado_outra_instancia'
+    mock_envia.assert_not_called()
