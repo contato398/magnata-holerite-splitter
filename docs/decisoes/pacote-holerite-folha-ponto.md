@@ -96,3 +96,61 @@ documento único, pré-existente e não tocada por esta Macro (`app.py`,
 `_gerar_comprovante_assinatura_pdf`). Corrigido nas 4 ocorrências do
 mesmo padrão (2 pré-existentes, 2 novas desta Macro) — troca de `—` por
 `-`, sem nenhuma mudança de conteúdo jurídico ou de layout.
+
+## Macro de fechamento — correções antes da publicação
+
+Revisão adversarial exigida por comando do usuário encontrou 2 falhas
+materiais na entrega inicial e ambas foram corrigidas **antes** do push
+(nunca depois — a entrega anterior invertia essa ordem, ver histórico da
+sessão):
+
+1. **Vínculo ativo checado nos 3 pontos exigidos**, não só um:
+   preparação/dry-run, imediatamente antes do disparo por WhatsApp, e
+   imediatamente antes de concluir a assinatura
+   (`_status_funcionario_elegivel`). Colaborador
+   desligado/inativo/suspenso/status ausente ou desconhecido bloqueia em
+   qualquer um dos 3 — nunca por lista fixa de nomes. Mudança de status
+   entre pontos invalida o pacote (`Cancelado`) em vez de assinar; a
+   idempotência já existente impede que uma reexecução ressuscite ou
+   reenvie automaticamente esse pacote depois disso.
+2. **Ordem de escrita da confirmação corrigida**: a versão anterior
+   gravava `Status=Assinado` incondicionalmente antes de tentar carimbar
+   os 2 documentos — uma falha parcial (hash trocado, upload incompleto,
+   exceção no carimbo) deixava o pacote marcado como concluído mesmo sem
+   ter concluído nada. `_confirmar_assinatura_pacote_holerite_ponto`
+   agora grava `Assinado` numa única chamada final, junto com os anexos e
+   evidências, só depois que os 2 documentos foram revalidados por hash,
+   carimbados, e o comprovante gerado e persistido.
+
+Também fechado nesta revisão:
+
+- **Idempotência com o casing real**: a versão anterior comparava contra
+  nomes ALL-CAPS aspiracionais (`ESTADOS_ASSINATURA`) que nenhum caminho
+  real do sistema escreve — a proteção contra duplicação nunca disparava
+  de fato contra dado real. Corrigido para o casing que a confirmação
+  compartilhada e o reenvio genérico realmente gravam (`PREPARADO`,
+  `Pendente`, `FALHA_ENVIO`, `Assinado`, `Expirado`, `Cancelado`).
+- **Reenvio do pacote** (`_reenviar_pacote_holerite_ponto`): extensão
+  isolada do mecanismo genérico já existente
+  (`/assinatura/processar-reenvios`) para o tipo `HOLERITE_FOLHA_PONTO` —
+  reaproveita a mesma transação/chave (nunca cria uma 2ª assinatura),
+  revalida vínculo e os 2 hashes originais antes de reenviar, respeita um
+  limite de tentativas (contador embutido em `Evidencias_Assinatura`,
+  sem campo novo no Airtable), e não altera nenhuma linha do reenvio de
+  Kit Admissão/Rescisão/EPI/Contratos/Folha de Ponto isolada.
+- Página de assinatura com `Status=Cancelado` deixa de mostrar o
+  formulário de CPF — uma retentativa nunca teria efeito, o vínculo já
+  invalidou o pacote.
+
+### Backlog de "34 elegíveis, nunca enviados" — provisório, não confirmado
+
+A auditoria anterior classificou 34 colaboradores como backlog por
+"nunca teve nenhum Envio/Assinatura no histórico" — isso **não** é o
+mesmo que "nunca recebeu a competência atual". `scripts/
+reconciliacao_backlog_holerite_ponto.py` implementa a reconciliação
+correta (por colaborador ativo + competência extraída de cada PDF + tipo
++ Record ID + hash íntegro + envio/assinatura **dessa** competência
+específica), mas não foi executado contra dado real nesta sessão — o
+sandbox não tem `AIRTABLE_API_KEY` real nem acesso de rede ao Render de
+produção. O número "34" permanece **provisório** até execução real
+(comando exato na docstring de `main()` do script).
