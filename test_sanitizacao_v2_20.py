@@ -44,11 +44,18 @@ def test_airtable_error_mensagem_sem_json():
 
 
 def test_processar_documento_sem_automacao_dry_run():
+    # Correção (Macro 6A — fechamento autônomo, achado: teste desatualizado):
+    # ctx faltava a chave 'texto', que _processar_documento_sem_automacao
+    # sempre exige (extrai nome/CPF do texto do PDF). A rota real
+    # (/processar-fila) sempre popula 'texto' no ctx antes de chamar
+    # qualquer handler — o fixture deste teste nunca foi atualizado quando
+    # esse campo passou a ser obrigatório. Texto 100% sintético.
     ctx = {
         'proc_id': 'recPROC123',
         'arquivo_id': 'recARQ123',
         'nome_arquivo': 'FGTS Digital - Junho 2026.pdf',
         'tipo_documento': 'FGTS',
+        'texto': 'FGTS Digital\nCompetência: 06/2026\nSem funcionário identificável neste texto sintético.',
     }
     resultado = app._processar_documento_sem_automacao(ctx, dry_run=True)
     assert resultado['status_final'] == 'Revisão Manual'
@@ -58,11 +65,13 @@ def test_processar_documento_sem_automacao_dry_run():
 
 
 def test_processar_documento_sem_automacao_real():
+    # Mesma correção de fixture do teste acima — ver comentário lá.
     ctx = {
         'proc_id': 'recPROC123',
         'arquivo_id': 'recARQ123',
         'nome_arquivo': 'FGTS Digital - Junho 2026.pdf',
         'tipo_documento': 'FGTS',
+        'texto': 'FGTS Digital\nCompetência: 06/2026\nSem funcionário identificável neste texto sintético.',
     }
     resultado = app._processar_documento_sem_automacao(ctx, dry_run=False)
     assert resultado['status_final'] == 'Revisão Manual'
@@ -141,7 +150,16 @@ def test_processar_holerite_sanitiza_quando_payload_completo_rejeitado(mock_post
         'pdf_bytes': b'%PDF-1.4 fake',
         'pdf_hash': 'hash123',
         'nome_arquivo': 'Holerite Junho 2026 - Fulano.pdf',
+        # Correção (Macro 6A — fechamento autônomo, achado: teste desatualizado):
+        # faltava marcador de competência ("Mês de AAAA") no texto sintético.
+        # extrair_competencia_holerite() não encontrava nenhuma competência,
+        # então a guarda de segurança 0b de _processar_holerite (já
+        # existente, correta, não introduzida por esta rodada) roteava
+        # corretamente para 'competencia_nao_detectada' — o teste nunca
+        # chegava a exercitar seu objetivo real (sanitização de payload
+        # 422). Com o marcador presente, o fluxo sob teste é alcançado.
         'texto': (
+            'Holerite Mensalista Junho de 2026\n'
             'CPF\n123.456.789-00\n'
             'Nome do Funcionário\n12345 FULANO DE TAL\n'
             'Total de Vencimentos  Total de Descontos\n2.000,00\n'

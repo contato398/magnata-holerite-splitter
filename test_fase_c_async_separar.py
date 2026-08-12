@@ -364,18 +364,42 @@ def test_scenario_9_worker_failure_updates_erro(mock_airtable_env):
 
 def test_scenario_10_no_whatsapp_integration(mock_airtable_env):
     """
-    Verifica: ZERO chamadas a WhatsApp em toda pipeline
+    Verifica: ZERO chamadas a WhatsApp na pipeline ASSÍNCRONA de /separar
+    (rota `separar` + tarefa Celery `processar_pdf_task`) — este teste é
+    especificamente sobre ESSA pipeline (fatiamento de PDF por CPF), que
+    nunca deveria depender de canal de envio nenhum.
+
+    Correção (Macro 6A — fechamento autônomo, achado de teste defeituoso +
+    expectativa antiga): a versão anterior fazia `from app import app` e
+    depois `inspect.getsource(app)` — `app` aqui é a INSTÂNCIA Flask (o
+    import sombreia o nome do módulo), não o módulo; `inspect.getsource()`
+    nunca aceita um objeto Flask, então o teste sempre falhava com
+    TypeError antes mesmo de checar qualquer coisa (bug de mecanismo, não
+    de comportamento). Além disso, a asserção original varria o app.py
+    INTEIRO — e a aplicação hoje tem integração WhatsApp real e deliberada
+    (Evolution API, canal de envio de Holerite, disparo de Assinatura
+    Nativa do Kit de Admissão), já coberta positivamente por outros testes
+    (test_fila_envios_v2_23.py, test_correcao_tabela_arquivos.py). Isso é
+    uma regra antiga (época em que WhatsApp não existia na aplicação)
+    substituída por decisão já aprovada — não uma regressão a reverter.
+
+    O comportamento inseguro que o teste original queria evitar (chamar
+    WhatsApp de dentro da pipeline de fatiamento de PDF, que não tem
+    relação nenhuma com canal de envio) continua garantido abaixo, agora
+    escopado corretamente às duas funções que de fato compõem essa
+    pipeline, em vez do módulo inteiro.
     """
-    from app import app
+    from app import separar
     import inspect
 
-    app_source = inspect.getsource(app)
-    assert 'whatsapp' not in app_source.lower()
-    assert 'telegram' not in app_source.lower()
+    separar_source = inspect.getsource(separar)
+    assert 'whatsapp' not in separar_source.lower()
+    assert 'telegram' not in separar_source.lower()
 
     from tarefas_processar_pdf import processar_pdf_task
     task_source = inspect.getsource(processar_pdf_task)
     assert 'whatsapp' not in task_source.lower()
+    assert 'telegram' not in task_source.lower()
 
     print("✅ Cenário 10 PASSOU: ZERO integração WhatsApp")
 
