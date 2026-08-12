@@ -37,8 +37,8 @@ PDF_SINTETICO = b'%PDF-1.4\n' + b'conteudo-sintetico-de-teste' * 5
 # ── /processar-doc-cliente ───────────────────────────────────────────────
 
 def test_processar_doc_cliente_sem_x_api_key_e_rejeitado_com_401():
-    with patch('app.EMAIL_WEBHOOK_KEY', 'chave-sintetica-teste'), \
-         patch('app.AIRTABLE_API_KEY', 'airtable-key-sintetica'), \
+    with patch('app.EMAIL_WEBHOOK_KEY', 'test'), \
+         patch('app.AIRTABLE_API_KEY', 'test'), \
          patch('app._processar_doc_cliente_master') as mock_processa:
         resp = _client().post(
             '/processar-doc-cliente',
@@ -51,8 +51,8 @@ def test_processar_doc_cliente_sem_x_api_key_e_rejeitado_com_401():
 
 
 def test_processar_doc_cliente_com_x_api_key_errada_e_rejeitado_com_401():
-    with patch('app.EMAIL_WEBHOOK_KEY', 'chave-sintetica-teste'), \
-         patch('app.AIRTABLE_API_KEY', 'airtable-key-sintetica'), \
+    with patch('app.EMAIL_WEBHOOK_KEY', 'test'), \
+         patch('app.AIRTABLE_API_KEY', 'test'), \
          patch('app._processar_doc_cliente_master') as mock_processa:
         resp = _client().post(
             '/processar-doc-cliente',
@@ -66,15 +66,15 @@ def test_processar_doc_cliente_com_x_api_key_errada_e_rejeitado_com_401():
 
 
 def test_processar_doc_cliente_com_x_api_key_correta_segue_fluxo_normal():
-    with patch('app.EMAIL_WEBHOOK_KEY', 'chave-sintetica-teste'), \
-         patch('app.AIRTABLE_API_KEY', 'airtable-key-sintetica'), \
+    with patch('app.EMAIL_WEBHOOK_KEY', 'test'), \
+         patch('app.AIRTABLE_API_KEY', 'test'), \
          patch('app._processar_doc_cliente_master',
                return_value={'status': 'concluido', 'registros_criados': 0}) as mock_processa:
         resp = _client().post(
             '/processar-doc-cliente',
             data={'tipo': 'extrato', 'folha_mensal': 'Maio 2026',
                   'pdf': (io.BytesIO(PDF_SINTETICO), 'mestre.pdf')},
-            headers={'X-API-KEY': 'chave-sintetica-teste'},
+            headers={'X-API-KEY': 'test'},
             content_type='multipart/form-data',
         )
     assert resp.status_code == 200
@@ -84,8 +84,8 @@ def test_processar_doc_cliente_com_x_api_key_correta_segue_fluxo_normal():
 # ── /processar-guia ──────────────────────────────────────────────────────
 
 def test_processar_guia_sem_x_api_key_e_rejeitado_com_401():
-    with patch('app.EMAIL_WEBHOOK_KEY', 'chave-sintetica-teste'), \
-         patch('app.AIRTABLE_API_KEY', 'airtable-key-sintetica'), \
+    with patch('app.EMAIL_WEBHOOK_KEY', 'test'), \
+         patch('app.AIRTABLE_API_KEY', 'test'), \
          patch('app._criar_registro') as mock_criar:
         resp = _client().post(
             '/processar-guia',
@@ -98,15 +98,15 @@ def test_processar_guia_sem_x_api_key_e_rejeitado_com_401():
 
 
 def test_processar_guia_com_x_api_key_correta_segue_fluxo_normal():
-    with patch('app.EMAIL_WEBHOOK_KEY', 'chave-sintetica-teste'), \
-         patch('app.AIRTABLE_API_KEY', 'airtable-key-sintetica'), \
+    with patch('app.EMAIL_WEBHOOK_KEY', 'test'), \
+         patch('app.AIRTABLE_API_KEY', 'test'), \
          patch('app._criar_registro', return_value='recGUIANOVA'), \
          patch('app._anexar_attachment') as mock_anexar:
         resp = _client().post(
             '/processar-guia',
             data={'tipo': 'DCTFWeb',
                   'arquivo': (io.BytesIO(PDF_SINTETICO), 'guia.pdf')},
-            headers={'X-API-KEY': 'chave-sintetica-teste'},
+            headers={'X-API-KEY': 'test'},
             content_type='multipart/form-data',
         )
     assert resp.status_code == 200
@@ -116,8 +116,8 @@ def test_processar_guia_com_x_api_key_correta_segue_fluxo_normal():
 # ── /processar-recibos ───────────────────────────────────────────────────
 
 def test_processar_recibos_sem_x_api_key_e_rejeitado_com_401():
-    with patch('app.EMAIL_WEBHOOK_KEY', 'chave-sintetica-teste'), \
-         patch('app.AIRTABLE_API_KEY', 'airtable-key-sintetica'), \
+    with patch('app.EMAIL_WEBHOOK_KEY', 'test'), \
+         patch('app.AIRTABLE_API_KEY', 'test'), \
          patch('app._processar_recibos_master') as mock_processa:
         resp = _client().post(
             '/processar-recibos',
@@ -130,15 +130,15 @@ def test_processar_recibos_sem_x_api_key_e_rejeitado_com_401():
 
 
 def test_processar_recibos_com_x_api_key_correta_segue_fluxo_normal():
-    with patch('app.EMAIL_WEBHOOK_KEY', 'chave-sintetica-teste'), \
-         patch('app.AIRTABLE_API_KEY', 'airtable-key-sintetica'), \
+    with patch('app.EMAIL_WEBHOOK_KEY', 'test'), \
+         patch('app.AIRTABLE_API_KEY', 'test'), \
          patch('app._processar_recibos_master',
                return_value={'status': 'concluido', 'recibos_anexados': 0}) as mock_processa:
         resp = _client().post(
             '/processar-recibos',
             data={'tipo': 'Salário', 'folha_mensal': 'Maio 2026',
                   'pdf': (io.BytesIO(PDF_SINTETICO), 'recibos.pdf')},
-            headers={'X-API-KEY': 'chave-sintetica-teste'},
+            headers={'X-API-KEY': 'test'},
             content_type='multipart/form-data',
         )
     assert resp.status_code == 200
@@ -148,13 +148,13 @@ def test_processar_recibos_com_x_api_key_correta_segue_fluxo_normal():
 # ── Regressão: rotas já protegidas continuam exigindo a chave certa ─────
 
 def test_processar_fila_continua_exigindo_x_api_key():
-    with patch('app.EMAIL_WEBHOOK_KEY', 'chave-sintetica-teste'):
+    with patch('app.EMAIL_WEBHOOK_KEY', 'test'):
         resp = _client().post('/processar-fila', json={'tipo_documento': 'Holerite'})
     assert resp.status_code == 401
 
 
 def test_email_webhook_continua_exigindo_x_api_key():
-    with patch('app.EMAIL_WEBHOOK_KEY', 'chave-sintetica-teste'):
+    with patch('app.EMAIL_WEBHOOK_KEY', 'test'):
         resp = _client().post('/email/webhook', json={'message_id': '<x@y>'})
     assert resp.status_code == 401
 

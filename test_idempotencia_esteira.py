@@ -142,12 +142,12 @@ def test_webhook_message_id_duplicado_nao_grava_nada():
         'assunto': 'Assunto sintético', 'remetente': 'origem@teste.invalido',
         'corpo': 'corpo sintético', 'anexos': [],
     }
-    with patch('app.EMAIL_WEBHOOK_KEY', 'chave-sintetica-teste'), patch('app.AIRTABLE_API_KEY', 'airtable-key-sintetica'), \
+    with patch('app.EMAIL_WEBHOOK_KEY', 'test'), patch('app.AIRTABLE_API_KEY', 'test'), \
          patch('app._buscar_por_campo', return_value={'id': 'recEMAILJAEXISTE'}) as mock_busca, \
          patch('app._criar_registro') as mock_criar:
         resp = _client().post(
             '/email/webhook', json=payload,
-            headers={'X-API-KEY': 'chave-sintetica-teste'},
+            headers={'X-API-KEY': 'test'},
         )
 
     assert resp.status_code == 200
@@ -176,13 +176,13 @@ def test_webhook_anexo_com_hash_ja_existente_nao_reprocessa_conteudo():
             return {'id': 'recARQUIVOJAEXISTE'}  # mas o anexo já existe
         return None
 
-    with patch('app.EMAIL_WEBHOOK_KEY', 'chave-sintetica-teste'), patch('app.AIRTABLE_API_KEY', 'airtable-key-sintetica'), \
+    with patch('app.EMAIL_WEBHOOK_KEY', 'test'), patch('app.AIRTABLE_API_KEY', 'test'), \
          patch('app._buscar_por_campo', side_effect=busca_por_campo), \
          patch('app._criar_registro', return_value='recEMAILNOVO') as mock_criar, \
          patch('app.classificar_documento', return_value=('Outro', 0)):
         resp = _client().post(
             '/email/webhook', json=payload,
-            headers={'X-API-KEY': 'chave-sintetica-teste'},
+            headers={'X-API-KEY': 'test'},
         )
 
     assert resp.status_code == 200
@@ -203,12 +203,12 @@ def test_webhook_dry_run_nunca_cria_registro_mesmo_sem_duplicidade():
         'assunto': 'Assunto sintético', 'remetente': 'origem@teste.invalido',
         'corpo': 'corpo sintético', 'anexos': [], 'dry_run': True,
     }
-    with patch('app.EMAIL_WEBHOOK_KEY', 'chave-sintetica-teste'), patch('app.AIRTABLE_API_KEY', 'airtable-key-sintetica'), \
+    with patch('app.EMAIL_WEBHOOK_KEY', 'test'), patch('app.AIRTABLE_API_KEY', 'test'), \
          patch('app._buscar_por_campo', return_value=None), \
          patch('app._criar_registro') as mock_criar:
         resp = _client().post(
             '/email/webhook', json=payload,
-            headers={'X-API-KEY': 'chave-sintetica-teste'},
+            headers={'X-API-KEY': 'test'},
         )
 
     assert resp.status_code == 200
@@ -233,7 +233,7 @@ def test_disparar_fila_email_envia_uma_vez_e_marca_enviado(mock_listar):
         'PDF HOLERITES': [{'url': 'http://x/h.pdf', 'filename': 'h.pdf'}],
     }}]
     with patch('app.EMAIL_SENDER', 'remetente@teste.invalido'), \
-         patch('app.EMAIL_SENDER_PASSWORD', 'senha-sintetica-teste'), \
+         patch('app.EMAIL_SENDER_PASSWORD', 'test'), \
          patch('app._baixar_attachment_bytes', return_value=b'pdf-fake'), \
          patch('app._smtp_enviar_email') as mock_smtp, \
          patch('app._marcar_envio_status') as mock_marcar:
@@ -263,7 +263,7 @@ def test_disparar_fila_email_nunca_reenvia_envio_ja_marcado_enviado(mock_listar)
         }},
     ]
     with patch('app.EMAIL_SENDER', 'remetente@teste.invalido'), \
-         patch('app.EMAIL_SENDER_PASSWORD', 'senha-sintetica-teste'), \
+         patch('app.EMAIL_SENDER_PASSWORD', 'test'), \
          patch('app._baixar_attachment_bytes', return_value=b'pdf-fake'), \
          patch('app._smtp_enviar_email') as mock_smtp, \
          patch('app._marcar_envio_status') as mock_marcar:
