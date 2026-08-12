@@ -183,6 +183,11 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_kit_admissao_identidade.py"
   "test_sanitizacao_v2_20.py"
   "test_seguranca_rotas_dp_fiscal.py"
+  # Exceção exata (decisão registrada, branch
+  # fix/holerite-ponto-pacote-assinatura) — pacote atômico de assinatura
+  # eletrônica Holerite + Folha de Ponto. Mesmo padrão de autorização
+  # nominal já usado para Macro 5 e Macro 6A.
+  "test_pacote_assinatura_holerite_ponto.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

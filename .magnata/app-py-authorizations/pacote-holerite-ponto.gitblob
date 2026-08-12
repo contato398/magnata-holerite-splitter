@@ -1,0 +1,7 @@
+# Autorização humana específica — Pacote Holerite + Folha de Ponto
+# Base: 07c85cc (origin/main, Macro 6A já mesclada)
+# Branch: fix/holerite-ponto-pacote-assinatura
+# Data: 2026-08-12
+# Decisão registrada em: docs/decisoes/pacote-holerite-folha-ponto.md
+# Somente blob exato aprovado; qualquer alteração subsequente invalida esta autorização.
+6624266ae0a3f6e544a9848da75c00399a3aa304  app.py

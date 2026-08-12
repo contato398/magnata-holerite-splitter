@@ -388,6 +388,13 @@ ALLOWED_PATHS=(
   "^test_kit_admissao_identidade\.py$"
   "^test_sanitizacao_v2_20\.py$"
   "^test_seguranca_rotas_dp_fiscal\.py$"
+  # Exceção exata (decisão registrada, branch
+  # fix/holerite-ponto-pacote-assinatura) — pacote atômico de assinatura
+  # eletrônica Holerite + Folha de Ponto (Holerite nunca assinável
+  # isolado, só pareado com a Folha de Ponto da mesma competência). Só
+  # este caminho exato — não libera "^test_" de forma ampla.
+  "^test_pacote_assinatura_holerite_ponto\.py$"
+  "^docs/decisoes/pacote-holerite-folha-ponto\.md$"
 )
 
 # ============================================================================
