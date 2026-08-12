@@ -188,6 +188,11 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # eletrônica Holerite + Folha de Ponto. Mesmo padrão de autorização
   # nominal já usado para Macro 5 e Macro 6A.
   "test_pacote_assinatura_holerite_ponto.py"
+  # Exceção exata (decisão registrada, branch
+  # fix/holerite-ponto-pacote-assinatura, macro de fechamento) — teste da
+  # rotina de reconciliação de backlog por competência (macro §5), mesmo
+  # padrão nominal.
+  "test_reconciliacao_backlog_holerite_ponto.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

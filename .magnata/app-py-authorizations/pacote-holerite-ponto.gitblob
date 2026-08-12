@@ -3,5 +3,10 @@
 # Branch: fix/holerite-ponto-pacote-assinatura
 # Data: 2026-08-12
 # Decisão registrada em: docs/decisoes/pacote-holerite-folha-ponto.md
+# Revisão: Macro de fechamento (correção do vínculo ativo antes do
+# disparo/conclusão, reenvio do pacote, ordem de escrita atômica da
+# confirmação) — hash abaixo recalculado sobre a versão FINAL de app.py
+# desta revisão; a entrada anterior (6624266ae0a3f6e544a9848da75c00399a3aa304)
+# fica registrada aqui só para rastreabilidade, não é mais válida.
 # Somente blob exato aprovado; qualquer alteração subsequente invalida esta autorização.
-6624266ae0a3f6e544a9848da75c00399a3aa304  app.py
+1f0464546abd7d9aa2dcd90c6b23c0d3cf96786a  app.py

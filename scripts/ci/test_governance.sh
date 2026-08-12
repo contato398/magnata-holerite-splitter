@@ -2094,6 +2094,64 @@ test_86_allowed_paths_single_source_of_truth() {
   fi
 }
 
+# ============================================================================
+# TESTES 87-88 — Exceção nominal do pacote Holerite + Folha de Ponto,
+# Macro de fechamento (branch fix/holerite-ponto-pacote-assinatura,
+# 2026-08-12): rotina de reconciliação de backlog por competência (só
+# leitura, macro §5) e seu teste, além dos 2 arquivos já commitados na
+# fase anterior (test_pacote_assinatura_holerite_ponto.py e
+# docs/decisoes/pacote-holerite-folha-ponto.md). Mesmo mecanismo das
+# exceções anteriores (Macro 5, Macro 6A) — commit real contra o hook
+# real, fonte única (.magnata/patterns.sh) compartilhada.
+# ============================================================================
+
+# TEST 87: os 4 caminhos exatos do pacote Holerite + Folha de Ponto
+# (2 já commitados + 2 novos da reconciliação) são aceitos pelo hook real.
+test_87_pacote_holerite_ponto_files_accepted() {
+  run_test 87 "Os 4 caminhos exatos do pacote Holerite + Folha de Ponto são aceitos" "PASS"
+
+  cd "$TEST_REPO"
+  mkdir -p scripts docs/decisoes
+  echo "# teste pacote" > test_pacote_assinatura_holerite_ponto.py
+  echo "# decisao" > docs/decisoes/pacote-holerite-folha-ponto.md
+  echo "# reconciliacao" > scripts/reconciliacao_backlog_holerite_ponto.py
+  echo "# teste reconciliacao" > test_reconciliacao_backlog_holerite_ponto.py
+  git add test_pacote_assinatura_holerite_ponto.py docs/decisoes/pacote-holerite-folha-ponto.md \
+          scripts/reconciliacao_backlog_holerite_ponto.py test_reconciliacao_backlog_holerite_ponto.py
+
+  if git commit -m "fix: teste 87 quatro caminhos exatos do pacote holerite ponto" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD test_pacote_assinatura_holerite_ponto.py docs/decisoes/pacote-holerite-folha-ponto.md \
+    scripts/reconciliacao_backlog_holerite_ponto.py test_reconciliacao_backlog_holerite_ponto.py 2>/dev/null || true
+  rm -f test_pacote_assinatura_holerite_ponto.py docs/decisoes/pacote-holerite-folha-ponto.md \
+    scripts/reconciliacao_backlog_holerite_ponto.py test_reconciliacao_backlog_holerite_ponto.py
+}
+
+# TEST 88: outro arquivo em scripts/ (não scripts/ci/, não o exato
+# reconciliacao_backlog_holerite_ponto.py) continua bloqueado — a exceção
+# não abre "^scripts/" de forma ampla, só o caminho exato.
+test_88_other_scripts_file_still_blocked() {
+  run_test 88 "Outro arquivo não autorizado em scripts/ continua bloqueado" "FAIL"
+
+  cd "$TEST_REPO"
+  mkdir -p scripts
+  echo "# script nao autorizado" > scripts/outro_script_qualquer.py
+  git add scripts/outro_script_qualquer.py
+
+  if git commit -m "fix: teste 88 arquivo nao autorizado em scripts" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD scripts/outro_script_qualquer.py 2>/dev/null || true
+  rm -f scripts/outro_script_qualquer.py
+}
+
 main() {
   echo -e "${BLUE}===================================="
   echo "SUÍTE DE TESTES DE GOVERNANÇA"
@@ -2196,6 +2254,8 @@ main() {
   test_84_migration_still_blocked_after_macro5_exception || true
   test_85_unlisted_test_file_still_blocked || true
   test_86_allowed_paths_single_source_of_truth || true
+  test_87_pacote_holerite_ponto_files_accepted || true
+  test_88_other_scripts_file_still_blocked || true
 
   # Report
   echo ""

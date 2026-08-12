@@ -395,6 +395,12 @@ ALLOWED_PATHS=(
   # este caminho exato — não libera "^test_" de forma ampla.
   "^test_pacote_assinatura_holerite_ponto\.py$"
   "^docs/decisoes/pacote-holerite-folha-ponto\.md$"
+  # Macro de fechamento do mesmo pacote — rotina de reconciliação de
+  # backlog por competência (só leitura, ver macro §5) e seu teste. Só
+  # estes 2 caminhos exatos — não libera "^scripts/" nem "^test_" de
+  # forma ampla.
+  "^scripts/reconciliacao_backlog_holerite_ponto\.py$"
+  "^test_reconciliacao_backlog_holerite_ponto\.py$"
 )
 
 # ============================================================================
