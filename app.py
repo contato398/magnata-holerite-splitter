@@ -1,4 +1,4 @@
-sta"""
+"""
 magnata-holerite-splitter — app.py v2.95
 Novidades vs v2.48:
   - Integração Secullum Ponto Web (Banco ID 149582) via blueprint isolado
