@@ -5,3 +5,10 @@ qr_final.json
 qr_final.png
 .env
 .env.txt
+
+# LGPD -- static/ nunca recebe PDF novo por padrão (ficha de empregado real
+# encontrada e removida em fix/lgpd-purga-mascara-cpf-tmp-cleanup). Para
+# adicionar um material legítimo (manual/guia sem dado pessoal), commitar
+# com -f explicitamente após confirmar que o conteúdo não tem CPF/RG/nome
+# de terceiro/endereço -- nunca por engano via `git add .`.
+static/*.pdf

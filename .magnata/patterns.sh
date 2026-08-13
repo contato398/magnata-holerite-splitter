@@ -388,6 +388,21 @@ ALLOWED_PATHS=(
   "^test_kit_admissao_identidade\.py$"
   "^test_sanitizacao_v2_20\.py$"
   "^test_seguranca_rotas_dp_fiscal\.py$"
+  # Exceção exata e restrita (decisão registrada, branch
+  # fix/lgpd-purga-mascara-cpf-tmp-cleanup, 2026-08-13) — Missão 0 de
+  # saneamento LGPD: só o .gitignore raiz, para a regra static/*.pdf que
+  # impede reincidência dos PDFs reais removidos neste branch. Não libera
+  # nenhum outro .gitignore (ex.: um futuro `frontend/.gitignore`) — bate
+  # só a raiz, por igualdade de string completa via âncora $ no fim.
+  "^\.gitignore$"
+  # Mesma decisão -- a Validação 6 do pre-commit também escopa remoções,
+  # não só adições/edições. Os 2 caminhos exatos sendo DELETADOS nesta
+  # branch (dado real de LGPD, ver commit) precisam estar no escopo para
+  # o próprio `git rm` passar. Não libera nenhum outro arquivo em
+  # static/ -- guia_colaborador_secullum_magnata.pdf, sem dado pessoal,
+  # permanece fora desta lista e intocado.
+  "^static/ficha_carlos_alberto_moutinho\.pdf$"
+  "^static/ficha_leonardo_henrique_bove_ramos\.pdf$"
 )
 
 # ============================================================================

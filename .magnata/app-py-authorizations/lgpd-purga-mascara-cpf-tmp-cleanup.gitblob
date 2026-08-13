@@ -1,0 +1,17 @@
+# Autorização humana específica — LGPD: purga de dado real, máscara de
+# CPF em log, limpeza garantida de PDF temporário
+# Base: 07c85cc (origin/main)
+# Branch: fix/lgpd-purga-mascara-cpf-tmp-cleanup
+# Data: 2026-08-13
+# Autorização: mensagem do usuário nesta sessão ("Atue como Engenheiro de
+# Software Autônomo... MISSÃO 0: SANEAMENTO E PREPARAÇÃO DA BASE (LGPD &
+# Segurança)"), item 2 (BLINDAGEM DE LOGS) e item 3 (PREVENÇÃO DE
+# VAZAMENTO EM DISCO) — nomeia app.py e as linhas exatas identificadas na
+# auditoria anterior como escopo explícito da alteração.
+# Escopo desta autorização, nada além: função _mascarar_cpf() nova +
+# aplicação dela nos 6 pontos de logger.warning/error que imprimiam CPF em
+# texto puro; try/finally garantindo remoção de PDF temporário em
+# processar_holerites() e processar_folha_ponto_master() (os 2 pontos
+# reais sem limpeza garantida encontrados na auditoria).
+# Somente blob exato aprovado; qualquer alteração subsequente invalida esta autorização.
+889cb8ca3c55c054ea4463a57b82417516ceaf52  app.py

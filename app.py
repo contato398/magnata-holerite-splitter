@@ -670,6 +670,19 @@ def extrair_cpf(texto: str):
     return m.group() if m else None
 
 
+def _mascarar_cpf(cpf: str) -> str:
+    """Blindagem LGPD para log/exibição: nunca imprimir o CPF completo.
+    Mantém só o último grupo (3 dígitos) + dígitos verificadores, no
+    formato ***.***.123-45 -- suficiente para correlacionar um caso
+    específico num log sem expor o documento inteiro. Entrada fora do
+    formato esperado (vazia, incompleta) nunca é ecoada como está --
+    volta um placeholder igualmente seguro."""
+    digitos = re.sub(r'\D', '', cpf or '')
+    if len(digitos) != 11:
+        return '***.***.***-**'
+    return f'***.***.{digitos[6:9]}-{digitos[9:11]}'
+
+
 def extrair_nome_funcionario(texto: str):
     if not texto:
         return 'Desconhecido'
@@ -1401,10 +1414,10 @@ def buscar_funcionario_por_cpf(cpf: str):
                     logger.info(f'[AT] Funcionário encontrado com fórmula: {formula}')
                     return records[0]['id'], nome
         except requests.exceptions.Timeout:
-            logger.warning(f'[AT] Timeout CPF {cpf} (fórmula: {formula})')
+            logger.warning(f'[AT] Timeout CPF {_mascarar_cpf(cpf)} (fórmula: {formula})')
             continue
         except Exception as exc:
-            logger.warning(f'[AT] Erro CPF {cpf}: {exc}')
+            logger.warning(f'[AT] Erro CPF {_mascarar_cpf(cpf)}: {exc}')
             continue
     return None, None
 
@@ -4543,6 +4556,7 @@ def processar_holerites():
         return jsonify({}), 200
 
     etapa = 'init'
+    caminho_pdf = None
     try:
         if not AIRTABLE_API_KEY:
             return jsonify({
@@ -4552,7 +4566,6 @@ def processar_holerites():
             }), 500
 
         etapa = 'receber_pdf'
-        caminho_pdf = None
         caminho_pdf = extrair_pdf_do_request()
         if not caminho_pdf or not os.path.exists(caminho_pdf) or os.path.getsize(caminho_pdf) < 100:
             return jsonify({'status': 'erro', 'erro': 'PDF não recebido.', 'etapa': etapa}), 400
@@ -4664,7 +4677,7 @@ def processar_holerites():
                 etapa = f'buscar_funcionario:{cpf}'
                 func_id, nome_at = buscar_funcionario_por_cpf(cpf)
                 if not func_id:
-                    logger.warning(f'{tag} Funcionário não encontrado | CPF: {cpf}')
+                    logger.warning(f'{tag} Funcionário não encontrado | CPF: {_mascarar_cpf(cpf)}')
                     erros.append({'cpf': cpf, 'nome': nome_pdf,
                                   'motivo': 'Funcionário não encontrado no Airtable'})
                     continue
@@ -4739,6 +4752,17 @@ def processar_holerites():
             'erro': str(exc),
             'etapa': etapa,
         }), 500
+    finally:
+        # Blindagem LGPD: garante a remoção do PDF de origem (lote inteiro
+        # de holerites, com CPF/valores de vários colaboradores) do /tmp
+        # mesmo quando uma exceção não prevista interrompe o processamento
+        # antes do unlink explícito do caminho feliz, acima. Mesmo padrão
+        # já usado em separar_zip().
+        if caminho_pdf and os.path.exists(caminho_pdf):
+            try:
+                os.unlink(caminho_pdf)
+            except Exception as e:
+                logger.warning(f'Erro ao limpar {caminho_pdf}: {e}')
 
 
 def _processar_folha_ponto_arquivo(caminho_pdf, folha_mensal, disparar_assinatura, cpfs_excluir):
@@ -4872,7 +4896,7 @@ def _processar_folha_ponto_arquivo(caminho_pdf, folha_mensal, disparar_assinatur
                     else:
                         item['assinatura'] = {'status': 'erro', 'erro': 'arquivo_record_id_nao_criado'}
                 except Exception as exc:
-                    logger.error(f'[PONTO] falha ao disparar assinatura {cpf}: {exc}')
+                    logger.error(f'[PONTO] falha ao disparar assinatura {_mascarar_cpf(cpf)}: {exc}')
                     item['assinatura'] = {'status': 'erro', 'erro': str(exc)}
 
             anexados.append(item)
@@ -4880,7 +4904,7 @@ def _processar_folha_ponto_arquivo(caminho_pdf, folha_mensal, disparar_assinatur
                 cpfs_processados.add(cpf_digitos)
             del pdf_ind
         except Exception as exc:
-            logger.error(f'[PONTO] erro ao anexar Folha de Ponto {cpf}: {exc}')
+            logger.error(f'[PONTO] erro ao anexar Folha de Ponto {_mascarar_cpf(cpf)}: {exc}')
             erros.append({'cpf': cpf, 'nome': nome_final, 'motivo': str(exc)})
 
         # Otimização de memória (v3.00, anti-timeout): libera RAM a cada 15
@@ -4992,66 +5016,76 @@ def processar_folha_ponto_master():
     cpfs_manuais_processados = set(cpfs_ja_processados)
     resultado_manual = None
 
-    if caminho_manual:
-        r_manual = _processar_folha_ponto_arquivo(
-            caminho_manual, folha_mensal, disparar_assinatura, cpfs_excluir=cpfs_ja_processados)
-        try:
-            os.unlink(caminho_manual)
-        except OSError:
-            pass
-        cpfs_manuais_processados |= r_manual['cpfs_processados']
-        resultado_manual = {
-            'total_colaboradores': r_manual['total_colaboradores'],
-            'total_paginas': r_manual['total_paginas'],
-            'total_anexados': len(r_manual['anexados']),
-            'total_ignorados': len(r_manual['ignorados']),
-            'total_erros': len(r_manual['erros']),
-            'anexados': r_manual['anexados'],
-            'ignorados': r_manual['ignorados'],
-            'erros': r_manual['erros'],
-        }
-
-    r_master = _processar_folha_ponto_arquivo(
-        caminho_master, folha_mensal, disparar_assinatura, cpfs_excluir=cpfs_manuais_processados)
+    # Blindagem LGPD: try/finally garante a remoção dos 2 PDFs de origem
+    # (master Secullum + manual, ambos com cartão de ponto de vários
+    # colaboradores) mesmo se _processar_folha_ponto_arquivo levantar uma
+    # exceção não prevista -- antes, o unlink de cada um só acontecia na
+    # linha seguinte à chamada, então uma exceção ali deixava o PDF preso
+    # no /tmp indefinidamente.
     try:
-        os.unlink(caminho_master)
-    except OSError:
-        pass
+        if caminho_manual:
+            r_manual = _processar_folha_ponto_arquivo(
+                caminho_manual, folha_mensal, disparar_assinatura, cpfs_excluir=cpfs_ja_processados)
+            cpfs_manuais_processados |= r_manual['cpfs_processados']
+            resultado_manual = {
+                'total_colaboradores': r_manual['total_colaboradores'],
+                'total_paginas': r_manual['total_paginas'],
+                'total_anexados': len(r_manual['anexados']),
+                'total_ignorados': len(r_manual['ignorados']),
+                'total_erros': len(r_manual['erros']),
+                'anexados': r_manual['anexados'],
+                'ignorados': r_manual['ignorados'],
+                'erros': r_manual['erros'],
+            }
 
-    if not resultado_manual and r_master['total_colaboradores'] == 0:
-        return jsonify({'status': 'erro', 'erro': 'Nenhum CPF/nome encontrado no PDF.'}), 422
+        r_master = _processar_folha_ponto_arquivo(
+            caminho_master, folha_mensal, disparar_assinatura, cpfs_excluir=cpfs_manuais_processados)
 
-    todos_anexados = r_master['anexados'] + (resultado_manual['anexados'] if resultado_manual else [])
-    total_assinaturas_enviadas = sum(
-        1 for a in todos_anexados
-        if disparar_assinatura and (a.get('assinatura') or {}).get('whatsapp_disparo') == 'enviado'
-    )
-    total_assinaturas_falha = sum(
-        1 for a in todos_anexados
-        if disparar_assinatura and (a.get('assinatura') or {}).get('status') != 'ok'
-    ) if disparar_assinatura else 0
+        if not resultado_manual and r_master['total_colaboradores'] == 0:
+            return jsonify({'status': 'erro', 'erro': 'Nenhum CPF/nome encontrado no PDF.'}), 422
 
-    return jsonify({
-        'status': 'concluido',
-        'folha_mensal': folha_mensal,
-        'disparar_assinatura': disparar_assinatura,
-        'total_assinaturas_enviadas': total_assinaturas_enviadas,
-        'total_assinaturas_falha': total_assinaturas_falha,
-        'folhas_manuais': resultado_manual,  # None se "pdf_manual" não foi enviado
-        'master_secullum': {
-            'total_colaboradores': r_master['total_colaboradores'],
-            'total_paginas': r_master['total_paginas'],
-            'total_anexados': len(r_master['anexados']),
-            'total_ignorados_prevalencia_manual': len(r_master['ignorados']),
-            'total_erros': len(r_master['erros']),
-            'anexados': r_master['anexados'],
-            'ignorados': r_master['ignorados'],
-            'erros': r_master['erros'],
-        },
-        # CPFs processados nesta chamada (manual + master) — útil para
-        # repassar em cpfs_ja_processados numa reexecução futura, se preciso.
-        'cpfs_processados': sorted(cpfs_manuais_processados | r_master['cpfs_processados']),
-    })
+        todos_anexados = r_master['anexados'] + (resultado_manual['anexados'] if resultado_manual else [])
+        total_assinaturas_enviadas = sum(
+            1 for a in todos_anexados
+            if disparar_assinatura and (a.get('assinatura') or {}).get('whatsapp_disparo') == 'enviado'
+        )
+        total_assinaturas_falha = sum(
+            1 for a in todos_anexados
+            if disparar_assinatura and (a.get('assinatura') or {}).get('status') != 'ok'
+        ) if disparar_assinatura else 0
+
+        return jsonify({
+            'status': 'concluido',
+            'folha_mensal': folha_mensal,
+            'disparar_assinatura': disparar_assinatura,
+            'total_assinaturas_enviadas': total_assinaturas_enviadas,
+            'total_assinaturas_falha': total_assinaturas_falha,
+            'folhas_manuais': resultado_manual,  # None se "pdf_manual" não foi enviado
+            'master_secullum': {
+                'total_colaboradores': r_master['total_colaboradores'],
+                'total_paginas': r_master['total_paginas'],
+                'total_anexados': len(r_master['anexados']),
+                'total_ignorados_prevalencia_manual': len(r_master['ignorados']),
+                'total_erros': len(r_master['erros']),
+                'anexados': r_master['anexados'],
+                'ignorados': r_master['ignorados'],
+                'erros': r_master['erros'],
+            },
+            # CPFs processados nesta chamada (manual + master) — útil para
+            # repassar em cpfs_ja_processados numa reexecução futura, se preciso.
+            'cpfs_processados': sorted(cpfs_manuais_processados | r_master['cpfs_processados']),
+        })
+    finally:
+        if caminho_manual and os.path.exists(caminho_manual):
+            try:
+                os.unlink(caminho_manual)
+            except OSError:
+                pass
+        if caminho_master and os.path.exists(caminho_master):
+            try:
+                os.unlink(caminho_master)
+            except OSError:
+                pass
 
 
 @app.route('/corrigir-valores', methods=['POST', 'OPTIONS'])
@@ -8897,7 +8931,7 @@ def _processar_recibos_master(caminho_pdf, tipo, folha_mensal):
             anexados.append({'cpf': cpf, 'nome': nome_final, 'func_id': func_id,
                              'paginas': [p + 1 for p in dados['paginas']]})
         except Exception as exc:
-            logger.error(f'[RECIBOS] falha {cpf}: {exc}')
+            logger.error(f'[RECIBOS] falha {_mascarar_cpf(cpf)}: {exc}')
             nao_vinculados.append({'cpf': cpf, 'erro': str(exc)})
     return {
         'status': 'concluido', 'tipo': tipo, 'folha_mensal': folha_mensal,
