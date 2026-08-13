@@ -9235,7 +9235,7 @@ def _status_funcionario_elegivel(funcionario_id: str):
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{funcionario_id}',
         headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
-        params={'returnFieldsByFieldId': 'true', 'fields[]': ['Status']},
+        params={'returnFieldsByFieldId': 'true'},
         timeout=30,
     )
     if not r.ok:
