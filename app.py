@@ -9217,7 +9217,7 @@ STATUS_FUNCIONARIO_CONHECIDOS = {'Ativo', 'Inativo', 'Empresa', 'Pessoal', 'Outr
 
 def _status_funcionario_elegivel(funcionario_id: str):
     if not funcionario_id:
-        return False, "vinculo_indeterminado"
+        return False, "id_vazio"
     _at_throttle()
     try:
         r = requests.get(
@@ -9226,7 +9226,7 @@ def _status_funcionario_elegivel(funcionario_id: str):
             timeout=30,
         )
         if not r.ok:
-            return False, "vinculo_indeterminado"
+            return False, f"airtable_http_{r.status_code}_{r.text[:80]}"
         fields = r.json().get("fields", {}) or {}
         raw = fields.get(F_FUNC_STATUS) or fields.get("Status") or fields.get("status") or fields.get("STATUS")
         if raw is None:
@@ -9241,10 +9241,10 @@ def _status_funcionario_elegivel(funcionario_id: str):
         if st == "ativo":
             return True, None
         if st:
-            return False, "vinculo_nao_ativo"
-        return False, "vinculo_indeterminado"
-    except Exception:
-        return False, "vinculo_indeterminado"
+            return False, f"status_veio_{st}"
+        return False, f"chaves_veio_{list(fields.keys())}"
+    except Exception as e:
+        return False, f"erro_exception_{str(e)[:80]}"
 
 
 def _montar_mensagem_assinatura(nome: str, tipo_documento: str, link: str) -> str:
