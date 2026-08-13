@@ -9216,38 +9216,41 @@ STATUS_FUNCIONARIO_CONHECIDOS = {'Ativo', 'Inativo', 'Empresa', 'Pessoal', 'Outr
 
 
 def _status_funcionario_elegivel(funcionario_id: str):
-    """Confere o vínculo ativo do colaborador antes de qualquer preparação,
-    disparo ou conclusão de assinatura -- exigência desta Macro (correção
-    indispensável antes de qualquer piloto/publicação, não depois).
-
-    Retorna (elegivel: bool, motivo_sanitizado: str|None). O motivo nunca
-    contém nome, telefone, CPF ou qualquer outro dado pessoal -- só uma das
-    3 categorias abaixo, adequadas para log e para o campo de erro (nunca
-    expõem quem é o colaborador, só o estado do vínculo):
-      - 'vinculo_nao_ativo'    -> Status é um valor conhecido, mas != Ativo
-      - 'vinculo_indeterminado' -> Status ausente ou valor não reconhecido
-      - None                   -> elegível (Status == Ativo, exato)
-    """
     if not funcionario_id:
         return False, 'vinculo_indeterminado'
 
     _at_throttle()
-    r = requests.get(
-        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{funcionario_id}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
-        params={'returnFieldsByFieldId': 'true'},
-        timeout=30,
-    )
-    if not r.ok:
+    try:
+        r = requests.get(
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{funcionario_id}',
+            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            params={'returnFieldsByFieldId': 'true'},
+            timeout=30,
+        )
+        if not r.ok:
+            return False, 'vinculo_indeterminado'
+
+        f = r.json().get('fields', {}) or {}
+        status_raw = f.get(F_FUNC_STATUS) or f.get('Status') or f.get('status') or f.get('STATUS')
+        if isinstance(status_raw, (list, tuple)) and status_raw:
+            status_raw = status_raw[0]
+
+        if isinstance(status_raw, str):
+            status_str = status_raw.strip()
+        elif status_raw is not None:
+            status_str = str(status_raw).strip()
+        else:
+            status_str = ""
+
+        if status_str.lower() == 'ativo':
+            return True, None
+
+        if status_str:
+            return False, 'vinculo_nao_ativo'
+
         return False, 'vinculo_indeterminado'
-
-    status = (r.json().get('fields', {}) or {}).get(F_FUNC_STATUS)
-
-    if status == STATUS_FUNCIONARIO_ATIVO:
-        return True, None
-    if status in STATUS_FUNCIONARIO_CONHECIDOS:
-        return False, 'vinculo_nao_ativo'
-    return False, 'vinculo_indeterminado'
+    except Exception:
+        return False, 'vinculo_indeterminado'
 
 
 def _montar_mensagem_assinatura(nome: str, tipo_documento: str, link: str) -> str:
