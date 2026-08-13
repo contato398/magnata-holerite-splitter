@@ -388,6 +388,11 @@ ALLOWED_PATHS=(
   "^test_kit_admissao_identidade\.py$"
   "^test_sanitizacao_v2_20\.py$"
   "^test_seguranca_rotas_dp_fiscal\.py$"
+  # Exceção exata e restrita (decisão registrada, branch
+  # fix/adr-modulo01-http-wiring, 2026-08-13) — ADR registrando a decisão
+  # (ainda não aprovada) de como/quando o Módulo 01 ganha superfície HTTP.
+  # Só este caminho exato -- não libera "^docs/decisoes/" de forma ampla.
+  "^docs/decisoes/modulo01-fiacao-http\.md$"
 )
 
 # ============================================================================
