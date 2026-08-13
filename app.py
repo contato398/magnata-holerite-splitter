@@ -9217,40 +9217,34 @@ STATUS_FUNCIONARIO_CONHECIDOS = {'Ativo', 'Inativo', 'Empresa', 'Pessoal', 'Outr
 
 def _status_funcionario_elegivel(funcionario_id: str):
     if not funcionario_id:
-        return False, 'vinculo_indeterminado'
-
+        return False, "vinculo_indeterminado"
     _at_throttle()
     try:
         r = requests.get(
-            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{funcionario_id}',
-            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
-            params={'returnFieldsByFieldId': 'true'},
+            f"https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{funcionario_id}",
+            headers={"Authorization": f"Bearer {AIRTABLE_API_KEY}"},
             timeout=30,
         )
         if not r.ok:
-            return False, 'vinculo_indeterminado'
-
-        f = r.json().get('fields', {}) or {}
-        status_raw = f.get(F_FUNC_STATUS) or f.get('Status') or f.get('status') or f.get('STATUS')
-        if isinstance(status_raw, (list, tuple)) and status_raw:
-            status_raw = status_raw[0]
-
-        if isinstance(status_raw, str):
-            status_str = status_raw.strip()
-        elif status_raw is not None:
-            status_str = str(status_raw).strip()
-        else:
-            status_str = ""
-
-        if status_str.lower() == 'ativo':
+            return False, "vinculo_indeterminado"
+        fields = r.json().get("fields", {}) or {}
+        raw = fields.get(F_FUNC_STATUS) or fields.get("Status") or fields.get("status") or fields.get("STATUS")
+        if raw is None:
+            for v in fields.values():
+                val = v[0] if isinstance(v, (list, tuple)) and v else v
+                if isinstance(val, str) and val.strip().lower() in {"ativo", "inativo", "afastado", "desligado"}:
+                    raw = val
+                    break
+        if isinstance(raw, (list, tuple)) and raw:
+            raw = raw[0]
+        st = str(raw).strip().lower() if raw is not None else ""
+        if st == "ativo":
             return True, None
-
-        if status_str:
-            return False, 'vinculo_nao_ativo'
-
-        return False, 'vinculo_indeterminado'
+        if st:
+            return False, "vinculo_nao_ativo"
+        return False, "vinculo_indeterminado"
     except Exception:
-        return False, 'vinculo_indeterminado'
+        return False, "vinculo_indeterminado"
 
 
 def _montar_mensagem_assinatura(nome: str, tipo_documento: str, link: str) -> str:
