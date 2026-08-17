@@ -1,0 +1,14 @@
+# Autorização humana específica — correção de regressão de PII em
+# _status_funcionario_elegivel
+# Base: 60240b1 (origin/main)
+# Branch: fix/status-funcionario-pii
+# Data: 2026-08-17
+# Autorização: mensagem do usuário nesta sessão ("sim autorizo a fazer"),
+# em resposta direta à proposta de correção apresentada (branch própria,
+# restaurar returnFieldsByFieldId e as constantes STATUS_FUNCIONARIO_ATIVO/
+# STATUS_FUNCIONARIO_CONHECIDOS já existentes no arquivo, motivo sempre
+# um dos 2 valores fixos vinculo_nao_ativo/vinculo_indeterminado).
+# Escopo desta autorização, nada além: função _status_funcionario_elegivel()
+# — 17 inserções, 16 remoções, conforme diff revisado antes da confirmação.
+# Somente blob exato aprovado; qualquer alteração subsequente invalida esta autorização.
+e14ab0a5ebecce9ffcca31a17447394021d00c9e  app.py
