@@ -401,6 +401,14 @@ ALLOWED_PATHS=(
   # forma ampla.
   "^scripts/reconciliacao_backlog_holerite_ponto\.py$"
   "^test_reconciliacao_backlog_holerite_ponto\.py$"
+  # Exceção exata e restrita (decisão registrada, branch
+  # fix/pacote-holerite-ponto-entrega-real, 2026-08-19) — correção da
+  # entrega real do pacote Holerite + Folha de Ponto (auditoria de
+  # 18-19/08/2026 encontrou que o colaborador nunca via o PDF em lugar
+  # nenhum). Script standalone de homologação (dispara 1 registro de
+  # teste antes do lote, não executado pelo agente). Só este caminho
+  # exato — não libera "^teste_" nem "^test_" de forma ampla.
+  "^teste_homologacao\.py$"
 )
 
 # ============================================================================

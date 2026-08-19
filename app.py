@@ -9126,47 +9126,173 @@ def _ip_real_da_requisicao() -> str:
     return request.remote_addr or 'desconhecido'
 
 
-def _pagina_assinatura_html(hash_token: str, nome_doc: str, erro: str = None, mostrar_formulario: bool = True) -> str:
+def _pagina_assinatura_html(hash_token: str, nome_doc: str, erro: str = None, mostrar_formulario: bool = True,
+                             documentos: list = None) -> str:
+    """
+    documentos (opcional, só usado hoje pelo pacote HOLERITE_FOLHA_PONTO —
+    correção desta Macro de fechamento, auditoria de 18-19/08 encontrou que
+    o colaborador nunca via o PDF em lugar nenhum, nem aqui nem no WhatsApp):
+    lista de {'nome': 'Holerite', 'url': 'https://...'} a exibir embutido
+    ANTES do formulário de CPF. Quando None (todo outro tipo de documento —
+    Kit Admissão, Rescisão, EPI, Contratos, Folha de Ponto isolada — e as
+    páginas de erro/status terminal do próprio pacote), o comportamento é
+    EXATAMENTE o de antes desta correção: formulário liberado de cara, sem
+    visualizador. Nenhuma mudança de comportamento fora do pacote.
+    """
     erro_html = f'<p style="color:#c0392b;font-weight:bold;">{erro}</p>' if erro else ''
     # mostrar_formulario=False: usado para status terminais em que reenviar o
     # CPF nunca teria efeito (ex.: pacote Cancelado por vínculo não mais
     # ativo) -- evita sugerir uma ação que a idempotência já bloqueia por
     # dentro, sem alterar o comportamento existente de Expirado/erro genérico.
+    tem_visualizador = bool(documentos) and mostrar_formulario
+    botao_attrs = 'disabled' if tem_visualizador else ''
+    botao_texto = 'Visualize os documentos acima para liberar a assinatura' if tem_visualizador else 'Confirmar e Assinar'
+    aviso_leitura_html = (
+        '<p id="avisoLeitura" class="aviso-leitura">Role/visualize os documentos acima até o fim '
+        'para liberar o botão de assinatura.</p>'
+    ) if tem_visualizador else ''
     form_html = f"""
     <form method="POST" action="/assinatura/{hash_token}">
       <input type="text" name="cpf" inputmode="numeric" pattern="\\d{{4}}" placeholder="Últimos 4 números do CPF" maxlength="4" required>
       <p class="termo">Ao clicar abaixo, concordo eletronicamente com o recebimento e os termos do documento acima, sob as penas da lei.</p>
-      <button type="submit">Confirmar e Assinar</button>
+      {aviso_leitura_html}
+      <button type="submit" id="btnAssinar" {botao_attrs}>{botao_texto}</button>
     </form>""" if mostrar_formulario else ''
+
+    visualizador_html = ''
+    visualizador_script = ''
+    if tem_visualizador:
+        blocos = []
+        chamadas_render = []
+        for idx, doc in enumerate(documentos):
+            container_id = f'pdfContainer{idx}'
+            url_js = json.dumps(doc['url'])
+            blocos.append(f"""
+    <div class="doc-bloco">
+      <h2>{doc['nome']}</h2>
+      <div id="{container_id}" class="pdf-container"></div>
+    </div>""")
+            chamadas_render.append(
+                f"renderizarPDF({idx}, {url_js}, {json.dumps(container_id)})"
+                f".then(function(ok) {{ if (!ok) {{ ativarFallback({idx}, {url_js}, {json.dumps(container_id)}); }} }});"
+            )
+        visualizador_html = '\n'.join(blocos)
+        visualizador_script = f"""
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.js"></script>
+<script>
+  var PDFJS_OK = (typeof pdfjsLib !== 'undefined');
+  if (PDFJS_OK) {{
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js';
+  }}
+  var TOTAL_DOCS = {len(documentos)};
+  var docsVistos = {{}};
+
+  function liberarBotao() {{
+    var btn = document.getElementById('btnAssinar');
+    if (btn) {{ btn.disabled = false; btn.textContent = 'Confirmar e Assinar'; }}
+    var aviso = document.getElementById('avisoLeitura');
+    if (aviso) {{ aviso.style.display = 'none'; }}
+  }}
+  function marcarVisto(idx) {{
+    if (!docsVistos[idx]) {{
+      docsVistos[idx] = true;
+      if (Object.keys(docsVistos).length >= TOTAL_DOCS) {{ liberarBotao(); }}
+    }}
+  }}
+
+  async function renderizarPDF(idx, url, containerId) {{
+    if (!PDFJS_OK) {{ return false; }}
+    try {{
+      var pdf = await pdfjsLib.getDocument(url).promise;
+      var container = document.getElementById(containerId);
+      for (var p = 1; p <= pdf.numPages; p++) {{
+        var page = await pdf.getPage(p);
+        var viewport = page.getViewport({{scale: 1.1}});
+        var canvas = document.createElement('canvas');
+        canvas.width = viewport.width; canvas.height = viewport.height;
+        canvas.className = 'pdf-page';
+        container.appendChild(canvas);
+        await page.render({{canvasContext: canvas.getContext('2d'), viewport: viewport}}).promise;
+        if (p === pdf.numPages) {{
+          var obs = new IntersectionObserver(function(entries) {{
+            entries.forEach(function(entry) {{ if (entry.isIntersecting) {{ marcarVisto(idx); }} }});
+          }}, {{threshold: 0.5}});
+          obs.observe(canvas);
+        }}
+      }}
+      return true;
+    }} catch (e) {{
+      return false;
+    }}
+  }}
+
+  function ativarFallback(idx, url, containerId) {{
+    // PDF.js indisponível (CDN bloqueado/navegador antigo) — fallback para
+    // iframe nativo do navegador; como não dá pra detectar rolagem dentro
+    // de um iframe de outra origem, libera por confirmação explícita do
+    // colaborador em vez de travar a assinatura indefinidamente.
+    var container = document.getElementById(containerId);
+    container.innerHTML =
+      '<iframe src="' + url + '" class="pdf-fallback-iframe"></iframe>' +
+      '<p><a href="' + url + '" target="_blank" rel="noopener">Abrir/baixar em nova aba</a></p>' +
+      '<label class="ack"><input type="checkbox" onchange="if(this.checked){{marcarVisto(' + idx + ');}}"> Já visualizei este documento</label>';
+  }}
+
+  window.addEventListener('DOMContentLoaded', function() {{
+    {' '.join(chamadas_render)}
+  }});
+</script>"""
+
     return f"""<!DOCTYPE html>
 <html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Assinatura — Magnata Portaria e Serviços</title>
 <style>
   body {{ font-family: Arial, sans-serif; background:#f4f6f8; margin:0; padding:24px; }}
-  .card {{ max-width:480px; margin:0 auto; background:#fff; border-radius:10px; padding:28px;
+  .card {{ max-width:640px; margin:0 auto; background:#fff; border-radius:10px; padding:28px;
            box-shadow:0 2px 10px rgba(0,0,0,0.08); }}
   h1 {{ font-size:18px; color:#1a1a1a; }}
+  h2 {{ font-size:15px; color:#2c5f8a; margin:20px 0 8px; }}
   p {{ color:#444; font-size:14px; line-height:1.5; }}
-  input {{ width:100%; padding:12px; font-size:16px; border:1px solid #ccc; border-radius:6px;
+  input[type=text] {{ width:100%; padding:12px; font-size:16px; border:1px solid #ccc; border-radius:6px;
            margin:12px 0; box-sizing:border-box; }}
   button {{ width:100%; padding:14px; font-size:16px; background:#2c5f8a; color:#fff;
             border:none; border-radius:6px; cursor:pointer; font-weight:bold; }}
   button:hover {{ background:#234b6e; }}
+  button:disabled {{ background:#9db3c4; cursor:not-allowed; }}
   .aviso {{ font-size:12px; color:#888; margin-top:16px; }}
+  .aviso-leitura {{ font-size:13px; color:#a05a00; background:#fff6e6; border-radius:6px; padding:10px; }}
   .termo {{ font-size:12px; color:#555; font-style:italic; margin:14px 0 8px; line-height:1.4; }}
+  .doc-bloco {{ border:1px solid #e2e2e2; border-radius:8px; padding:12px; margin-bottom:16px; background:#fafafa; }}
+  .pdf-container {{ max-height:480px; overflow-y:auto; border:1px solid #ddd; border-radius:6px; background:#fff; }}
+  .pdf-page {{ display:block; width:100%; height:auto; margin:0 auto; }}
+  .pdf-fallback-iframe {{ width:100%; height:480px; border:1px solid #ddd; border-radius:6px; }}
+  .ack {{ display:block; font-size:13px; margin-top:8px; }}
 </style></head>
 <body>
   <div class="card">
     <h1>Confirmação de Recebimento — {nome_doc}</h1>
     <p>Para confirmar que você é o(a) destinatário(a) deste documento, digite os <strong>4 últimos números</strong> do seu CPF abaixo.</p>
+    {visualizador_html}
     {erro_html}{form_html}
     <p class="aviso">Ao confirmar, você declara ter recebido e tomado conhecimento do documento. Data, hora e IP de acesso serão registrados como comprovação.</p>
   </div>
+  {visualizador_script}
 </body></html>"""
 
 
-def _pagina_assinatura_sucesso_html(nome_doc: str, quando: str) -> str:
+def _pagina_assinatura_sucesso_html(nome_doc: str, quando: str, download_url: str = None) -> str:
+    # download_url (opcional — correção desta Macro): quando informado, mostra
+    # botão de download do PDF final logo na tela de sucesso. None preserva
+    # o comportamento anterior (nenhum botão) para todo tipo de documento
+    # que não passa esse parâmetro.
+    botao_download_html = ''
+    if download_url:
+        url_html = download_url.replace('"', '&quot;')
+        botao_download_html = (
+            f'<a class="botao-download" href="{url_html}" target="_blank" rel="noopener" download>'
+            f'⬇ Baixar PDF Combinado Carimbado</a>'
+        )
     return f"""<!DOCTYPE html>
 <html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9177,6 +9303,9 @@ def _pagina_assinatura_sucesso_html(nome_doc: str, quando: str) -> str:
            box-shadow:0 2px 10px rgba(0,0,0,0.08); text-align:center; }}
   h1 {{ color:#1e7a34; font-size:20px; }}
   p {{ color:#444; font-size:14px; line-height:1.5; }}
+  .botao-download {{ display:block; margin-top:20px; padding:14px; font-size:15px; font-weight:bold;
+                      background:#2c5f8a; color:#fff; text-decoration:none; border-radius:6px; }}
+  .botao-download:hover {{ background:#234b6e; }}
 </style></head>
 <body>
   <div class="card">
@@ -9184,6 +9313,7 @@ def _pagina_assinatura_sucesso_html(nome_doc: str, quando: str) -> str:
     <p><strong>{nome_doc}</strong></p>
     <p>Recebimento confirmado em {quando}.</p>
     <p>Obrigado!</p>
+    {botao_download_html}
   </div>
 </body></html>"""
 
@@ -10183,17 +10313,32 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
             }, 200
 
         try:
+            # Correção desta Macro (auditoria de 18-19/08 encontrou a falha):
+            # a versão anterior só mandava TEXTO com o link — o Holerite e a
+            # Folha de Ponto nunca chegavam ao colaborador em lugar nenhum
+            # (nem WhatsApp, nem a própria página do link, que só pede CPF).
+            # Agora os 2 PDFs são enviados como documento de verdade (mesmo
+            # mecanismo já usado e testado em produção por _gerar_assinatura_
+            # core — media_bytes embutido em base64, não por URL, pelo mesmo
+            # motivo documentado ali: evita o PDF corrompido observado em
+            # 08/07/2026 quando a Evolution buscava a URL por conta própria).
+            saudacao = f'Olá{(" " + nome_func) if nome_func else ""}!'
+            caption_holerite = f'{saudacao} Segue o seu Holerite de {competencia}.'
+            caption_ponto = f'E a sua Folha de Ponto de {competencia}.'
             mensagem = (
-                f'Olá{(" " + nome_func) if nome_func else ""}! Você tem 2 documentos pendentes de '
-                f'confirmação — Holerite e Folha de Ponto de {competencia}.\n\nPara confirmar o '
-                f'recebimento dos dois, acesse o link abaixo e informe os 4 últimos números do seu '
-                f'CPF:\n{link}\n\nMagnata Portaria e Serviços.'
+                f'Para confirmar o recebimento dos dois documentos acima e concluir a '
+                f'assinatura digital, acesse o link abaixo e informe os 4 últimos números '
+                f'do seu CPF:\n{link}\n\nMagnata Portaria e Serviços.'
             )
             if mensagem_extra:
                 mensagem = f'{mensagem}\n\n{mensagem_extra}'
+            _evolution_enviar_documento(whatsapp, None, holerite['filename'],
+                                         caption=caption_holerite, media_bytes=holerite['bytes'])
+            _evolution_enviar_documento(whatsapp, None, ponto['filename'],
+                                         caption=caption_ponto, media_bytes=ponto['bytes'])
             _evolution_enviar_texto(whatsapp, mensagem)
             disparo_resultado = 'enviado'
-            logger.info(f'[PACOTE HOL+PONTO] WhatsApp enviado: {assinatura_id} | WhatsApp: {whatsapp}')
+            logger.info(f'[PACOTE HOL+PONTO] WhatsApp enviado (2 documentos + link): {assinatura_id} | WhatsApp: {whatsapp}')
             _at_throttle()
             requests.patch(
                 f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{assinatura_id}',
@@ -10886,8 +11031,34 @@ def _confirmar_assinatura_pacote_holerite_ponto(registro, fields, hash_token, no
             logger.warning(f'[PACOTE HOL+PONTO] assinado, mas cópia para o Funcionário falhou (não bloqueante): '
                             f'{registro["id"]} | {exc}')
 
+        # PDF único combinado (Holerite + Folha de Ponto + Comprovante), para
+        # o botão de download na tela de sucesso — correção desta Macro.
+        # Melhor esforço: se falhar, a assinatura já está gravada e correta
+        # (bloco acima), só não aparece o botão de download imediato; os 3
+        # arquivos separados continuam disponíveis normalmente no registro.
+        url_combinado = None
+        try:
+            merged_writer = PdfWriter()
+            for pdf_parte in (pdf_hol_carimbado, pdf_ponto_carimbado, pdf_comprovante_pacote):
+                merged_writer.append(io.BytesIO(pdf_parte))
+            buf_combinado = io.BytesIO()
+            merged_writer.write(buf_combinado)
+            pdf_combinado_bytes = buf_combinado.getvalue()
+            merged_writer.close()
+
+            nome_combinado = f'Combinado Carimbado - {(nome_func or "Colaborador").title()} - {competencia_pacote}.pdf'
+            upload_combinado = _anexar_attachment(TABLE_ASSINATURAS, registro['id'], F_ASS_DOCUMENTO_PDF,
+                                                   pdf_combinado_bytes, nome_combinado)
+            for att in (upload_combinado.get('fields', {}) or {}).get(F_ASS_DOCUMENTO_PDF) or []:
+                if att['filename'] == nome_combinado:
+                    url_combinado = att['url']
+                    break
+        except Exception as exc:
+            logger.warning(f'[PACOTE HOL+PONTO] assinado, mas PDF combinado p/ download falhou (não bloqueante): '
+                            f'{registro["id"]} | {exc}')
+
         logger.info(f'[PACOTE HOL+PONTO] Assinado com sucesso: {registro["id"]}')
-        return _pagina_assinatura_sucesso_html(nome_doc, _fmt_quando(agora_brt))
+        return _pagina_assinatura_sucesso_html(nome_doc, _fmt_quando(agora_brt), download_url=url_combinado)
 
     except Exception as exc:
         logger.warning(f'[PACOTE HOL+PONTO] falha ao processar assinatura do pacote {registro["id"]}: {exc}')
@@ -10913,7 +11084,13 @@ def assinatura_pagina(hash_token):
 
     if status_atual == 'Assinado':
         quando = _fmt_quando(fields.get('Data/Hora Assinatura'))
-        return _pagina_assinatura_sucesso_html(nome_doc, quando)
+        url_combinado_existente = None
+        if fields.get('Tipo de Documento') == TIPO_PACOTE_HOLERITE_PONTO:
+            for att in fields.get('Documento PDF') or []:
+                if att['filename'].startswith('Combinado Carimbado'):
+                    url_combinado_existente = att['url']
+                    break
+        return _pagina_assinatura_sucesso_html(nome_doc, quando, download_url=url_combinado_existente)
 
     if status_atual == 'Expirado':
         return _pagina_assinatura_html(
@@ -10929,7 +11106,31 @@ def assinatura_pagina(hash_token):
         )
 
     if request.method == 'GET':
-        return _pagina_assinatura_html(hash_token, nome_doc)
+        documentos_preview = None
+        if fields.get('Tipo de Documento') == TIPO_PACOTE_HOLERITE_PONTO:
+            # Correção desta Macro: busca os 2 PDFs originais (ainda não
+            # carimbados) já anexados ao registro na criação do pacote, para
+            # o colaborador ver o conteúdo real antes de assinar — mesma
+            # ordem de anexação usada em _confirmar_assinatura_pacote_
+            # holerite_ponto (holerite primeiro, ponto depois).
+            doc_atual = fields.get('Documento PDF') or []
+            anexos_originais = [
+                a for a in doc_atual
+                if not a['filename'].startswith('Comprovante Assinatura')
+                and not a['filename'].startswith('Combinado Carimbado')
+                and ' - ASSINADO' not in a['filename']
+            ]
+            if len(anexos_originais) == 2:
+                documentos_preview = [
+                    {'nome': 'Holerite', 'url': anexos_originais[0]['url']},
+                    {'nome': 'Folha de Ponto', 'url': anexos_originais[1]['url']},
+                ]
+            else:
+                logger.warning(
+                    f'[PACOTE HOL+PONTO] GET com estrutura inesperada de anexos ({len(anexos_originais)}, '
+                    f'esperado 2) — mostrando formulário sem visualizador embutido: {registro["id"]}'
+                )
+        return _pagina_assinatura_html(hash_token, nome_doc, documentos=documentos_preview)
 
     # POST — validar os 4 últimos dígitos do CPF informado
     cpf_informado = re.sub(r'\D', '', request.form.get('cpf', ''))

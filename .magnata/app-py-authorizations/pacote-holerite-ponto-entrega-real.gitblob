@@ -1,0 +1,46 @@
+# Autorização humana específica — Pacote Holerite + Folha de Ponto:
+# correção da entrega real (WhatsApp com PDF anexado + visualizador
+# travado na página de assinatura + PDF combinado pós-assinatura)
+# Base: 60240b1 (origin/main)
+# Branch: fix/pacote-holerite-ponto-entrega-real
+# Data: 2026-08-19
+# Autorização: mensagem do usuário nesta sessão ("Claude, assuma
+# AUTONOMIA TOTAL para corrigir o fluxo de entrega e assinatura do
+# pacote combinando (Holerite + Folha de Ponto) em 'app.py'..."),
+# confirmada em mensagem distinta ("vamos seguir pela opção 2" —
+# aprovação pelo resumo das 4 mudanças, após o bloqueio do pre-commit
+# hook e a pergunta explícita sobre forma de revisão).
+# Motivação/achado que originou o pedido: auditoria de 18-19/08/2026
+# (nesta mesma sessão) encontrou que o pacote HOLERITE_FOLHA_PONTO nunca
+# entregava o PDF ao colaborador — nem por WhatsApp (só texto com link),
+# nem na página do link (só formulário de CPF, sem exibir documento
+# nenhum, antes ou depois de assinar). 62 dos 102 disparados em
+# 18-19/08/2026 já estavam "Assinado" nessa condição.
+# Escopo desta autorização, nada além, restrito ao tipo de documento
+# HOLERITE_FOLHA_PONTO (nenhuma mudança de comportamento para Kit
+# Admissão/Rescisão/EPI/Contratos/Folha de Ponto isolada — parâmetros
+# novos com default None/False preservam o fluxo anterior nesses tipos):
+#   1. _gerar_pacote_assinatura_holerite_ponto: WhatsApp agora envia os
+#      2 PDFs de verdade (_evolution_enviar_documento, media_bytes),
+#      além do texto com o link.
+#   2. _pagina_assinatura_html (+ rota GET /assinatura/<hash>): novo
+#      parâmetro opcional 'documentos' — embute os 2 PDFs (PDF.js com
+#      fallback para iframe + confirmação manual) e mantém o botão
+#      "Confirmar e Assinar" desabilitado até visualizar os 2 documentos.
+#   3. _confirmar_assinatura_pacote_holerite_ponto +
+#      _pagina_assinatura_sucesso_html: gera PDF único combinado
+#      (Holerite + Folha de Ponto + Comprovante, via pypdf) e mostra
+#      botão de download na tela de sucesso (inclusive em reacesso ao
+#      link já assinado).
+#   4. teste_homologacao.py (novo arquivo, fora do escopo desta
+#      autorização de app.py): script standalone para 1 disparo de
+#      teste antes do lote — não executado nesta sessão.
+# Validação nesta sessão, antes desta autorização: py_compile limpo,
+# JS extraído validado com 'node --check', testes de render isolados
+# (exec das 2 funções de página com dados simulados) confirmando botão
+# disabled-por-padrão quando há documentos e nenhuma regressão nos tipos
+# que não passam os novos parâmetros. Nenhuma chamada de rede real foi
+# feita (sem acesso a Render/WhatsApp neste sandbox) — commit e push
+# apenas; deploy e merge continuam fora do escopo autorizado (§9/§12-I).
+# Somente blob exato aprovado; qualquer alteração subsequente invalida esta autorização.
+80592613142f68f7b94f4751946faa3acea4a3aa  app.py
