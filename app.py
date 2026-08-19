@@ -9241,6 +9241,26 @@ def _pagina_assinatura_html(hash_token: str, nome_doc: str, erro: str = None, mo
   window.addEventListener('DOMContentLoaded', function() {{
     {' '.join(chamadas_render)}
   }});
+
+  // Correção adicional (feedback do teste de homologação, 19/08/2026):
+  // a detecção por documento (IntersectionObserver na última página de
+  // cada PDF) pode falhar de forma silenciosa dependendo de como o
+  // navegador mede visibilidade dentro do container do PDF -- confirmado
+  // no teste real: os documentos renderizaram certinho, mas o botão
+  // continuou travado mesmo depois do colaborador rolar a página inteira
+  // até o campo de CPF. Esta checagem independente serve de rede de
+  // segurança: se a pessoa rolou até perto do fim da PÁGINA (não de cada
+  // caixa de PDF individualmente), libera o botão de qualquer forma --
+  // não depende de canvas, PDF.js ou de nenhum dos containers.
+  function pertoDoFimDaPagina() {{
+    return (window.innerHeight + window.scrollY) >= (document.body.scrollHeight - 60);
+  }}
+  window.addEventListener('scroll', function() {{
+    if (pertoDoFimDaPagina()) {{ liberarBotao(); }}
+  }});
+  window.addEventListener('load', function() {{
+    if (pertoDoFimDaPagina()) {{ liberarBotao(); }}
+  }});
 </script>"""
 
     return f"""<!DOCTYPE html>
@@ -9264,7 +9284,7 @@ def _pagina_assinatura_html(hash_token: str, nome_doc: str, erro: str = None, mo
   .aviso-leitura {{ font-size:13px; color:#a05a00; background:#fff6e6; border-radius:6px; padding:10px; }}
   .termo {{ font-size:12px; color:#555; font-style:italic; margin:14px 0 8px; line-height:1.4; }}
   .doc-bloco {{ border:1px solid #e2e2e2; border-radius:8px; padding:12px; margin-bottom:16px; background:#fafafa; }}
-  .pdf-container {{ max-height:480px; overflow-y:auto; border:1px solid #ddd; border-radius:6px; background:#fff; }}
+  .pdf-container {{ border:1px solid #ddd; border-radius:6px; background:#fff; }}
   .pdf-page {{ display:block; width:100%; height:auto; margin:0 auto; }}
   .pdf-fallback-iframe {{ width:100%; height:480px; border:1px solid #ddd; border-radius:6px; }}
   .ack {{ display:block; font-size:13px; margin-top:8px; }}
@@ -10314,31 +10334,33 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
 
         try:
             # Correção desta Macro (auditoria de 18-19/08 encontrou a falha):
-            # a versão anterior só mandava TEXTO com o link — o Holerite e a
+            # a versão original só mandava TEXTO com o link — o Holerite e a
             # Folha de Ponto nunca chegavam ao colaborador em lugar nenhum
-            # (nem WhatsApp, nem a própria página do link, que só pede CPF).
-            # Agora os 2 PDFs são enviados como documento de verdade (mesmo
-            # mecanismo já usado e testado em produção por _gerar_assinatura_
-            # core — media_bytes embutido em base64, não por URL, pelo mesmo
-            # motivo documentado ali: evita o PDF corrompido observado em
-            # 08/07/2026 quando a Evolution buscava a URL por conta própria).
+            # (nem WhatsApp, nem a própria página do link, que só pedia CPF
+            # sem exibir documento nenhum). Corrigido em 2 passos, nesta
+            # ordem, dentro da mesma Macro:
+            #   1) passou a mandar os 2 PDFs soltos por WhatsApp + o link;
+            #   2) decisão do usuário (19/08/2026, após teste de homologação
+            #      real confirmar que a página do link já exibe os 2
+            #      documentos embutidos via PDF.js): manda SÓ o link — os
+            #      PDFs soltos ficaram redundantes, e um clique único (ver +
+            #      assinar no mesmo lugar) é mais simples que 3 mensagens
+            #      separadas. Risco aceito conscientemente: exige o Render
+            #      sempre acessível (dependência de plano pago, sem
+            #      hibernação por inatividade — decisão de infra do
+            #      usuário, fora deste código).
             saudacao = f'Olá{(" " + nome_func) if nome_func else ""}!'
-            caption_holerite = f'{saudacao} Segue o seu Holerite de {competencia}.'
-            caption_ponto = f'E a sua Folha de Ponto de {competencia}.'
             mensagem = (
-                f'Para confirmar o recebimento dos dois documentos acima e concluir a '
-                f'assinatura digital, acesse o link abaixo e informe os 4 últimos números '
-                f'do seu CPF:\n{link}\n\nMagnata Portaria e Serviços.'
+                f'{saudacao} Seu Holerite e sua Folha de Ponto de {competencia} estão '
+                f'prontos. Para visualizar os 2 documentos e concluir a assinatura '
+                f'digital, acesse o link abaixo e informe os 4 últimos números do seu '
+                f'CPF:\n{link}\n\nMagnata Portaria e Serviços.'
             )
             if mensagem_extra:
                 mensagem = f'{mensagem}\n\n{mensagem_extra}'
-            _evolution_enviar_documento(whatsapp, None, holerite['filename'],
-                                         caption=caption_holerite, media_bytes=holerite['bytes'])
-            _evolution_enviar_documento(whatsapp, None, ponto['filename'],
-                                         caption=caption_ponto, media_bytes=ponto['bytes'])
             _evolution_enviar_texto(whatsapp, mensagem)
             disparo_resultado = 'enviado'
-            logger.info(f'[PACOTE HOL+PONTO] WhatsApp enviado (2 documentos + link): {assinatura_id} | WhatsApp: {whatsapp}')
+            logger.info(f'[PACOTE HOL+PONTO] WhatsApp enviado (só link, documentos embutidos na página): {assinatura_id} | WhatsApp: {whatsapp}')
             _at_throttle()
             requests.patch(
                 f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{assinatura_id}',
