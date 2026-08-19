@@ -1,0 +1,42 @@
+# Autorização humana específica — Pacote Holerite + Folha de Ponto:
+# proxy dos PDFs pelo próprio domínio (evita fallback pro visualizador
+# nativo do navegador por CORS)
+# Base: 70a9cbc (branch fix/pacote-holerite-ponto-entrega-real, PR #24,
+# já mesclado em main e publicado no Render)
+# Branch: fix/pacote-holerite-ponto-entrega-real
+# Data: 2026-08-19
+# Autorização: usuário pediu para investigar por que a página de
+# assinatura caiu no visualizador nativo do navegador (com botão de
+# download próprio) em vez do visualizador PDF.js do sistema, a partir de
+# captura de tela real mostrando a barra de ferramentas nativa do Chrome
+# (zoom, rotação, "Summarize", download). Diagnóstico apresentado
+# (CORS entre o domínio do Render e v5.airtableusercontent.com,
+# impedindo o fetch() do PDF.js) e a correção proposta (proxy servidor-a-
+# servidor) foram aprovados em mensagem distinta ("sim aprovo"), após
+# revisão do resumo e do hash exato.
+#
+# Escopo desta autorização, nada além:
+#   1. Nova rota /assinatura/<hash_token>/doc/<idx> (idx 0=Holerite,
+#      1=Folha de Ponto) — busca o anexo original correspondente no
+#      Airtable no servidor (sem CORS, servidor-a-servidor, reaproveita
+#      _carregar_documento_url já existente) e repassa os bytes como
+#      resposta própria (Content-Type: application/pdf, Content-
+#      Disposition: inline). Só serve o par de documentos do tipo
+#      HOLERITE_FOLHA_PONTO — 404 pra qualquer outro tipo ou índice.
+#   2. GET de assinatura_pagina: as URLs passadas para o visualizador
+#      (documentos_preview) trocam da URL direta do Airtable para esta
+#      nova rota same-origin.
+#
+# Nenhuma mudança em nenhum outro tipo de documento nem em nenhuma outra
+# rota. Nenhum campo novo no Airtable, nenhuma migração.
+#
+# Validação nesta sessão, antes desta autorização: py_compile limpo,
+# teste de render isolado confirmando que as novas URLs (/assinatura/
+# <hash>/doc/0 e /doc/1) aparecem corretamente no HTML gerado e que o
+# botão de assinatura continua começando desabilitado. Diagnóstico da
+# causa raiz (CORS) é bem fundamentado tecnicamente mas não foi
+# confirmado por teste ao vivo neste sandbox (sem acesso de rede ao
+# domínio do Airtable nem ao Render) — declarado explicitamente ao
+# usuário como tal antes desta aprovação.
+# Somente blob exato aprovado; qualquer alteração subsequente invalida esta autorização.
+035b9771ea114988339570568db705eecb764f87  app.py

@@ -11087,6 +11087,56 @@ def _confirmar_assinatura_pacote_holerite_ponto(registro, fields, hash_token, no
         return erro_generico
 
 
+@app.route('/assinatura/<hash_token>/doc/<int:idx>', methods=['GET'])
+def assinatura_documento_proxy(hash_token, idx):
+    """
+    Repassa (proxy) um dos 2 PDFs originais do pacote HOLERITE_FOLHA_PONTO
+    pelo NOSSO domínio, em vez do navegador buscar direto na URL do
+    Airtable — ver comentário completo na chamada (GET de
+    assinatura_pagina). Existe só pra resolver o problema de CORS que
+    fazia o PDF.js cair no visualizador nativo do navegador; não é uma
+    rota de download de uso geral, nem substitui nenhuma checagem de
+    acesso já existente (o hash_token continua sendo o único controle,
+    igual ao resto do fluxo de assinatura).
+    idx: 0 = Holerite, 1 = Folha de Ponto — mesma ordem de anexação usada
+    em toda a Macro (holerite sempre primeiro, ponto sempre depois).
+    """
+    if not AIRTABLE_API_KEY:
+        return 'Serviço indisponível.', 503
+    if idx not in (0, 1):
+        return 'Documento inválido.', 404
+
+    registro = _buscar_por_campo(TABLE_ASSINATURAS, 'Hash Token', hash_token)
+    if not registro:
+        return 'Link inválido ou expirado.', 404
+
+    fields = registro.get('fields', {})
+    if fields.get('Tipo de Documento') != TIPO_PACOTE_HOLERITE_PONTO:
+        return 'Documento inválido.', 404
+
+    doc_atual = fields.get('Documento PDF') or []
+    anexos_originais = [
+        a for a in doc_atual
+        if not a['filename'].startswith('Comprovante Assinatura')
+        and not a['filename'].startswith('Combinado Carimbado')
+        and ' - ASSINADO' not in a['filename']
+    ]
+    if len(anexos_originais) != 2:
+        return 'Documento indisponível.', 404
+
+    anexo = anexos_originais[idx]
+    try:
+        pdf_bytes = _carregar_documento_url(anexo['url'])
+    except Exception as exc:
+        logger.warning(f'[PACOTE HOL+PONTO] proxy de documento falhou: {registro["id"]} | idx={idx} | {exc}')
+        return 'Erro ao carregar documento.', 502
+
+    resposta = app.response_class(pdf_bytes, mimetype='application/pdf')
+    resposta.headers['Content-Disposition'] = f'inline; filename="{anexo["filename"]}"'
+    resposta.headers['Cache-Control'] = 'private, max-age=300'
+    return resposta
+
+
 @app.route('/assinatura/<hash_token>', methods=['GET', 'POST'])
 def assinatura_pagina(hash_token):
     """Página pública de assinatura nativa — GET mostra o formulário de CPF,
@@ -11143,9 +11193,25 @@ def assinatura_pagina(hash_token):
                 and ' - ASSINADO' not in a['filename']
             ]
             if len(anexos_originais) == 2:
+                # Correção adicional (investigação do modo nativo do
+                # navegador, 19/08/2026): antes, o PDF.js tentava baixar o
+                # PDF direto da URL do Airtable (v5.airtableusercontent.com)
+                # — outra origem, que provavelmente não libera CORS para
+                # fetch() de terceiros. Quando isso falha, o código já caía
+                # (corretamente) no fallback de <iframe>, mas aí quem exibe
+                # o PDF passa a ser o visualizador NATIVO do navegador —
+                # com sua própria barra de ferramentas, incluindo um botão
+                # de download que a gente queria evitar antes da assinatura.
+                # Correção: servir o PDF através do NOSSO próprio domínio
+                # (rota /assinatura/<hash>/doc/<idx> abaixo, que baixa do
+                # Airtable no servidor — sem CORS, servidor-a-servidor — e
+                # repassa os bytes) em vez da URL direta do Airtable. Mesma
+                # origem = PDF.js nunca mais cai no fallback por causa de
+                # CORS; o visualizador nativo do navegador deixa de entrar
+                # em cena no caminho normal.
                 documentos_preview = [
-                    {'nome': 'Holerite', 'url': anexos_originais[0]['url']},
-                    {'nome': 'Folha de Ponto', 'url': anexos_originais[1]['url']},
+                    {'nome': 'Holerite', 'url': f'/assinatura/{hash_token}/doc/0'},
+                    {'nome': 'Folha de Ponto', 'url': f'/assinatura/{hash_token}/doc/1'},
                 ]
             else:
                 logger.warning(
