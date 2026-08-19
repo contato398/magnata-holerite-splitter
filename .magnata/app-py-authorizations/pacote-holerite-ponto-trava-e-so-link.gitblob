@@ -1,0 +1,52 @@
+# Autorização humana específica — Pacote Holerite + Folha de Ponto:
+# corrige a trava do botão de assinatura + passa a enviar só o link
+# (sem PDFs soltos por WhatsApp)
+# Base: bba85b8 (branch fix/pacote-holerite-ponto-entrega-real, PR #23,
+# já mesclado em main via commit baa21c3 e publicado no Render)
+# Branch: fix/pacote-holerite-ponto-entrega-real
+# Data: 2026-08-19
+# Autorização: mensagens do usuário nesta sessão, a partir do relato do
+# teste de homologação real (prints de tela do WhatsApp e da página de
+# assinatura mostrando os 2 PDFs renderizados via PDF.js mas o botão
+# "Confirmar e Assinar" preso mesmo após rolar a página inteira até o
+# campo de CPF) — confirmada em mensagem distinta ("sim aprovo."), após
+# eu explicar o diff completo e o risco assumido conscientemente (link
+# único depende do Render estar sempre acessível). O usuário também
+# confirmou, em mensagem própria, ter feito o upgrade do plano Render
+# para o tier pago de US$7/mês especificamente para cobrir esse risco
+# antes de aprovar.
+#
+# Escopo desta autorização, nada além, restrito à função
+# _gerar_pacote_assinatura_holerite_ponto (bloco de disparo WhatsApp) e a
+# _pagina_assinatura_html (template da página de assinatura):
+#
+#   1. CSS: removida a caixa de rolagem interna do container do PDF
+#      (max-height/overflow-y), causa provável do botão nunca liberar —
+#      documento agora rola junto com a página inteira, não numa caixa
+#      separada.
+#   2. JS: adicionada checagem redundante e independente do PDF.js/
+#      IntersectionObserver — se o usuário rolar a página até perto do
+#      fim (scroll + load), o botão libera de qualquer forma, funcionando
+#      como rede de segurança mesmo se a detecção por documento falhar.
+#   3. WhatsApp: os 2 PDFs deixam de ser enviados como anexo separado —
+#      agora só a mensagem de texto com o link é enviada (a página do
+#      link já exibe os 2 documentos embutidos, conforme confirmado no
+#      teste real). Decisão consciente do usuário: simplifica a entrega
+#      (1 mensagem, 1 clique) trocando pela dependência de o Render estar
+#      sempre no ar — mitigada pelo upgrade de plano já realizado.
+#
+# Nenhuma mudança em nenhum outro tipo de documento (Kit Admissão,
+# Rescisão, EPI, Contratos, Folha de Ponto isolada) nem em nenhuma outra
+# rota — os parâmetros usados (documentos=None por padrão) preservam o
+# comportamento anterior nos outros tipos.
+#
+# Validação nesta sessão, antes desta autorização: py_compile limpo, JS
+# extraído validado com 'node --check', testes de render isolados (exec
+# das 2 funções de página com dados simulados) confirmando ausência de
+# regressão nos outros tipos de documento, e simulação da nova mensagem
+# de WhatsApp (string final conferida, contém o link). Não foi possível
+# testar num navegador real neste sandbox — a correção do botão travado
+# foi validada por leitura de código + captura de tela real enviada pelo
+# usuário mostrando o sintoma exato, não por execução ao vivo aqui.
+# Somente blob exato aprovado; qualquer alteração subsequente invalida esta autorização.
+4d1d3a66a05629aa3a3c92750963736c068e63a0  app.py
