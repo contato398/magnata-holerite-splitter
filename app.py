@@ -10324,12 +10324,20 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
             # 08/07/2026 quando a Evolution buscava a URL por conta própria).
             saudacao = f'Olá{(" " + nome_func) if nome_func else ""}!'
             caption_holerite = f'{saudacao} Segue o seu Holerite de {competencia}.'
-            caption_ponto = f'E a sua Folha de Ponto de {competencia}.'
-            mensagem = (
+            # Correção adicional (feedback do teste de homologação, 19/08/2026):
+            # o link de assinatura ia numa 3ª mensagem de texto separada dos 2
+            # documentos -- fácil de parar de rolar e nunca ver. Agora o link
+            # vai dentro da LEGENDA da Folha de Ponto (2º e último documento),
+            # grudado no anexo em vez de numa mensagem à parte. A mensagem de
+            # texto com o mesmo link continua sendo enviada depois, como
+            # reforço redundante, não como único lugar onde o link aparece.
+            instrucao_link = (
                 f'Para confirmar o recebimento dos dois documentos acima e concluir a '
                 f'assinatura digital, acesse o link abaixo e informe os 4 últimos números '
-                f'do seu CPF:\n{link}\n\nMagnata Portaria e Serviços.'
+                f'do seu CPF:\n{link}'
             )
+            caption_ponto = f'E a sua Folha de Ponto de {competencia}.\n\n{instrucao_link}'
+            mensagem = f'{instrucao_link}\n\nMagnata Portaria e Serviços.'
             if mensagem_extra:
                 mensagem = f'{mensagem}\n\n{mensagem_extra}'
             _evolution_enviar_documento(whatsapp, None, holerite['filename'],

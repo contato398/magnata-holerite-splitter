@@ -1,0 +1,25 @@
+# Autorização humana específica — Pacote Holerite + Folha de Ponto:
+# link de assinatura movido para a legenda da Folha de Ponto
+# Base: 5bca9e8 (branch fix/pacote-holerite-ponto-entrega-real, PR #23)
+# Branch: fix/pacote-holerite-ponto-entrega-real
+# Data: 2026-08-19
+# Autorização: mensagem do usuário nesta sessão relatando o resultado do
+# teste de homologação real (1 disparo real, WhatsApp confirmado) —
+# "o link para assinar veio no mesmo envio porém separado dos documentos
+# e isso não é bom porque os colaboradores esquecem de assinar depois de
+# verem os documentos" — confirmada em mensagem distinta, via pergunta
+# explícita sobre implementar agora (resposta: "Sim, implementa agora"),
+# e reconfirmada nesta mensagem de aprovação do diff/hash específico.
+# Escopo desta autorização, nada além, restrito à função
+# _gerar_pacote_assinatura_holerite_ponto (bloco de disparo WhatsApp):
+# o link de assinatura, que antes só ia numa 3ª mensagem de texto solta,
+# agora também vai embutido na legenda (caption) da 2ª mensagem (Folha de
+# Ponto) — a mensagem de texto solta com o mesmo link continua sendo
+# enviada depois, como reforço redundante, não como único lugar onde o
+# link aparece. Nenhuma mudança em nenhum outro tipo de documento.
+# Validação nesta sessão, antes desta autorização: py_compile limpo,
+# simulação isolada da montagem das 3 strings (caption_holerite,
+# caption_ponto, mensagem) com dados de exemplo, confirmando o link
+# presente tanto na legenda quanto no texto de reforço.
+# Somente blob exato aprovado; qualquer alteração subsequente invalida esta autorização.
+49597354bf70e9eaec644288182b0d76e26ae7cb  app.py
