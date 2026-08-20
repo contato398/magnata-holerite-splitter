@@ -1177,3 +1177,124 @@ def test_url_de_anexo_tem_aspas_escapadas_no_html():
         downloads=[{'rotulo': 'r', 'url': 'https://exemplo/a"onerror=1'}])
     assert '&quot;onerror' in html
     assert 'a"onerror' not in html
+
+
+# ---------------------------------------------------------------------------
+# Performance da pré-visualização — incidente de 20/08/2026.
+#
+# Colaboradores relataram tela em branco/preta ao abrir o link. Medição
+# local: cada página renderizava em ~2,3s na escala 2.0, e cada página
+# baixava o PDF INTEIRO do Airtable de novo (5 páginas = 5 downloads dos
+# mesmos arquivos). 100% dado sintético.
+# ---------------------------------------------------------------------------
+
+def _pdf_sintetico_paginas(n):
+    from fpdf import FPDF
+    doc = FPDF()
+    for i in range(n):
+        doc.add_page()
+        doc.set_font('Helvetica', size=12)
+        doc.cell(0, 8, f'PAGINA SINTETICA {i + 1}')
+    return bytes(doc.output())
+
+
+def test_pdf_do_anexo_e_baixado_uma_vez_so_para_varias_paginas():
+    """O ganho principal: 5 páginas do mesmo documento = 1 download."""
+    app._cache_pdf.clear()
+    pdf = _pdf_sintetico_paginas(3)
+    with patch('app._carregar_documento_url', return_value=pdf) as mock_dl:
+        for _ in range(5):
+            app._pdf_de_anexo_com_cache('https://exemplo/anexo-a.pdf')
+    assert mock_dl.call_count == 1
+
+
+def test_documentos_diferentes_nao_se_misturam_no_cache():
+    app._cache_pdf.clear()
+    with patch('app._carregar_documento_url', side_effect=[b'AAA', b'BBB']):
+        a = app._pdf_de_anexo_com_cache('https://exemplo/holerite.pdf')
+        b = app._pdf_de_anexo_com_cache('https://exemplo/ponto.pdf')
+    assert (a, b) == (b'AAA', b'BBB')
+    assert app._pdf_de_anexo_com_cache('https://exemplo/holerite.pdf') == b'AAA'
+
+
+def test_cache_expira_e_busca_de_novo():
+    """TTL curto: documento trocado no Airtable não fica preso para sempre."""
+    app._cache_pdf.clear()
+    with patch('app._carregar_documento_url', side_effect=[b'ANTIGO', b'NOVO']):
+        assert app._pdf_de_anexo_com_cache('https://exemplo/x.pdf') == b'ANTIGO'
+        expira, conteudo = app._cache_pdf['https://exemplo/x.pdf']
+        app._cache_pdf['https://exemplo/x.pdf'] = (expira - app._CACHE_PDF_TTL_S - 1, conteudo)
+        assert app._pdf_de_anexo_com_cache('https://exemplo/x.pdf') == b'NOVO'
+
+
+def test_cache_tem_teto_de_itens():
+    """Sem teto, um lote grande encheria a memória do worker."""
+    app._cache_pdf.clear()
+    with patch('app._carregar_documento_url', return_value=b'PDF'):
+        for i in range(app._CACHE_PDF_MAX + 5):
+            app._pdf_de_anexo_com_cache(f'https://exemplo/{i}.pdf')
+    assert len(app._cache_pdf) <= app._CACHE_PDF_MAX
+
+
+def test_escala_padrao_da_previa_e_a_reduzida():
+    """1.4 em vez de 2.0 — medido 4,6x mais rápido, mantendo legibilidade."""
+    import inspect
+    assert inspect.signature(app._pdf_para_paginas_png).parameters['escala'].default == 1.4
+
+
+def test_previa_reduzida_continua_com_marca_dagua():
+    """Regressão: reduzir a escala não pode apagar a marca d'água."""
+    from PIL import Image
+    paginas = app._pdf_para_paginas_png(_pdf_sintetico_paginas(1), apenas=1)
+    imagem = Image.open(io.BytesIO(paginas[0])).convert('RGB')
+    pixels = imagem.load()
+    avermelhados = sum(
+        1
+        for x in range(0, imagem.width, 4)
+        for y in range(0, imagem.height, 4)
+        if pixels[x, y][0] > pixels[x, y][1] + 15 and pixels[x, y][0] > pixels[x, y][2] + 15
+    )
+    total = len(range(0, imagem.width, 4)) * len(range(0, imagem.height, 4))
+    assert avermelhados / total > 0.01
+
+
+def _html_com_previa(paginas_hol=2, paginas_ponto=3):
+    documentos = [
+        {'nome': 'Holerite', 'url': '/assinatura/HASH/doc/0',
+         'paginas': paginas_hol, 'url_pagina': '/assinatura/HASH/doc/0/pagina/'},
+        {'nome': 'Folha de Ponto', 'url': '/assinatura/HASH/doc/1',
+         'paginas': paginas_ponto, 'url_pagina': '/assinatura/HASH/doc/1/pagina/'},
+    ]
+    return app._pagina_assinatura_html('HASH', 'Pacote', documentos=documentos)
+
+
+def test_cada_pagina_tem_aviso_de_carregando():
+    html = _html_com_previa()
+    assert html.count('class="pagina-wrap"') == 5
+    assert html.count('Carregando documento') == 5
+    assert html.count('class="girador"') == 5
+
+
+def test_aviso_some_ao_carregar_e_vira_erro_se_falhar():
+    html = _html_com_previa()
+    assert html.count("classList.add('carregada')") == 5
+    assert html.count("classList.add('falhou')") == 5
+    assert '.pagina-wrap.carregada .pagina-aviso { display:none; }' in html
+    assert 'Não foi possível carregar esta página' in html
+
+
+def test_bloco_da_pagina_reserva_altura_antes_da_imagem_chegar():
+    """Sem isso a página nasce curta e a rede de segurança de rolagem
+    destravaria o botão antes de existir o que ver."""
+    html = _html_com_previa()
+    assert 'aspect-ratio:1/1.414' in html
+    assert '.pagina-wrap.carregada { aspect-ratio:auto' in html
+
+
+def test_botao_continua_travado_e_imagens_continuam_contaveis():
+    """Regressão: envolver a <img> num <div> não pode soltar o botão nem
+    quebrar observarUltimaImagem, que usa getElementsByTagName('img')."""
+    html = _html_com_previa()
+    assert 'disabled' in html
+    assert html.count('class="pdf-page"') == 5
+    assert "getElementsByTagName('img')" in html

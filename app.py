@@ -31,7 +31,7 @@ import unicodedata
 import logging
 import tempfile
 import requests
-from collections import Counter
+from collections import Counter, OrderedDict
 from calendar import monthrange
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify, redirect
@@ -9170,9 +9170,29 @@ def _pagina_assinatura_html(hash_token: str, nome_doc: str, erro: str = None, mo
             if doc.get('paginas'):
                 # Caminho normal: páginas como imagem, marcadas como
                 # pré-visualização. Nenhum PDF chega ao navegador aqui.
+                # Cada página fica dentro de um bloco com proporção de folha
+                # A4 e o aviso "Carregando documento…". Dois motivos, ambos
+                # do incidente de 20/08/2026:
+                #   1. sem isso a área da página fica vazia (branca no
+                #      navegador comum, PRETA no navegador interno do
+                #      WhatsApp em modo escuro) enquanto a imagem não chega,
+                #      e o colaborador acha que travou e fecha;
+                #   2. o bloco já ocupa a altura final antes da imagem
+                #      carregar, então a rede de segurança de rolagem não
+                #      dispara numa página "curta" e o botão não destrava
+                #      antes de haver o que ver.
+                # onload/onerror são inline de propósito: não dependem de o
+                # <script> do fim da página já ter sido interpretado, o que
+                # falharia para imagem servida do cache do navegador.
                 imgs = '\n'.join(
-                    f'        <img class="pdf-page" loading="lazy" alt="{doc["nome"]} — página {p}" '
-                    f'src="{doc["url_pagina"]}{p}">'
+                    f'        <div class="pagina-wrap">'
+                    f'<img class="pdf-page" loading="lazy" alt="{doc["nome"]} — página {p}" '
+                    f'src="{doc["url_pagina"]}{p}" '
+                    f'onload="this.parentNode.classList.add(\'carregada\')" '
+                    f'onerror="this.parentNode.classList.add(\'falhou\')">'
+                    f'<div class="pagina-aviso"><span class="girador"></span>'
+                    f'<span class="rotulo">Carregando documento…</span></div>'
+                    f'</div>'
                     for p in range(1, doc['paginas'] + 1)
                 )
                 blocos.append(f"""
@@ -9304,6 +9324,27 @@ def _pagina_assinatura_html(hash_token: str, nome_doc: str, erro: str = None, mo
   .doc-bloco {{ border:1px solid #e2e2e2; border-radius:8px; padding:12px; margin-bottom:16px; background:#fafafa; }}
   .pdf-container {{ border:1px solid #ddd; border-radius:6px; background:#fff; }}
   .pdf-page {{ display:block; width:100%; height:auto; margin:0 auto; }}
+  /* Bloco de página com aviso de carregamento — ver comentário em
+     _pagina_assinatura_html. A proporção A4 segura a altura final antes da
+     imagem chegar. */
+  .pagina-wrap {{ position:relative; width:100%; aspect-ratio:1/1.414;
+                  background:#eef1f4; border-radius:4px; margin-bottom:10px; }}
+  .pagina-wrap.carregada {{ aspect-ratio:auto; background:none; }}
+  .pagina-wrap.falhou {{ aspect-ratio:auto; min-height:96px; background:#fdf1f1; }}
+  .pagina-aviso {{ position:absolute; top:0; left:0; right:0; bottom:0;
+                   display:flex; align-items:center; justify-content:center;
+                   color:#5b6b7a; font-size:14px; padding:12px; text-align:center; }}
+  .pagina-wrap.carregada .pagina-aviso {{ display:none; }}
+  .girador {{ width:15px; height:15px; margin-right:8px; flex:none;
+              border:2px solid #c8d2dc; border-top-color:#2c5f8a;
+              border-radius:50%; animation:girar 0.8s linear infinite; }}
+  @keyframes girar {{ to {{ transform:rotate(360deg); }} }}
+  .pagina-wrap.falhou .girador {{ display:none; }}
+  .pagina-wrap.falhou .rotulo {{ display:none; }}
+  .pagina-wrap.falhou .pagina-aviso {{ color:#a12d2d; }}
+  .pagina-wrap.falhou .pagina-aviso::after {{
+      content:'Não foi possível carregar esta página. Recarregue a tela.'; }}
+  @media (prefers-reduced-motion: reduce) {{ .girador {{ animation:none; }} }}
   .pdf-fallback-iframe {{ width:100%; height:480px; border:1px solid #ddd; border-radius:6px; }}
   .ack {{ display:block; font-size:13px; margin-top:8px; }}
 </style></head>
@@ -11177,7 +11218,7 @@ def _contar_paginas_pdf(pdf_bytes: bytes) -> int:
         documento.close()
 
 
-def _pdf_para_paginas_png(pdf_bytes: bytes, escala: float = 2.0, apenas: int = None):
+def _pdf_para_paginas_png(pdf_bytes: bytes, escala: float = 1.4, apenas: int = None):
     """
     Converte cada página de um PDF em PNG, com marca d'água diagonal de
     pré-visualização. Retorna lista de bytes PNG (1 por página).
@@ -11263,6 +11304,43 @@ def _pdf_para_paginas_png(pdf_bytes: bytes, escala: float = 2.0, apenas: int = N
     return paginas
 
 
+# Cache em memória dos PDFs originais do pacote, por URL de anexo.
+#
+# Motivo (incidente de 20/08/2026): cada PÁGINA que o colaborador vê é uma
+# requisição própria, e cada uma baixava o PDF INTEIRO do Airtable de novo.
+# Um pacote de 5 páginas baixava os mesmos 2 arquivos 5 vezes. Com o lote de
+# 102 pessoas clicando junto num servidor de 0,5 vCPU, isso vira fila e a
+# tela fica em branco esperando.
+#
+# Escopo deliberadamente pequeno: guarda só os bytes já baixados, por URL
+# assinada do Airtable (que já é de curta duração), com teto de itens e TTL
+# curto. NÃO guarda o registro do Airtable — a checagem de Status/Tipo
+# continua sendo feita a cada requisição, então assinar continua refletindo
+# na hora. Cada worker tem o seu; não há estado compartilhado.
+_CACHE_PDF_MAX = 8
+_CACHE_PDF_TTL_S = 300
+_cache_pdf = OrderedDict()   # url -> (expira_em_epoch, bytes)
+
+
+def _pdf_de_anexo_com_cache(url: str) -> bytes:
+    agora = time.time()
+    item = _cache_pdf.get(url)
+    if item and item[0] > agora:
+        _cache_pdf.move_to_end(url)
+        return item[1]
+
+    conteudo = _carregar_documento_url(url)
+
+    # Limpa expirados antes de inserir, para o teto não guardar lixo.
+    for chave in [k for k, v in _cache_pdf.items() if v[0] <= agora]:
+        _cache_pdf.pop(chave, None)
+    _cache_pdf[url] = (agora + _CACHE_PDF_TTL_S, conteudo)
+    _cache_pdf.move_to_end(url)
+    while len(_cache_pdf) > _CACHE_PDF_MAX:
+        _cache_pdf.popitem(last=False)
+    return conteudo
+
+
 def _pdf_original_do_pacote(fields, idx):
     """
     Devolve (pdf_bytes, erro) do documento `idx` (0=Holerite, 1=Folha de
@@ -11280,7 +11358,7 @@ def _pdf_original_do_pacote(fields, idx):
     if len(anexos_originais) != 2 or idx not in (0, 1):
         return None, 'estrutura_inesperada'
     try:
-        return _carregar_documento_url(anexos_originais[idx]['url']), None
+        return _pdf_de_anexo_com_cache(anexos_originais[idx]['url']), None
     except Exception as exc:
         return None, str(exc)
 
