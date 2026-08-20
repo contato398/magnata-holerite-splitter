@@ -9319,18 +9319,70 @@ def _pagina_assinatura_html(hash_token: str, nome_doc: str, erro: str = None, mo
 </body></html>"""
 
 
-def _pagina_assinatura_sucesso_html(nome_doc: str, quando: str, download_url: str = None) -> str:
-    # download_url (opcional — correção desta Macro): quando informado, mostra
-    # botão de download do PDF final logo na tela de sucesso. None preserva
-    # o comportamento anterior (nenhum botão) para todo tipo de documento
-    # que não passa esse parâmetro.
+def _downloads_do_registro_assinado(fields: dict):
+    """Downloads a oferecer na tela de "já assinado" do pacote Holerite +
+    Folha de Ponto. Devolve lista de {'rotulo', 'url'} — vazia se não houver
+    nada entregável.
+
+    Preferência: o PDF único "Combinado Carimbado", gerado no momento da
+    assinatura desde 5bca9e8 (19/08/2026 13:58).
+
+    Registros assinados ANTES desse commit não têm esse arquivo. Auditoria de
+    20/08/2026: 65 dos 71 registros assinados do lote Julho/2026 estavam nessa
+    situação, e a tela mostrava só "Assinatura confirmada", sem documento
+    nenhum — embora os 3 PDFs individuais já estivessem anexados ao registro.
+    Para esses, devolve os 3 individuais em vez de deixar a tela vazia.
+
+    Só entrega arquivo já carimbado (" - ASSINADO") ou o comprovante. O PDF
+    original, não carimbado, nunca é oferecido por aqui — quem ainda não
+    assinou não passa por esta função (o status não é "Assinado"), e um
+    registro que por qualquer motivo ainda guarde o original não deve
+    entregá-lo como se fosse o documento assinado.
+    """
+    anexos = fields.get('Documento PDF') or []
+
+    for att in anexos:
+        if (att.get('filename') or '').startswith('Combinado Carimbado'):
+            return [{'rotulo': '⬇ Baixar PDF Combinado Carimbado', 'url': att['url']}]
+
+    ROTULOS = {
+        'Holerite': '⬇ Baixar Holerite assinado',
+        'Folha de Ponto': '⬇ Baixar Folha de Ponto assinada',
+        'Comprovante Assinatura': '⬇ Baixar Comprovante de Assinatura',
+    }
+    ORDEM = ('Holerite', 'Folha de Ponto', 'Comprovante Assinatura')
+
+    achados = {}
+    for att in anexos:
+        nome = att.get('filename') or ''
+        if ' - ASSINADO' not in nome and not nome.startswith('Comprovante Assinatura'):
+            continue
+        for prefixo in ORDEM:
+            if nome.startswith(prefixo) and prefixo not in achados:
+                achados[prefixo] = {'rotulo': ROTULOS[prefixo], 'url': att['url']}
+                break
+
+    return [achados[p] for p in ORDEM if p in achados]
+
+
+def _pagina_assinatura_sucesso_html(nome_doc: str, quando: str, downloads=None) -> str:
+    # downloads (opcional): lista de {'rotulo', 'url'} mostrada como botões na
+    # tela de sucesso. None/vazio preserva o comportamento anterior (nenhum
+    # botão) para todo tipo de documento que não passa esse parâmetro.
+    # Substitui o antigo parâmetro download_url (1 botão só), que não dava
+    # conta dos registros sem o PDF combinado — ver
+    # _downloads_do_registro_assinado.
     botao_download_html = ''
-    if download_url:
-        url_html = download_url.replace('"', '&quot;')
-        botao_download_html = (
-            f'<a class="botao-download" href="{url_html}" target="_blank" rel="noopener" download>'
-            f'⬇ Baixar PDF Combinado Carimbado</a>'
+    if downloads:
+        botoes = ''.join(
+            f'<a class="botao-download" href="{(d["url"] or "").replace(chr(34), "&quot;")}" '
+            f'target="_blank" rel="noopener" download>{d["rotulo"]}</a>'
+            for d in downloads if d.get('url')
         )
+        if botoes:
+            legenda = ('<p class="legenda-downloads">Seus documentos assinados:</p>'
+                       if len(downloads) > 1 else '')
+            botao_download_html = legenda + botoes
     return f"""<!DOCTYPE html>
 <html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9341,9 +9393,10 @@ def _pagina_assinatura_sucesso_html(nome_doc: str, quando: str, download_url: st
            box-shadow:0 2px 10px rgba(0,0,0,0.08); text-align:center; }}
   h1 {{ color:#1e7a34; font-size:20px; }}
   p {{ color:#444; font-size:14px; line-height:1.5; }}
-  .botao-download {{ display:block; margin-top:20px; padding:14px; font-size:15px; font-weight:bold;
+  .botao-download {{ display:block; margin-top:12px; padding:14px; font-size:15px; font-weight:bold;
                       background:#2c5f8a; color:#fff; text-decoration:none; border-radius:6px; }}
   .botao-download:hover {{ background:#234b6e; }}
+  .legenda-downloads {{ margin-top:22px; margin-bottom:0; font-weight:bold; color:#333; }}
 </style></head>
 <body>
   <div class="card">
@@ -11098,7 +11151,9 @@ def _confirmar_assinatura_pacote_holerite_ponto(registro, fields, hash_token, no
                             f'{registro["id"]} | {exc}')
 
         logger.info(f'[PACOTE HOL+PONTO] Assinado com sucesso: {registro["id"]}')
-        return _pagina_assinatura_sucesso_html(nome_doc, _fmt_quando(agora_brt), download_url=url_combinado)
+        downloads = ([{'rotulo': '⬇ Baixar PDF Combinado Carimbado', 'url': url_combinado}]
+                     if url_combinado else None)
+        return _pagina_assinatura_sucesso_html(nome_doc, _fmt_quando(agora_brt), downloads=downloads)
 
     except Exception as exc:
         logger.warning(f'[PACOTE HOL+PONTO] falha ao processar assinatura do pacote {registro["id"]}: {exc}')
@@ -11335,13 +11390,15 @@ def assinatura_pagina(hash_token):
 
     if status_atual == 'Assinado':
         quando = _fmt_quando(fields.get('Data/Hora Assinatura'))
-        url_combinado_existente = None
+        downloads = None
         if fields.get('Tipo de Documento') == TIPO_PACOTE_HOLERITE_PONTO:
-            for att in fields.get('Documento PDF') or []:
-                if att['filename'].startswith('Combinado Carimbado'):
-                    url_combinado_existente = att['url']
-                    break
-        return _pagina_assinatura_sucesso_html(nome_doc, quando, download_url=url_combinado_existente)
+            downloads = _downloads_do_registro_assinado(fields)
+            if not downloads:
+                logger.warning(
+                    f'[PACOTE HOL+PONTO] registro assinado sem nenhum PDF entregável '
+                    f'na tela de sucesso: {registro["id"]}'
+                )
+        return _pagina_assinatura_sucesso_html(nome_doc, quando, downloads=downloads)
 
     if status_atual == 'Expirado':
         return _pagina_assinatura_html(

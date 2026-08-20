@@ -1,0 +1,64 @@
+# Autorização humana específica — Pacote Holerite + Folha de Ponto:
+# tela de "já assinado" passa a entregar os PDFs de quem assinou ANTES do
+# commit que gerava o "Combinado Carimbado"
+# Base: 2fe49ad (branch fix/pacote-holerite-ponto-entrega-real, PR #26,
+# já mesclado em main e publicado no Render)
+# Branch: fix/pacote-holerite-ponto-entrega-real
+# Data: 2026-08-20
+# Autorização: apresentei ao usuário o achado da auditoria e duas rotas
+# (A — corrigir o app.py antes de disparar; B — fatiar o disparo e deixar
+# os já assinados para depois), com o risco e o custo de cada uma. O
+# usuário escolheu explicitamente em mensagem distinta daquela em que a
+# proposta foi redigida: "Autorizado seguir a ROTA A (§7). Pode aplicar a
+# correção no app.py para exibir os 3 PDFs individuais aos 65 que já
+# assinaram".
+#
+# Contexto do achado (auditoria de 20/08/2026, medida no Airtable, não
+# estimada): dos 71 registros do lote Julho/2026 com Status="Assinado",
+# somente 6 tinham o anexo "Combinado Carimbado" — o recurso que o gera
+# entrou em 5bca9e8 (19/08/2026 13:58) e os outros 65 assinaram em
+# 18/08/2026, antes disso. Para esses 65 a tela de sucesso mostrava
+# apenas "✅ Assinatura confirmada!", sem documento nenhum, embora os 3
+# PDFs individuais (Holerite carimbado, Folha de Ponto carimbada e
+# Comprovante) já estivessem anexados ao registro. Sem esta correção, a
+# mensagem de reenvio prometeria documentos que a página não entrega.
+#
+# Escopo desta autorização, nada além:
+#   1. _downloads_do_registro_assinado(fields) — função nova. Devolve a
+#      lista de downloads da tela de sucesso: o "Combinado Carimbado"
+#      quando existir (1 botão), senão os 3 PDFs individuais já anexados,
+#      na ordem Holerite / Folha de Ponto / Comprovante. Só entrega
+#      arquivo já carimbado (" - ASSINADO") ou o comprovante — o PDF
+#      original, não carimbado, nunca é oferecido por aqui.
+#   2. _pagina_assinatura_sucesso_html: parâmetro download_url (1 botão)
+#      vira downloads (lista). None/vazio mantém exatamente o
+#      comportamento anterior — nenhum botão — para todo tipo de
+#      documento que não passa o parâmetro. CSS: margem do botão 20px ->
+#      12px (empilhamento) e a classe nova .legenda-downloads.
+#   3. Os 2 pontos de chamada do pacote passam a usar `downloads`. O GET
+#      de assinatura_pagina registra warning quando um registro assinado
+#      não tem nenhum PDF entregável — falha visível, nunca silenciosa.
+# Nenhuma mudança no fluxo de assinatura em si, na trava do botão, na
+# pré-visualização com marca d'água, nas rotas de imagem/PDF, no Airtable
+# ou em qualquer outro tipo de documento. Nenhum campo novo, nenhuma
+# migration. Nenhum registro do Airtable é alterado por esta mudança —
+# ela só muda o que a página MOSTRA a partir do que já está gravado.
+#
+# Limite declarado ao usuário, não escondido: as URLs dos anexos vêm
+# assinadas pelo Airtable e são de curta duração; são lidas a cada
+# carregamento da página, então valem no momento do clique — é o mesmo
+# mecanismo que já funciona hoje para os 6 registros que têm o combinado.
+# Esta correção NÃO gera o "Combinado Carimbado" retroativamente para os
+# 65: eles recebem os 3 arquivos separados, não um PDF único.
+#
+# Validação nesta sessão, antes desta autorização (execuções reais, não
+# estimativas): py_compile limpo; 7 testes novos acrescentados a
+# test_pacote_assinatura_holerite_ponto.py cobrindo os 65 sem combinado,
+# os 6 com combinado, PDF original nunca entregue, registro sem anexo,
+# renderização de 1 botão por documento, regressão dos demais tipos de
+# documento e escape de aspas na URL. Suíte do pacote: 54 -> 61 passando.
+# Suíte geral: 600 -> 607 passando, com a LISTA DE FALHAS IDÊNTICA à do
+# HEAD limpo (19 falhas, comparadas por diff, todas pré-existentes e de
+# ambiente — nenhuma regressão nova introduzida por esta mudança).
+# Somente blob exato aprovado; qualquer alteração subsequente invalida esta autorização.
+52c3876822cae743204a1203c90e4d7ac8625fed  app.py
