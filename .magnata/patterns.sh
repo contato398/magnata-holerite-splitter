@@ -409,6 +409,18 @@ ALLOWED_PATHS=(
   # teste antes do lote, não executado pelo agente). Só este caminho
   # exato — não libera "^teste_" nem "^test_" de forma ampla.
   "^teste_homologacao\.py$"
+  # Exceção exata e restrita (decisão registrada, branch
+  # fix/pacote-holerite-ponto-entrega-real, 2026-08-20) — capacidade do
+  # servidor para o disparo em lote do pacote Holerite + Folha de Ponto.
+  # Desde a pré-visualização em imagem, CADA página de documento é uma
+  # requisição que busca o registro, baixa o PDF e o renderiza; com 1
+  # worker e reciclagem a cada 50 requisições, um pico de cliques
+  # enfileira e derruba requisições em andamento. Os 2 arquivos entram
+  # juntos porque precisam declarar o MESMO comando — divergência entre
+  # eles faz o ajuste sumir em silêncio. Só estes 2 caminhos exatos —
+  # não libera "^.*\.yaml$" nem nenhum outro arquivo de infraestrutura.
+  "^Procfile$"
+  "^render\.yaml$"
 )
 
 # ============================================================================
