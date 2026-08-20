@@ -1,0 +1,54 @@
+# Autorização humana específica — Pacote Holerite + Folha de Ponto:
+# esconde a barra do visualizador nativo (#toolbar=0) e remove o link de
+# download antes da assinatura, no modo alternativo (fallback)
+# Base: 5af9c8e (branch fix/pacote-holerite-ponto-entrega-real, PR #25,
+# já mesclado em main e publicado no Render)
+# Branch: fix/pacote-holerite-ponto-entrega-real
+# Data: 2026-08-19
+# Autorização: usuário escolheu explicitamente esta correção ("vamos
+# resolver ja prieiro, opçao 1"), entre 2 opções que ofereci — (1) fazer
+# esta mudança de 1 linha antes de seguir para os envios em lote, ou (2)
+# seguir direto para os envios deixando isso para depois. Aprovação final
+# do diff e do hash exato em mensagem distinta ("sim aprovado").
+#
+# Contexto do achado (3ª rodada de investigação do mesmo sintoma): o
+# teste real mostrou que a página caiu no modo alternativo (iframe +
+# visualizador nativo do navegador) mesmo depois do proxy same-origin do
+# PR #25. Causa mais provável identificada nesta rodada: o Chrome do
+# usuário é gerenciado por política corporativa (comprovado por
+# "DevTools not allowed on this page — Your organization has blocked the
+# use of DevTools"), e a mesma política provavelmente bloqueia o CDN
+# cdnjs.cloudflare.com de onde o PDF.js é carregado — sem a biblioteca,
+# o código cai no fallback por desenho. Declarado ao usuário que
+# colaboradores em celular pessoal provavelmente NÃO passam por isso, e
+# que não consigo confirmar o bloqueio do CDN daqui (rede do sandbox
+# também bloqueia esse domínio).
+#
+# Escopo desta autorização, nada além, dentro da função ativarFallback
+# (JS embutido em _pagina_assinatura_html), que só existe para o tipo
+# HOLERITE_FOLHA_PONTO:
+#   1. #toolbar=0 acrescentado à URL do iframe — esconde a barra de
+#      ferramentas do visualizador nativo do Chrome/Edge, incluindo o
+#      botão de download que ela traz.
+#   2. Removido o link "Abrir/baixar em nova aba" — era um caminho
+#      explícito de download antes da assinatura. O documento continua
+#      visível no iframe; o PDF combinado carimbado continua disponível
+#      logo após assinar.
+# A caixa de confirmação "Já visualizei este documento" e a trava do
+# botão permanecem inalteradas.
+#
+# Limitação declarada ao usuário antes da aprovação, não escondida:
+# isto reduz atrito, NÃO é controle de acesso — #toolbar=0 é parâmetro
+# não-padrão (ignorado por navegadores que não sejam Chrome/Edge) e
+# captura de tela sempre existe. Nenhum site consegue impedir 100% que
+# um documento exibido seja salvo.
+#
+# Validação nesta sessão, antes desta autorização: py_compile limpo, JS
+# extraído validado com 'node --check', e teste de render isolado
+# confirmando (ignorando linhas de comentário, após um primeiro teste ter
+# dado falso positivo justamente por casar com o texto de um comentário):
+# #toolbar=0 presente no código real, nenhum <a>/target=_blank de
+# download restante, botão ainda começando travado, checkbox de
+# confirmação mantido, e nenhuma regressão nos outros tipos de documento.
+# Somente blob exato aprovado; qualquer alteração subsequente invalida esta autorização.
+628aa903a1ce2cedfbf3effd5c35c5f79cb7fc57  app.py
