@@ -9167,23 +9167,36 @@ def _pagina_assinatura_html(hash_token: str, nome_doc: str, erro: str = None, mo
         for idx, doc in enumerate(documentos):
             container_id = f'pdfContainer{idx}'
             url_js = json.dumps(doc['url'])
-            blocos.append(f"""
+            if doc.get('paginas'):
+                # Caminho normal: páginas como imagem, marcadas como
+                # pré-visualização. Nenhum PDF chega ao navegador aqui.
+                imgs = '\n'.join(
+                    f'        <img class="pdf-page" loading="lazy" alt="{doc["nome"]} — página {p}" '
+                    f'src="{doc["url_pagina"]}{p}">'
+                    for p in range(1, doc['paginas'] + 1)
+                )
+                blocos.append(f"""
+    <div class="doc-bloco">
+      <h2>{doc['nome']}</h2>
+      <div id="{container_id}" class="pdf-container">
+{imgs}
+      </div>
+    </div>""")
+                chamadas_render.append(f"observarUltimaImagem({idx}, {json.dumps(container_id)});")
+            else:
+                # Renderização em imagem indisponível para este documento —
+                # cai no PDF embutido, comportamento anterior.
+                blocos.append(f"""
     <div class="doc-bloco">
       <h2>{doc['nome']}</h2>
       <div id="{container_id}" class="pdf-container"></div>
     </div>""")
-            chamadas_render.append(
-                f"renderizarPDF({idx}, {url_js}, {json.dumps(container_id)})"
-                f".then(function(ok) {{ if (!ok) {{ ativarFallback({idx}, {url_js}, {json.dumps(container_id)}); }} }});"
-            )
+                chamadas_render.append(
+                    f"ativarFallback({idx}, {url_js}, {json.dumps(container_id)});"
+                )
         visualizador_html = '\n'.join(blocos)
         visualizador_script = f"""
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.js"></script>
 <script>
-  var PDFJS_OK = (typeof pdfjsLib !== 'undefined');
-  if (PDFJS_OK) {{
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js';
-  }}
   var TOTAL_DOCS = {len(documentos)};
   var docsVistos = {{}};
 
@@ -9200,30 +9213,24 @@ def _pagina_assinatura_html(hash_token: str, nome_doc: str, erro: str = None, mo
     }}
   }}
 
-  async function renderizarPDF(idx, url, containerId) {{
-    if (!PDFJS_OK) {{ return false; }}
-    try {{
-      var pdf = await pdfjsLib.getDocument(url).promise;
-      var container = document.getElementById(containerId);
-      for (var p = 1; p <= pdf.numPages; p++) {{
-        var page = await pdf.getPage(p);
-        var viewport = page.getViewport({{scale: 1.1}});
-        var canvas = document.createElement('canvas');
-        canvas.width = viewport.width; canvas.height = viewport.height;
-        canvas.className = 'pdf-page';
-        container.appendChild(canvas);
-        await page.render({{canvasContext: canvas.getContext('2d'), viewport: viewport}}).promise;
-        if (p === pdf.numPages) {{
-          var obs = new IntersectionObserver(function(entries) {{
-            entries.forEach(function(entry) {{ if (entry.isIntersecting) {{ marcarVisto(idx); }} }});
-          }}, {{threshold: 0.5}});
-          obs.observe(canvas);
-        }}
-      }}
-      return true;
-    }} catch (e) {{
-      return false;
+  function observarUltimaImagem(idx, containerId) {{
+    // As páginas já vêm no HTML como <img> (servidas pelo próprio
+    // domínio, com marca d'água). Aqui só marcamos o documento como
+    // "visto" quando a ÚLTIMA página dele aparecer na tela.
+    var container = document.getElementById(containerId);
+    if (!container) {{ return; }}
+    var imagens = container.getElementsByTagName('img');
+    if (!imagens.length) {{ return; }}
+    var ultima = imagens[imagens.length - 1];
+    if (!('IntersectionObserver' in window)) {{
+      // Navegador sem suporte: a rede de segurança de rolagem da página
+      // (mais abaixo) continua valendo, então nunca trava a assinatura.
+      return;
     }}
+    var obs = new IntersectionObserver(function(entries) {{
+      entries.forEach(function(entry) {{ if (entry.isIntersecting) {{ marcarVisto(idx); }} }});
+    }}, {{threshold: 0.3}});
+    obs.observe(ultima);
   }}
 
   function ativarFallback(idx, url, containerId) {{
@@ -11098,6 +11105,167 @@ def _confirmar_assinatura_pacote_holerite_ponto(registro, fields, hash_token, no
         return erro_generico
 
 
+# Marca d'água da pré-visualização — texto fixo, nunca configurável por
+# request (não é conteúdo do documento, é rótulo de estado).
+_MARCA_DAGUA_PREVIEW = 'PRÉ-VISUALIZAÇÃO — NÃO ASSINADO'
+
+
+def _contar_paginas_pdf(pdf_bytes: bytes) -> int:
+    """Só conta páginas — não renderiza nada. Usado pelo GET da página de
+    assinatura, que precisa saber quantas <img> emitir mas não precisa das
+    imagens em si (cada uma é pedida depois, sob demanda, pelo navegador)."""
+    import pypdfium2 as _pdfium
+    documento = _pdfium.PdfDocument(pdf_bytes)
+    try:
+        return len(documento)
+    finally:
+        documento.close()
+
+
+def _pdf_para_paginas_png(pdf_bytes: bytes, escala: float = 2.0, apenas: int = None):
+    """
+    Converte cada página de um PDF em PNG, com marca d'água diagonal de
+    pré-visualização. Retorna lista de bytes PNG (1 por página).
+
+    Decisão desta Macro (pedido do usuário, 19-20/08/2026): a
+    pré-visualização da página de assinatura passa a ser IMAGEM, não o PDF
+    original. Motivo: enquanto o navegador recebe o PDF, ele sempre pode
+    salvá-lo (trocando a URL na barra de endereço, pelo visualizador
+    nativo, etc.) ANTES de assinar — o que contraria a intenção de que o
+    colaborador só fique com o documento depois de confirmar. Com imagens
+    não existe arquivo PDF do lado do colaborador; o PDF só aparece depois
+    de assinar, no "Baixar PDF Combinado Carimbado".
+
+    Efeito colateral positivo: elimina a dependência do PDF.js via CDN
+    (bloqueado por política corporativa em pelo menos um ambiente real,
+    ver histórico desta Macro) e, com ela, o visualizador nativo do
+    navegador que aparecia no fallback.
+
+    Limite declarado, não escondido: captura de tela continua possível —
+    isso vale para qualquer site e não tem solução técnica. A marca
+    d'água serve justamente para que uma cópia obtida assim fique
+    visivelmente distinta do documento oficial carimbado.
+
+    Import tardio e proposital: pypdfium2/Pillow chegam como dependência
+    transitiva do pdfplumber (confirmado instalado no build do Render),
+    não estão fixados em requirements.txt. Se algum dia sumirem, esta
+    função levanta e o chamador cai no caminho antigo (servir o PDF) em
+    vez de derrubar a rota inteira.
+    """
+    import pypdfium2 as _pdfium
+    from PIL import Image as _Image, ImageDraw as _ImageDraw, ImageFont as _ImageFont
+
+    documento = _pdfium.PdfDocument(pdf_bytes)
+    paginas = []
+    try:
+        # `apenas` (1-based) renderiza uma única página. Sem isso, cada
+        # requisição de imagem re-renderizaria o documento inteiro só para
+        # devolver uma página — num documento de 5 páginas seriam 25
+        # renderizações por colaborador (medido: ~0,7s cada).
+        if apenas is not None:
+            if not (1 <= apenas <= len(documento)):
+                return []
+            indices = [apenas - 1]
+        else:
+            indices = range(len(documento))
+        for indice in indices:
+            imagem = documento[indice].render(scale=escala).to_pil().convert('RGBA')
+
+            # A camada da marca é desenhada MAIOR que a página e depois
+            # recortada no centro: girar uma camada do tamanho exato corta
+            # as frases nas bordas e deixa palavras pela metade
+            # ("LIZAÇÃO —"), o que fica visualmente desleixado.
+            lado = int((imagem.width ** 2 + imagem.height ** 2) ** 0.5) + 40
+            camada = _Image.new('RGBA', (lado, lado), (255, 255, 255, 0))
+            desenho = _ImageDraw.Draw(camada)
+            try:
+                fonte = _ImageFont.truetype('DejaVuSans-Bold.ttf', max(18, imagem.width // 28))
+            except Exception:
+                fonte = _ImageFont.load_default()
+
+            largura_texto = desenho.textlength(_MARCA_DAGUA_PREVIEW, font=fonte)
+            # Marca repetida cobrindo a camada inteira: uma única faixa
+            # central seria fácil de recortar de uma captura de tela.
+            passo_y = max(140, imagem.height // 6)
+            passo_x = int(largura_texto) + max(60, imagem.width // 12)
+            for linha, pos_y in enumerate(range(0, lado, passo_y)):
+                deslocamento = -(passo_x // 2) if linha % 2 else 0
+                for pos_x in range(deslocamento, lado, passo_x):
+                    desenho.text((pos_x, pos_y), _MARCA_DAGUA_PREVIEW,
+                                 font=fonte, fill=(190, 30, 30, 70))
+
+            camada = camada.rotate(28, resample=_Image.BICUBIC, expand=False)
+            esq = (lado - imagem.width) // 2
+            topo = (lado - imagem.height) // 2
+            camada = camada.crop((esq, topo, esq + imagem.width, topo + imagem.height))
+            composta = _Image.alpha_composite(imagem, camada).convert('RGB')
+
+            saida = io.BytesIO()
+            composta.save(saida, format='PNG', optimize=True)
+            paginas.append(saida.getvalue())
+    finally:
+        documento.close()
+    return paginas
+
+
+def _pdf_original_do_pacote(fields, idx):
+    """
+    Devolve (pdf_bytes, erro) do documento `idx` (0=Holerite, 1=Folha de
+    Ponto) de um registro de pacote — mesma seleção de anexos originais
+    usada pela rota GET e pela confirmação. Nunca usa os arquivos
+    carimbados nem o comprovante.
+    """
+    doc_atual = fields.get('Documento PDF') or []
+    anexos_originais = [
+        a for a in doc_atual
+        if not a['filename'].startswith('Comprovante Assinatura')
+        and not a['filename'].startswith('Combinado Carimbado')
+        and ' - ASSINADO' not in a['filename']
+    ]
+    if len(anexos_originais) != 2 or idx not in (0, 1):
+        return None, 'estrutura_inesperada'
+    try:
+        return _carregar_documento_url(anexos_originais[idx]['url']), None
+    except Exception as exc:
+        return None, str(exc)
+
+
+@app.route('/assinatura/<hash_token>/doc/<int:idx>/pagina/<int:num>', methods=['GET'])
+def assinatura_documento_pagina_png(hash_token, idx, num):
+    """
+    Uma página do documento `idx` do pacote, como PNG com marca d'água de
+    pré-visualização — ver _pdf_para_paginas_png. `num` é 1-based.
+    Mesmo controle de acesso do resto do fluxo: só o hash_token.
+    """
+    if not AIRTABLE_API_KEY:
+        return 'Serviço indisponível.', 503
+
+    registro = _buscar_por_campo(TABLE_ASSINATURAS, 'Hash Token', hash_token)
+    if not registro:
+        return 'Link inválido ou expirado.', 404
+
+    fields = registro.get('fields', {})
+    if fields.get('Tipo de Documento') != TIPO_PACOTE_HOLERITE_PONTO:
+        return 'Documento inválido.', 404
+
+    pdf_bytes, erro = _pdf_original_do_pacote(fields, idx)
+    if erro or not pdf_bytes:
+        logger.warning(f'[PACOTE HOL+PONTO] preview PNG indisponível: {registro["id"]} | idx={idx} | {erro}')
+        return 'Documento indisponível.', 404
+
+    try:
+        paginas = _pdf_para_paginas_png(pdf_bytes, apenas=num)
+    except Exception as exc:
+        logger.warning(f'[PACOTE HOL+PONTO] falha ao renderizar página: {registro["id"]} | idx={idx} | pg={num} | {exc}')
+        return 'Documento indisponível.', 404
+    if not paginas:
+        return 'Página inexistente.', 404
+
+    resposta = app.response_class(paginas[0], mimetype='image/png')
+    resposta.headers['Cache-Control'] = 'private, max-age=300'
+    return resposta
+
+
 @app.route('/assinatura/<hash_token>/doc/<int:idx>', methods=['GET'])
 def assinatura_documento_proxy(hash_token, idx):
     """
@@ -11204,26 +11372,50 @@ def assinatura_pagina(hash_token):
                 and ' - ASSINADO' not in a['filename']
             ]
             if len(anexos_originais) == 2:
-                # Correção adicional (investigação do modo nativo do
-                # navegador, 19/08/2026): antes, o PDF.js tentava baixar o
-                # PDF direto da URL do Airtable (v5.airtableusercontent.com)
-                # — outra origem, que provavelmente não libera CORS para
-                # fetch() de terceiros. Quando isso falha, o código já caía
-                # (corretamente) no fallback de <iframe>, mas aí quem exibe
-                # o PDF passa a ser o visualizador NATIVO do navegador —
-                # com sua própria barra de ferramentas, incluindo um botão
-                # de download que a gente queria evitar antes da assinatura.
-                # Correção: servir o PDF através do NOSSO próprio domínio
-                # (rota /assinatura/<hash>/doc/<idx> abaixo, que baixa do
-                # Airtable no servidor — sem CORS, servidor-a-servidor — e
-                # repassa os bytes) em vez da URL direta do Airtable. Mesma
-                # origem = PDF.js nunca mais cai no fallback por causa de
-                # CORS; o visualizador nativo do navegador deixa de entrar
-                # em cena no caminho normal.
-                documentos_preview = [
-                    {'nome': 'Holerite', 'url': f'/assinatura/{hash_token}/doc/0'},
-                    {'nome': 'Folha de Ponto', 'url': f'/assinatura/{hash_token}/doc/1'},
-                ]
+                # Evolução em 3 passos dentro desta mesma Macro, cada um
+                # motivado por um teste real (ver histórico e autorizações
+                # em .magnata/app-py-authorizations/):
+                #   1) URL direta do Airtable + PDF.js -> falhava por CORS e
+                #      caía no visualizador nativo do navegador;
+                #   2) proxy same-origin do PDF -> não resolveu: o PDF.js
+                #      nem chegava a carregar (CDN bloqueado por política
+                #      corporativa no ambiente real testado);
+                #   3) agora: PÁGINAS COMO IMAGEM (PNG com marca d'água de
+                #      pré-visualização), servidas pelo próprio domínio.
+                #      Sem PDF do lado do colaborador antes de assinar, sem
+                #      dependência de CDN, sem visualizador nativo.
+                # O PDF só chega ao colaborador depois da assinatura, no
+                # "Baixar PDF Combinado Carimbado".
+                #
+                # A contagem de páginas é feita aqui (renderizando uma vez)
+                # para o HTML já sair com as <img> certas. Se a renderização
+                # falhar por qualquer motivo, cai no caminho anterior
+                # (iframe com o PDF) em vez de deixar o colaborador sem
+                # documento nenhum.
+                documentos_preview = []
+                for indice, rotulo in ((0, 'Holerite'), (1, 'Folha de Ponto')):
+                    total_paginas = None
+                    pdf_bytes, erro_preview = _pdf_original_do_pacote(fields, indice)
+                    if pdf_bytes and not erro_preview:
+                        try:
+                            total_paginas = _contar_paginas_pdf(pdf_bytes)
+                        except Exception as exc:
+                            erro_preview = str(exc)
+                    if not total_paginas:
+                        logger.warning(
+                            f'[PACOTE HOL+PONTO] preview em imagem indisponível ({erro_preview}) — '
+                            f'usando PDF embutido para "{rotulo}": {registro["id"]}'
+                        )
+                        documentos_preview.append(
+                            {'nome': rotulo, 'url': f'/assinatura/{hash_token}/doc/{indice}'}
+                        )
+                    else:
+                        documentos_preview.append({
+                            'nome': rotulo,
+                            'url': f'/assinatura/{hash_token}/doc/{indice}',
+                            'paginas': total_paginas,
+                            'url_pagina': f'/assinatura/{hash_token}/doc/{indice}/pagina/',
+                        })
             else:
                 logger.warning(
                     f'[PACOTE HOL+PONTO] GET com estrutura inesperada de anexos ({len(anexos_originais)}, '
