@@ -1,0 +1,66 @@
+# Autorização humana específica — Pacote Holerite + Folha de Ponto:
+# pré-visualização como IMAGEM com marca d'água (nenhum PDF chega ao
+# colaborador antes de assinar)
+# Base: 754e86d (branch fix/pacote-holerite-ponto-entrega-real, PR #26,
+# já mesclado em main e publicado no Render)
+# Branch: fix/pacote-holerite-ponto-entrega-real
+# Data: 2026-08-20
+# Autorização: pedido explícito do usuário — "uma unica coisa é que eu
+# gostaria que não desse para os [colaboradores] abaixarem os documentos
+# sem assinar. como fazemos? que sugere". Apresentei a proposta (servir
+# páginas como imagem em vez do PDF) com o custo e o limite declarados;
+# usuário escolheu incluir a marca d'água ("vamos incluir a marca
+# dalgua") e aprovou o diff/hash em mensagem distinta ("sim").
+#
+# Contexto: fecha a sequência de 4 rodadas desta Macro sobre o mesmo
+# ponto. As 3 anteriores tentaram fazer o PDF.js funcionar (URL direta ->
+# proxy same-origin -> esconder a barra do fallback); esta remove a causa
+# raiz: se o navegador nunca recebe um PDF, não há PDF para baixar nem
+# visualizador nativo para aparecer, e a dependência do CDN (bloqueado
+# por política corporativa em ambiente real testado) deixa de existir.
+#
+# Escopo desta autorização, nada além, restrito ao tipo
+# HOLERITE_FOLHA_PONTO:
+#   1. _contar_paginas_pdf: conta páginas sem renderizar (usado pelo GET).
+#   2. _pdf_para_paginas_png: converte página(s) em PNG com marca d'água
+#      diagonal "PRÉ-VISUALIZAÇÃO — NÃO ASSINADO" repetida sobre toda a
+#      página; parâmetro `apenas` renderiza uma única página.
+#   3. _pdf_original_do_pacote: devolve os bytes do PDF original do
+#      documento 0/1 (substitui _paginas_preview_do_pacote, removida).
+#   4. Rota nova /assinatura/<hash>/doc/<idx>/pagina/<num> -> PNG.
+#   5. GET de assinatura_pagina: passa contagem de páginas + URL base das
+#      imagens; se a renderização falhar, cai no PDF embutido anterior.
+#   6. _pagina_assinatura_html: emite <img> por página (lazy loading) em
+#      vez de canvas do PDF.js; removidos <script src> do CDN, a variável
+#      PDFJS_OK e a função renderizarPDF. ativarFallback permanece, usada
+#      só quando a renderização em imagem não estiver disponível.
+# Trava do botão, checkbox de confirmação, rede de segurança de rolagem
+# e comportamento dos demais tipos de documento permanecem inalterados.
+#
+# Dependências: pypdfium2 e Pillow chegam como dependência transitiva do
+# pdfplumber (confirmadas no log de build do Render exibido pelo usuário).
+# Import é tardio e dentro de try/except no chamador — se sumirem, a rota
+# cai no PDF embutido em vez de derrubar a aplicação. NÃO foram fixadas em
+# requirements.txt nesta autorização (arquivo fora do ALLOWED_PATHS atual;
+# fixá-las exigiria alterar .magnata/patterns.sh, fora do escopo pedido) —
+# risco residual declarado, não escondido.
+#
+# Limite declarado ao usuário antes da aprovação, não escondido: isto
+# impede o download do ARQUIVO, não a captura de tela — que nenhum site
+# consegue impedir. A marca d'água existe justamente para que uma cópia
+# obtida por captura fique visivelmente distinta do documento oficial
+# carimbado, que só é entregue após a assinatura.
+#
+# Validação nesta sessão, antes desta autorização (medições reais, não
+# estimativas): py_compile limpo; JS extraído validado com 'node --check';
+# contagem de páginas em 16 ms contra 1,85 s da versão inicial que
+# renderizava tudo; render de 1 página isolada em 0,63 s; página fora do
+# intervalo devolve vazio (404 na rota); HTML com o número correto de
+# <img> e lazy loading, sem iframe/CDN, botão travado; nenhuma regressão
+# nos demais tipos de documento; marca d'água medida cobrindo 4,7% dos
+# pixels da página, com amostra visual conferida pelo usuário. Duas
+# correções foram feitas em resposta a essas medições, antes de pedir
+# aprovação: recorte de palavras na borda (camada maior antes de girar) e
+# re-renderização redundante por requisição.
+# Somente blob exato aprovado; qualquer alteração subsequente invalida esta autorização.
+cb2c304adf9c5cd1b5a42576a6a19d17be0fee6e  app.py
