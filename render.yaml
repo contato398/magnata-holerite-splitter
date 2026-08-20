@@ -3,7 +3,11 @@ services:
     name: magnata-holerite-splitter
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    # Mantido IGUAL ao Procfile de propósito: se os dois divergirem, o
+    # ajuste de capacidade some silenciosamente dependendo de como o
+    # serviço foi criado no Render (Blueprint usa este startCommand;
+    # serviço criado à mão usa o Procfile ou o Start Command do painel).
+    startCommand: gunicorn app:app --workers 2 --timeout 300 --max-requests 400 --max-requests-jitter 40 --bind 0.0.0.0:$PORT --log-level info
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0

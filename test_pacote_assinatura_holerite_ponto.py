@@ -1093,3 +1093,87 @@ def test_reenvio_pacote_outra_instancia_ja_processou_e_pulado():
         item = app._reenviar_pacote_holerite_ponto(registro, registro['fields'], FUNC_ID, dry_run=False, disparar_whatsapp=True)
     assert item['acao'] == 'ja_processado_outra_instancia'
     mock_envia.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Tela de "já assinado" — entrega dos PDFs a quem assinou ANTES do commit que
+# passou a gerar o "Combinado Carimbado" (5bca9e8, 19/08/2026 13:58).
+#
+# Auditoria de 20/08/2026 no lote Julho/2026: dos 71 registros com
+# Status="Assinado", só 6 tinham o PDF combinado. Para os outros 65 a tela
+# mostrava apenas "Assinatura confirmada", sem documento nenhum — embora os 3
+# PDFs individuais já estivessem anexados ao registro. Estes testes fixam o
+# comportamento corrigido. 100% dado sintético.
+# ---------------------------------------------------------------------------
+
+def _anexo(filename, url):
+    return {'filename': filename, 'url': url}
+
+
+def _fields_assinado_sem_combinado():
+    """Estrutura exata dos 65 registros: 2 PDFs carimbados + comprovante."""
+    return {'Documento PDF': [
+        _anexo('Holerite Julho 2026 - FULANO DE TAL - ASSINADO.pdf', 'u_hol'),
+        _anexo('Folha de Ponto Julho 2026 - FULANO DE TAL - ASSINADO.pdf', 'u_pon'),
+        _anexo('Comprovante Assinatura - Fulano De Tal - Julho 2026.pdf', 'u_com'),
+    ]}
+
+
+def test_assinado_sem_combinado_entrega_os_3_pdfs_individuais():
+    downloads = app._downloads_do_registro_assinado(_fields_assinado_sem_combinado())
+    assert [d['url'] for d in downloads] == ['u_hol', 'u_pon', 'u_com']
+
+
+def test_assinado_com_combinado_entrega_so_o_pdf_unico():
+    """Quem tem o combinado recebe 1 botão só — não os 4 arquivos."""
+    fields = _fields_assinado_sem_combinado()
+    fields['Documento PDF'].append(
+        _anexo('Combinado Carimbado - Fulano De Tal - Julho 2026.pdf', 'u_comb'))
+    downloads = app._downloads_do_registro_assinado(fields)
+    assert [d['url'] for d in downloads] == ['u_comb']
+
+
+def test_pdf_original_nao_carimbado_nunca_e_oferecido():
+    """Só arquivo já carimbado (' - ASSINADO') ou o comprovante são entregues:
+    um registro que ainda guarde o original não pode entregá-lo como se fosse
+    o documento assinado."""
+    fields = {'Documento PDF': [
+        _anexo('Holerite Julho 2026 - FULANO DE TAL.pdf', 'u_original'),
+        _anexo('Comprovante Assinatura - Fulano De Tal - Julho 2026.pdf', 'u_com'),
+    ]}
+    downloads = app._downloads_do_registro_assinado(fields)
+    assert [d['url'] for d in downloads] == ['u_com']
+
+
+def test_registro_assinado_sem_anexo_nenhum_nao_quebra():
+    assert app._downloads_do_registro_assinado({}) == []
+    html = app._pagina_assinatura_sucesso_html('Doc', '18/08/2026 14:32', downloads=[])
+    assert 'Assinatura confirmada' in html
+    assert 'class="botao-download"' not in html
+
+
+def test_tela_de_sucesso_renderiza_um_botao_por_documento():
+    downloads = app._downloads_do_registro_assinado(_fields_assinado_sem_combinado())
+    html = app._pagina_assinatura_sucesso_html(
+        'Holerite + Folha de Ponto - Julho 2026', '18/08/2026 14:32', downloads=downloads)
+    assert html.count('class="botao-download"') == 3
+    assert 'Seus documentos assinados:' in html
+    for url in ('u_hol', 'u_pon', 'u_com'):
+        assert f'href="{url}"' in html
+
+
+def test_outros_tipos_de_documento_seguem_sem_botao_de_download():
+    """Regressão: só o pacote passa `downloads`. Todo outro tipo continua
+    caindo no comportamento anterior — tela de sucesso sem nenhum botão."""
+    html = app._pagina_assinatura_sucesso_html('Contrato', '01/01/2026 10:00')
+    assert 'class="botao-download"' not in html
+    assert 'Seus documentos assinados:' not in html
+    assert 'Contrato' in html
+
+
+def test_url_de_anexo_tem_aspas_escapadas_no_html():
+    html = app._pagina_assinatura_sucesso_html(
+        'Doc', '01/01/2026 10:00',
+        downloads=[{'rotulo': 'r', 'url': 'https://exemplo/a"onerror=1'}])
+    assert '&quot;onerror' in html
+    assert 'a"onerror' not in html
