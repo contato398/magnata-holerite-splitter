@@ -9227,14 +9227,25 @@ def _pagina_assinatura_html(hash_token: str, nome_doc: str, erro: str = None, mo
   }}
 
   function ativarFallback(idx, url, containerId) {{
-    // PDF.js indisponível (CDN bloqueado/navegador antigo) — fallback para
-    // iframe nativo do navegador; como não dá pra detectar rolagem dentro
-    // de um iframe de outra origem, libera por confirmação explícita do
-    // colaborador em vez de travar a assinatura indefinidamente.
+    // PDF.js indisponível (CDN bloqueado por política de rede/corporativa,
+    // navegador antigo, etc.) — fallback para o visualizador nativo do
+    // navegador via iframe; como não dá pra detectar rolagem dentro de um
+    // iframe, libera por confirmação explícita do colaborador em vez de
+    // travar a assinatura indefinidamente.
+    //
+    // #toolbar=0 (feedback do teste de homologação, 19/08/2026): esconde a
+    // barra de ferramentas do visualizador nativo do Chrome/Edge, junto com
+    // o botão de download que ela traz -- alinhado à intenção de que o
+    // colaborador assine antes de guardar o documento. Não é garantia (é
+    // um parâmetro não-padrão, ignorado por outros navegadores, e print de
+    // tela sempre existe) -- é redução de atrito, não controle de acesso.
+    // O link "Abrir/baixar em nova aba" foi removido pelo mesmo motivo: era
+    // um caminho explícito de download antes da assinatura. O documento
+    // continua visível no iframe; quem precisar de cópia recebe o PDF
+    // combinado carimbado logo após assinar.
     var container = document.getElementById(containerId);
     container.innerHTML =
-      '<iframe src="' + url + '" class="pdf-fallback-iframe"></iframe>' +
-      '<p><a href="' + url + '" target="_blank" rel="noopener">Abrir/baixar em nova aba</a></p>' +
+      '<iframe src="' + url + '#toolbar=0" class="pdf-fallback-iframe"></iframe>' +
       '<label class="ack"><input type="checkbox" onchange="if(this.checked){{marcarVisto(' + idx + ');}}"> Já visualizei este documento</label>';
   }}
 
