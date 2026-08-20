@@ -1,0 +1,71 @@
+# Autorização humana específica — performance da pré-visualização do pacote
+# Holerite + Folha de Ponto (tela em branco/preta no celular do colaborador)
+# Base: 47cd894 (main, após o merge do PR #28)
+# Branch: fix/performance-preview-assinatura
+# Data: 2026-08-20
+# Autorização: incidente aberto pelo usuário — "ESTAMOS RECEBENDO MENSAGEM
+# DOS COLABORADORES QUE NAO ESTAO CONSEGUINDO ACESSAR OS DOCUMENTOS, CLICAM
+# A PAGINA FICA EM BRANCO, OU PRETA". Apresentei o diagnóstico com medição e
+# 4 opções de correção; o usuário autorizou explicitamente 3 delas, nomeando
+# cada uma: "aplique imediatamente as otimizações de performance (reduzir a
+# escala das imagens, baixar o PDF uma única vez por requisição e adicionar
+# o aviso visual de 'Carregando documentos...')".
+#
+# RESSALVA REGISTRADA, não escondida: o teste de 90 segundos que eu havia
+# pedido (abrir um link pendente e cronometrar) NÃO foi executado, e os logs
+# do Render não foram consultados. O diagnóstico de "lento demais, não
+# quebrado" continua sendo HIPÓTESE fundamentada em medição local, não fato
+# confirmado no servidor de produção. O que ESTÁ confirmado por consulta ao
+# Airtable é que o sistema não está fora do ar: 3 dos 31 pendentes assinaram
+# com sucesso depois do disparo (15:54, 16:19 e 16:40 BRT de 20/08). Se a
+# causa real for outra, estas otimizações ajudam mas não resolvem sozinhas.
+#
+# Escopo desta autorização, nada além:
+#   1. _pdf_para_paginas_png: escala padrão 2.0 -> 1.4. Medido neste
+#      ambiente, página densa de 55 linhas: 2,33s -> 0,51s (4,6x), PNG de
+#      556 KB -> 372 KB, 1191x1684 -> 834x1179 px. Amostra visual das duas
+#      escalas foi enviada ao usuário antes da aprovação.
+#   2. _pdf_de_anexo_com_cache + _cache_pdf: cache em memória dos BYTES do
+#      PDF por URL de anexo, teto de 8 itens e TTL de 300s, usado por
+#      _pdf_original_do_pacote. Antes, cada PÁGINA baixava o PDF inteiro do
+#      Airtable de novo — 5 páginas eram 5 downloads dos mesmos arquivos.
+#      NÃO guarda o registro do Airtable: Status e Tipo continuam sendo
+#      lidos a cada requisição, então assinar continua refletindo na hora e
+#      o controle de acesso não é afetado. Cada worker tem o seu; não há
+#      estado compartilhado entre processos.
+#   3. _pagina_assinatura_html: cada página passa a vir num .pagina-wrap com
+#      aviso "Carregando documento…" e girador, trocado por classe via
+#      onload/onerror inline (inline de propósito: não depende de o <script>
+#      do fim já ter sido interpretado, o que falharia para imagem vinda do
+#      cache do navegador). CSS novo para o bloco, o aviso e o estado de
+#      falha.
+#
+# Ganho colateral relevante, deliberado: o .pagina-wrap tem proporção A4
+# (aspect-ratio 1/1.414), então a página já nasce com a altura final antes
+# das imagens chegarem. Isso corrige um risco real do código anterior — com
+# a página curta durante o carregamento, a rede de segurança de rolagem
+# podia destravar o botão de assinar ANTES de existir documento visível.
+#
+# Nenhuma mudança na trava do botão, no fluxo de assinatura, no carimbo, na
+# marca d'água, no Airtable ou em qualquer outro tipo de documento. Nenhum
+# campo novo, nenhuma migration.
+#
+# Limite declarado: isto NÃO deixa a página "instantânea". A medição de
+# ponta a ponta (GET + todas as imagens de um pacote de 5 páginas) foi de
+# 4,24s para 2,12s — 2,0x — e o número real no Render deve ser melhor que
+# esse, porque no ambiente de teste o download do anexo é instantâneo
+# enquanto lá é ida e volta ao Airtable (downloads caíram de 7 para 2). Para
+# ficar instantâneo de verdade faltaria guardar as IMAGENS já renderizadas,
+# que é mudança maior e NÃO foi autorizada nesta fase.
+#
+# Validação nesta sessão, antes desta autorização: py_compile limpo; JS
+# extraído validado com 'node --check'; 10 testes novos (cache com 1 só
+# download para 5 páginas, documentos não se misturam, TTL expira, teto de
+# itens, escala padrão, marca d'água mantida na escala menor, aviso por
+# página, troca para carregada/falhou, altura reservada, botão continua
+# travado e getElementsByTagName('img') continua contando as páginas).
+# Suíte do pacote 61 -> 71; suíte geral 607 -> 617 passando, com a LISTA DE
+# FALHAS IDÊNTICA à do main (19 pré-existentes de ambiente, comparadas por
+# diff).
+# Somente blob exato aprovado; qualquer alteração subsequente invalida esta autorização.
+10c753ea1656831552959169791354452e01d8ff  app.py
