@@ -2,12 +2,51 @@
 
 **Tipo:** memória mestre persistente e verificável do estado real do projeto.
 **Propósito:** ser o contexto inicial de qualquer nova conversa/sessão sobre o Magnata OS, substituindo a dependência de uma conversa longa como memória principal.
-**Gerado em:** 2026-08-21, por auditoria direta do repositório `contato398/magnata-holerite-splitter` (branch auditada: `main` em `d3546ba`; branches remotas verificadas: todas).
+**Gerado em:** 2026-08-21 (Etapa 1 — auditoria técnica), ampliado em 2026-08-21 (Etapa 2 — auditoria de memória e proveniência). Repositório `contato398/magnata-holerite-splitter` (branch auditada: `main` em `d3546ba`; branches remotas verificadas: todas).
 **Método:** nenhuma informação aqui vem de conversa anterior tratada como verdade absoluta. Tudo foi confirmado em código, documentação versionada, histórico de commits/branches ou execução real de teste nesta sessão. Onde isso não foi possível, o item está marcado 🔍 **PRECISA SER VALIDADO**, nunca apresentado como fato.
 **Regra de manutenção:** este documento fica desatualizado no minuto em que o código muda. Ele **não substitui** `CLAUDE.md` nem `docs/magnata-os/README.md` — é uma camada de consolidação por cima deles, e deve ser regenerado por auditoria, não editado de memória.
 
 **Legenda de status:**
 ✅ FUNCIONANDO/CONFIRMADO · 🟡 EM EVOLUÇÃO · ⚠️ PENDENTE · ❌ DESCARTADO/SUPERADO · 🔍 PRECISA SER VALIDADO · 🚫 PLANEJADO MAS NÃO EXECUTADO
+
+---
+
+## 0. Etapa 2 — Memória e proveniência (2026-08-21)
+
+Esta seção resume o que a Etapa 2 acrescentou. O detalhe completo,
+estruturado por ID e rastreável até a fonte exata (arquivo + branch +
+commit), vive em `docs/central-command/` — **deliberadamente fora
+deste arquivo**, para não colocar toda a memória bruta num único
+Markdown:
+
+- [`SOURCES_AND_PROVENANCE.md`](docs/central-command/SOURCES_AND_PROVENANCE.md) — índice de toda fonte histórica localizada, auditada ou não.
+- [`DECISIONS.md`](docs/central-command/DECISIONS.md) — 11 decisões arquiteturais/técnicas, com ID, evidência, status.
+- [`DIRECTIVES.md`](docs/central-command/DIRECTIVES.md) — 11 ordens da Direção, da diretiva fundacional ("arquiteto-chefe", 2026-07-22) a regras operacionais pontuais.
+- [`ACTIONS_COMPLETED.md`](docs/central-command/ACTIONS_COMPLETED.md) — 35 ações concluídas, 12/06/2026 a hoje.
+- [`WORK_IN_PROGRESS.md`](docs/central-command/WORK_IN_PROGRESS.md) — 8 frentes com código/documento real, não mescladas.
+- [`PENDING.md`](docs/central-command/PENDING.md) — 19 pendências ativas.
+- [`ARCHITECTURE.md`](docs/central-command/ARCHITECTURE.md) — linha do tempo completa de como a fundação documental chegou (ou não) a `main`.
+- [`SUPERSEDED_DECISIONS.md`](docs/central-command/SUPERSEDED_DECISIONS.md) — 7 trilhas `DECISÃO ANTIGA → SUPERADA POR → DECISÃO NOVA`.
+- [`COBERTURA.md`](docs/central-command/COBERTURA.md) — relatório de cobertura e lacunas, com a resposta objetiva a "a memória está completa?" (não).
+
+**O achado mais importante da Etapa 2:** existe uma memória de
+continuidade real do projeto (`docs/historico/`, 30 registros
+cobrindo 12/06 a 01/07/2026, decisões da diretoria, bugs encontrados e
+corrigidos, pendências) — mas ela vive **só** na branch
+`fix/recibos-outros-documentos`, nunca mesclada em `main`. A Etapa 1
+desta auditoria tinha classificado essa branch como "❌ aparenta
+obsoleta/abandonada" por causa do volume de deleções no diff — **essa
+leitura estava incompleta**: a branch carrega justamente o arquivo de
+memória que este pedido de Etapa 2 buscava. Correção registrada aqui,
+não escondida — ver `docs/central-command/SOURCES_AND_PROVENANCE.md` §2.
+
+**Limite que nenhuma auditoria futura vai conseguir remover:** esta
+sessão não tem, e nenhuma sessão em container remoto efêmero jamais
+terá, acesso às conversas brutas que geraram esses documentos — só ao
+que foi escrito e commitado. `docs/historico/` e os relatórios de fase
+**são** a memória de continuidade do projeto; não existe uma camada
+"mais bruta" ainda por trás deles que este processo possa recuperar.
+Ver a resposta completa em `COBERTURA.md`.
 
 ---
 
@@ -305,7 +344,7 @@ Módulo 01/importação em lote.
 | `fix/adr-modulo01-http-wiring` | 2026-08-13 | Decisão de como expor a API do Módulo 01 via HTTP | Médio |
 | `fix/plano-modulo01-email-captura` | 2026-08-17 | Plano de captura de e-mail para o módulo novo | Médio |
 | `claude/evolution-api-instances-1s9raa` | 2026-08-17 | Trabalho em instâncias da Evolution API | 🔍 não avaliado em profundidade nesta auditoria |
-| `fix/recibos-outros-documentos` | 2026-07-24 | 166 arquivos, -30.893 linhas vs. `main` atual | ❌ aparenta obsoleta/abandonada — precisa decisão humana de fechar ou não |
+| `fix/recibos-outros-documentos` | 2026-07-24 (base antiga) + commit `1027fc8` de 2026-07-23 preservando `docs/historico/` | **Correção pós-Etapa 2:** carrega a única memória de continuidade operacional do projeto (30 registros, 12/06-01/07/2026) — não é lixo, ver §0 e `docs/central-command/`. O volume de -30.893 linhas é diff contra o `main` atual (a branch é antiga, ficou para trás), não sinal de abandono do conteúdo que ela preserva | Alto — memória real presa numa branch que parecia descartável |
 
 ### 9.4 Riscos estruturais declarados nos próprios documentos (não novidade desta sessão)
 
@@ -323,13 +362,19 @@ Módulo 01/importação em lote.
 ## 10. Itens descartados / superados
 
 - ❌ **`ARQUITETURA_FASE_2_DECISAO_FINAL.md`** — documento histórico
-  citado pelo índice como precedente superado pela fundação atual; não
-  encontrado na raiz de `main` (nem foi objeto de busca profunda nesta
-  sessão — tratar como histórico, não como fonte ativa).
-- ❌ **`fix/recibos-outros-documentos`** (branch) — aparenta abandonada:
-  diverge de `main` num volume incompatível com uso corrente (ver
-  §9.3). Não descartar oficialmente sem decisão humana — só registrado
-  como candidata.
+  citado pelo índice como precedente superado pela fundação atual;
+  **localizado na Etapa 2** na branch `feat/magnata-os-claude-powerpack`
+  (não em `main`) — lido parcialmente, é decisão pré-Manifesto sobre
+  reaproveitamento de campos Airtable. Ver `docs/central-command/DECISIONS.md`
+  DEC-011 e `SUPERSEDED_DECISIONS.md` SUP-006.
+- **Correção pós-Etapa 2:** `fix/recibos-outros-documentos` **não é**
+  uma branch abandonada a descartar — carrega a memória de continuidade
+  do projeto (§0). O que de fato pode ser candidato a fechamento é só o
+  **código** dessa branch (o trabalho original sobre recibos de outros
+  documentos, se já superado por `fix/outros-documentos-fila-dedup`,
+  que está mesclado) — decisão ainda não tomada, e agora informada
+  corretamente: fechar a branch só depois de extrair/preservar
+  `docs/historico/` para um lugar versionado em `main` (ver §14).
 - 🔍 Qualquer capacidade listada como "nível 9 — Autorizada para
   produção" nos documentos de capacidade **não existe** — a escala
   inteira do Magnata OS está entre níveis 2 e 8 hoje, por desenho
@@ -461,28 +506,45 @@ aspiracionais para o Magnata OS.
 
 Em ordem de risco/impacto, não de preferência:
 
-1. **Decidir o destino de `feat/magnata-os-claude-powerpack`** (§3, §9.3)
+1. **Preservar `docs/historico/` em `main`** (achado da Etapa 2, §0) —
+   antes de qualquer decisão sobre fechar/limpar
+   `fix/recibos-outros-documentos`, extrair e mesclar esses 30
+   registros (ou o commit inteiro) para um lugar versionado em `main`.
+   É a memória de continuidade mais concreta que existe do projeto e
+   hoje está a um `git branch -D` de distância de ficar só no reflog.
+2. **Decidir o destino de `feat/magnata-os-claude-powerpack`** (§3, §9.3)
    — é a lacuna mais estrutural encontrada: a fundação documental que
    `CLAUDE.md` cita como existente não está em `main`. Precisa de
    decisão humana: reconciliar com os 70 commits que `main` já tem à
    frente (provável trabalho de merge não trivial, não um simples
-   fast-forward), ou reconstruir só o que ainda é válido.
-2. **Corrigir a regressão confirmada** (§9.1) — rebasear
+   fast-forward), ou reconstruir só o que ainda é válido. A Etapa 2
+   (`docs/central-command/ARCHITECTURE.md`) já reconstruiu a linha do
+   tempo completa de como e por que essa branch ficou presa.
+3. **Ler por conteúdo os 9 documentos fundacionais ainda não extraídos**
+   (`docs/central-command/COBERTURA.md` §7, item 1) — é o que falta
+   para a Central Command deixar de depender de "existência confirmada"
+   e passar a ter as ~29 decisões de `MAGNATA_OS_DECISOES_ENTIDADES.md`
+   e o restante da fundação de fato incorporados aos registros.
+4. **Corrigir a regressão confirmada** (§9.1) — rebasear
    `fix/status-funcionario-pii` sobre `main` e abrir PR; é uma correção
    pequena, isolada, com causa raiz já identificada nesta auditoria.
-3. **Decidir sobre as branches órfãs** (§9.3) — painel visual do
+5. **Decidir sobre as branches órfãs** (§9.3) — painel visual do
    Módulo 01, wiring HTTP, plano de captura de e-mail: todas prontas ou
    quase prontas, todas paradas.
-4. **Esclarecer os núcleos sem evidência de código** (Financeiro,
+6. **Esclarecer os núcleos sem evidência de código** (Financeiro,
    Comercial, Marketing, Diretoria/BI) — decisão de negócio, não
    técnica: são escopo futuro do Magnata OS ou vivem fora dele?
-5. **Avaliar formalmente o Graphify** (§12) — depois de entender a
+7. **Avaliar formalmente o Graphify** (§12) — depois de entender a
    ferramenta de verdade, decidir se ela é a fonte automática do mapa
    de módulos/dependências, mantendo a Central Command atualizada sem
    auditoria manual a cada consolidação.
-6. Só depois disso: retomar o roadmap de 11 fases a partir da Fase 1
+8. Só depois disso: retomar o roadmap de 11 fases a partir da Fase 1
    (Observabilidade), que os próprios documentos de módulo já apontam
    como caminho recomendado.
+
+**Sobre a pergunta de fechamento desta Etapa 2 — "a memória está
+completa?":** não. Ver a resposta objetiva e o que falta especificamente
+em `docs/central-command/COBERTURA.md` (última seção).
 
 ---
 
