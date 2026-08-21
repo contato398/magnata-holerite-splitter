@@ -1,0 +1,72 @@
+# Autorização humana específica — data/hora exibida sempre em horário de
+# Brasília (_fmt_quando)
+# Base: 665f2d0 (main, após o merge do PR #29)
+# Branch: fix/fuso-horario-brt-na-exibicao
+# Data: 2026-08-20 (autorização) / 2026-08-21 (rebase sobre main)
+# Autorização: apresentei o achado, a causa, a correção proposta e a
+# verificação; o usuário aprovou em mensagem distinta — "Aprovo o diff do
+# fuso horário e autorizo o commit."
+#
+# Achado (20/08/2026, evidência real, não hipótese): o usuário abriu o link
+# de assinatura de um colaborador e comparou as duas telas. Para a MESMA
+# assinatura, o carimbo dentro do PDF mostrava "18/08/2026 23:06" e a tela
+# de sucesso mostrava "19/08/2026 às 02:06" — 3 horas de diferença e dia
+# trocado.
+#
+# Causa: o Airtable NORMALIZA campo de data/hora para UTC e devolve com
+# 'Z', mesmo quando a gravação foi feita com offset -03:00 — que é o que o
+# app faz em F_ASS_DATA_ASSINATURA e F_ENVIO_ENVIADO_EM. _fmt_quando
+# formatava o valor direto, imprimindo o relógio UTC como se fosse local.
+# O carimbo estava certo porque usa `agora_brt`, já convertido.
+#
+# NÃO é regressão do PR #28: a definição de _fmt_quando era byte a byte
+# idêntica à de antes daquele merge (verificado por diff). É defeito antigo
+# que só ficou visível quando essa tela passou a mostrar algo além da frase.
+#
+# Escopo desta autorização, nada além:
+#   1. _fmt_quando: quando o valor ISO tem fuso (venha 'Z' ou '-03:00'),
+#      converte para -03:00 antes de formatar. Valor SEM fuso continua
+#      formatado como está — não há como saber a que zona pertence, e
+#      chutar seria pior do que preservar o comportamento antigo.
+#   2. Docstring registrando o achado, para não ser desfeito por engano.
+# Nenhuma outra função, rota, campo ou tipo de documento é tocado. Nenhum
+# dado do Airtable é alterado — muda só a formatação na exibição.
+#
+# Por que astimezone e não subtrair 3 horas fixas: os 6 pontos que chamam
+# esta função recebem DOIS tipos de valor — o que vem do Airtable (UTC) e o
+# `agora_brt` passado direto (já -03:00). Subtrair 3 horas consertaria o
+# primeiro e QUEBRARIA o segundo, fazendo quem acabou de assinar ver 3
+# horas a menos. astimezone acerta os dois.
+#
+# Efeito colateral declarado: o Protocolo de Entrega ('Enviado em',
+# 'Recibo Lido em') usa a mesma função e passa a exibir BRT correto também.
+#
+# ── REBASE SOBRE MAIN (2026-08-21) — não é mudança nova ──────────────────
+# O GitHub apontou "Merge conflicts" no PR #30 depois que o PR #29 entrou em
+# main. O usuário pediu explicitamente: "resolva esse conflito na branch do
+# fuso horário, faça o rebase/update com a main e atualize o PR".
+#
+# A branch foi refeita a partir de main (665f2d0) e a MESMA correção foi
+# reaplicada por patch. Merge commit não é caminho válido neste repositório:
+# a validação 2 do pre-commit bloqueia commit com merge pendente. Rebase é.
+#
+# O hash mudou APENAS porque app.py agora contém também o PR #29, já
+# aprovado e já em produção. Prova mecânica de que não há conteúdo novo:
+#   1. `git apply --check` do patch do fuso passou limpo sobre main — o PR
+#      #29 não tocou em _fmt_quando, não houve resolução manual em app.py;
+#   2. `git diff` contra main devolve EXATAMENTE este diff e nada mais
+#      (24 linhas em app.py, 44 no arquivo de testes);
+#   3. o blob resultante (14ccd38...) é IDÊNTICO ao que o merge de main
+#      produzia antes de ser abortado — mesmo conteúdo, sem merge commit.
+# O conflito real estava só em test_pacote_assinatura_holerite_ponto.py: os
+# dois PRs acrescentaram blocos de teste no fim do mesmo arquivo. Os DOIS
+# blocos foram preservados — 80 funções de teste, soma exata dos dois lados,
+# nenhuma removida, reescrita ou enfraquecida.
+#
+# Validação nesta sessão: py_compile limpo; render do registro real
+# conferido (tela passou a mostrar "18/08/2026 às 23:06", igual ao carimbo,
+# mantendo os 3 botões de download); 6 testes do fuso + 10 do PR #29
+# coexistindo; suíte geral 623 passando, com a LISTA DE FALHAS IDÊNTICA ao
+# baseline (19 pré-existentes de ambiente, comparadas por diff).
+# Somente blob exato aprovado; qualquer alteração subsequente invalida esta autorização.
+14ccd38a817b06ffca2071d00ac9070364040b5b  app.py

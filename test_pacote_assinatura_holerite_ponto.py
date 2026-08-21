@@ -1298,3 +1298,47 @@ def test_botao_continua_travado_e_imagens_continuam_contaveis():
     assert 'disabled' in html
     assert html.count('class="pdf-page"') == 5
     assert "getElementsByTagName('img')" in html
+
+
+# ---------------------------------------------------------------------------
+# _fmt_quando — data/hora exibida sempre em horário de Brasília.
+#
+# Achado de 20/08/2026: para a MESMA assinatura, o carimbo do PDF mostrava
+# "18/08/2026 23:06" (BRT, correto) e a tela de sucesso mostrava
+# "19/08/2026 às 02:06" — o relógio UTC devolvido pelo Airtable, impresso
+# como se fosse local. 100% dado sintético.
+# ---------------------------------------------------------------------------
+
+def test_data_vinda_do_airtable_em_utc_e_convertida_para_brt():
+    """O caso real do achado: Airtable devolve 'Z', a tela precisa mostrar BRT
+    — inclusive virando para o dia anterior."""
+    assert app._fmt_quando('2026-08-19T02:06:00.000Z') == '18/08/2026 às 23:06'
+
+
+def test_data_ja_em_brt_nao_e_convertida_de_novo():
+    """`agora_brt` é passado direto para a tela, já com offset -03:00; converter
+    outra vez tiraria 3 horas indevidamente."""
+    assert app._fmt_quando('2026-08-18T23:06:00-03:00') == '18/08/2026 às 23:06'
+
+
+def test_carimbo_do_pdf_e_tela_mostram_o_mesmo_instante():
+    """Regressão do achado: os dois caminhos (gravado no Airtable e formatado
+    na hora da assinatura) têm que exibir a mesma data/hora."""
+    momento_brt = '2026-08-18T23:06:00-03:00'
+    mesmo_momento_como_o_airtable_devolve = '2026-08-19T02:06:00.000Z'
+    assert app._fmt_quando(momento_brt) == app._fmt_quando(mesmo_momento_como_o_airtable_devolve)
+
+
+def test_data_sem_fuso_mantem_comportamento_anterior():
+    """Sem fuso não há como saber a zona — formata como está, em vez de chutar."""
+    assert app._fmt_quando('2026-08-18T23:06:00') == '18/08/2026 às 23:06'
+
+
+def test_campo_de_data_sem_hora_continua_so_com_a_data():
+    assert app._fmt_quando('2026-08-18') == '18/08/2026'
+
+
+def test_valor_vazio_e_valor_invalido_nao_quebram():
+    assert app._fmt_quando(None) == 'data não registrada'
+    assert app._fmt_quando('') == 'data não registrada'
+    assert app._fmt_quando('nao é uma data') == 'nao é uma data'

@@ -8417,12 +8417,32 @@ def _smtp_enviar_email(destinatario: str, assunto: str, corpo_texto: str, anexos
 
 
 def _fmt_quando(valor):
-    """Formata um ISO datetime/date -> 'dd/mm/aaaa às HH:MM' (ou só a data)."""
+    """Formata um ISO datetime/date -> 'dd/mm/aaaa às HH:MM' (ou só a data),
+    sempre no horário de Brasília.
+
+    O Airtable NORMALIZA campo de data/hora para UTC e devolve com 'Z'
+    (ex.: '2026-08-19T02:06:00.000Z'), mesmo quando a gravação foi feita com
+    offset -03:00 — é o que o app faz em F_ASS_DATA_ASSINATURA e
+    F_ENVIO_ENVIADO_EM. Sem converter na leitura, a tela mostrava o relógio
+    UTC como se fosse local: 3 horas adiantado e, perto da virada, no dia
+    seguinte. Achado de 20/08/2026 — para a MESMA assinatura, o carimbo do
+    PDF dizia "18/08/2026 23:06" e a tela de sucesso dizia "19/08/2026 às
+    02:06".
+
+    Valor COM fuso (venha 'Z' ou '-03:00') é convertido para BRT — o que
+    torna esta função correta tanto para o que vem do Airtable quanto para o
+    `agora_brt` passado direto, que já está em -03:00 e sai inalterado.
+    Valor SEM fuso é formatado como está: não há como saber a que zona
+    pertence, e chutar seria pior do que preservar o comportamento antigo.
+    """
     if not valor:
         return 'data não registrada'
     try:
         if 'T' in valor:
-            return datetime.fromisoformat(valor).strftime('%d/%m/%Y às %H:%M')
+            dt = datetime.fromisoformat(valor)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(timezone(timedelta(hours=-3)))
+            return dt.strftime('%d/%m/%Y às %H:%M')
         return datetime.strptime(valor[:10], '%Y-%m-%d').strftime('%d/%m/%Y')
     except Exception:
         return str(valor)
