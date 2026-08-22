@@ -2,7 +2,7 @@
 
 **Tipo:** memória mestre persistente e verificável do estado real do projeto.
 **Propósito:** ser o contexto inicial de qualquer nova conversa/sessão sobre o Magnata OS, substituindo a dependência de uma conversa longa como memória principal.
-**Gerado em:** 2026-08-21 (Etapa 1 — auditoria técnica), ampliado em 2026-08-21 (Etapa 2 — auditoria de memória e proveniência) e em 2026-08-22 (Etapa 3 — consolidação macro e unificação de duas linhas divergentes; Etapa 4 — preservação canônica: fundação documental resgatada para `main`, memória histórica preservada dentro dos limites da LGPD). Repositório `contato398/magnata-holerite-splitter` (branch auditada: `main` em `d3546ba`; branches remotas verificadas: todas).
+**Gerado em:** 2026-08-21 (Etapa 1 — auditoria técnica), ampliado em 2026-08-21 (Etapa 2 — auditoria de memória e proveniência) e em 2026-08-22 (Etapa 3 — consolidação macro e unificação de duas linhas divergentes; Etapa 4 — preservação canônica: fundação documental resgatada para `main`, memória histórica preservada dentro dos limites da LGPD). Repositório `contato398/magnata-holerite-splitter` (Etapa 6 — pós-merge do PR #31; `main` em `9f8a53f`; branches remotas verificadas: todas).
 **Método:** nenhuma informação aqui vem de conversa anterior tratada como verdade absoluta. Tudo foi confirmado em código, documentação versionada, histórico de commits/branches ou execução real de teste nesta sessão. Onde isso não foi possível, o item está marcado 🔍 **PRECISA SER VALIDADO**, nunca apresentado como fato.
 **Linhagem deste arquivo:** nasceu como `CENTRAL_COMMAND_MAGNATA_OS.md` na raiz, na branch `claude/magnata-central-command-0n0713` (commits `ea95ab6`, `27d12b1`). Foi movido para cá na Etapa 3 porque aquele caminho e aquela branch não passam nos gates de governança do próprio repositório — ver §0-B.2. O texto das Etapas 1 e 2 está preservado; a Etapa 3 acrescenta, corrige explicitamente onde errou, e nunca reescreve.
 
@@ -267,6 +267,60 @@ Nenhuma regra de negócio foi alterada para resolver link. O caminho foi
 o inverso — confirmar qual documento é canônico e **trazer o documento**.
 O `README.md` recebeu nota declarando o que foi resgatado e o que
 continua fora.
+
+
+---
+
+## 0-D. Etapa 6 — Pós-merge: a memória está em `main` (2026-08-22)
+
+**O PR #31 foi mesclado em `main` pelo merge commit `9f8a53f`.** A
+fundação documental, a Central Command e a memória operacional
+sanitizada deixaram de depender de branch.
+
+### 0-D.1 Estado verificado depois do merge
+
+| Verificação | Resultado |
+|---|---|
+| `main` | `9f8a53f` |
+| Arquivos que entraram | 40 (+15.432 / −1) |
+| Links relativos em `main` | **85 verificados, 0 quebrados** |
+| CPF / nome de funcionário em `main` | **zero** |
+| CI de governança | **15/15 gates**, 0 bloqueados |
+| Suíte | 623/19 — lista idêntica ao baseline pré-merge |
+
+### 0-D.2 As 19 falhas — classificação finalmente PROVADA
+
+As rodadas anteriores classificaram 13 como "de ambiente" **por
+inferência do tipo de erro**. Agora está provado por execução:
+
+- `celery==5.3.6` e `redis==5.0.1` **estão** no `requirements.txt`;
+  `celery_app.py` existe; `render.yaml` declara o worker. Não é
+  dependência ausente do projeto — é do **container**.
+- Com `celery` instalado: **636 passando, 6 falhando.** As 13 somem.
+- Aplicando o patch de `fix/status-funcionario-pii` num worktree
+  isolado: **642 passando, ZERO falhando.**
+
+**Achado estrutural novo:** `.github/workflows/` tem **um único
+workflow**, de governança. **Nenhum CI roda a suíte de testes.** As 6
+falhas reais estão em `main` desde 2026-08-17 e nenhuma automação
+poderia tê-las apontado.
+
+### 0-D.3 Produção — não verificável desta sessão
+
+A política de rede do ambiente bloqueia o host de produção
+(`CONNECT tunnel failed, response 403`). `GET /health` retornou `000`.
+
+Portanto: `--workers 2`, versão publicada e estado do worker continuam
+**DOCUMENTADOS, NÃO CONFIRMADOS**. Isso é limite de ambiente, não etapa
+pulada — e nenhuma inferência foi convertida em fato.
+
+### 0-D.4 Correções de conclusões anteriores
+
+| Afirmação anterior | Correção, com evidência |
+|---|---|
+| "Financeiro e Comercial: sem evidência" | **Superado.** O schema do Airtable tem `Pagamentos`, `Recebimentos`, `Despesas`, `Patrimônio`, `Clientes`, `Locais`. Existem — **fora deste repositório** |
+| "Graphify: mapa automático de código" | **Incompleto.** É extrator de grafo por LLM que *também* tem modo AST. O padrão envia conteúdo para provider externo |
+| "13 falhas de ambiente" (inferido) | **Confirmado por execução**, não mais por inferência |
 
 
 ---

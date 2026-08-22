@@ -31,6 +31,10 @@ Cadeia: **fonte → decisão → implementação → PR/commit → estado atual.
 | De onde veio cada informação? | [`SOURCES_AND_PROVENANCE.md`](SOURCES_AND_PROVENANCE.md) |
 | O que ainda não sabemos? | [`COBERTURA.md`](COBERTURA.md) |
 | O que existe mas não está no Git, e por quê? | [`FORA_DO_GIT.md`](FORA_DO_GIT.md) |
+| Devemos adotar o Graphify? | [`GRAPHIFY.md`](GRAPHIFY.md) — POC executada |
+| Como sair do Airtable? | [`AIRTABLE_DESACOPLAMENTO.md`](AIRTABLE_DESACOPLAMENTO.md) — 4 fases |
+| Onde guardar dado sensível? | [`MEMORIA_SENSIVEL.md`](MEMORIA_SENSIVEL.md) |
+| Qual fonte vence qual, em caso de conflito? | [`ORQUESTRADOR.md`](ORQUESTRADOR.md) §6 |
 | Que núcleos de negócio existem de fato? | [`ORQUESTRADOR.md`](ORQUESTRADOR.md) §1 |
 | Qual camada é verdade sobre o quê? | [`ORQUESTRADOR.md`](ORQUESTRADOR.md) §3 |
 | Qual a memória operacional de jun-jul/2026? | [`HISTORICO.md`](HISTORICO.md) — 30 registros, livre de PII |
@@ -61,6 +65,7 @@ produção.
 | 3 | 2026-08-22 | Conteúdo da fundação extraído · lacuna temporal fechada · duas linhas de Central Command unificadas · PRs/branches inventariados · Macro 6A reconciliada · riscos priorizados | `26b9754` |
 | 4 | 2026-08-22 | **Fundação documental resgatada para `main`** (10 documentos + 8 relatórios, com proveniência e notas de reconciliação) · memória histórica preservada como conhecimento livre de PII · 13 referências quebradas corrigidas · PRs reclassificados por função | esta branch |
 | 5 | 2026-08-22 | PR #31 aberto · diff auditado · CI 15/15 · suíte idêntica ao baseline · fontes fora do Git registradas · núcleos classificados por evidência · requisito de camada de memória segura registrado | esta branch |
+| 6 | 2026-08-22 | **PR #31 MESCLADO — `main` = `9f8a53f`** · falhas classificadas por execução (642 passando com a correção) · produção não verificável (rede) · Graphify avaliado com POC · desacoplamento do Airtable mapeado (31 tabelas) · memória sensível especificada · arbitragem de fontes definida | esta branch |
 
 As Etapas 1-2 nasceram em `claude/magnata-central-command-0n0713`, em
 caminhos que os gates do repositório não autorizam. A Etapa 3 moveu tudo

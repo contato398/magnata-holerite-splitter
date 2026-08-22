@@ -145,3 +145,27 @@ NXT-005 ─► direção do Módulo 01
 depois.** Enquanto a fundação e a memória histórica estiverem numa
 branch, qualquer decisão de arquitetura é tomada sem acesso às 26
 decisões que a Direção já aprovou.
+
+---
+
+## Etapa 6 — reordenação por evidência (2026-08-22)
+
+✅ **Concluídos:** NXT-002 (fundação em `main`) · NXT-001 parcial (lição
+preservada; bruto pendente) · NXT-015 (Graphify avaliado com POC).
+
+### Nova ordem por valor × risco
+
+| # | Ação | Por quê agora | Gate |
+|---|---|---|---|
+| **1** | **Aplicar a correção de `_status_funcionario_elegivel`** | Provado: leva a suíte de 636/6 para **642/0**. Patch aplica limpo em `main` | 🔴 `app.py` (§7) |
+| **2** | **Criar CI que rode a suíte** (RSK-013) | Sem isso, o item 1 volta a acontecer sem ninguém ver | 🟠 `.github/workflows/` |
+| **3** | **Auditar as automações nativas do Airtable** (RSK-014) | Lógica de negócio invisível; bloqueia qualquer migração séria | 🟢 Leitura |
+| **4** | Decidir o PR #22 (adapter de e-mail) | Aditivo, não toca `app.py` | 🟡 |
+| **5** | Auditar a Fase 5 (RSK-016) | ~50 arquivos parados há 4 semanas | 🟢 Leitura |
+| **6** | Fixar `pypdfium2` e `Pillow` | Quebra a tela de assinatura em produção sem aviso | 🟡 `requirements.txt` |
+| **7** | Confirmar `--workers 2` no painel do Render | Não verificável desta sessão (rede bloqueada) | 🔴 Produção |
+| **8** | Definir retenção de dado pessoal | Destrava a memória sensível | 🔴 Negócio |
+| **9** | Responder `DEC-ENT-010/011/012` | Pendentes há um mês; `DEC-ENT-020` depende de `012` | 🔴 Direção |
+| **10** | POC do Graphify sobre `app.py` | É onde ele paga o custo — 12.301 linhas que não cabem no contexto | 🟢 Isolado |
+| **11** | Plano do Postgres | `free` não serve; bloqueia a Fase 2 do Airtable | 🔴 Custo |
+| **12** | ADR da taxonomia de núcleos | Agora com evidência: Financeiro e Comercial **existem**, fora do repo | 🔴 Arquitetura |

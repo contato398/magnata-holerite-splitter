@@ -157,3 +157,33 @@ parte pela numeração baixa. **Corrigido:** as ações de maior valor eram
 as de preservação (executadas nesta etapa), porque envolviam risco de
 perda irreversível. O #20 é a melhor ação **de código** disponível — mas
 código sempre pode ser reescrito; memória perdida, não.
+
+---
+
+## 6. Estado pós-merge — Etapa 6, 2026-08-22
+
+**PR #31 MESCLADO.** `main` = `9f8a53f`. Último PR existente: **#31**.
+
+| Classe | PRs |
+|---|---|
+| **MERGED** | #1–#11 · #13–#15 · #17–#19 · #23–#31 **(26)** |
+| **OPEN** | **#20** · **#22** |
+| **CLOSED WITHOUT MERGE** | #12 · #16 · #21 |
+| **SUPERSEDED** | #16→#17 · #21→#22 · **#12 → resolvido pelo #31** |
+| **WORK STILL UNIQUE** | #20 · #22 · e 3 branches sem PR (abaixo) |
+
+### 6.1 Branches — classificação final
+
+| Branch | Conteúdo único | Classe | Risco | Ação |
+|---|---|---|---|---|
+| `fix/status-funcionario-pii` | `app.py` +17/−16 · 1 `.gitblob` | **UNIQUE WORK** | 🟠 Alto | **Patch aplica limpo em `main` e leva a suíte a 642/0 — provado em worktree isolado.** Gate: toca `app.py` |
+| `fix/plano-modulo01-email-captura` | plano + adapter de e-mail + 7 testes | **UNIQUE WORK** | 🟡 Médio | Aditivo, não toca `app.py`. Precisa decisão |
+| `feat/...modulo01-fase5-painel` | **~50 arquivos de frontend** + doc da Fase 5 | **UNIQUE WORK** | 🟠 Alto | Muito trabalho pronto, parado desde 25/07. **Nunca auditado em profundidade** |
+| `fix/adr-modulo01-http-wiring` | `docs/decisoes/modulo01-fiacao-http.md` (113 linhas) + 5 linhas em `patterns.sh` | **UNIQUE WORK** | 🟡 Médio | Resgatável como PR documental — **mas exige alterar `ALLOWED_PATHS`**, que é decisão de governança |
+| `feat/magnata-os-claude-powerpack` | só `.claude/` (skills, agentes, matriz) | **PARCIALMENTE SUPERSEDED** | 🟡 Médio | Documentos resgatados pelo #31. Resta `.claude/`, fora de `ALLOWED_PATHS` |
+| `fix/recibos-outros-documentos` | **29 históricos brutos com PII** | **UNIQUE WORK** | 🔴 **Crítico** | **NÃO APAGAR.** Lição já preservada; texto bruto não. Gate: desidentificação |
+| `claude/magnata-central-command-0n0713` | Central Command Etapas 1-2 | **SUPERSEDED** | 🟢 Baixo | Conteúdo em `main` pelo #31. `SAFE TO ARCHIVE` — mas só com sua decisão |
+| `claude/evolution-api-instances-1s9raa` | mesmo SHA do #22 | **SUPERSEDED** | 🟢 Baixo | `SAFE TO ARCHIVE` |
+
+**Nenhuma branch foi apagada.** `SAFE TO ARCHIVE` é classificação, não
+autorização — exclusão de branch é gate humano.
