@@ -9498,35 +9498,54 @@ STATUS_FUNCIONARIO_CONHECIDOS = {'Ativo', 'Inativo', 'Empresa', 'Pessoal', 'Outr
 
 
 def _status_funcionario_elegivel(funcionario_id: str):
+    """Retorna (elegivel: bool, motivo: Optional[str]).
+
+    Quando elegivel=False, `motivo` é SEMPRE um destes 2 valores fixos --
+    nunca contém dado pessoal, nome de campo do Airtable ou texto de erro:
+      'vinculo_nao_ativo'      status conhecido, mas != Ativo;
+      'vinculo_indeterminado'  id ausente, falha de rede/HTTP, exceção, ou
+                               status ausente/desconhecido.
+
+    Duas razões para não devolver o valor bruto, ambas reais:
+    1. LGPD (`CLAUDE.md` §6) -- a versão anterior interpolava
+       `r.text[:80]` e `list(fields.keys())` no motivo, e esse motivo vai
+       para log. O corpo de um registro de Funcionários contém nome, CPF
+       e WhatsApp.
+    2. Nunca aprovar por omissão -- status desconhecido é tratado como
+       indeterminado (bloqueia), nunca como "provavelmente ativo".
+
+    `returnFieldsByFieldId` é obrigatório, não cosmético: F_FUNC_STATUS é
+    um Field ID (`fld...`). Sem esse parâmetro o Airtable devolve as
+    chaves por NOME, `fields.get(F_FUNC_STATUS)` seria sempre None, e era
+    exatamente isso que as heurísticas de fallback removidas aqui
+    tentavam compensar -- varrendo todos os valores do registro atrás de
+    algo parecido com um status, o que podia casar com o campo errado.
+    Mesmo padrão já usado em outros 18 pontos deste arquivo.
+    """
     if not funcionario_id:
-        return False, "id_vazio"
+        return False, 'vinculo_indeterminado'
     _at_throttle()
     try:
         r = requests.get(
             f"https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{funcionario_id}",
             headers={"Authorization": f"Bearer {AIRTABLE_API_KEY}"},
+            params={'returnFieldsByFieldId': 'true'},
             timeout=30,
         )
         if not r.ok:
-            return False, f"airtable_http_{r.status_code}_{r.text[:80]}"
+            return False, 'vinculo_indeterminado'
         fields = r.json().get("fields", {}) or {}
-        raw = fields.get(F_FUNC_STATUS) or fields.get("Status") or fields.get("status") or fields.get("STATUS")
-        if raw is None:
-            for v in fields.values():
-                val = v[0] if isinstance(v, (list, tuple)) and v else v
-                if isinstance(val, str) and val.strip().lower() in {"ativo", "inativo", "afastado", "desligado"}:
-                    raw = val
-                    break
+        raw = fields.get(F_FUNC_STATUS)
         if isinstance(raw, (list, tuple)) and raw:
             raw = raw[0]
-        st = str(raw).strip().lower() if raw is not None else ""
-        if st == "ativo":
+        st = str(raw).strip() if raw is not None else ''
+        if st == STATUS_FUNCIONARIO_ATIVO:
             return True, None
-        if st:
-            return False, f"status_veio_{st}"
-        return False, f"chaves_veio_{list(fields.keys())}"
-    except Exception as e:
-        return False, f"erro_exception_{str(e)[:80]}"
+        if st in STATUS_FUNCIONARIO_CONHECIDOS:
+            return False, 'vinculo_nao_ativo'
+        return False, 'vinculo_indeterminado'
+    except Exception:
+        return False, 'vinculo_indeterminado'
 
 
 def _montar_mensagem_assinatura(nome: str, tipo_documento: str, link: str) -> str:
