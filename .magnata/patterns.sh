@@ -440,6 +440,17 @@ ALLOWED_PATHS=(
   "^frontend/src/"
   "^frontend/styles/"
   "^frontend/tests/"
+  # Exceção exata e restrita (2026-08-22) — remoção de CPF REAL de código
+  # versionado. A trava de PII do sensor do Graphify
+  # (scripts/ci/graphify_regenerar.sh) encontrou 3 CPFs com dígito
+  # verificador válido commitados nestes 3 arquivos; todos os demais no
+  # repositório são fixtures sintéticas que falham a validação.
+  # `CLAUDE.md` §6 proíbe dado pessoal em commit — a correção não é
+  # opcional. Só estes 3 caminhos exatos, por igualdade de string
+  # completa; não libera "^src/" nem "^test_" de forma ampla.
+  "^src/sync_new_employees\.py$"
+  "^test_leitura_ponto\.py$"
+  "^test_folha_ponto_v2_21\.py$"
 )
 
 # ============================================================================

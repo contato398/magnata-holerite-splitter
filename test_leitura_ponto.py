@@ -18,7 +18,7 @@ MAGNATA PORTARIA E SERVIÇOS LTDA
 CNPJ: 17.987.187/0001-61
 
 CPF: ADMISSÃO:
-326.052.678-14
+123.456.789-00
 
 ADRIANO DE ALBUQUERQUE ANGARTEN
 
@@ -89,7 +89,7 @@ def test_periodo_extraido():
 
 def test_cpf_extraido():
     resultado = app.extrair_cartao_ponto(TEXTO_CARTAO_PONTO_REAL)
-    assert resultado['cpf'] == '326.052.678-14'
+    assert resultado['cpf'] == '123.456.789-00'
     print('OK: CPF extraído via extrair_cpf existente')
 
 

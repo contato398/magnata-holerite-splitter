@@ -102,7 +102,7 @@ def test_anexo_identico_nao_duplica(mock_busca, mock_get):
 
 
 CTX_CARTAO_PONTO = dict(CTX_BASE, texto=(
-    'CPF: ADMISSÃO:\n326.052.678-14\n'
+    'CPF: ADMISSÃO:\n123.456.789-00\n'
     'Período: 28/04/2026 até 28/05/2026\n'
     '28/04/26 - Ter - C2 FOLGA FOLGA FOLGA FOLGA FOLGA FOLGA\n'
     '29/04/26 - Qua - C1 18:56 01:00 01:53 09:05\n'
