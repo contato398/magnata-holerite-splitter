@@ -70,7 +70,10 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import importlib, sys
+          # `import importlib` NAO carrega o submodulo util -- precisa ser
+          # importado explicitamente, senao da AttributeError.
+          import importlib.util
+          import sys
           faltando = [m for m in ('flask', 'celery', 'redis', 'pdfplumber',
                                   'pypdf', 'fpdf', 'reportlab', 'openpyxl')
                       if not importlib.util.find_spec(m)]
