@@ -1,0 +1,60 @@
+# Autorização humana específica — motivo de bloqueio de vínculo sem PII
+# Base: 67720ad (main, após o merge dos PRs #31 e #32)
+# Branch: fix/vinculo-motivo-sem-pii
+# Data: 2026-08-22
+# Autorização: missão "ESTABILIZAÇÃO TÉCNICA E INÍCIO DA IMPLEMENTAÇÃO DO
+# GRANDE ORQUESTRADOR", §3 — "Está autorizada a aplicação da correção
+# funcional já comprovada da função _status_funcionario_elegivel, desde
+# que a implementação usada seja tecnicamente equivalente à correção já
+# testada que levou a suíte a 642/0". A mesma missão instruiu
+# explicitamente a NÃO copiar cegamente o PR antigo, e sim comparar com
+# main, confirmar aplicabilidade e identificar o comportamento corrigido
+# — foi o que se fez, e o resultado está registrado abaixo.
+#
+# DOIS DEFEITOS REAIS CORRIGIDOS, não um rótulo:
+#
+# 1. VAZAMENTO DE DADO PESSOAL (LGPD, CLAUDE.md §6). A versão anterior
+#    montava o motivo interpolando 'r.text[:80]' (corpo da resposta do
+#    Airtable) e 'list(fields.keys())'. Esse motivo é propagado para log
+#    pelos 4 pontos que chamam a função. O corpo de um registro de
+#    Funcionários contém Nome Completo, CPF e WhatsApp. O teste
+#    test_motivo_de_bloqueio_nunca_expoe_pii existia justamente para
+#    provar isso e falhava em main desde 2026-08-17.
+#
+# 2. LEITURA DO STATUS QUE NUNCA FUNCIONAVA PELO CAMINHO PRINCIPAL.
+#    F_FUNC_STATUS é um Field ID ('fld5T04dlg1Yt6Xj8'), não um nome. Sem
+#    'returnFieldsByFieldId', o Airtable devolve as chaves por NOME —
+#    portanto fields.get(F_FUNC_STATUS) era SEMPRE None, e o código caía
+#    nas heurísticas de fallback: procurar 'Status'/'status'/'STATUS' e,
+#    falhando isso, varrer TODOS os valores do registro atrás de algo
+#    parecido com um status. Essa varredura podia casar com o campo
+#    errado. O parâmetro não é cosmético: é o que faz a leitura funcionar
+#    pelo caminho declarado. Já é o padrão em outros 18 pontos de app.py.
+#
+# CONTRATO NOVO, verificado contra os 6 testes que o exigem:
+#   elegivel=True,  motivo=None                    -> status == 'Ativo'
+#   elegivel=False, motivo='vinculo_nao_ativo'     -> status em
+#                   STATUS_FUNCIONARIO_CONHECIDOS, mas != 'Ativo'
+#   elegivel=False, motivo='vinculo_indeterminado' -> id ausente, HTTP não-ok,
+#                   exceção, status ausente ou status desconhecido
+# Nunca aprovar por omissão: status desconhecido BLOQUEIA.
+#
+# COMPATIBILIDADE VERIFICADA, não presumida: os 4 pontos que chamam a
+# função (linhas ~10245, ~10449, ~10752, ~11062) usam o motivo apenas
+# para registro/propagação — nenhum compara o motivo por string. A única
+# ocorrência textual parecida, 'cancelado_vinculo_nao_ativo' (~10755), é
+# um literal independente atribuído a item['acao'] e não é produzido por
+# esta função. Nenhum contrato externo quebra.
+#
+# Escopo desta autorização, nada além: a função
+# _status_funcionario_elegivel e sua docstring. Nenhuma outra função,
+# rota, campo, constante ou tipo de documento é tocado. Nenhum dado do
+# Airtable é alterado — a mudança é de leitura e de rótulo.
+#
+# VALIDAÇÃO NESTA SESSÃO: py_compile limpo; suíte completa
+# 642 passando / 0 falhando (baseline imediatamente antes, no mesmo
+# container e com as mesmas dependências: 636 passando / 6 falhando).
+# As 6 que passaram a verde são exatamente as 6 que o teste exigia.
+# Nenhuma falha nova, nenhum teste enfraquecido ou alterado.
+# Somente blob exato aprovado; qualquer alteração subsequente invalida esta autorização.
+2049badb94883c1942805c81028ab3cabca36036  app.py
