@@ -1,0 +1,101 @@
+name: Magnata OS — Suíte de Testes
+
+# Por que este workflow existe (achado da Etapa 6 da Central Command,
+# 2026-08-22): até esta data o repositório tinha UM único workflow, o de
+# governança, que valida branch, arquivos protegidos, segredos e
+# conformidade documental — mas NÃO executa a suíte. Consequência real,
+# não hipotética: 6 testes ficaram vermelhos em `main` desde 2026-08-17 e
+# nenhuma automação poderia tê-los apontado. Um deles
+# (test_motivo_de_bloqueio_nunca_expoe_pii) protegia contra vazamento de
+# dado pessoal em log.
+#
+# Escopo deliberado: instalar as MESMAS dependências declaradas em
+# requirements.txt e rodar pytest. Nada além disso. Sem segredo, sem
+# serviço externo, sem acesso a produção, sem Airtable, sem rede de
+# terceiros — a suíte é toda mockada e não faz chamada real.
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  testes:
+    name: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          # Mesma versão declarada em render.yaml (PYTHON_VERSION 3.11.0).
+          # Se divergir de produção, o teste deixa de representar produção.
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Instalar dependências
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # requirements.txt é a fonte única — o runner instala exatamente
+          # o que produção instala. `celery` e `redis` estão lá e são
+          # necessários para a coleta de 3 arquivos de teste; sem eles a
+          # suíte falha por ModuleNotFoundError e a falha PARECE regressão
+          # de código sem ser. Foi exatamente o que confundiu auditorias
+          # anteriores.
+          pip install -r requirements.txt
+          # pytest não está (e não deve estar) em requirements.txt: é
+          # ferramenta de teste, não dependência de execução em produção.
+          pip install pytest
+
+      - name: Conferir que as dependências de coleta existem
+        # Falha cedo e com mensagem clara, em vez de deixar a suíte
+        # reportar ModuleNotFoundError espalhado por vários arquivos.
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          # `import importlib` NAO carrega o submodulo util -- precisa ser
+          # importado explicitamente, senao da AttributeError.
+          import importlib.util
+          import sys
+          faltando = [m for m in ('flask', 'celery', 'redis', 'pdfplumber',
+                                  'pypdf', 'fpdf', 'reportlab', 'openpyxl')
+                      if not importlib.util.find_spec(m)]
+          if faltando:
+              print('FALTANDO (dependência de coleta ausente):', ', '.join(faltando))
+              sys.exit(1)
+          print('Todas as dependências de coleta presentes.')
+          PY
+
+      - name: Executar a suíte
+        # Sem `|| true`, sem `continue-on-error`: qualquer teste vermelho
+        # reprova o job. É o ponto inteiro deste workflow.
+        run: python -m pytest -q --tb=short
+
+      - name: Resumo
+        if: always()
+        run: |
+          echo "### Suíte de testes" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "Todos os testes passaram." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Há teste falhando — ver o log do passo \`Executar a suíte\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Se a falha for \`ModuleNotFoundError\`, é dependência de ambiente, não regressão de código: confira \`requirements.txt\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
