@@ -1,5 +1,25 @@
 # Magnata OS — Índice da Documentação Fundacional
 
+> **NOTA DE PRESERVAÇÃO — Etapa 4 da Central Command, 2026-08-22.**
+> Até esta data, **13 dos documentos abaixo não existiam em `main`** —
+> este índice apontava para arquivos ausentes, e `CLAUDE.md` §2 mandava
+> desempatar conflito por dois deles (`MAGNATA_OS_CONTRATOS.md` e
+> `MAGNATA_OS_ESTADOS.md`) que também não estavam aqui. Eles existiam
+> apenas na branch `feat/magnata-os-claude-powerpack`, cujo PR **#12 foi
+> fechado sem merge** em 2026-08-03.
+>
+> Foram resgatados com proveniência declarada no topo de cada arquivo.
+> Onde havia divergência conhecida contra o que já está implementado, o
+> arquivo recebeu uma **NOTA DE RECONCILIAÇÃO** visível — nenhuma decisão
+> aprovada pela Direção foi alterada, e nada foi corrigido em silêncio.
+>
+> **Continuam fora de `main`:** os 5 skills e 5 subagentes em `.claude/`
+> e a matriz de responsabilidades (caminhos não cobertos por
+> `ALLOWED_PATHS` — exigem decisão própria), e
+> `MAGNATA_OS_DOCUMENTAL_MODULO01_FASE5.md`, cuja Fase 5 não foi
+> mesclada. Ver `central-command/FOUNDATION.md` e
+> `central-command/HISTORICO.md`.
+
 **Este arquivo é um índice, não uma cópia.** Todo documento listado
 aqui continua vivendo na **raiz do repositório**, com o nome de arquivo
 que já tem hoje — de propósito, não por descuido. Ver "Por que os

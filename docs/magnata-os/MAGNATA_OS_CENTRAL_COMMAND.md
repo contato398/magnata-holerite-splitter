@@ -2,7 +2,7 @@
 
 **Tipo:** memória mestre persistente e verificável do estado real do projeto.
 **Propósito:** ser o contexto inicial de qualquer nova conversa/sessão sobre o Magnata OS, substituindo a dependência de uma conversa longa como memória principal.
-**Gerado em:** 2026-08-21 (Etapa 1 — auditoria técnica), ampliado em 2026-08-21 (Etapa 2 — auditoria de memória e proveniência) e em 2026-08-22 (Etapa 3 — consolidação macro, recuperação da fundação e unificação de duas linhas divergentes de Central Command). Repositório `contato398/magnata-holerite-splitter` (branch auditada: `main` em `d3546ba`; branches remotas verificadas: todas).
+**Gerado em:** 2026-08-21 (Etapa 1 — auditoria técnica), ampliado em 2026-08-21 (Etapa 2 — auditoria de memória e proveniência) e em 2026-08-22 (Etapa 3 — consolidação macro e unificação de duas linhas divergentes; Etapa 4 — preservação canônica: fundação documental resgatada para `main`, memória histórica preservada dentro dos limites da LGPD). Repositório `contato398/magnata-holerite-splitter` (branch auditada: `main` em `d3546ba`; branches remotas verificadas: todas).
 **Método:** nenhuma informação aqui vem de conversa anterior tratada como verdade absoluta. Tudo foi confirmado em código, documentação versionada, histórico de commits/branches ou execução real de teste nesta sessão. Onde isso não foi possível, o item está marcado 🔍 **PRECISA SER VALIDADO**, nunca apresentado como fato.
 **Linhagem deste arquivo:** nasceu como `CENTRAL_COMMAND_MAGNATA_OS.md` na raiz, na branch `claude/magnata-central-command-0n0713` (commits `ea95ab6`, `27d12b1`). Foi movido para cá na Etapa 3 porque aquele caminho e aquela branch não passam nos gates de governança do próprio repositório — ver §0-B.2. O texto das Etapas 1 e 2 está preservado; a Etapa 3 acrescenta, corrige explicitamente onde errou, e nunca reescreve.
 
@@ -183,6 +183,90 @@ Registradas, não silenciadas:
 | "as 19 falhas são pré-existentes de ambiente" (linha B) | **13** são de ambiente (`celery` ausente); **6** são divergência real código×teste. Com `cffi` e `celery` instalados: 636 passando / 6 falhando |
 | "fontes 'Central Command' e 'Auditoria de Memória' não localizadas" (linha B) | **Localizadas** — são exatamente os commits `ea95ab6` e `27d12b1`. A conclusão anterior era correta para os refs disponíveis naquele momento e está superada |
 | "`fix/recibos-outros-documentos` não auditada" (linha B) | Auditada: carrega `docs/historico/`, **31 arquivos**, commit `1027fc8` |
+
+
+---
+
+## 0-C. Etapa 4 — Preservação canônica da memória (2026-08-22)
+
+Esta etapa executou NXT-001 + NXT-002 como uma fase única de
+preservação. **O que mudou em relação a tudo que veio antes:** a §3
+deste documento e a Etapa 2 descreviam corretamente que a fundação e a
+memória histórica estavam presas em branches. **A fundação não está
+mais.** A memória histórica está preservada em conhecimento, mas não em
+texto bruto — e o motivo é LGPD, não descuido.
+
+### 0-C.1 Rastro canônico — `ORIGEM HISTÓRICA → ARQUIVO CANÔNICO → STATUS`
+
+| Origem histórica | Arquivo canônico agora | Status |
+|---|---|---|
+| `powerpack:MAGNATA_OS_ARQUITETURA.md` | `MAGNATA_OS_ARQUITETURA.md` | ✅ Preservado · 🟡 §2 superada por `MODULOS.md`, com nota |
+| `powerpack:MAGNATA_OS_ENTIDADES.md` | `MAGNATA_OS_ENTIDADES.md` | ✅ Preservado · vigente |
+| `powerpack:MAGNATA_OS_DECISOES_ENTIDADES.md` | `MAGNATA_OS_DECISOES_ENTIDADES.md` | ✅ Preservado · **26 decisões aprovadas + 4 Modelos Conceituais**, com nota sobre o cabeçalho desatualizado |
+| `powerpack:MAGNATA_OS_CONTRATOS.md` | `MAGNATA_OS_CONTRATOS.md` | ✅ Preservado · vigente · **`CLAUDE.md` §2 volta a ter alvo real** |
+| `powerpack:MAGNATA_OS_ESTADOS.md` | `MAGNATA_OS_ESTADOS.md` | ✅ Preservado · vigente · idem |
+| `powerpack:MAGNATA_OS_EVENTOS.md` | `MAGNATA_OS_EVENTOS.md` | ✅ Preservado · vigente |
+| `powerpack:MAGNATA_OS_MODULO_01_INGESTAO.md` | `MAGNATA_OS_MODULO_01_INGESTAO.md` | ✅ Preservado · 🟡 plano anterior ao código, com nota de precedência |
+| `powerpack:..._MODULO_01_DECISOES_IMPLEMENTACAO.md` | mesmo nome | ✅ Preservado · 13 decisões |
+| `powerpack:docs/magnata-os/ADR_001...` | `docs/magnata-os/MAGNATA_OS_ADR_001_...md` | ✅ Preservado · ⚠️ **continua sem decisão**, por desenho |
+| `powerpack:docs/magnata-os/MAGNATA_AI_SKILLS_E_SUBAGENTES.md` | mesmo caminho | ✅ Preservado (documento) |
+| `powerpack:` 8 relatórios de Etapa do Powerpack | raiz, mesmos nomes | ✅ Preservados · 📜 relatórios históricos |
+| `recibos:docs/historico/` (31 arquivos) | `central-command/HISTORICO.md` + 2 originais em `docs/magnata-os/historico/` | 🟡 **Conhecimento preservado, texto bruto não** — LGPD, ver 0-C.3 |
+| `powerpack:.claude/skills/*`, `agents/*`, `MATRIX_*` | — | ⚠️ **Ainda fora** — caminhos não cobertos por `ALLOWED_PATHS` |
+| `fase5-painel:MAGNATA_OS_DOCUMENTAL_MODULO01_FASE5.md` | — | ⚠️ **Ainda fora** — Fase 5 não mesclada; trazer só o documento afirmaria algo que o código não sustenta |
+
+### 0-C.2 Reconciliação, não cópia cega
+
+Cada arquivo resgatado leva um bloco de **proveniência** no topo (branch,
+HEAD, PR de origem, data do fechamento sem merge). Três receberam
+**NOTA DE RECONCILIAÇÃO** visível, porque tinham divergência conhecida:
+
+1. `ARQUITETURA.md` — o mapa de 9 módulos é anterior ao de 10; o resto
+   não foi superado.
+2. `DECISOES_ENTIDADES.md` — o cabeçalho diz "pauta aberta"; a §12 do
+   mesmo arquivo lista 26 aprovadas. A nota aponta qual das duas
+   declarações internas é a posterior. **Nenhum status foi alterado.**
+3. `MODULO_01_INGESTAO.md` — é plano anterior às Fases 1-4 já
+   implementadas; a nota registra que o código prevalece.
+
+**Nenhuma decisão aprovada pela Direção foi alterada, reinterpretada ou
+marcada de outra forma.** Plano antigo continua rotulado como plano.
+
+### 0-C.3 LGPD travou a cópia dos 31 históricos — e isso é um achado
+
+Auditoria obrigatória antes de qualquer cópia:
+
+- **8 de 31** arquivos com **CPF real de funcionário**;
+- **29 de 31** com **nome completo de funcionário real**;
+- apenas **2** livres de dado pessoal;
+- pior caso: **51** candidatos a nome num único arquivo.
+
+`CLAUDE.md` §6 proíbe dado pessoal em commit, e §12-I diz que a
+autonomia nunca dispensa §6. Mascaramento automático em massa foi
+**avaliado e rejeitado** — com 29 arquivos, um nome escapando viraria
+violação permanente na linha canônica.
+
+**O que foi feito:** `central-command/HISTORICO.md` preserva a lição, a
+decisão e a proveniência (blob SHA) dos **30 registros**, verificadamente
+livre de PII; os **2 arquivos limpos** foram preservados na íntegra.
+Três regras vivas em produção hoje ganharam finalmente registro de
+origem — "nome não é identificador", "envio combinado numa mensagem só"
+e "assinatura nativa com evidência de IP/CPF".
+
+**O que continua dependendo da branch:** o texto bruto dos 29 arquivos.
+Desidentificá-los é trabalho próprio e **gate humano** — envolve dado
+pessoal dos funcionários.
+
+### 0-C.4 Referências que apontavam para o vazio — corrigidas
+
+Antes: **13 documentos** citados por `docs/magnata-os/README.md` e por
+`CLAUDE.md` §2/§5 não existiam em `main`.
+Depois: **zero** referências quebradas em `CLAUDE.md` e no `README.md`.
+
+Nenhuma regra de negócio foi alterada para resolver link. O caminho foi
+o inverso — confirmar qual documento é canônico e **trazer o documento**.
+O `README.md` recebeu nota declarando o que foi resgatado e o que
+continua fora.
 
 
 ---

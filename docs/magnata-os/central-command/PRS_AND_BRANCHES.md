@@ -98,3 +98,62 @@ estavam ativos naquelas sessões. Não é irregularidade de conteúdo — mas
 significa que **o CI de governança rejeitaria esses commits**, e é uma
 razão adicional para não tratar essas branches como caminho de entrada
 para `main` sem antes reposicionar o trabalho.
+
+---
+
+## 5. Reclassificação funcional — Etapa 4, 2026-08-22
+
+O pedido desta fase foi explícito: **não tratar o PR #20 como "próximo PR"
+por numeração.** A numeração é ordem de abertura, não ordem de
+importância nem sequência obrigatória. O repositório já tem PRs
+posteriores mesclados (#23 a #30) que passaram por cima dele.
+
+Reclassificação pelo estado real do GitHub, por **função e pendência**:
+
+| Classe | PRs | O que significa operacionalmente |
+|---|---|---|
+| **MERGED** | #1–#11, #13–#15, #17–#19, #23–#30 (25) | Conteúdo em `main`. Nenhuma ação |
+| **OPEN** | #20, #22 | Aguardam decisão humana |
+| **CLOSED WITHOUT MERGE** | #12, #16, #21 | #16 e #21 foram reabertos; **#12 não** |
+| **SUPERSEDED** | #16 → por #17 · #21 → por #22 · #12 → **parcialmente** por #13 | #13 trouxe o CI e o índice; **não** trouxe a fundação que o índice cita |
+| **CONTÉM TRABALHO NÃO INCORPORADO** | **#20**, **#22**, **#12** | Ver abaixo |
+
+### 5.1 Trabalho ainda não incorporado — por função
+
+**#12 — fundação documental.** ✅ **Resolvido nesta etapa.** Os 10
+documentos e os 8 relatórios de Etapa foram resgatados para `main` com
+proveniência. Resta apenas `.claude/` (skills, subagentes, matriz), fora
+de `ALLOWED_PATHS`.
+
+**#20 — divergência no rótulo do motivo de bloqueio.**
+Registrado **por função, não por número**:
+
+- **Função:** `_status_funcionario_elegivel` devolve
+  `'status_veio_inativo'`; o resto do sistema e os testes esperam
+  `'vinculo_nao_ativo'`/`'vinculo_indeterminado'`.
+- **Efeito hoje:** o bloqueio de vínculo inativo **funciona** — não há
+  risco de assinatura indevida. O que quebra é o **rótulo**, e com ele
+  **6 testes vermelhos permanentes** que mascaram regressão nova.
+- **Onde a correção existe:** `origin/fix/status-funcionario-pii`,
+  2 arquivos, +17/−16 em `app.py`, **18 commits atrás de `main`**.
+- **Independência:** esta pendência **não depende** do número do PR. Se
+  o #20 for fechado, a correção continua necessária e continua
+  disponível naquela branch. Pode ser reaberta como PR novo sobre
+  `main` atual sem nenhuma perda.
+- **Gate:** toca `app.py` — legado protegido, `CLAUDE.md` §7.
+
+**#22 — direção do Módulo 01 (captura de e-mail).**
+
+- **Função:** registra a decisão de não construir automação nova no
+  Make.com e entrega um adapter de e-mail que roda **em paralelo** ao
+  Gmail Apps Script, sem substituir nada.
+- **Risco de não agir:** a análise se perde e a próxima sessão a refaz.
+- **Independência:** aditivo, não toca `app.py`, 3 arquivos novos.
+
+### 5.2 O que mudou nesta reclassificação
+
+A leitura anterior colocava o #20 como "próxima ação de maior valor" em
+parte pela numeração baixa. **Corrigido:** as ações de maior valor eram
+as de preservação (executadas nesta etapa), porque envolviam risco de
+perda irreversível. O #20 é a melhor ação **de código** disponível — mas
+código sempre pode ser reescrito; memória perdida, não.
