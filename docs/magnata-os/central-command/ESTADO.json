@@ -2,7 +2,6 @@
   "autorizacoes_app_py": 13,
   "branches_fora_de_main": [
     "claude/evolution-api-instances-1s9raa",
-    "claude/macro-6a-sensor-central-command",
     "claude/magnata-central-command-0n0713",
     "feat/magnata-os-claude-powerpack",
     "feat/magnata-os-documental-modulo01-fase5-painel",
@@ -16,6 +15,7 @@
     "ACTIONS_COMPLETED.md",
     "AIRTABLE_DESACOPLAMENTO.md",
     "ARCHITECTURE.md",
+    "BANCO_PROPRIO_MODELO.md",
     "COBERTURA.md",
     "DECISIONS.md",
     "DIRECTIVES.md",
@@ -37,9 +37,9 @@
     "WORK_IN_PROGRESS.md"
   ],
   "links_quebrados": [],
-  "main_assunto": "Merge pull request #34 from contato398/fix/ci-suite-de-testes",
-  "main_data": "2026-08-22 18:58:19 -0300",
-  "main_sha": "f227a8f",
+  "main_assunto": "Merge pull request #35 from contato398/claude/macro-6a-sensor-central-command",
+  "main_data": "2026-08-22 19:02:40 -0300",
+  "main_sha": "75dd8fc",
   "testes": {
     "falhando": 0,
     "passando": 642

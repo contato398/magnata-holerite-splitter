@@ -391,6 +391,100 @@ regenerada por decisão humana — mas agora ela sabe quando está velha.
 
 ---
 
+## 0-F. Etapa 8 — main verde, CI ativo, sensores operando (2026-08-22)
+
+**`main` = `75dd8fc`.** Três merges nesta etapa: **#33** (correção do
+vínculo), **#34** (CI de testes), **#35** (sensor + auditorias).
+
+### 0-F.1 Estado alcançado
+
+| Verificação | Resultado |
+|---|---|
+| Suíte em `main` | ✅ **642 passando / 0 falhando** |
+| CI de governança | ✅ 15/15 gates |
+| CI de testes | ✅ **ativo** — `magnata-testes.yml` |
+| Links | ✅ 0 quebrados |
+| PII em documentação | ✅ zero |
+| Sensor da Central Command | ✅ operacional |
+
+**Pela primeira vez a suíte está inteiramente verde e protegida por CI.**
+
+### 0-F.2 O CI se provou três vezes
+
+1. **Reprovou por bug do próprio workflow** — `import importlib` não
+   carrega `importlib.util`. Reproduzido localmente, corrigido, republicado.
+2. **Reprovou pelas 6 falhas reais** quando a base ainda não tinha a correção.
+3. **Aprovou** contra a base corrigida.
+
+Um CI que encontra o próprio defeito antes de julgar o código é o
+comportamento desejado. Também foi testado por injeção de regressão
+isolada e reversível: assertion falsa → `1 failed`; restaurada → `642 passed`.
+
+### 0-F.3 Correção de acoplamento no sensor do Graphify
+
+A primeira versão do detector acusou
+`escritor.py → airtable_escrita.py` como violação de `CLAUDE.md` §3.
+**Falso positivo, corrigido:** `airtable_escrita.py` é um **adapter**, e
+adapter falando com fornecedor é exatamente o padrão que a §3 exige.
+Verificado no código: `escritor.py` importa só o adapter, nunca o driver.
+
+O detector agora exclui `adapters/` do escopo da regra. Detector que
+grita em código certo é pior que detector nenhum.
+
+### 0-F.4 Snapshot de arquitetura — 1,42 MB → 32 KB
+
+`scripts/ci/graphify_snapshot.py` converte o grafo bruto num snapshot
+leve com **só arestas `EXTRACTED`**, descartando 1.211 arestas `INFERRED`
+de confiança 0,5. Detecta arquivo/módulo/símbolo novo ou removido,
+dependência nova e violação de acoplamento.
+
+**O Graphify não é dependência:** sem `graph.json`, o script avisa e sai
+com código 0. Nada no Magnata OS quebra sem ele.
+
+### 0-F.5 Modelo do banco próprio — o problema é temporal
+
+`Funcionários` liga-se a `Locais de trabalho` **sem dimensão temporal**.
+Quando alguém muda de posto, o vínculo anterior é sobrescrito — e o
+holerite de julho passa a apontar para o posto de agosto.
+
+É exatamente o que o Modelo Conceitual aprovado pela Direção previu ao
+criar **`Alocação`** como entidade distinta de `Vínculo Trabalhista`.
+Modelo alvo com vigência por intervalo em
+[`BANCO_PROPRIO_MODELO.md`](central-command/BANCO_PROPRIO_MODELO.md).
+
+🔴 **`Folha de Ponto` tem 36 de 50 campos derivados (72%)** — regra de
+negócio dentro do Airtable, fora do Git, sem teste. Copiar dados não
+migra o sistema.
+
+### 0-F.6 Deslize de escopo registrado, não escondido
+
+`scripts/ci/graphify_snapshot.py` entrou em `main` pelo commit `91bbcbb`,
+**dentro do PR #35** — varrido por um `git add -A` junto com a atualização
+do snapshot. **A descrição do PR #35 não mencionava esse arquivo.**
+
+Verificado antes de registrar: a versão que entrou é a **corrigida** (com
+`_e_dominio`/`CAMINHOS_ADAPTER`, sem o falso positivo de acoplamento),
+passou por todos os gates — governança 15/15, CI de testes, caminhos,
+whitespace — e é script read-only que não é dependência de nada.
+
+**Nenhum defeito foi para `main`.** O que ficou errado foi o *registro*:
+um PR entregou um arquivo que sua descrição não declarava. Fica anotado
+como precedente — `git add -A` num tree com arquivo não rastreado de outra
+frente é como isso acontece.
+
+### 0-F.7 `ALLOWED_PATHS` — proposta mínima preparada
+
+49 dos 50 arquivos da Fase 5 são barrados hoje. A proposta libera
+**apenas** `frontend/index.html`, `frontend/src/`, `frontend/styles/` e
+`frontend/tests/` — **não** `^frontend/` genérico. `frontend/CLAUDE.md` e
+`frontend/assets/brand/` continuam protegidos, verificado.
+
+⚠️ **Amplia a superfície de escrita.** O impacto está declarado dentro do
+próprio `patterns.sh`. **Não mesclado** — é decisão de governança.
+
+
+---
+
 ## 1. Visão geral
 
 O Magnata OS é a plataforma operacional modular da Magnata, em migração

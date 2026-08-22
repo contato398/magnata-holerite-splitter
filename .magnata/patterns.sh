@@ -421,6 +421,25 @@ ALLOWED_PATHS=(
   # não libera "^.*\.yaml$" nem nenhum outro arquivo de infraestrutura.
   "^Procfile$"
   "^render\.yaml$"
+  # Exceção exata e restrita (proposta da Etapa 8 da Central Command,
+  # 2026-08-22) — recuperação do painel visual da Fase 5 do Módulo 01,
+  # hoje parado numa branch com 50 arquivos porque 49 deles são barrados
+  # aqui. Ver docs/magnata-os/central-command/FASE5_AUDITORIA.md §5.1.
+  #
+  # IMPACTO DECLARADO, não escondido: isto AMPLIA a superfície de escrita
+  # do repositório. Passa a ser possível commitar em frontend/src/,
+  # frontend/styles/, frontend/tests/ e frontend/index.html sem nova
+  # decisão a cada arquivo.
+  #
+  # O que continua protegido, de propósito: "^frontend/" NÃO foi liberado
+  # como prefixo genérico. frontend/CLAUDE.md e frontend/assets/brand/
+  # seguem em PROTECTED_FILES e nenhum padrão abaixo os alcança — os
+  # assets oficiais de marca continuam exigindo autorização explícita
+  # (CLAUDE.md §7).
+  "^frontend/index\.html$"
+  "^frontend/src/"
+  "^frontend/styles/"
+  "^frontend/tests/"
 )
 
 # ============================================================================
