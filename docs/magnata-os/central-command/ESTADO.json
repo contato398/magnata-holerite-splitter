@@ -1,0 +1,47 @@
+{
+  "autorizacoes_app_py": 12,
+  "branches_fora_de_main": [
+    "claude/evolution-api-instances-1s9raa",
+    "claude/magnata-central-command-0n0713",
+    "feat/magnata-os-claude-powerpack",
+    "feat/magnata-os-documental-modulo01-fase5-painel",
+    "fix/adr-modulo01-http-wiring",
+    "fix/ci-suite-de-testes",
+    "fix/plano-modulo01-email-captura",
+    "fix/recibos-outros-documentos",
+    "fix/status-funcionario-pii",
+    "fix/vinculo-motivo-sem-pii"
+  ],
+  "cpf_em_documentacao": [],
+  "documentos_central_command": [
+    "ACTIONS_COMPLETED.md",
+    "AIRTABLE_DESACOPLAMENTO.md",
+    "ARCHITECTURE.md",
+    "COBERTURA.md",
+    "DECISIONS.md",
+    "DIRECTIVES.md",
+    "FASE5_AUDITORIA.md",
+    "FORA_DO_GIT.md",
+    "FOUNDATION.md",
+    "GRAPHIFY.md",
+    "HISTORICO.md",
+    "INDEX.md",
+    "MACRO_6A.md",
+    "MEMORIA_SENSIVEL.md",
+    "NEXT_ACTIONS.md",
+    "ORQUESTRADOR.md",
+    "PENDING.md",
+    "PRS_AND_BRANCHES.md",
+    "RISKS.md",
+    "SOURCES_AND_PROVENANCE.md",
+    "SUPERSEDED_DECISIONS.md",
+    "WORK_IN_PROGRESS.md"
+  ],
+  "links_quebrados": [],
+  "main_assunto": "Merge pull request #32 from contato398/claude/macro-6a-pos-merge-orquestrador",
+  "main_data": "2026-08-22 16:58:55 -0300",
+  "main_sha": "67720ad",
+  "workflows": [
+    "magnata-governance.yml"
+  ]
+}

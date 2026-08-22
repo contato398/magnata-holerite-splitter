@@ -31,6 +31,8 @@ Cadeia: **fonte → decisão → implementação → PR/commit → estado atual.
 | De onde veio cada informação? | [`SOURCES_AND_PROVENANCE.md`](SOURCES_AND_PROVENANCE.md) |
 | O que ainda não sabemos? | [`COBERTURA.md`](COBERTURA.md) |
 | O que existe mas não está no Git, e por quê? | [`FORA_DO_GIT.md`](FORA_DO_GIT.md) |
+| A Fase 5 pode ser recuperada? | [`FASE5_AUDITORIA.md`](FASE5_AUDITORIA.md) |
+| A Central Command está desatualizada? | `scripts/ci/central_command_sensor.py` — compara com [`ESTADO.json`](ESTADO.json) |
 | Devemos adotar o Graphify? | [`GRAPHIFY.md`](GRAPHIFY.md) — POC executada |
 | Como sair do Airtable? | [`AIRTABLE_DESACOPLAMENTO.md`](AIRTABLE_DESACOPLAMENTO.md) — 4 fases |
 | Onde guardar dado sensível? | [`MEMORIA_SENSIVEL.md`](MEMORIA_SENSIVEL.md) |
@@ -65,6 +67,7 @@ produção.
 | 3 | 2026-08-22 | Conteúdo da fundação extraído · lacuna temporal fechada · duas linhas de Central Command unificadas · PRs/branches inventariados · Macro 6A reconciliada · riscos priorizados | `26b9754` |
 | 4 | 2026-08-22 | **Fundação documental resgatada para `main`** (10 documentos + 8 relatórios, com proveniência e notas de reconciliação) · memória histórica preservada como conhecimento livre de PII · 13 referências quebradas corrigidas · PRs reclassificados por função | esta branch |
 | 5 | 2026-08-22 | PR #31 aberto · diff auditado · CI 15/15 · suíte idêntica ao baseline · fontes fora do Git registradas · núcleos classificados por evidência · requisito de camada de memória segura registrado | esta branch |
+| 7 | 2026-08-22 | **PRs #31 e #32 mesclados** · correção do vínculo (PR #33, 642/0) · CI de testes (PR #34) · Fase 5 auditada · **primeiro sensor de atualização automática** · integração do Graphify desenhada | esta branch |
 | 6 | 2026-08-22 | **PR #31 MESCLADO — `main` = `9f8a53f`** · falhas classificadas por execução (642 passando com a correção) · produção não verificável (rede) · Graphify avaliado com POC · desacoplamento do Airtable mapeado (31 tabelas) · memória sensível especificada · arbitragem de fontes definida | esta branch |
 
 As Etapas 1-2 nasceram em `claude/magnata-central-command-0n0713`, em
