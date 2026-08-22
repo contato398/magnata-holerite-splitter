@@ -223,7 +223,11 @@ agentes técnicos especializados para verificação, governança e validação.
   4. `documentation-auditor` — auditoria documental
   5. `quality-gate-reviewer` — revisão final
 
-**Matriz de responsabilidades:** [`.claude/MATRIX_DE_RESPONSABILIDADES.md`](../../.claude/MATRIX_DE_RESPONSABILIDADES.md)
+**Matriz de responsabilidades:** `.claude/MATRIX_DE_RESPONSABILIDADES.md`
+— ⚠️ **FORA DE `main`**, caminho não coberto por `ALLOWED_PATHS`. Existe em
+`feat/magnata-os-claude-powerpack`; registrada em
+[`central-command/FORA_DO_GIT.md`](central-command/FORA_DO_GIT.md) §2.
+Link removido de propósito: apontava para arquivo inexistente.
 
 **Limite de escopo:** Todos trabalham em leitura segura do repositório.
 Nenhum acesso autônomo a produção. Nenhuma alteração de código. Nenhum

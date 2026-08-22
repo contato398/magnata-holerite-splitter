@@ -30,6 +30,9 @@ Cadeia: **fonte → decisão → implementação → PR/commit → estado atual.
 | O que fazer em seguida? | [`NEXT_ACTIONS.md`](NEXT_ACTIONS.md) — 15 ações |
 | De onde veio cada informação? | [`SOURCES_AND_PROVENANCE.md`](SOURCES_AND_PROVENANCE.md) |
 | O que ainda não sabemos? | [`COBERTURA.md`](COBERTURA.md) |
+| O que existe mas não está no Git, e por quê? | [`FORA_DO_GIT.md`](FORA_DO_GIT.md) |
+| Que núcleos de negócio existem de fato? | [`ORQUESTRADOR.md`](ORQUESTRADOR.md) §1 |
+| Qual camada é verdade sobre o quê? | [`ORQUESTRADOR.md`](ORQUESTRADOR.md) §3 |
 | Qual a memória operacional de jun-jul/2026? | [`HISTORICO.md`](HISTORICO.md) — 30 registros, livre de PII |
 | O que está em produção? | mestre §6 · [`RISKS.md`](RISKS.md) |
 | Quais integrações existem? | mestre §5 |
@@ -56,6 +59,7 @@ produção.
 | 1 | 2026-08-21 | Auditoria técnica: estado real, módulos, integrações, produção | `ea95ab6` |
 | 2 | 2026-08-21 | Memória e proveniência: `docs/historico/`, decisões, diretivas, superadas | `27d12b1` |
 | 3 | 2026-08-22 | Conteúdo da fundação extraído · lacuna temporal fechada · duas linhas de Central Command unificadas · PRs/branches inventariados · Macro 6A reconciliada · riscos priorizados | `26b9754` |
+| 5 | 2026-08-22 | PR #31 aberto · diff auditado · CI 15/15 · suíte idêntica ao baseline · fontes fora do Git registradas · núcleos classificados por evidência · requisito de camada de memória segura registrado | esta branch |
 | 4 | 2026-08-22 | **Fundação documental resgatada para `main`** (10 documentos + 8 relatórios, com proveniência e notas de reconciliação) · memória histórica preservada como conhecimento livre de PII · 13 referências quebradas corrigidas · PRs reclassificados por função | esta branch |
 
 As Etapas 1-2 nasceram em `claude/magnata-central-command-0n0713`, em
