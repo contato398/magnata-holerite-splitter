@@ -59,8 +59,8 @@ produção.
 | 1 | 2026-08-21 | Auditoria técnica: estado real, módulos, integrações, produção | `ea95ab6` |
 | 2 | 2026-08-21 | Memória e proveniência: `docs/historico/`, decisões, diretivas, superadas | `27d12b1` |
 | 3 | 2026-08-22 | Conteúdo da fundação extraído · lacuna temporal fechada · duas linhas de Central Command unificadas · PRs/branches inventariados · Macro 6A reconciliada · riscos priorizados | `26b9754` |
-| 5 | 2026-08-22 | PR #31 aberto · diff auditado · CI 15/15 · suíte idêntica ao baseline · fontes fora do Git registradas · núcleos classificados por evidência · requisito de camada de memória segura registrado | esta branch |
 | 4 | 2026-08-22 | **Fundação documental resgatada para `main`** (10 documentos + 8 relatórios, com proveniência e notas de reconciliação) · memória histórica preservada como conhecimento livre de PII · 13 referências quebradas corrigidas · PRs reclassificados por função | esta branch |
+| 5 | 2026-08-22 | PR #31 aberto · diff auditado · CI 15/15 · suíte idêntica ao baseline · fontes fora do Git registradas · núcleos classificados por evidência · requisito de camada de memória segura registrado | esta branch |
 
 As Etapas 1-2 nasceram em `claude/magnata-central-command-0n0713`, em
 caminhos que os gates do repositório não autorizam. A Etapa 3 moveu tudo
