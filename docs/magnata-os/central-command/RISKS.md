@@ -132,3 +132,44 @@ trabalho que nunca vira PR.
 | RSK-010 | Não | Não | Aceitar ou instrumentar |
 | RSK-011 | Não | Não | Decisão financeira |
 | RSK-012 | Não | Não | Instalar hooks / exigir PR |
+
+---
+
+## Etapa 6 — 2026-08-22, pós-merge
+
+### Resolvidos
+
+- **RSK-002 (fundação em uma única branch)** → ✅ **ELIMINADO.** Está em `main` (`9f8a53f`).
+- **RSK-001 (memória histórica)** → 🟡 **REDUZIDO.** A lição está em `main`; o texto bruto com PII continua dependendo da branch.
+
+### Novos
+
+### RSK-013 — nenhum CI roda a suíte de testes
+`.github/workflows/` tem **um** workflow, de governança. **Nada executa
+`pytest`.** As 6 falhas reais estão em `main` desde 2026-08-17 e nenhuma
+automação as apontaria. É a causa de fundo de RSK-004 continuar aberto.
+**Correção é barata:** um job que instala `requirements.txt` e roda a
+suíte. Toca `.github/workflows/` — decisão de governança.
+
+### RSK-014 — regra de negócio dentro do Airtable, não versionada
+Campos como `ESTE MES`, `Mes passado?` e lookups de competência são
+lógica avaliada na leitura, **fora do Git**: sem PR, sem teste, sem
+auditoria. Uma migração que só copie dados perde essa lógica sem
+perceber. Ver [`AIRTABLE_DESACOPLAMENTO.md`](AIRTABLE_DESACOPLAMENTO.md) §4.
+
+### RSK-015 — tabelas nomeadas por competência
+`Sem_Batida_Julho_2026`, `Fechamento_Mai_Jun_2026`: o mês está no **nome
+da tabela**, não num campo. Não escala e contraria o Contrato de
+Competência já definido em `MAGNATA_OS_CONTRATOS.md`.
+
+### RSK-016 — Fase 5 parada com ~50 arquivos
+`feat/...modulo01-fase5-painel` carrega um frontend inteiro (componentes,
+views, testes) parado desde 2026-07-25, **77 commits atrás de `main`** e
+nunca auditado em profundidade. Quanto mais tempo passa, mais caro fica
+reconciliar.
+
+### Reclassificado
+
+- **RSK-004** deixa de ser "6 falhas mascarando regressão" e passa a ser
+  **"6 falhas com correção provada e nenhum CI que as detecte"** — a
+  correção leva a suíte a **642/0**, verificado em worktree isolado.
