@@ -325,6 +325,72 @@ pulada — e nenhuma inferência foi convertida em fato.
 
 ---
 
+## 0-E. Etapa 7 — Estabilização técnica e primeiro sensor (2026-08-22)
+
+`main` = `67720ad` (após o merge do PR #32).
+
+### 0-E.1 O que foi entregue
+
+| Entrega | Estado |
+|---|---|
+| **PR #33** — correção de `_status_funcionario_elegivel` | Aberto · **642 ✓ / 0 ✗** · gate: toca `app.py` |
+| **PR #34** — CI que executa a suíte | Aberto · fecha RSK-013 |
+| **Auditoria da Fase 5** | [`FASE5_AUDITORIA.md`](central-command/FASE5_AUDITORIA.md) |
+| **Sensor da Central Command** | `scripts/ci/central_command_sensor.py` + `ESTADO.json` |
+| **Integração do Graphify** | [`GRAPHIFY.md`](central-command/GRAPHIFY.md) §7 |
+
+### 0-E.2 A correção do vínculo eram DOIS defeitos, não um rótulo
+
+Auditorias anteriores descreveram as 6 falhas como divergência de rótulo.
+**Incompleto.** Lendo o código em `main`:
+
+1. **Vazamento de dado pessoal.** O motivo do bloqueio era montado
+   interpolando `r.text[:80]` (corpo da resposta do Airtable) e
+   `list(fields.keys())`, e vai para log pelos 4 chamadores. O corpo de
+   um registro de `Funcionários` tem Nome, CPF e WhatsApp. O teste
+   `test_motivo_de_bloqueio_nunca_expoe_pii` existia para provar isso.
+2. **A leitura do status nunca funcionava pelo caminho principal.**
+   `F_FUNC_STATUS` é um **Field ID**; sem `returnFieldsByFieldId` o
+   Airtable devolve chaves por nome, então `fields.get(F_FUNC_STATUS)`
+   era sempre `None` e o código caía em heurísticas de fallback — uma
+   delas varrendo todos os valores do registro atrás de algo parecido
+   com um status, o que podia casar com o campo errado.
+
+### 0-E.3 Fase 5 — o risco não era o que parecia
+
+**Vanilla JS, sem `package.json`, sem build, sem nenhuma dependência
+npm.** Não há cadeia para envelhecer: nenhum bloco foi classificado como
+`REFAZER`.
+
+Os bloqueios reais são outros dois:
+- **49 dos 50 arquivos são barrados por `ALLOWED_PATHS`** — `^frontend/`
+  não está na lista. É decisão de governança, não de código.
+- **A API que o painel consumiria não está exposta por HTTP.**
+  `magnata_os/documental/modulo01/api/` é Python puro, sem rota. Por isso
+  o painel roda 100% de `mockData.js`.
+
+⚠️ `autorizacao.js` é **mock visual, não autenticação**. Publicar sem
+rotular isso na própria interface seria pior que não ter painel.
+
+### 0-E.4 Primeiro passo da atualização automática
+
+`scripts/ci/central_command_sensor.py` — read-only, não edita documento,
+não commita, não acessa rede, não é dependência de nada. Compara o estado
+real com `ESTADO.json` e reporta divergência em 8 classes: avanço de
+`main`, branch nova fora de `main`, **branch que sumiu**, documento
+novo/removido, link quebrado, CPF em documentação, mudança de workflow,
+alteração no legado protegido e **regressão de testes**.
+
+**Verificado por teste de detecção**, não só por execução: com um
+snapshot adulterado de propósito, apontou as 8 divergências corretamente,
+incluindo `REGRESSÃO: falhas 0 -> 6`.
+
+Continua sendo **detecção**, não correção. A Central Command ainda é
+regenerada por decisão humana — mas agora ela sabe quando está velha.
+
+
+---
+
 ## 1. Visão geral
 
 O Magnata OS é a plataforma operacional modular da Magnata, em migração

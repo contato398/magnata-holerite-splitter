@@ -161,3 +161,76 @@ reclassificar para ADIAR.
 continua sendo memória, decisão e proveniência; o Graphify seria a foto
 verificável e regenerável da estrutura. Fronteira em
 [`ORQUESTRADOR.md`](ORQUESTRADOR.md) §3.
+
+---
+
+## 7. Proposta de integração controlada — Etapa 7, 2026-08-22
+
+Desenho, não implementação. **O Graphify continua não instalado no
+repositório** e não deve virar dependência de nada.
+
+### 7.1 Contrato de execução
+
+| Item | Decisão |
+|---|---|
+| Onde roda | **Fora do repositório** (`/tmp` ou máquina do operador). Nunca em `node_modules/` versionado |
+| Comando | `graphify update <caminho>` — code-only, AST |
+| Chave de API | **Nenhuma.** Se houver chave no ambiente, passar `--description-mode assistant` |
+| Alvo | Cópia do repositório **sem** `docs/historico/` e sem qualquer corpus com PII |
+| Versão | Pinada exata (`@sentropic/graphify@0.17.1`) e registrada junto do grafo |
+| `.graphify/` | Em `.gitignore` — o grafo é derivado, nunca fonte |
+
+### 7.2 O que a Central Command consome — e o que descarta
+
+Do `GRAPH_REPORT.md`, apenas o que é **evidência**:
+
+| Consumir | Descartar |
+|---|---|
+| ✅ Arestas `EXTRACTED` (42%) — AST real | ❌ Arestas `INFERRED` (58%, confiança 0,5) |
+| ✅ `imports_from` — verifica a regra de acoplamento de `CLAUDE.md` §3 | ❌ "Surprising Connections" — é inferência |
+| ✅ God Nodes — abstrações centrais por grau | ❌ Descrições geradas por LLM |
+| ✅ Contagem de nós/arestas/comunidades — para detectar mudança estrutural | ❌ Rótulos de comunidade |
+| ✅ Componentes novos/removidos entre execuções | |
+
+**Regra dura:** nenhuma afirmação da Central Command pode se apoiar em
+aresta `INFERRED`. Inferência a 0,5 de confiança é cara ou coroa.
+
+### 7.3 Como detectar mudança de arquitetura
+
+Comparar duas execuções e reportar apenas:
+
+1. módulos/arquivos que **entraram** ou **saíram**;
+2. classes e funções novas ou removidas;
+3. arestas `imports_from` novas — **especialmente do domínio para
+   fornecedor** (Flask, `psycopg`, `boto3`, cliente Airtable), que é
+   violação direta de `CLAUDE.md` §3;
+4. variação relevante em nós/arestas/comunidades.
+
+Isso é o mesmo padrão do sensor já implementado
+(`scripts/ci/central_command_sensor.py`): **instantâneo + comparação**.
+A integração natural é o Graphify virar mais uma fonte lida por ele —
+não um segundo mecanismo paralelo.
+
+### 7.4 Evitar duplicidade com a documentação
+
+O Graphify responde **"como o código está"**. A Central Command responde
+**"o que foi decidido e por quê"**. Nunca devem descrever a mesma coisa.
+
+Quando divergirem: **o código vence**, e a divergência é registrada —
+exatamente a regra de arbitragem de [`ORQUESTRADOR.md`](ORQUESTRADOR.md) §6.1.
+
+### 7.5 Economia de contexto — hipótese não medida
+
+`graphify serve` expõe um servidor MCP sobre o `graph.json`. Uma sessão
+poderia perguntar "quem chama `_status_funcionario_elegivel`?" em vez de
+carregar 12.301 linhas de `app.py`.
+
+🔍 **Não medido.** É a maior economia potencial e a razão mais forte para
+adotar — mas segue sendo hipótese até alguém cronometrar.
+
+### 7.6 Próximo passo concreto
+
+Rodar `update` code-only sobre cópia isolada do repositório **inteiro**
+(com `app.py`) e verificar se o `GRAPH_REPORT.md` responde perguntas que
+hoje custam leitura manual. Se responder, adotar com as 7 restrições da
+§6. Se não, reclassificar para **ADIAR**.
