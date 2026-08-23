@@ -148,6 +148,27 @@ Command** = memória/decisão/proveniência · **Graphify** = visão
 verificável do código · **Airtable/bancos** = dados operacionais ·
 **GitHub** = histórico técnico · **produção** = verdade de execução.
 
+## Bloco 5 — provar o Módulo 01 contra dado real (2026-08-24)
+
+### NXT-016 · Modo sombra: `AdapterCapturaEmail` contra Gmail real
+**Esforço:** médio · **Toca código?** só código novo isolado até a Fase 2
+**Plano:** [`docs/decisoes/plano-modo-sombra-captura-email.md`](../../decisoes/plano-modo-sombra-captura-email.md)
+
+O adapter de e-mail (PR #22) está em `main` desde 2026-08-23, testado,
+e **nunca foi exercitado contra dado real**. É o único componente do
+Módulo 01 pronto para essa prova, e a maior lacuna estrutural do
+projeto hoje não é falta de arquitetura — é falta de prova de que o
+*strangler pattern* funciona de verdade em pelo menos um caso.
+
+Fase 1 (implementar `FonteMensagensEmail` real, código sem conexão) não
+exige gate novo. **Fase 2 (conexão real ao Gmail, só leitura) exige
+autorização de fase completa** (`CLAUDE.md` §6-a a §6-f) — nunca
+decidida em silêncio, nunca decorrente da aprovação deste plano.
+
+**Por que isto vem antes de qualquer capacidade nova do Orquestrador:**
+construir mais automação sem primeiro provar que uma peça do Módulo 01
+processa dado real corretamente é resolver o problema errado.
+
 ---
 
 ## Caminho crítico
