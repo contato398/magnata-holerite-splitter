@@ -64,6 +64,15 @@ paralelo** ao Gmail Apps Script, sem substituir nada. Registra também a
 regra "não construir nada novo no Make.com". Sem ele, a próxima sessão
 refaz a mesma análise do zero.
 
+**Correção declarada (2026-08-23) — auditoria completa desta etapa:**
+não é mais "decidir se vale a pena" — é "decidir merge". Adapter
+auditado (idempotência, erro por anexo, falha de rede — 3 lacunas de
+teste fechadas), rebaseado sobre `main` (`98e32d2`), `mergeable_state:
+clean`, CI (pytest) e governança verdes, suíte geral 649→659, 0
+regressão. **Único ponto em aberto:** é código novo + decisão de
+direção registrada, não uma correção isolada — por isso continua como
+gate humano de merge (`CLAUDE.md` §12-I), não auto-mesclável.
+
 ### NXT-006 · Decidir as 3 branches paradas
 Fase 5 (painel visual, pronta há ~4 semanas, 72 commits atrás) ·
 `fix/adr-modulo01-http-wiring` (ADR da fiação HTTP) ·
@@ -160,7 +169,7 @@ preservada; bruto pendente) · NXT-015 (Graphify avaliado com POC).
 | **1** | **Aplicar a correção de `_status_funcionario_elegivel`** | Provado: leva a suíte de 636/6 para **642/0**. Patch aplica limpo em `main` | 🔴 `app.py` (§7) |
 | **2** | **Criar CI que rode a suíte** (RSK-013) | Sem isso, o item 1 volta a acontecer sem ninguém ver | 🟠 `.github/workflows/` |
 | **3** | **Auditar as automações nativas do Airtable** (RSK-014) | Lógica de negócio invisível; bloqueia qualquer migração séria | 🟢 Leitura |
-| **4** | Decidir o PR #22 (adapter de e-mail) | Aditivo, não toca `app.py` | 🟡 |
+| **4** | Decidir o merge do PR #22 (adapter de e-mail) — **auditado, rebaseado, CI verde** (2026-08-23) | Aditivo, não toca `app.py` | 🟡 |
 | **5** | Auditar a Fase 5 (RSK-016) | ~50 arquivos parados há 4 semanas | 🟢 Leitura |
 | **6** | Fixar `pypdfium2` e `Pillow` | Quebra a tela de assinatura em produção sem aviso | 🟡 `requirements.txt` |
 | **7** | Confirmar `--workers 2` no painel do Render | Não verificável desta sessão (rede bloqueada) | 🔴 Produção |
