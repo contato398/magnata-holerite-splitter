@@ -321,3 +321,210 @@ faz um registro entrar em `NORMAL`"* continua só na interface.
 2. 🔴 Filtros exatos das 9 views.
 3. 🟠 View de `Contabilidade Mensal` não mapeada.
 4. 🟠 Condições dos ramos das 4 automações de ponto.
+
+---
+
+# ANEXO B — Etapa 11 (2026-08-23): o que a API resolveu e o que ela não alcança
+
+Fecha o que o ANEXO A deixou aberto, **com evidência**, e corrige duas
+afirmações minhas que estavam erradas. Leitura somente. Nada alterado.
+
+## B.1 `Automation 1` — resolvida: o script está VAZIO
+
+**Correção de conclusão anterior.** O ANEXO A §A.2 disse que *"o corpo do
+script não foi retornado pela API"* e listou duas leituras possíveis sem
+escolher. A escolha agora é possível, por comparação direta:
+
+| Automação | Nó | A API devolveu `script`? |
+|---|---|---|
+| `PROCESSAR ARQUIVOS` | `customScript` | ✅ **sim, completo** |
+| `Automation 1` | `customScript` | ❌ **a chave `script` não existe** |
+
+A API **devolve** corpo de script — provado pelo primeiro caso, lido na
+mesma sessão, com a mesma credencial e a mesma ferramenta. A ausência da
+chave no segundo caso não é limitação: é **ausência de conteúdo**.
+
+Somando ao `recordId` com template vazio (`[""]`) e ao nome genérico:
+
+> 🟠 **`Automation 1` é, com alta probabilidade, um rascunho publicado por
+> engano.** Publicada sobre `Holerites`, `deployed`, `configurationStatus:
+> valid`, e **sem nada para executar**.
+
+⚠️ **O que continua não provado:** que ela seja inofensiva. `valid` +
+`deployed` com nó vazio deveria ser inerte, mas isso é inferência sobre o
+motor do Airtable, não observação. **Confirmação pela interface continua
+sendo o gate** — e agora é uma conferência de 30 segundos, não uma
+investigação.
+
+## B.2 `PROCESSAR ARQUIVOS` — correção do nome do input
+
+O ANEXO A §A.1 disse *"passando apenas o ID do registro"*, o que está
+certo no efeito, mas **errado no nome**: a chave do input é `Cliente`,
+ligada a `trigger.id`. O valor é o ID do registro; o rótulo diz "Cliente".
+
+Isso não é preciosismo: um rótulo que não descreve o que carrega é
+exatamente o que faz a próxima pessoa ler errado.
+
+O restante do §A.1 está confirmado e **inalterado**: `fetch` para webhook
+do Make.com **hardcoded**, sem `try/catch`, sem checagem de status, sem
+idempotência. A URL continua tratada como credencial e **não é
+reproduzida em lugar nenhum deste repositório**.
+
+## B.3 As 8 views — mapeamento completo
+
+A view que faltava é **`INATIVOS`**, em `Contabilidade Mensal`
+(`tblWITpkSbPg4SBAR`), disparando `INATIVAR MES CONTABIL`.
+
+| # | View | Tabela | Automação |
+|---|---|---|---|
+| 1 | `NORMAL` | Batidas de ponto | `PONTO BATIDO - COM ALMOÇO` |
+| 2 | `NORMAL - SEM ALMOCO` | Batidas de ponto | `PONTO BATIDO - SEM ALMOÇO` |
+| 3 | `EXTRA` | Batidas de ponto | `PONTO EXTRA BATIDO - COM ALMOÇO` |
+| 4 | `EXTRA - SEM ALMOÇO` | Batidas de ponto | `PONTO EXTRA BATIDO - SEM ALMOÇO` |
+| 5 | `VENCIDO` | Guias e Comprovantes | `VENCEU GUIA` |
+| 6 | `INATIVO` | Guias e Comprovantes | `INATIVA GUIA` |
+| 7 | `Pronto` | Processar Arquivos | `Concluido-arquivado processos` |
+| 8 | `VENCEU` | Certidões | `VENCER CERTIDAO` |
+| 9 | `CONCLUIDOS-ONTEM OU DPS` | Folha de Ponto | `CONCLUIDO - FOLHA PONTO` |
+| 10 | **`INATIVOS`** | **Contabilidade Mensal** | `INATIVAR MES CONTABIL` |
+
+**Assimetria confirmada nos ramos:** as automações **COM ALMOÇO** têm
+**4 ramos** condicionais; as **SEM ALMOÇO**, apenas **2**. A diferença é
+real e está na estrutura, não no nome — mas *qual* condição separa cada
+ramo continua invisível (ver B.4).
+
+🟡 **Achado lateral:** `Contabilidade Mensal` tem uma view chamada
+**`MES ATIVO copy`**. Cópia esquecida é candidata a virar gatilho por
+engano se alguém plugar uma automação nela.
+
+## B.4 ❌ NÃO OBSERVÁVEL POR API — declarado, não inferido
+
+| O que falta | Por quê |
+|---|---|
+| **Filtros de todas as views** | `list_views_for_table` devolve id, nome e tipo. Não há endpoint de filtro |
+| **Condições dos ramos** dos `conditionalGroup` | `list_automations` devolve a árvore de nós, sem as condições |
+| **Corpo de `Automation 1`** | Não existe corpo a devolver (B.1) |
+
+**Caminho manual necessário** — o único que resolve:
+
+1. Abrir cada view no Airtable e transcrever o filtro.
+2. Abrir cada `conditionalGroup` e transcrever as condições dos ramos.
+3. Abrir `Automation 1` e confirmar se o script está mesmo vazio.
+
+**Não infiro filtro a partir de dado.** Seria possível comparar quais
+registros aparecem em cada view, mas isso significa ler registros reais —
+e `CLAUDE.md` §6 proíbe dado pessoal em log, saída ou documento. Uma
+regra deduzida de amostra também não é a regra: é uma hipótese que
+combina com a amostra.
+
+## B.5 `480` — o mapeamento pedido, com um achado que muda a conclusão
+
+🔴 **`480` não existe em nenhum arquivo do repositório.**
+
+Verificado por varredura em todo o código versionado (`*.py`, `*.js`,
+fora de `docs/`): **zero ocorrências**. A constante vive **exclusivamente
+dentro da fórmula `Horas Extras` do Airtable**.
+
+**Consequência prática:** não há nada a corrigir no código. Mudar a
+jornada é, hoje, **necessariamente** uma alteração no Airtable — que é
+gate humano por `CLAUDE.md` §6.
+
+### Onde a escala existe de fato
+
+O código **conhece** 12x36; ele simplesmente não calcula hora extra.
+`src/services/secullum_ponto.py` trata a escala com cuidado real:
+
+- linha 82-85: decisão de produto de 24/06/2026 — focar em faltas porque
+  *"em escalas 12x36 gera muitos falsos positivos"* com extras;
+- linha 188: reconhece turno **SOLO 12x36 sem intervalo**;
+- linha 566: interpreta `"12x36 19h - 07h IMPAR"` para classificar noturno;
+- linha 630-636: a escala teórica do dia (FOLGA/Feriado) vem do próprio
+  `/Calcular` da Secullum, que **já resolve 12x36, 5x2 etc. internamente**.
+
+### O quadro completo
+
+| Camada | Sabe o que é 12x36? | Calcula hora extra? |
+|---|---|---|
+| Secullum (`/Calcular`) | ✅ sim, é a fonte da escala | ✅ sim |
+| Código (`secullum_ponto.py`) | ✅ sim, com tratamento explícito | ❌ não |
+| Airtable (fórmula `Horas Extras`) | ❌ **não — assume 8h fixas** | ✅ sim |
+
+🔴 **A única camada que calcula hora extra é a única que não sabe que a
+escala existe.** Este é o enunciado exato do risco AT-01, e ele é pior do
+que "uma constante mal escolhida": é uma camada operando com um modelo de
+mundo que as outras duas já abandonaram.
+
+### Impacto — declarado como possibilidade, não como fato medido
+
+| Frente | Impacto se a fórmula estiver em uso para 12x36 |
+|---|---|
+| Hora extra | Um plantão de 12h gera 4h de "extra" que podem não ser extra |
+| Ponto | O fato bruto está certo; a derivação é que diverge |
+| Folha | Propaga para valor pago |
+| Competência | Se estiver errado, está errado **retroativamente**, por competência |
+
+⚠️ **Não medi quantos funcionários 12x36 passam por essa fórmula.** Medir
+exigiria ler registros reais. O risco é estrutural e comprovado; a
+extensão é desconhecida e **precisa ser medida por quem pode ver o dado**.
+
+### Recomendação arquitetural
+
+**Fonte correta da jornada: a escala resolvida pela Secullum**, que já é
+a fonte de verdade em `secullum_ponto.py` e já resolve 12x36 sozinha.
+Jornada deve ser **atributo do vínculo/alocação com vigência**
+(`BANCO_PROPRIO_MODELO.md` §5.1), nunca constante — porque jornada muda
+no tempo e a fórmula atual não tem como saber disso.
+
+**Ordem sugerida, cada passo um gate:**
+
+1. **Medir** quantos vínculos 12x36 atravessam a fórmula. Sem isso,
+   qualquer correção é chute sobre o tamanho do problema.
+2. **Confirmar com a Direção** se a fórmula está mesmo em uso para
+   cálculo, ou se virou vestígio.
+3. Só então decidir entre corrigir a fórmula, movê-la para o código com
+   a escala como entrada, ou aposentá-la.
+
+❌ **Não transformo isto em implementação.** É regra trabalhista com
+efeito retroativo em folha — decisão de negócio, não técnica.
+
+## B.6 Make.com — estado real vs. decisão documentada
+
+**As duas afirmações são verdadeiras ao mesmo tempo, e não se anulam:**
+
+| | |
+|---|---|
+| **ESTADO REAL** | Make.com está **ativo em produção**, via `PROCESSAR ARQUIVOS`, disparando a cada registro criado |
+| **DECISÃO DOCUMENTADA** | O plano do PR #22 registra *"não construir nada novo no Make.com"* |
+
+**Classificação: divergência histórica/arquitetural.** A decisão fala de
+*construir novo*; o que existe é *pré-existente*. O plano foi escrito sem
+saber que a integração já existia — a falha foi de **inventário**, não de
+decisão. Nenhuma das duas frases significa *"remover o Make.com agora"*.
+
+### Decisão futura — quatro opções, com impacto
+
+| Opção | O que significa | Impacto | Risco |
+|---|---|---|---|
+| **MANTER TEMPORARIAMENTE** | Nada muda; a dependência fica registrada | Zero imediato. Convive com AT-12 (falha silenciosa) | 🟡 O risco continua, mas **conhecido** |
+| **INSTRUMENTAR** *(recomendada como primeiro passo)* | Manter o fluxo, acrescentar `try/catch`, checagem de status e registro de falha | Baixo — não muda o caminho feliz | 🟢 Mata AT-12 sem tocar no fluxo |
+| **MIGRAR / SUBSTITUIR** | O cenário do Make vira código no Magnata OS | Alto — exige saber **o que o cenário faz**, hoje desconhecido | 🟠 Migrar o que não se entende é reescrever um bug |
+| **DESCOMISSIONAR** | Desligar o Make | Desconhecido — pode parar um fluxo em produção | 🔴 Sem saber o que o cenário faz, é aposta |
+
+**Recomendação:** **INSTRUMENTAR primeiro, decidir depois.** Falha
+silenciosa é o problema urgente (`CLAUDE.md` §4); dependência de
+fornecedor é o problema importante. Não são o mesmo problema e não
+precisam da mesma decisão.
+
+**Pré-requisito de qualquer opção além de MANTER:** abrir o cenário no
+Make.com e documentar o que ele faz. É a lacuna que bloqueia as outras
+três — e não é acessível por nenhuma ferramenta desta sessão.
+
+## B.7 Riscos acrescentados
+
+| ID | Risco | Severidade |
+|---|---|---|
+| AT-17 | `Automation 1` publicada com nó vazio sobre `Holerites` | 🟠 |
+| AT-18 | Input rotulado `Cliente` carregando ID de registro | 🟡 |
+| AT-19 | View `MES ATIVO copy` — cópia esquecida, gatilho acidental em potencial | 🟡 |
+| AT-20 | Cenário do Make.com de conteúdo desconhecido — bloqueia migrar/descomissionar | 🟠 |
+| AT-21 | Única camada que calcula hora extra é a única que ignora a escala | 🔴 |
