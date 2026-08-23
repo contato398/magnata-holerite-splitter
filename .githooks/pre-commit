@@ -182,6 +182,16 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_idempotencia_pendencia_kit.py"
   "test_kit_admissao_identidade.py"
   "test_sanitizacao_v2_20.py"
+  # Exceção nominal (2026-08-22) — remoção de CPF REAL destes 2 arquivos.
+  # A trava de PII do sensor do Graphify encontrou 3 CPFs com dígito
+  # verificador válido commitados no repositório; `CLAUDE.md` §6 proíbe
+  # dado pessoal em commit, então a correção não é opcional.
+  # ⚠️ REGISTRO EXPLÍCITO: o PR que corrige o dado é o MESMO que adiciona
+  # esta exceção — ou seja, ele altera a regra que o autoriza. Está
+  # declarado de propósito, para receber revisão humana em vez de passar
+  # despercebido. Dois nomes exatos, não um padrão.
+  "test_leitura_ponto.py"
+  "test_folha_ponto_v2_21.py"
   "test_seguranca_rotas_dp_fiscal.py"
   # Exceção exata (decisão registrada, branch
   # fix/holerite-ponto-pacote-assinatura) — pacote atômico de assinatura

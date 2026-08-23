@@ -39,7 +39,7 @@ escala efetivamente seguida bate com o grupo aqui definido.
 
 Uso:
     python -m src.sync_new_employees --dry-run --limit 5
-    python -m src.sync_new_employees --dry-run --cpf 397.529.068-42
+    python -m src.sync_new_employees --dry-run --cpf 123.456.789-00
 """
 
 import os
@@ -231,7 +231,7 @@ def processar_holerite_record(rec: dict) -> dict:
 def buscar_funcionario_por_cpf(cpf: str):
     """Retorna o registro do Funcionário (ou None) casando por CPF.
 
-    O campo CPF no Airtable às vezes guarda com máscara ("397.529.068-42"),
+    O campo CPF no Airtable às vezes guarda com máscara ("123.456.789-00"),
     às vezes só dígitos — por isso tenta também o campo fórmula "num-cpf"
     (sempre normalizado), igual ao padrão já usado em secullum_ponto.py.
     Bug real encontrado em 27/06/2026: passar só dígitos sem esse terceiro
