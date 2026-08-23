@@ -1,4 +1,10 @@
 __pycache__/
+
+# Orquestrador -- estado de execucao efemero por run de CI/sessao, nunca
+# fonte de verdade (o audit log persistente e
+# docs/magnata-os/central-command/AUDITORIA_ORQUESTRADOR.jsonl, esse sim
+# commitado). Nunca versionar o banco em si.
+.orquestrador_ci/
 _vps_ssh.py
 _evolution_docker-compose.yml
 qr_final.json

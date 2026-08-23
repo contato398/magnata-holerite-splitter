@@ -38,15 +38,16 @@
     "WORK_IN_PROGRESS.md"
   ],
   "links_quebrados": [],
-  "main_assunto": "Merge pull request #44 from contato398/fix/central-command-fecha-pr22",
-  "main_data": "2026-08-23 17:31:29 -0300",
-  "main_sha": "1409454",
+  "main_assunto": "Merge pull request #46 from contato398/fix/orquestrador-nucleo-motor",
+  "main_data": "2026-08-23 20:31:33 -0300",
+  "main_sha": "4d1f2e2",
   "testes": {
     "falhando": 0,
-    "passando": 659
+    "passando": 690
   },
   "workflows": [
     "magnata-governance.yml",
-    "magnata-testes.yml"
+    "magnata-testes.yml",
+    "orquestrador-sensor.yml"
   ]
 }
