@@ -157,6 +157,38 @@ def coletar(com_testes: bool = False) -> dict:
     return estado
 
 
+def preservar_baseline(novo: dict, anterior: dict) -> tuple[dict, str | None]:
+    """Impede que `--atualizar` sem `--com-testes` apague a baseline de testes.
+
+    DEFEITO QUE ISTO CORRIGE: `coletar()` só produz a chave `testes` quando a
+    suíte é executada. Gravar esse dicionário por cima do snapshot apagava
+    silenciosamente a baseline anterior — e, sem baseline, `comparar()` deixa
+    de detectar regressão. Perda silenciosa de dado é exatamente o que
+    `CLAUDE.md` §4 proíbe.
+
+    REGRA: não medir os testes significa **"baseline não atualizada"**, nunca
+    **"baseline vazia"**. Se a execução atual não mediu e o snapshot anterior
+    tinha uma baseline, ela é carregada adiante sem alteração.
+
+    Retorna o snapshot a gravar e, quando houve preservação, um aviso a
+    exibir — preservar é correto, mas nunca deve ser silencioso.
+    """
+    if novo.get('testes') is not None:
+        return novo, None
+    baseline = anterior.get('testes')
+    if baseline is None:
+        return novo, None
+    preservado = dict(novo)
+    preservado['testes'] = baseline
+    aviso = (
+        f"baseline de testes PRESERVADA do snapshot anterior "
+        f"({baseline.get('passando')} passando, {baseline.get('falhando')} "
+        f"falhando) — esta execução não rodou a suíte. Use --com-testes para "
+        f"remedir; do contrário a baseline segue sendo a da medição anterior."
+    )
+    return preservado, aviso
+
+
 def comparar(atual: dict, anterior: dict) -> list[str]:
     """Divergências entre o estado real e o instantâneo declarado.
 
@@ -246,12 +278,15 @@ def main() -> int:
     divergencias = comparar(atual, anterior) if anterior else []
 
     if args.atualizar:
+        a_gravar, aviso = preservar_baseline(atual, anterior)
         SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
         SNAPSHOT.write_text(
-            json.dumps(atual, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+            json.dumps(a_gravar, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
             encoding='utf-8',
         )
         print(f'Snapshot atualizado: {SNAPSHOT.relative_to(RAIZ)}')
+        if aviso:  # preservar é correto; preservar em silêncio, não
+            print(f'  AVISO: {aviso}')
 
     if args.json:
         print(json.dumps(
