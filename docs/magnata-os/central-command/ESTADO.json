@@ -10,6 +10,7 @@
     "AIRTABLE_DESACOPLAMENTO.md",
     "AIRTABLE_LOGICA_OCULTA.md",
     "ARCHITECTURE.md",
+    "ARQUITETURA_EVENTOS.md",
     "BANCO_PROPRIO_MODELO.md",
     "COBERTURA.md",
     "DECISIONS.md",
@@ -23,6 +24,7 @@
     "INDEX.md",
     "MACRO_6A.md",
     "MACRO_6A_RECONCILIACAO.md",
+    "MATRIZ_AUTONOMIA.md",
     "MEMORIA_SENSIVEL.md",
     "NEXT_ACTIONS.md",
     "ORQUESTRADOR.md",
@@ -32,12 +34,13 @@
     "RISKS.md",
     "SOURCES_AND_PROVENANCE.md",
     "SUPERSEDED_DECISIONS.md",
+    "TAXONOMIA_MEMORIA.md",
     "WORK_IN_PROGRESS.md"
   ],
   "links_quebrados": [],
-  "main_assunto": "Merge pull request #22 from contato398/fix/plano-modulo01-email-captura",
-  "main_data": "2026-08-23 17:27:26 -0300",
-  "main_sha": "a18d4b2",
+  "main_assunto": "Merge pull request #44 from contato398/fix/central-command-fecha-pr22",
+  "main_data": "2026-08-23 17:31:29 -0300",
+  "main_sha": "1409454",
   "testes": {
     "falhando": 0,
     "passando": 659
