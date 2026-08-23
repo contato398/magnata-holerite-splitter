@@ -99,7 +99,7 @@ trabalho falha**. Nenhum estava registrado como lição antes desta etapa.
 
 | Pendência | Estado |
 |---|---|
-| PR #22 aberto desde etapas anteriores | 🟡 aberto — não avaliado nesta etapa |
+| PR #22 aberto desde etapas anteriores | 🟡 **avaliado na Etapa 11: NÃO é superado.** 489 linhas inexistentes em `main` — plano, adapter de captura de e-mail e 204 linhas de teste. Fechá-lo destruiria conhecimento |
 | `DEC-ENT-010/011/012` | 🔴 pendentes |
 | Contrato canônico do Financeiro/Fiscal | 🔴 não existe |
 | Postgres real (`render.yaml` = `plan: free`) | 🔴 decisão financeira |

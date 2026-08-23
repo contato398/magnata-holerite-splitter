@@ -48,7 +48,7 @@ python scripts/ci/central_command_sensor.py
 |---|---|---|
 | **#41** | 🟡 correção do sensor — CI verde | **Gate humano:** é mudança funcional (§12-I) |
 | **#42** | 🟡 Etapa 11 — documental | Merge |
-| **#22** | 🟡 aberto há várias etapas | Não avaliado desde então. **Reavaliar ou fechar** |
+| **#22** | 🟡 aberto há várias etapas | ⚠️ **NÃO está superado.** Carrega 489 linhas que não existem em `main`: plano de consolidação, adapter `email_captura.py` e 204 linhas de teste. **Fechar destruiria trabalho** — precisa ser avaliado, não descartado |
 
 ## 5. Riscos, em ordem
 
