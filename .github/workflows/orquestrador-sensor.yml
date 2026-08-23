@@ -16,6 +16,11 @@ name: Orquestrador — sensor automático (AUTO_FACT)
 # proibido de virar dependencia de CI -- GRAPHIFY.md restricao 3),
 # escrever em DECISIONS.md/DIRECTIVES.md (bloqueado em codigo por
 # motor.py:CAMINHOS_PROIBIDOS, nao so aqui).
+#
+# DESLIGAR: Actions -> este workflow -> "Disable workflow" (nenhum
+# codigo precisa ser revertido -- so pausa o cron/dispatch). Para
+# remover de vez, deletar este arquivo em PR normal. Nenhuma das duas
+# formas afeta PRs ja abertos por execucoes anteriores.
 
 on:
   schedule:
@@ -70,6 +75,20 @@ jobs:
         run: |
           set -e
           SHA_CURTO=$(git rev-parse --short HEAD)
+
+          # IDEMPOTENCIA ENTRE EXECUCOES: se o PR de uma execucao
+          # anterior para este MESMO main_sha ainda estiver aberto (o
+          # cron roda de 6 em 6h; se ninguem revisou a tempo, o proximo
+          # run veria a mesma divergencia contra o ESTADO.json ainda
+          # nao mesclado e abriria um PR duplicado). Confere por branch
+          # -- nunca por titulo, que pode ser editado.
+          JA_EXISTE=$(gh pr list --state open --json headRefName \
+            --jq "[.[] | select(.headRefName | startswith(\"fix/auto-orquestrador-${SHA_CURTO}-\"))] | length")
+          if [ "$JA_EXISTE" -gt 0 ]; then
+            echo "Ja existe PR aberto para main=${SHA_CURTO} -- nao duplicando. Nada a fazer."
+            exit 0
+          fi
+
           BRANCH="fix/auto-orquestrador-${SHA_CURTO}-${{ github.run_number }}"
 
           git config user.name "orquestrador-sensor[bot]"
@@ -77,15 +96,17 @@ jobs:
           git checkout -b "$BRANCH"
           git add docs/magnata-os/central-command/ESTADO.json \
                    docs/magnata-os/central-command/AUDITORIA_ORQUESTRADOR.jsonl
-          git commit -m "chore(orquestrador): atualiza AUTO_FACT (main avançou para ${SHA_CURTO})
 
-Gerado automaticamente pelo sensor do Orquestrador
-(scripts/ci/orquestrador_sensor_ci.py), sem sessão Claude no meio --
-ver docs/magnata-os/central-command/MATRIZ_AUTONOMIA.md.
-
-Escreve SOMENTE ESTADO.json e AUDITORIA_ORQUESTRADOR.jsonl (AUTO_FACT).
-Nunca DECISIONS.md, app.py, produção ou qualquer HUMAN_DECISION --
-verificado em tempo de execução por motor.py:CAMINHOS_PROIBIDOS."
+          # Mensagem de commit numa linha so, de proposito: dentro de um
+          # bloco literal YAML (`run: |`), toda linha do script precisa
+          # manter a indentacao do bloco -- uma mensagem multi-linha
+          # solta (como a primeira versao deste workflow tinha) quebra o
+          # parser YAML. Achado nesta revisao: o workflow nunca tinha
+          # sido de fato executado (so schedule/dispatch, nunca
+          # disparado em CI ate agora), entao esse erro de sintaxe nunca
+          # tinha sido pego. Detalhe completo fica so no corpo do PR,
+          # que o `gh pr create` abaixo escreve.
+          git commit -m "chore(orquestrador): atualiza AUTO_FACT (main avancou para ${SHA_CURTO}) -- gerado sem sessao Claude, ver MATRIZ_AUTONOMIA.md"
           git push -u origin "$BRANCH"
           gh pr create \
             --title "chore(orquestrador): AUTO_FACT atualizado (main=${SHA_CURTO})" \
