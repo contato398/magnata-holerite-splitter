@@ -209,11 +209,21 @@ Para cada fonte: que verdade fornece, autoridade, frequência, risco e
 | Memória, decisão, proveniência | ✅ **Existe** — em `main` desde o merge de `9f8a53f` |
 | Verdade sobre versionamento | ✅ Existe (GitHub) |
 | Verdade sobre dado operacional | ✅ Existe (Airtable) |
-| Verdade sobre estrutura do código | 🟡 Possível — Graphify com restrições |
-| Verdade sobre execução real | 🔴 **Não verificável** de sessão remota — rede bloqueada |
+| Verdade sobre estrutura do código | ✅ **Exercitada de verdade** — Graphify rodado sobre o repositório inteiro, incluindo `app.py`; zero violação de `CLAUDE.md` §3 confirmada mecanicamente; comparação entre execuções detectou corretamente mudança real. Ver `GRAPHIFY.md` §8 |
+| Verdade sobre execução real | 🔴 **Não verificável** de sessão remota — rede bloqueada (reconfirmado por `WebFetch`, Etapa 12) |
 | Memória sensível | 🔴 **Não existe** |
-| **Atualização automática** | 🔴 **Não existe** — hoje toda a Central Command é regenerada por auditoria manual |
+| **Taxonomia da memória** (o que pode ser sobrescrito automaticamente vs. o que só decisão humana altera) | ✅ **Formalizada** — `TAXONOMIA_MEMORIA.md`, Etapa 12 |
+| **Matriz de autonomia** (o que age sozinho vs. o que exige gate) | ✅ **Formalizada e mapeada contra casos reais já exercitados** — `MATRIZ_AUTONOMIA.md`, Etapa 12 |
+| **Arquitetura de eventos** (fonte → adapter → evento → serviço → estado) | ✅ **Formalizada, com 1 caso real completo até o Estado** (`email_captura.py`) — `ARQUITETURA_EVENTOS.md`, Etapa 12 |
+| **Atualização automática, sem sessão no meio** | 🔴 **Ainda não existe** — todo nível 4 exercitado até aqui (sensor, Graphify, merge de PR seguro) foi disparado por uma sessão. Nenhum gatilho (cron/Action/webhook) roda sozinho. Ver `MATRIZ_AUTONOMIA.md` §4 |
 
-**A peça que falta e define a próxima fase é a última.** Memória
-consolidada à mão é documentação; memória que se atualiza sozinha é
-orquestração.
+**A peça que ainda falta e define a próxima fase é a última.** As três
+peças de formalização (taxonomia, matriz, eventos) fecham a lacuna de
+**desenho** — o Orquestrador agora sabe descrever o que é fato, o que é
+decisão, e o que pode agir sozinho. A lacuna que resta é de
+**infraestrutura de disparo**: nada aciona essas capacidades sem uma
+sessão decidindo quando. Memória consolidada à mão, mesmo bem
+categorizada, ainda depende de alguém chamar o sensor; memória que se
+atualiza sozinha, sem ninguém pedir, é orquestração de verdade — e essa
+etapa final não foi construída aqui (decisão de arquitetura de CI nova,
+fora da autonomia desta missão — ver `MATRIZ_AUTONOMIA.md` §4).

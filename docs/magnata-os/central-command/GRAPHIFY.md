@@ -234,3 +234,39 @@ Rodar `update` code-only sobre cópia isolada do repositório **inteiro**
 (com `app.py`) e verificar se o `GRAPH_REPORT.md` responde perguntas que
 hoje custam leitura manual. Se responder, adotar com as 7 restrições da
 §6. Se não, reclassificar para **ADIAR**.
+
+---
+
+## 8. Executado — Etapa 12, 2026-08-23
+
+O passo do §6 foi executado, com `scripts/ci/graphify_regenerar.sh` (já
+existente, não escrito nesta etapa) — não uma reconstrução do zero.
+
+**Resultado real, whole-repo (`app.py` incluído), code-only, sem
+chave de API (confirmado por `env | grep -i api_key` vazio no processo):**
+
+| Métrica | Valor |
+|---|---|
+| Arquivos | 64 · Módulos | 12 · Símbolos | 1212 |
+| Nós / arestas EXTRACTED / descartadas (INFERRED) | 1359 / 2167 / 1211 |
+| Comunidades | 78 |
+| `imports_from` (EXTRACTED) | 15 |
+| **Violação de `CLAUDE.md` §3 (domínio importa fornecedor)** | **Nenhuma detectada** |
+| Abstração central (maior grau EXTRACTED) | `app.py` — 201 |
+
+**Isto responde a pergunta do §6:** sim, o `GRAPH_REPORT.md`/snapshot
+responde uma pergunta que hoje custava leitura manual — a verificação
+mecânica da regra de acoplamento de `CLAUDE.md` §3, antes só feita por
+`grep` a cada auditoria. Rodado uma segunda vez, sobre o mesmo alvo, sem
+nenhuma mudança de código: resultado idêntico (determinístico). Rodado
+uma primeira vez antes de duas correções desta etapa entrarem em
+`main` (email_captura.py, test_central_command_sensor.py): a
+comparação `--comparar` **detectou corretamente os 2 arquivos novos**
+como mudança estrutural — não falso positivo, não silêncio.
+
+**Veredito revisado:** ✅ **ADOTADO COM RESTRIÇÕES, EXERCITADO** — deixa
+de ser POC/proposta. Continua sendo sensor sob demanda, nunca dependência
+de CI/build/deploy, nunca instalado no repositório. `ARQUITETURA_SNAPSHOT.json`
+atualizado nesta etapa. Ver `MATRIZ_AUTONOMIA.md` §2 para o nível de
+autonomia desta operação (nível 4 — escreve só o snapshot derivado,
+nunca decisão humana).
