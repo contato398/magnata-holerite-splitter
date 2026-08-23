@@ -2,7 +2,16 @@
 
 **Branch:** `claude/evolution-api-instances-1s9raa`
 **Data:** 2026-08-17
-**Status:** Proposta de plano — **não implementado**, aguardando aprovação humana do escopo de implementação (fluxo de tarefas complexas, `CLAUDE.md` §12, nota de compatibilidade final).
+**Status:** Plano de direção aprovado nesta mesma branch — a "próxima
+ação concreta proposta" (adapter de e-mail, §"Próxima ação concreta
+proposta") **foi implementada** junto com este plano
+(`magnata_os/documental/modulo01/adapters/email_captura.py`), em
+paralelo ao Gmail Apps Script, sem tocar `app.py`. Continua **sem
+nenhuma escrita real** — não conectado a caixa de e-mail real, não
+substitui o Apps Script, não liga a Airtable — e a decisão de quando
+ligar a uma fonte real continua exigindo autorização de fase separada
+(`CLAUDE.md` §6/§12-I). Atualizado nesta nota — não reescrito — na
+auditoria/reconciliação de 2026-08-23.
 
 ## Contexto
 

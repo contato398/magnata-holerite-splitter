@@ -28,6 +28,20 @@ deduplicacao real e por hash de conteudo de cada anexo, ja garantida por
 mesma mensagem (ex.: apos reiniciar a fonte, ou por reenvio) nunca cria
 um segundo `Documento` para o mesmo anexo; o `ItemResumoLote`
 correspondente vem com `duplicado=True`.
+
+Erro por anexo: um anexo invalido (ex.: vazio) vira um `ItemResumoLote`
+com `sucesso=False` e `erro` preenchido -- nunca trava os demais anexos
+da mesma mensagem nem as demais mensagens da mesma chamada (comportamento
+de `ServicoCriacaoLote`, testado em
+`test_erro_parcial_um_anexo_falha_outro_da_mesma_mensagem_sucede`).
+
+Erro na propria busca: `buscar_novas_mensagens()` NAO tem retry nem
+tratamento de excecao aqui -- uma falha de rede/API na fonte real
+propaga sem ser engolida (fail-loud deliberado, nao ausencia de
+cuidado). Quem instanciar este adapter com uma fonte real e responsavel
+por decidir a politica de retry/backoff do lado de fora (ex.: no
+agendador/cron que chama `capturar_novas_mensagens()`) -- ver
+`test_falha_na_busca_de_mensagens_propaga_sem_ser_engolida`.
 """
 from __future__ import annotations
 

@@ -202,3 +202,85 @@ def test_nenhuma_mensagem_nova_retorna_resumo_vazio():
     assert resumo.mensagens_sem_anexo == ()
     assert resumo.resumos_lote == ()
     assert repo_docs.listar_todos() == []
+
+
+# ============================================================================
+# 8. anexo invalido (vazio) -- ServicoCriacaoLote ja rejeita, o adapter nunca
+#    esconde o erro nem trava as demais mensagens da mesma chamada
+# ============================================================================
+
+def test_anexo_vazio_gera_item_com_erro_sem_travar_a_mensagem():
+    adapter, _fonte, repo_docs = _montar_adapter([
+        _mensagem(anexos=[_anexo('vazio.pdf', b'')]),
+    ])
+
+    resumo = adapter.capturar_novas_mensagens()
+
+    resumo_lote = resumo.resumos_lote[0]
+    assert resumo_lote.quantidade_erro == 1
+    assert resumo_lote.quantidade_sucesso == 0
+    assert resumo_lote.itens[0].sucesso is False
+    assert resumo_lote.itens[0].erro  # mensagem de erro explicita, nunca None
+    # nenhum Documento foi criado para o anexo vazio -- mas a mensagem
+    # inteira nao foi descartada, o resumo do lote existe e reporta o erro
+    assert repo_docs.listar_todos() == []
+
+
+# ============================================================================
+# 9. erro parcial -- uma mensagem com anexo valido E anexo invalido no mesmo
+#    lote nunca perde o sucesso por causa do erro do outro
+# ============================================================================
+
+def test_erro_parcial_um_anexo_falha_outro_da_mesma_mensagem_sucede():
+    adapter, _fonte, repo_docs = _montar_adapter([
+        _mensagem(anexos=[
+            _anexo('valido.pdf', b'conteudo real'),
+            _anexo('vazio.pdf', b''),
+        ]),
+    ])
+
+    resumo = adapter.capturar_novas_mensagens()
+
+    resumo_lote = resumo.resumos_lote[0]
+    assert resumo_lote.quantidade_arquivos == 2
+    assert resumo_lote.quantidade_sucesso == 1
+    assert resumo_lote.quantidade_erro == 1
+    assert len(repo_docs.listar_todos()) == 1
+
+
+# ============================================================================
+# 10. erro na propria busca (API/rede) -- NAO e engolido pelo adapter.
+#     Comportamento fail-loud documentado e travado por teste: o adapter nao
+#     tem retry nem tratamento proprio, propositalmente (ver docstring do
+#     modulo) -- quem instanciar com uma fonte real precisa decidir a
+#     politica de retry/backoff do lado de fora. Este teste existe para que
+#     uma mudanca futura desse comportamento seja deliberada, nunca
+#     acidental.
+# ============================================================================
+
+class _FonteQueFalha:
+    def buscar_novas_mensagens(self):
+        raise ConnectionError('falha simulada de rede/API')
+
+
+def test_falha_na_busca_de_mensagens_propaga_sem_ser_engolida():
+    from magnata_os.documental.modulo01.repositorio import (
+        RepositorioDocumentosEmMemoria, RepositorioHistoricoEmMemoria,
+    )
+    from magnata_os.documental.modulo01.repositorio_esteira import (
+        RepositorioEstadosEsteiraEmMemoria, RepositorioLotesEmMemoria,
+    )
+
+    servico_entrada = ServicoEntradaDocumental(
+        RepositorioDocumentosEmMemoria(), RepositorioHistoricoEmMemoria(),
+    )
+    servico_avanco = ServicoAvancoEsteira(
+        RepositorioEstadosEsteiraEmMemoria(), RepositorioHistoricoEmMemoria(),
+    )
+    servico_lote = ServicoCriacaoLote(
+        RepositorioLotesEmMemoria(), servico_entrada, servico_avanco,
+    )
+    adapter = AdapterCapturaEmail(_FonteQueFalha(), servico_lote)
+
+    with pytest.raises(ConnectionError):
+        adapter.capturar_novas_mensagens()
