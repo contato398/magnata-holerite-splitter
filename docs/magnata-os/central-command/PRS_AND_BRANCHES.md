@@ -244,3 +244,39 @@ apontava nessa direção antes desta auditoria.
 
 **Atualiza:** `DECISIONS.md` DEC-009 · `WORK_IN_PROGRESS.md` WIP-004 ·
 `NEXT_ACTIONS.md` NXT-005.
+
+### 7.4 Fechamento — PR #22 MESCLADO, 2026-08-23
+
+Autorização confirmada pelo usuário em mensagem distinta ("FAÇA O
+MERGE DO PR #22"), condicionada a todas as verificações do §7.2
+seguirem verdadeiras — revalidadas imediatamente antes do merge
+(`clean`, CI/governança verdes, escopo idêntico aos 7 arquivos
+auditados). **Merge commit `a18d4b2`. `main` = `a18d4b2`.**
+
+Confirmado pós-merge, em worktree limpo de `origin/main` (não
+reaproveitado do PR):
+
+| Verificação | Resultado |
+|---|---|
+| Suíte completa | **659 passed, 0 failed** |
+| Testes de `email_captura` | **10/10** |
+| Governança | **15/15** |
+| CPF/segredo nos 7 arquivos | Nenhum |
+| `AdapterCapturaEmail` chamado fora do teste | **Nenhum caller** — não importado em `app.py`, `celery_app.py`, `render.yaml`, `Procfile` |
+
+**O adapter está em `main`, mas continua inerte** — mesma garantia que
+o plano original sempre declarou: roda em paralelo, não substitui o
+Gmail Apps Script, não liga a Airtable, não faz deploy.
+
+| Classe | PRs (atualizado) |
+|---|---|
+| **MERGED** | #1–#11 · #13–#15 · #17–#19 · #22 · #23–#31 · #41 **(29)** |
+| **OPEN** | **#20** |
+| **CLOSED WITHOUT MERGE** | #12 · #16 · #21 |
+
+`#20` (`fix/status-funcionario-pii`) é o único PR aberto restante com
+trabalho único não incorporado — ver `PENDING.md` PEN-001/WIP-005.
+
+Pendência nova registrada por este fechamento: **`PENDING.md`
+PEN-020** — política de retry/backoff, decisão adiada para quando (e
+se) uma fonte de e-mail real for conectada.

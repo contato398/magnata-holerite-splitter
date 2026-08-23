@@ -2,7 +2,6 @@
   "autorizacoes_app_py": 13,
   "branches_fora_de_main": [
     "claude/magnata-central-command-0n0713",
-    "fix/sensor-baseline-nao-destrutiva",
     "fix/status-funcionario-pii"
   ],
   "cpf_em_documentacao": [],
@@ -36,12 +35,12 @@
     "WORK_IN_PROGRESS.md"
   ],
   "links_quebrados": [],
-  "main_assunto": "Merge pull request #43 from contato398/claude/macro-6a-handoff-precisao",
-  "main_data": "2026-08-23 15:09:52 -0300",
-  "main_sha": "4a6444f",
+  "main_assunto": "Merge pull request #22 from contato398/fix/plano-modulo01-email-captura",
+  "main_data": "2026-08-23 17:27:26 -0300",
+  "main_sha": "a18d4b2",
   "testes": {
     "falhando": 0,
-    "passando": 649
+    "passando": 659
   },
   "workflows": [
     "magnata-governance.yml",

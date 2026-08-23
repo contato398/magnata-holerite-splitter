@@ -132,6 +132,34 @@ CI e governança verdes.
 - **Testada? (corrigido):** Sim — 10 casos, 100% em memória, sem rede/disco.
 - **Substituída? (corrigido):** Não.
 
+**Segunda correção declarada — merge do PR #22, 2026-08-23** (texto
+acima preservado): autorização de merge confirmada pelo usuário em
+mensagem distinta ("FAÇA O MERGE DO PR #22"), condicionada a
+`mergeable_state: clean` + CI/governança verdes + escopo inalterado —
+todos revalidados imediatamente antes do merge. **PR #22 MESCLADO —
+merge commit `a18d4b2`, `main` = `a18d4b2`.** Suíte pós-merge: 659
+passed, 0 failed (medida em worktree limpo de `origin/main`, não
+reaproveitada do PR). Governança pós-merge: 15/15. Confirmado por
+busca no repositório: `AdapterCapturaEmail` não é chamado por nenhum
+arquivo além do próprio teste — não importado em `app.py`,
+`celery_app.py`, `render.yaml` nem `Procfile`. **O adapter está em
+`main`, mas continua inerte: nenhuma conexão com Gmail real, IMAP,
+Apps Script ou qualquer fonte de e-mail de produção.**
+- **Status atual (fechamento):** ✅ **FUNCIONANDO/CONFIRMADO** como
+  código em `main` — testado, íntegro, sem regressão. Permanece 🚫
+  **PLANEJADO MAS NÃO EXECUTADO** para o que a decisão de direção
+  ainda não cobre: nenhuma fonte real ligada, nenhuma decisão sobre
+  quando/como substituir o Gmail Apps Script.
+- **Em produção? (fechamento):** Não — nem pode estar: não há nenhum
+  ponto de entrada real (rota, cron, worker) que instancie o adapter.
+- **Risco futuro registrado, não resolvido aqui:** `buscar_novas_mensagens()`
+  não tem retry/backoff (decisão deliberada, documentada e travada por
+  teste nesta mesma etapa — ver `test_falha_na_busca_de_mensagens_propaga_sem_ser_engolida`).
+  Quando uma fonte real (Gmail API/IMAP) for conectada, quem fizer essa
+  ligação precisa decidir a política de retry/backoff do lado de fora
+  — não é uma lacuna nova, é uma decisão adiada conscientemente, que
+  esta nota torna impossível de esquecer.
+
 ### DEC-010 — Decisão oficial de e-mails de envio/recebimento
 - **Categoria:** decisão de configuração
 - **Data/origem:** 2026-06-15

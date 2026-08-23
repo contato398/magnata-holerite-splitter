@@ -56,7 +56,7 @@ de rebase antes.
 
 **Decide:** você (§7 — `app.py` é legado protegido).
 
-### NXT-005 · Decidir o PR #22
+### NXT-005 · ~~Decidir o PR #22~~ — ENCERRADO, mesclado (2026-08-23)
 **Esforço:** baixo · **Toca código?** não toca `app.py`
 
 Aditivo: plano de consolidação + adapter de e-mail que roda **em
@@ -72,6 +72,17 @@ clean`, CI (pytest) e governança verdes, suíte geral 649→659, 0
 regressão. **Único ponto em aberto:** é código novo + decisão de
 direção registrada, não uma correção isolada — por isso continua como
 gate humano de merge (`CLAUDE.md` §12-I), não auto-mesclável.
+
+**Fechamento (2026-08-23):** autorizado pelo usuário em mensagem
+distinta, revalidado imediatamente antes (clean, CI/governança verdes,
+escopo inalterado) e **mesclado — `a18d4b2`**. Confirmado pós-merge em
+worktree limpo: suíte 659/0, governança 15/15, `AdapterCapturaEmail`
+sem nenhum caller real em `main` (continua inerte). Esta ação **sai da
+lista de próximas ações** — não há mais decisão pendente sobre o PR
+#22 em si. O que fica como ação nova, distinta: **NXT-005b** — decidir
+quando (e se) ligar o adapter a uma fonte de e-mail real, o que exige
+autorização de fase separada (`CLAUDE.md` §6/§12-I) e a política de
+retry/backoff registrada em `PENDING.md` PEN-020.
 
 ### NXT-006 · Decidir as 3 branches paradas
 Fase 5 (painel visual, pronta há ~4 semanas, 72 commits atrás) ·
@@ -169,7 +180,7 @@ preservada; bruto pendente) · NXT-015 (Graphify avaliado com POC).
 | **1** | **Aplicar a correção de `_status_funcionario_elegivel`** | Provado: leva a suíte de 636/6 para **642/0**. Patch aplica limpo em `main` | 🔴 `app.py` (§7) |
 | **2** | **Criar CI que rode a suíte** (RSK-013) | Sem isso, o item 1 volta a acontecer sem ninguém ver | 🟠 `.github/workflows/` |
 | **3** | **Auditar as automações nativas do Airtable** (RSK-014) | Lógica de negócio invisível; bloqueia qualquer migração séria | 🟢 Leitura |
-| **4** | Decidir o merge do PR #22 (adapter de e-mail) — **auditado, rebaseado, CI verde** (2026-08-23) | Aditivo, não toca `app.py` | 🟡 |
+| **4** | ~~Decidir o merge do PR #22~~ — **MESCLADO `a18d4b2`** (2026-08-23), suíte 659/0 pós-merge | Aditivo, não tocou `app.py` | ✅ |
 | **5** | Auditar a Fase 5 (RSK-016) | ~50 arquivos parados há 4 semanas | 🟢 Leitura |
 | **6** | Fixar `pypdfium2` e `Pillow` | Quebra a tela de assinatura em produção sem aviso | 🟡 `requirements.txt` |
 | **7** | Confirmar `--workers 2` no painel do Render | Não verificável desta sessão (rede bloqueada) | 🔴 Produção |
