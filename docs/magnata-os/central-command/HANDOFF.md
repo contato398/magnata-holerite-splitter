@@ -11,10 +11,14 @@ canônicos abaixo** — sem a conversa Macro 6A, que está encerrada.
 
 ## 1. Onde o repositório está
 
+> ⚠️ **Os números abaixo são de 2026-08-23 e envelhecem.** Não confie
+> neles: **execute `python scripts/ci/central_command_sensor.py`** — ele
+> compara o estado real com `ESTADO.json` e diz o que mudou.
+
 | | |
 |---|---|
-| **`main`** | `007a4e5` — *Merge pull request #38* |
-| **Suíte** | **649 passando / 0 falhando** (642 + 7 do PR #41) |
+| **`main`** | `5def429` — *Merge pull request #42* (Etapa 11) |
+| **Suíte** | **642 passando / 0 falhando** |
 | **CI** | 2 workflows, ambos verdes: governança (15/16 gates) e `pytest` |
 | **PII na árvore atual de `main`** | ✅ **nenhuma** |
 | **Central Command** | 28 documentos + `ESTADO.json` + `ARQUITETURA_SNAPSHOT.json` |
@@ -46,8 +50,8 @@ python scripts/ci/central_command_sensor.py
 
 | PR | Estado | O que falta |
 |---|---|---|
-| **#41** | 🟡 correção do sensor — CI verde | **Gate humano:** é mudança funcional (§12-I) |
-| **#42** | 🟡 Etapa 11 — documental | Merge |
+| **#41** | 🟡 correção do sensor — CI verde | **Gate humano:** é mudança funcional (§12-I). Leva a suíte a **649** quando entrar |
+| **#42** | ✅ **mesclado** — `5def429` | — |
 | **#22** | 🟡 aberto há várias etapas | ⚠️ **NÃO está superado.** Carrega 489 linhas que não existem em `main`: plano de consolidação, adapter `email_captura.py` e 204 linhas de teste. **Fechar destruiria trabalho** — precisa ser avaliado, não descartado |
 
 ## 5. Riscos, em ordem

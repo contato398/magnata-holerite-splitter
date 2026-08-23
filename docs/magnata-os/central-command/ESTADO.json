@@ -42,9 +42,9 @@
     "WORK_IN_PROGRESS.md"
   ],
   "links_quebrados": [],
-  "main_assunto": "Merge pull request #38 from contato398/fix/lgpd-cpf-real-em-codigo",
-  "main_data": "2026-08-23 09:47:39 -0300",
-  "main_sha": "007a4e5",
+  "main_assunto": "Merge pull request #42 from contato398/claude/macro-6a-etapa11-encerramento",
+  "main_data": "2026-08-23 15:05:30 -0300",
+  "main_sha": "5def429",
   "testes": {
     "falhando": 0,
     "passando": 642
