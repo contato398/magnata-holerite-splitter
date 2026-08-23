@@ -2,6 +2,7 @@
   "autorizacoes_app_py": 13,
   "branches_fora_de_main": [
     "claude/magnata-central-command-0n0713",
+    "fix/orquestrador-gatilho-ci",
     "fix/status-funcionario-pii"
   ],
   "cpf_em_documentacao": [],
@@ -38,15 +39,16 @@
     "WORK_IN_PROGRESS.md"
   ],
   "links_quebrados": [],
-  "main_assunto": "Merge pull request #44 from contato398/fix/central-command-fecha-pr22",
-  "main_data": "2026-08-23 17:31:29 -0300",
-  "main_sha": "1409454",
+  "main_assunto": "Merge pull request #48 from contato398/fix/plano-modo-sombra-captura-email",
+  "main_data": "2026-08-23 20:43:29 -0300",
+  "main_sha": "2176268",
   "testes": {
     "falhando": 0,
-    "passando": 659
+    "passando": 690
   },
   "workflows": [
     "magnata-governance.yml",
-    "magnata-testes.yml"
+    "magnata-testes.yml",
+    "orquestrador-sensor.yml"
   ]
 }

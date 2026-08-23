@@ -1,0 +1,123 @@
+name: Orquestrador — sensor automático (AUTO_FACT)
+
+# Gatilho automatico sem sessao Claude -- fecha a lacuna registrada em
+# docs/magnata-os/central-command/MATRIZ_AUTONOMIA.md paragrafo 4.
+#
+# O QUE ESTE WORKFLOW FAZ: roda o motor real do Orquestrador
+# (magnata_os/orquestrador/) contra o unico evento que ele sabe
+# processar sozinho hoje -- GIT_MAIN_AVANCOU, Nivel EXECUTE_SAFE. Se
+# `main` avancou desde o ultimo ESTADO.json commitado, atualiza
+# ESTADO.json + AUDITORIA_ORQUESTRADOR.jsonl (ambos AUTO_FACT,
+# docs/magnata-os/central-command/TAXONOMIA_MEMORIA.md) e ABRE UM PR --
+# nunca commita direto em main (CLAUDE.md paragrafo 9).
+#
+# O QUE ESTE WORKFLOW NUNCA FAZ: mesclar o PR sozinho, tocar app.py,
+# Airtable, Render, Make.com, rodar o Graphify (612 MB de dependencia,
+# proibido de virar dependencia de CI -- GRAPHIFY.md restricao 3),
+# escrever em DECISIONS.md/DIRECTIVES.md (bloqueado em codigo por
+# motor.py:CAMINHOS_PROIBIDOS, nao so aqui).
+#
+# DESLIGAR: Actions -> este workflow -> "Disable workflow" (nenhum
+# codigo precisa ser revertido -- so pausa o cron/dispatch). Para
+# remover de vez, deletar este arquivo em PR normal. Nenhuma das duas
+# formas afeta PRs ja abertos por execucoes anteriores.
+
+on:
+  schedule:
+    # a cada 6 horas -- frequencia baixa de proposito: este e um sensor
+    # de fato/estrutura, nao um gatilho de negocio com urgencia.
+    - cron: '17 */6 * * *'
+  workflow_dispatch: {}  # botao manual, para testar sem esperar o cron
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: orquestrador-sensor
+  cancel-in-progress: false  # nunca cancelar um run no meio de escrever AUTO_FACT
+
+jobs:
+  sensor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # o sensor precisa de origin/main real, nao raso
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Rodar o sensor do Orquestrador
+        id: sensor
+        run: |
+          set +e
+          python scripts/ci/orquestrador_sensor_ci.py
+          echo "codigo=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Verificar se algo mudou
+        id: mudou
+        run: |
+          if git diff --quiet -- docs/magnata-os/central-command/; then
+            echo "mudou=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "mudou=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Abrir PR com o AUTO_FACT atualizado
+        if: steps.mudou.outputs.mudou == 'true' && steps.sensor.outputs.codigo == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          SHA_CURTO=$(git rev-parse --short HEAD)
+
+          # IDEMPOTENCIA ENTRE EXECUCOES: se o PR de uma execucao
+          # anterior para este MESMO main_sha ainda estiver aberto (o
+          # cron roda de 6 em 6h; se ninguem revisou a tempo, o proximo
+          # run veria a mesma divergencia contra o ESTADO.json ainda
+          # nao mesclado e abriria um PR duplicado). Confere por branch
+          # -- nunca por titulo, que pode ser editado.
+          JA_EXISTE=$(gh pr list --state open --json headRefName \
+            --jq "[.[] | select(.headRefName | startswith(\"fix/auto-orquestrador-${SHA_CURTO}-\"))] | length")
+          if [ "$JA_EXISTE" -gt 0 ]; then
+            echo "Ja existe PR aberto para main=${SHA_CURTO} -- nao duplicando. Nada a fazer."
+            exit 0
+          fi
+
+          BRANCH="fix/auto-orquestrador-${SHA_CURTO}-${{ github.run_number }}"
+
+          git config user.name "orquestrador-sensor[bot]"
+          git config user.email "orquestrador-sensor@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add docs/magnata-os/central-command/ESTADO.json \
+                   docs/magnata-os/central-command/AUDITORIA_ORQUESTRADOR.jsonl
+
+          # Mensagem de commit numa linha so, de proposito: dentro de um
+          # bloco literal YAML (`run: |`), toda linha do script precisa
+          # manter a indentacao do bloco -- uma mensagem multi-linha
+          # solta (como a primeira versao deste workflow tinha) quebra o
+          # parser YAML. Achado nesta revisao: o workflow nunca tinha
+          # sido de fato executado (so schedule/dispatch, nunca
+          # disparado em CI ate agora), entao esse erro de sintaxe nunca
+          # tinha sido pego. Detalhe completo fica so no corpo do PR,
+          # que o `gh pr create` abaixo escreve.
+          git commit -m "chore(orquestrador): atualiza AUTO_FACT (main avancou para ${SHA_CURTO}) -- gerado sem sessao Claude, ver MATRIZ_AUTONOMIA.md"
+          git push -u origin "$BRANCH"
+          gh pr create \
+            --title "chore(orquestrador): AUTO_FACT atualizado (main=${SHA_CURTO})" \
+            --body "PR aberto automaticamente pelo sensor do Orquestrador. Atualiza só \`ESTADO.json\` e \`AUDITORIA_ORQUESTRADOR.jsonl\` (AUTO_FACT — ver \`TAXONOMIA_MEMORIA.md\`). Nunca mesclado automaticamente por este workflow — gate humano de revisão, mesmo sendo aditivo/reversível." \
+            --base main
+
+      - name: Sem mudança — nada a fazer
+        if: steps.mudou.outputs.mudou == 'false'
+        run: echo "Sensor rodou, nenhuma divergência de AUTO_FACT — sem PR."
+
+      - name: Evento não chegou a SUCCEEDED — alerta sem PR
+        if: steps.sensor.outputs.codigo != '0' && steps.sensor.outputs.codigo != ''
+        run: |
+          echo "::warning::Sensor do Orquestrador não concluiu com SUCCEEDED (código ${{ steps.sensor.outputs.codigo }}). Nenhum PR aberto — ver log do passo 'Rodar o sensor do Orquestrador'."
