@@ -1,13 +1,7 @@
 {
   "autorizacoes_app_py": 13,
   "branches_fora_de_main": [
-    "claude/evolution-api-instances-1s9raa",
     "claude/magnata-central-command-0n0713",
-    "feat/magnata-os-claude-powerpack",
-    "feat/magnata-os-documental-modulo01-fase5-painel",
-    "fix/adr-modulo01-http-wiring",
-    "fix/plano-modulo01-email-captura",
-    "fix/recibos-outros-documentos",
     "fix/sensor-baseline-nao-destrutiva",
     "fix/status-funcionario-pii"
   ],
@@ -42,12 +36,12 @@
     "WORK_IN_PROGRESS.md"
   ],
   "links_quebrados": [],
-  "main_assunto": "Merge pull request #42 from contato398/claude/macro-6a-etapa11-encerramento",
-  "main_data": "2026-08-23 15:05:30 -0300",
-  "main_sha": "5def429",
+  "main_assunto": "Merge pull request #43 from contato398/claude/macro-6a-handoff-precisao",
+  "main_data": "2026-08-23 15:09:52 -0300",
+  "main_sha": "4a6444f",
   "testes": {
     "falhando": 0,
-    "passando": 642
+    "passando": 649
   },
   "workflows": [
     "magnata-governance.yml",
