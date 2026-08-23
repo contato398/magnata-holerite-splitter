@@ -87,6 +87,21 @@ Legenda: ⚠️ PENDENTE (aberta, ação clara) · 🔍 PRECISA SER VALIDADO
 - **PEN-019** ⚠️ Branches órfãs com trabalho pronto ou quase pronto —
   ver `WORK_IN_PROGRESS.md`.
 
+## Pendência nova — merge do PR #22, 2026-08-23
+
+- **PEN-020** 🚫 PLANEJADO MAS NÃO EXECUTADO — política de
+  retry/backoff para `AdapterCapturaEmail.capturar_novas_mensagens()`
+  quando uma fonte real (Gmail API/IMAP) for conectada. Decisão
+  deliberadamente adiada, não esquecida: o adapter é fail-loud por
+  desenho (`buscar_novas_mensagens()` não trata exceção), comportamento
+  documentado na própria docstring do módulo e travado por teste
+  (`test_falha_na_busca_de_mensagens_propaga_sem_ser_engolida`). Quem
+  ligar uma fonte real precisa decidir contagem de tentativas, backoff
+  e onde essa lógica mora (no chamador/agendador, não no adapter) —
+  ver DEC-009. Não bloqueia nada hoje: o adapter não está conectado a
+  nenhuma fonte real (`main` = `a18d4b2`, confirmado por busca de
+  import).
+
 ## Observação sobre confiabilidade destes números
 
 Praticamente toda pendência quantitativa acima (contagens de

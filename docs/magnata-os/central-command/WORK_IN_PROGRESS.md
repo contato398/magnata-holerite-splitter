@@ -48,6 +48,13 @@ Legenda: 🟡 EM EVOLUÇÃO · 🚫 PLANEJADO MAS NÃO EXECUTADO
   sobre `main` atual, `clean`, CI/governança verdes — ver DEC-009.
   **Status corrigido: 🟡 EM EVOLUÇÃO** (pronto para merge, gate humano
   pendente; não conectado a fonte de e-mail real).
+- **ENCERRADO — merge do PR #22, 2026-08-23:** mesclado (`a18d4b2`),
+  suíte 659/0 e governança 15/15 confirmadas pós-merge em worktree
+  limpo. Este item **sai de WORK_IN_PROGRESS** — o código não está mais
+  "em andamento", está em `main`, testado. Fica **✅
+  FUNCIONANDO/CONFIRMADO** como código; a parte que segue de fato em
+  aberto (ligar a uma fonte de e-mail real) nunca foi escopo deste item
+  — é pendência nova, registrada em `PENDING.md` e em DEC-009.
 
 ### WIP-005 — Correção da regressão em `_status_funcionario_elegivel`
 - **Branch:** `fix/status-funcionario-pii`
