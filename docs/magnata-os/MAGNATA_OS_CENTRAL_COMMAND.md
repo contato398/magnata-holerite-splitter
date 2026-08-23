@@ -485,6 +485,158 @@ próprio `patterns.sh`. **Não mesclado** — é decisão de governança.
 
 ---
 
+## 0-G. Etapa 9 — Airtable auditado e banco próprio modelado (2026-08-22)
+
+**Registro retroativo.** A Etapa 9 produziu dois documentos que entraram
+em `main`, mas **não foi registrada aqui nem na linhagem do `INDEX.md`**
+quando aconteceu. Fica registrada agora, sem reescrever nada — a lacuna
+existiu e está declarada, não apagada.
+
+### 0-G.1 O que a Etapa 9 fez
+
+| Item | Resultado |
+|---|---|
+| PR **#36** | ✅ mesclado — modelo do banco próprio + proposta de `ALLOWED_PATHS` |
+| PR **#20** | ✅ **fechado sem merge** — superado pelo #33, que já entrou em `main` |
+| PR **#37** | aberto — inventário da lógica oculta do Airtable + Graphify regenerável |
+| `AIRTABLE_LOGICA_OCULTA.md` | criado — fecha **RSK-014** |
+| `BANCO_PROPRIO_MODELO.md` | criado — modelo alvo com temporalidade |
+
+### 0-G.2 O achado central da Etapa 9
+
+**72% dos campos de `Folha de Ponto` são calculados dentro do Airtable.**
+Regra de negócio que não está em nenhum arquivo do repositório, não passa
+por PR, não tem teste e não aparece em auditoria de código.
+
+E `Alocação` — a entidade que responde *"onde este colaborador trabalhava
+na competência de julho?"* — **não existe**. Hoje é um link sem vigência:
+quando alguém muda de posto, o holerite de julho passa a apontar para o
+posto de agosto.
+
+### 0-G.3 Correção declarada
+
+`BANCO_PROPRIO_MODELO.md` traz no cabeçalho **"Etapa 8"**. É **Etapa 9**.
+Erro de numeração, não de conteúdo. Fica corrigido aqui por declaração,
+conforme a regra append-only do `INDEX.md` — o texto original não é
+reescrito.
+
+---
+
+## 0-H. Etapa 10 — a lógica oculta do Airtable, completada até o limite da API (2026-08-22)
+
+**`main` = `a74cd1c`** (merge do **#37**). Suíte **642 passando / 0
+falhando**, medida nesta etapa, não presumida.
+
+### 0-H.1 Estado dos PRs ao fim da etapa
+
+| PR | Estado | Decisão |
+|---|---|---|
+| **#37** | ✅ **mesclado** — `a74cd1c` | Revalidado antes do merge |
+| **#38** | 🔴 **ABERTO — NÃO mesclado** | Auditado adversarialmente. **Gate humano explícito pendente** |
+| **#39** | 🟡 aberto | ANEXO A — os 2 `customScript` e as views |
+| **#22** | 🟡 aberto | Continua pendente desde etapas anteriores |
+
+### 0-H.2 Por que o #38 não foi mesclado
+
+O #38 remove três CPFs reais de código versionado. A auditoria
+adversarial **não encontrou defeito técnico** — e mesmo assim ele não foi
+mesclado, por uma razão que não é técnica:
+
+🔴 **O #38 precisa alterar `.githooks/pre-commit` para poder existir.**
+`SCRATCH_SCOPE_PATTERNS` contém `^test_` e é avaliado **antes** de
+`ALLOWED_PATHS` — então nenhum arquivo `test_*.py` passa no gate. Não há
+alternativa: sem tocar o hook, a correção de LGPD não commita.
+
+Isso significa que **o PR modifica o mecanismo que o julga**. Um PR que
+afrouxa o próprio portão é exatamente o caso em que a decisão não pode
+ser do agente, por mais correto que o conteúdo esteja.
+
+**O que foi verificado antes de parar:**
+
+| Verificação | Resultado |
+|---|---|
+| Superfície nova do hook | ✅ **exatamente 3 arquivos nominais** — testado por injeção |
+| `src/qualquer_outro.py` passaria? | ❌ **NÃO** |
+| `test_inventado.py` passaria? | ❌ **NÃO** |
+| CPF substituto usado no #38 | ✅ **inválido** por dígito verificador — reprovado por qualquer validador |
+| Guarda de PII: CPF sintético | ✅ passa |
+| Guarda de PII: CPF válido | ✅ bloqueia |
+
+### 0-H.3 O que o merge do #38 NÃO resolve
+
+🔴 **O CPF continua recuperável no histórico do Git** — commit `20ddbde`.
+Mesclar o #38 limpa a *árvore de trabalho*, não o histórico. Quem clonar
+o repositório continua tendo o dado.
+
+Isso não é objeção ao #38: é o registro honesto de que ele é **necessário
+e insuficiente**. Reescrever histórico é operação destrutiva e gate
+humano por `CLAUDE.md` §12-I — não foi feita, não foi tentada, e não deve
+ser feita sem decisão explícita.
+
+### 0-H.4 Os 2 `customScript` — a lacuna nº 1, fechada pela metade
+
+**`PROCESSAR ARQUIVOS` 🔴** — dispara `await fetch()` para um webhook do
+Make.com **hardcoded**, a cada criação de registro. Sem `try/catch`, sem
+checagem de status, sem idempotência.
+
+Três consequências, todas verificadas no corpo do script:
+
+1. **Contradiz decisão documentada** — o plano do #22 registra *"não
+   construir nada novo no Make.com"*. A integração já existe, ativa, em
+   produção. O plano foi escrito sem saber disso.
+2. **Falha silenciosa** — contraria `CLAUDE.md` §4 diretamente. Make fora
+   do ar = arquivo entra e ninguém sabe.
+3. **URL de webhook em texto claro** — quem lê o Airtable tem a
+   credencial. **Não reproduzida em lugar nenhum deste repositório.**
+
+**`Automation 1` 🔍** — publicada e válida sobre `Holerites`, mas o corpo
+do script **não foi devolvido pela API** e o input vem vazio. **Não sei o
+que faz.** Duas leituras são possíveis e nenhuma foi escolhida sem
+evidência. Só a interface do Airtable resolve.
+
+### 0-H.5 As views — a lacuna nº 2, fechada até onde a API deixa
+
+7 das 8 mapeadas. O achado que importa: **a view carrega a condição real;
+a automação só executa.**
+
+A regra **"com almoço / sem almoço"** existe **três vezes** — na view, na
+automação e na fórmula. Três lugares que precisam concordar, e **nenhum
+teste garante que concordem**.
+
+⚠️ **Limite declarado:** `list_views_for_table` devolve id, nome e tipo —
+**não os filtros**. *"O que exatamente faz um registro entrar em
+`NORMAL`"* continua acessível só pela interface.
+
+### 0-H.6 Riscos acrescentados nesta etapa
+
+| ID | Risco | Severidade |
+|---|---|---|
+| AT-11 | Make.com ativo contradizendo decisão documentada | 🔴 |
+| AT-12 | Webhook sem `try/catch` — falha silenciosa (§4) | 🔴 |
+| AT-13 | URL de webhook em texto claro na automação | 🟠 |
+| AT-14 | `Automation 1` sobre `Holerites`, propósito desconhecido | 🟠 |
+| AT-15 | Regra "com/sem almoço" triplicada sem teste | 🟠 |
+| AT-16 | Filtros das views inacessíveis por API | 🟡 |
+
+### 0-H.7 O `480` e o `F_FUNC_STATUS` — confirmados, não corrigidos
+
+**`480` continua hardcoded** como jornada de 8h. **12x36 é jornada de
+12h.** A constante não foi alterada: mudar regra de cálculo de jornada em
+produção é mudança funcional material — gate humano por §12-I.
+
+**`F_FUNC_STATUS` é escrito por automação do Airtable** (`INATIVA
+FUNCIONARIO QUANDO RECISÂO`), **fora do código**. O `app.py` lê esse
+campo para decidir elegibilidade de vínculo. Ou seja: **uma decisão que o
+código toma depende de um valor que o código não escreve e não versiona.**
+
+### 0-H.8 O que esta etapa NÃO fez
+
+Não mesclou o #38 · não alterou nenhuma automação do Airtable · não
+alterou nenhum registro · não tocou o `480` · não reescreveu histórico do
+Git · não removeu o webhook do Make · não acessou produção.
+
+---
+
 ## 1. Visão geral
 
 O Magnata OS é a plataforma operacional modular da Magnata, em migração
