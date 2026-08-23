@@ -218,3 +218,106 @@ negócio real que precisa ser conferida por quem a escreveu.
 a Direção confirmar quais estão corretas. Várias podem estar erradas há
 meses — `480` fixo com 12x36 é candidato forte. **Migrar uma regra errada
 só a torna permanente.**
+
+---
+
+# ANEXO A — Etapa 10 (2026-08-22): os 2 `customScript` e as views
+
+Fecha a lacuna nº 1 e nº 2 declaradas na §8. Leitura via API, somente
+leitura. **Nenhum segredo é reproduzido aqui.**
+
+## A.1 `PROCESSAR ARQUIVOS` — 🔴 CRÍTICO
+
+| Campo | Valor |
+|---|---|
+| Gatilho | `recordCreated` em `Processar Arquivos` |
+| Input | apenas o **ID do registro** disparado |
+| Tabelas lidas | nenhuma |
+| Tabelas escritas | **nenhuma** |
+| Efeito externo | ✅ **`fetch` HTTP para um webhook do Make.com** |
+| Secret referenciado | a URL do webhook está **hardcoded no script** — é credencial de fato, e **não é reproduzida aqui** |
+| Tratamento de erro | ❌ **nenhum** — `await fetch()` sem `try/catch`, sem checar status |
+| Idempotência | ❌ **nenhuma** — dispara a cada criação de registro |
+| Risco de PII | 🟢 Baixo — só o ID vai na query string |
+| Risco financeiro | 🟡 consome operações do plano Make a cada registro |
+
+**Regra humana:** *"Sempre que um arquivo novo entra em `Processar
+Arquivos`, avise um cenário do Make.com passando o ID do registro."*
+
+🔴 **Três problemas:**
+
+1. **Contradiz decisão documentada.** O plano do PR #22 registra a regra
+   *"não construir nada novo no Make.com"*. Existe integração ativa do
+   Make **em produção**, disparando em toda criação de registro — e o
+   plano foi escrito sem saber disso.
+2. **Falha silenciosa** — `CLAUDE.md` §4 é explícito. Se o Make estiver
+   fora, o arquivo entra e ninguém é avisado. Sem log, sem retry, sem
+   pendência.
+3. **URL de webhook em texto claro** dentro da automação — quem tiver
+   acesso de leitura ao Airtable tem a credencial.
+
+## A.2 `Automation 1` — 🔍 PRECISA SER VALIDADO
+
+| Campo | Valor |
+|---|---|
+| Gatilho | `inputReceivedFromConnection` em `Holerites` |
+| Input declarado | `recordId` com template **vazio** (`[""]`) |
+| Corpo do script | ⚠️ **não retornado pela API** — ao contrário do anterior, que veio completo |
+| Status | `deployed`, `configurationStatus: valid` |
+
+**Não sei o que esta automação faz.** O que sei: está publicada, é
+disparada por conexão externa sobre a tabela de `Holerites`, e o input
+que ela declara está vazio.
+
+Duas leituras possíveis, e **não vou escolher sem evidência**: ou é um
+rascunho publicado por engano com script vazio, ou a API não devolve o
+corpo neste caso. **Só a interface do Airtable resolve.**
+
+⚠️ Uma automação sem nome descritivo, sem descrição e com input vazio,
+publicada sobre a tabela de holerites, é exatamente o tipo de coisa que
+ninguém lembra de ter criado.
+
+## A.3 As views — a condição que não está em lugar nenhum
+
+7 das 8 mapeadas. **A view define a regra; a automação só executa.**
+
+| View | Tabela | Automação | Regra humana |
+|---|---|---|---|
+| `NORMAL` | Batidas de ponto | `PONTO BATIDO - COM ALMOÇO` | Ponto normal **com** intervalo |
+| `NORMAL - SEM ALMOCO` | Batidas de ponto | `PONTO BATIDO - SEM ALMOÇO` | Ponto normal **sem** intervalo |
+| `EXTRA` | Batidas de ponto | `PONTO EXTRA BATIDO - COM ALMOÇO` | Ponto extra **com** intervalo |
+| `EXTRA - SEM ALMOÇO` | Batidas de ponto | `PONTO EXTRA BATIDO - SEM ALMOÇO` | Ponto extra **sem** intervalo |
+| `VENCIDO` | Guias e Comprovantes | `VENCEU GUIA` | Guia passou do vencimento |
+| `INATIVO` | Guias e Comprovantes | `INATIVA GUIA` | Guia deixou de valer |
+| `Pronto` | Processar Arquivos | `Concluido-arquivado processos` | Arquivo terminou o processamento |
+| `VENCEU` | Certidões | `VENCER CERTIDAO` | Certidão passou do vencimento |
+| `CONCLUIDOS-ONTEM OU DPS` | Folha de Ponto | `CONCLUIDO - FOLHA PONTO` | Folha concluída **de ontem em diante** |
+| 🔍 (não mapeada) | Contabilidade Mensal | `INATIVAR MES CONTABIL` | Mês contábil a encerrar |
+
+**Confirmação importante:** a divisão **"com almoço / sem almoço"** é a
+condição da *view*, não da automação. Ela existe **três vezes** no
+sistema — na view, na automação e na fórmula (§3). Três lugares que
+precisam concordar, e nenhum teste garante que concordem.
+
+⚠️ **Limite declarado:** `list_views_for_table` devolve id, nome e tipo —
+**não os filtros**. Os nomes são autoexplicativos, mas *"o que exatamente
+faz um registro entrar em `NORMAL`"* continua só na interface.
+`CONCLUIDOS-ONTEM OU DPS` embute uma **regra temporal relativa** no nome.
+
+## A.4 Riscos acrescentados
+
+| ID | Risco | Severidade |
+|---|---|---|
+| AT-11 | Integração ativa com Make.com contradizendo decisão documentada | 🔴 Crítico |
+| AT-12 | Webhook sem `try/catch` — falha silenciosa (§4) | 🔴 Crítico |
+| AT-13 | URL de webhook em texto claro na automação | 🟠 Alto |
+| AT-14 | `Automation 1` publicada sobre `Holerites`, propósito desconhecido | 🟠 Alto |
+| AT-15 | Regra "com/sem almoço" triplicada sem teste de concordância | 🟠 Alto |
+| AT-16 | Filtros das views inacessíveis por API | 🟡 Médio |
+
+## A.5 O que ainda falta
+
+1. 🔴 Corpo de `Automation 1` — só pela interface.
+2. 🔴 Filtros exatos das 9 views.
+3. 🟠 View de `Contabilidade Mensal` não mapeada.
+4. 🟠 Condições dos ramos das 4 automações de ponto.
