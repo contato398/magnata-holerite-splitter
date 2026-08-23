@@ -37,6 +37,7 @@ Cadeia: **fonte → decisão → implementação → PR/commit → estado atual.
 | A arquitetura do código mudou? | `scripts/ci/graphify_snapshot.py` — só arestas EXTRACTED |
 | Devemos adotar o Graphify? | [`GRAPHIFY.md`](GRAPHIFY.md) — POC executada |
 | Como sair do Airtable? | [`AIRTABLE_DESACOPLAMENTO.md`](AIRTABLE_DESACOPLAMENTO.md) — 4 fases |
+| Que regra só existe dentro do Airtable? | [`AIRTABLE_LOGICA_OCULTA.md`](AIRTABLE_LOGICA_OCULTA.md) — 13 automações · ANEXO A: scripts e views |
 | Onde guardar dado sensível? | [`MEMORIA_SENSIVEL.md`](MEMORIA_SENSIVEL.md) |
 | Qual fonte vence qual, em caso de conflito? | [`ORQUESTRADOR.md`](ORQUESTRADOR.md) §6 |
 | Que núcleos de negócio existem de fato? | [`ORQUESTRADOR.md`](ORQUESTRADOR.md) §1 |
@@ -69,14 +70,28 @@ produção.
 | 3 | 2026-08-22 | Conteúdo da fundação extraído · lacuna temporal fechada · duas linhas de Central Command unificadas · PRs/branches inventariados · Macro 6A reconciliada · riscos priorizados | `26b9754` |
 | 4 | 2026-08-22 | **Fundação documental resgatada para `main`** (10 documentos + 8 relatórios, com proveniência e notas de reconciliação) · memória histórica preservada como conhecimento livre de PII · 13 referências quebradas corrigidas · PRs reclassificados por função | esta branch |
 | 5 | 2026-08-22 | PR #31 aberto · diff auditado · CI 15/15 · suíte idêntica ao baseline · fontes fora do Git registradas · núcleos classificados por evidência · requisito de camada de memória segura registrado | esta branch |
-| 8 | 2026-08-22 | **PRs #33, #34 e #35 MESCLADOS — main = `75dd8fc`, suíte 642/0, CI de testes ATIVO** · sensor de arquitetura (1,42 MB → 32 KB) · modelo do banco próprio com temporalidade · proposta mínima de ALLOWED_PATHS | esta branch |
-| 7 | 2026-08-22 | **PRs #31 e #32 mesclados** · correção do vínculo (PR #33, 642/0) · CI de testes (PR #34) · Fase 5 auditada · **primeiro sensor de atualização automática** · integração do Graphify desenhada | esta branch |
 | 6 | 2026-08-22 | **PR #31 MESCLADO — `main` = `9f8a53f`** · falhas classificadas por execução (642 passando com a correção) · produção não verificável (rede) · Graphify avaliado com POC · desacoplamento do Airtable mapeado (31 tabelas) · memória sensível especificada · arbitragem de fontes definida | esta branch |
+| 7 | 2026-08-22 | **PRs #31 e #32 mesclados** · correção do vínculo (PR #33, 642/0) · CI de testes (PR #34) · Fase 5 auditada · **primeiro sensor de atualização automática** · integração do Graphify desenhada | esta branch |
+| 8 | 2026-08-22 | **PRs #33, #34 e #35 MESCLADOS — main = `75dd8fc`, suíte 642/0, CI de testes ATIVO** · sensor de arquitetura (1,42 MB → 32 KB) · modelo do banco próprio com temporalidade · proposta mínima de ALLOWED_PATHS | esta branch |
+| 9 | 2026-08-22 | **PR #36 mesclado · PR #20 fechado como superado** · lógica oculta do Airtable inventariada (RSK-014 fechado) · modelo do banco próprio · **72% de `Folha de Ponto` é calculado dentro do Airtable** | mestre §0-G |
+| 10 | 2026-08-22 | **PR #37 MESCLADO — `main` = `a74cd1c`, suíte 642/0** · #38 auditado adversarialmente e **NÃO mesclado** (gate humano) · 2 `customScript` e 7 views lidos · Make.com ativo descoberto · riscos AT-11..AT-16 | mestre §0-H |
 
 As Etapas 1-2 nasceram em `claude/magnata-central-command-0n0713`, em
 caminhos que os gates do repositório não autorizam. A Etapa 3 moveu tudo
 para caminhos conformes **sem alterar o texto** e sem apagar a branch de
 origem — ver mestre §0-B.2.
+
+**Correções declaradas na Etapa 10** (nenhum texto de etapa anterior foi
+reescrito):
+
+1. As Etapas 6, 7 e 8 estavam listadas fora de ordem numérica (8, 7, 6).
+   As linhas foram **reordenadas, não alteradas** — cada palavra é a
+   original.
+2. A **Etapa 9 nunca foi registrada** nesta tabela nem no mestre quando
+   aconteceu. Fica registrada agora, com a lacuna declarada em §0-G.
+3. `BANCO_PROPRIO_MODELO.md` traz no cabeçalho "Etapa 8"; é **Etapa 9**.
+   Corrigido por declaração aqui e em §0-G.3 — o cabeçalho original
+   permanece como está.
 
 ---
 
