@@ -3,8 +3,8 @@ Teste local (offline) para a Fase 2 da automação de Folha de Ponto ("Cartão
 Ponto" — formato Secullum Ponto Web).
 
 NÃO está conectado ao pipeline de produção ainda. Objetivo: validar
-`extrair_cartao_ponto()` contra um texto baseado no PDF real de exemplo
-("Cartão Ponto adriano angarten.pdf").
+`extrair_cartao_ponto()` contra um texto com a MESMA ESTRUTURA de um
+PDF real de exemplo, mas com dados pessoais sintéticos (CLAUDE.md §6).
 
 Rodar: python test_leitura_ponto.py
 """
@@ -12,7 +12,7 @@ Rodar: python test_leitura_ponto.py
 import app
 
 
-# ── Texto baseado no PDF real "Cartão Ponto adriano angarten.pdf" ─────────────
+# ── Estrutura do PDF real de Cartão Ponto, com dados pessoais sintéticos ─────
 TEXTO_CARTAO_PONTO_REAL = """
 MAGNATA PORTARIA E SERVIÇOS LTDA
 CNPJ: 17.987.187/0001-61
@@ -20,7 +20,7 @@ CNPJ: 17.987.187/0001-61
 CPF: ADMISSÃO:
 123.456.789-00
 
-ADRIANO DE ALBUQUERQUE ANGARTEN
+FULANO DE TAL DA SILVA
 
 Período: 28/04/2026 até 28/05/2026
 
