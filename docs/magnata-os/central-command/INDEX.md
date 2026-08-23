@@ -37,8 +37,12 @@ Cadeia: **fonte → decisão → implementação → PR/commit → estado atual.
 | A arquitetura do código mudou? | `scripts/ci/graphify_snapshot.py` — só arestas EXTRACTED |
 | Devemos adotar o Graphify? | [`GRAPHIFY.md`](GRAPHIFY.md) — POC executada |
 | Como sair do Airtable? | [`AIRTABLE_DESACOPLAMENTO.md`](AIRTABLE_DESACOPLAMENTO.md) — 4 fases |
-| Que regra só existe dentro do Airtable? | [`AIRTABLE_LOGICA_OCULTA.md`](AIRTABLE_LOGICA_OCULTA.md) — 13 automações · ANEXO A: scripts e views |
+| Que regra só existe dentro do Airtable? | [`AIRTABLE_LOGICA_OCULTA.md`](AIRTABLE_LOGICA_OCULTA.md) — 13 automações · ANEXO A: scripts e views · ANEXO B: `480`, Make.com e o que a API não alcança |
 | Onde guardar dado sensível? | [`MEMORIA_SENSIVEL.md`](MEMORIA_SENSIVEL.md) |
+| Onde ainda existe PII, e como sair? | [`PII_HISTORICO_PLANO.md`](PII_HISTORICO_PLANO.md) — 3 opções com impacto |
+| A Macro 6A pode ser abandonada? | [`MACRO_6A_RECONCILIACAO.md`](MACRO_6A_RECONCILIACAO.md) |
+| **Sou uma sessão nova. Por onde começo?** | **[`HANDOFF.md`](HANDOFF.md)** |
+| Que erros já cometemos e não devem se repetir? | [`MACRO_6A_RECONCILIACAO.md`](MACRO_6A_RECONCILIACAO.md) §4 |
 | Qual fonte vence qual, em caso de conflito? | [`ORQUESTRADOR.md`](ORQUESTRADOR.md) §6 |
 | Que núcleos de negócio existem de fato? | [`ORQUESTRADOR.md`](ORQUESTRADOR.md) §1 |
 | Qual camada é verdade sobre o quê? | [`ORQUESTRADOR.md`](ORQUESTRADOR.md) §3 |
@@ -75,6 +79,7 @@ produção.
 | 8 | 2026-08-22 | **PRs #33, #34 e #35 MESCLADOS — main = `75dd8fc`, suíte 642/0, CI de testes ATIVO** · sensor de arquitetura (1,42 MB → 32 KB) · modelo do banco próprio com temporalidade · proposta mínima de ALLOWED_PATHS | esta branch |
 | 9 | 2026-08-22 | **PR #36 mesclado · PR #20 fechado como superado** · lógica oculta do Airtable inventariada (RSK-014 fechado) · modelo do banco próprio · **72% de `Folha de Ponto` é calculado dentro do Airtable** | mestre §0-G |
 | 10 | 2026-08-22 | **PR #37 MESCLADO — `main` = `a74cd1c`, suíte 642/0** · #38 auditado adversarialmente e **NÃO mesclado** (gate humano) · 2 `customScript` e 7 views lidos · Make.com ativo descoberto · riscos AT-11..AT-16 | mestre §0-H |
+| 11 | 2026-08-23 | **PRs #39, #40 e #38 MESCLADOS — `main` = `007a4e5`, suíte 649/0** · PII removida da árvore (inclusive o nome real que o #38 deixou) · **40 de 42 branches ainda contaminadas** · `Automation 1` resolvida (script vazio) · `480` não existe no código · Make.com classificado com 4 opções · sensor corrigido (PR #41) · Macro 6A reconciliada · handoff produzido | mestre §0-I |
 
 As Etapas 1-2 nasceram em `claude/magnata-central-command-0n0713`, em
 caminhos que os gates do repositório não autorizam. A Etapa 3 moveu tudo
@@ -92,6 +97,19 @@ reescrito):
 3. `BANCO_PROPRIO_MODELO.md` traz no cabeçalho "Etapa 8"; é **Etapa 9**.
    Corrigido por declaração aqui e em §0-G.3 — o cabeçalho original
    permanece como está.
+
+**Correções declaradas na Etapa 11:**
+
+4. A varredura de PII em branches acusou **42 de 42** contaminadas,
+   incluindo `main`. Errado: o heurístico de nome próprio capturou a
+   declaração de variável `TEXTO_CARTAO_PONTO_REAL`. O número é **40 de
+   42**, e `main` está limpa — ver `PII_HISTORICO_PLANO.md` §1.1.
+5. O mestre §0-H.4 registrou que a API do Airtable *"não devolveu o corpo"*
+   de `Automation 1`. **Superado por evidência:** a API devolve corpo de
+   script; esse nó simplesmente não tem um — ver ANEXO B §B.1.
+6. O ANEXO A §A.1 disse que o input de `PROCESSAR ARQUIVOS` era
+   `recordId`. O nome real da chave é **`Cliente`**, ligada a `trigger.id`
+   — o efeito estava certo, o rótulo não.
 
 ---
 

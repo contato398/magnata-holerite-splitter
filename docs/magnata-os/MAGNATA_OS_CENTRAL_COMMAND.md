@@ -637,6 +637,122 @@ Git · não removeu o webhook do Make · não acessou produção.
 
 ---
 
+## 0-I. Etapa 11 — encerramento da Macro 6A (2026-08-23)
+
+**`main` = `007a4e5`.** Três merges nesta etapa: **#39**, **#40** e
+**#38**. Suíte **649 passando / 0 falhando** (642 + 7 do PR #41).
+
+### 0-I.1 O #38 foi mesclado — e a revalidação achou o que ele deixou passar
+
+A Etapa 10 parou no #38 porque ele **altera o hook que o julga**. Com a
+autorização por fase desta missão, revalidei as 10 condições e mesclei.
+
+🔴 **A revalidação encontrou uma lacuna real:** o #38 trocou o CPF e
+**deixou o nome próprio do funcionário** três linhas abaixo, na mesma
+fixture. Nome de funcionário real é dado pessoal tanto quanto CPF
+(`CLAUDE.md` §6). Corrigido em `b12d94d` antes do merge.
+
+**A lição vale mais que o conserto:** a busca foi por *padrão de CPF*,
+não pelo *registro da pessoa*. Sanitizar um tipo de PII não sanitiza o
+registro.
+
+**Superfície do hook, medida por injeção** — não por leitura:
+
+| Caminho | Resultado |
+|---|---|
+| `src/qualquer_outro.py` | ❌ BLOQUEADO |
+| `test_inventado.py` | ❌ BLOQUEADO |
+| `src/sync_new_employees.pyX` | ❌ BLOQUEADO |
+| `test_leitura_pontoXpy` | ❌ BLOQUEADO — o ponto está escapado |
+| Os 3 caminhos nominais | ✅ permitidos |
+
+Varredura da árvore inteira: **zero CPF com dígito verificador válido.**
+
+### 0-I.2 O que o merge do #38 NÃO resolveu — e é maior do que parecia
+
+🔴 **40 das 42 pontas de branch remota carregam PII na árvore atual** —
+não no histórico: no arquivo. Um `git checkout` materializa o dado.
+
+`origin/main` está limpa. O plano completo, com 3 opções e impacto de
+cada uma, está em **`PII_HISTORICO_PLANO.md`**. **Nada foi reescrito.**
+
+**Correção declarada:** minha primeira varredura acusou 42 de 42,
+incluindo `main`. Estava errada — o heurístico de "nome próprio" capturou
+a declaração de variável `TEXTO_CARTAO_PONTO_REAL`. O número é **40**.
+
+### 0-I.3 `Automation 1` — resolvida por evidência
+
+**Supera o §0-H.4.** Eu havia registrado que *"a API não devolve o corpo
+do script"* e listado duas leituras sem escolher. Errado: a API **devolve**
+— `PROCESSAR ARQUIVOS` veio completo, na mesma sessão, com a mesma
+credencial. `Automation 1` **não tem a chave `script`**. O nó está vazio.
+
+**"A API não devolve" e "não existe" são coisas diferentes**, e eu tratei
+uma como a outra.
+
+### 0-I.4 O `480` — o achado que muda a conclusão
+
+🔴 **`480` não existe em nenhum arquivo do repositório.** Zero
+ocorrências em todo o código versionado. Vive só na fórmula do Airtable.
+
+| Camada | Sabe o que é 12x36? | Calcula hora extra? |
+|---|---|---|
+| Secullum (`/Calcular`) | ✅ | ✅ |
+| Código (`secullum_ponto.py`) | ✅ tratamento explícito | ❌ |
+| Airtable (fórmula) | ❌ **assume 8h** | ✅ |
+
+**A única camada que calcula hora extra é a única que ignora a escala.**
+Risco **AT-21**. Não corrigido: regra trabalhista com efeito retroativo
+em folha é gate de negócio.
+
+### 0-I.5 Make.com — divergência classificada, não resolvida
+
+Estado real (ativo em produção) e decisão documentada (*"não construir
+nada novo"*) são **ambos verdadeiros** e não se anulam. A decisão fala de
+*construir novo*; o que existe é *pré-existente*. A falha foi de
+**inventário**, não de decisão.
+
+Quatro opções com impacto em ANEXO B §B.6. **Recomendação: instrumentar
+primeiro.** Falha silenciosa é o problema urgente; dependência de
+fornecedor é o importante — não são o mesmo problema.
+
+### 0-I.6 O sensor corrigido, e o teste que não testava
+
+O sensor apagava a baseline de testes quando `--atualizar` rodava sem
+`--com-testes`. Corrigido no **PR #41**, com a regra: *não medir significa
+"baseline não atualizada", nunca "baseline vazia"*.
+
+🔴 **Registro do erro mais útil desta etapa:** a primeira suíte de
+regressão **não pegava o defeito**. Reintroduzi o bug de propósito e os
+6 testes continuaram verdes — todos exercitavam a função isolada, então
+desconectá-la de `main()` passava despercebido. Um sétimo teste, sobre o
+caminho real de gravação, reprova com o defeito e passa com a correção.
+
+**Um teste de regressão só vale depois de você ter visto ele reprovar.**
+
+### 0-I.7 Documentos novos
+
+| Documento | Responde |
+|---|---|
+| `PII_HISTORICO_PLANO.md` | Onde o dado ainda está e o que custa cada saída |
+| `MACRO_6A_RECONCILIACAO.md` | O que da conversa já estava preservado, e o que faltava |
+| `HANDOFF.md` | Como uma sessão nova continua sem ler a Macro 6A |
+
+### 0-I.8 Produção — reconfirmada como NÃO VERIFICÁVEL
+
+`HTTP 000`. Mesmo resultado das etapas anteriores, mesma causa (rede da
+sessão). **Não insisti** — repetir tentativa comprovadamente inútil é
+desperdício, não diligência.
+
+### 0-I.9 O que esta etapa NÃO fez
+
+Não reescreveu histórico · não fez force push · não apagou branch · não
+alterou nenhuma automação, fórmula ou registro do Airtable · não desligou
+o Make.com · não tocou no `480` · não fez deploy · não acessou produção ·
+não mesclou o **#41** (mudança funcional, gate humano).
+
+---
+
 ## 1. Visão geral
 
 O Magnata OS é a plataforma operacional modular da Magnata, em migração
