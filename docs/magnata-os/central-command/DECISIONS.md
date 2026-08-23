@@ -109,6 +109,29 @@ Legenda: ✅ FUNCIONANDO/CONFIRMADO · 🟡 EM EVOLUÇÃO · ⚠️ PENDENTE ·
 - **Em produção?** N/A
 - **Substituída?** Não
 
+**Correção declarada — auditoria do PR #22, 2026-08-23** (texto acima
+preservado, não reescrito): a "próxima ação proposta" **foi
+implementada** na mesma branch, hoje carregada pelo PR #22
+(`fix/plano-modulo01-email-captura` — mesmo SHA de origem que
+`claude/evolution-api-instances-1s9raa`, ver `PRS_AND_BRANCHES.md`).
+Auditoria adversarial desta etapa: adapter revisado item a item contra
+o checklist de adapter seguro (idempotência delegada e comprovada,
+duplicidade não escondida, erro por anexo isolado, falha de rede
+fail-loud e agora testada), 3 lacunas de teste reais encontradas e
+fechadas (anexo vazio/inválido, erro parcial dentro do lote, falha na
+busca propagando sem ser engolida) — suíte do adapter 7→10, suíte geral
+649→659, 0 regressão. PR rebaseado sobre `main` (`98e32d2`), `clean`,
+CI e governança verdes.
+- **Status atual (corrigido):** 🟡 EM EVOLUÇÃO — código pronto, testado,
+  revisado adversarialmente; **ainda não mesclado em `main`** (gate
+  humano: registra decisão de direção + introduz adapter novo, não é
+  correção isolada) e **ainda não conectado a nenhuma fonte de e-mail
+  real** (permanece §12-I: qualquer ligação a Gmail/IMAP real, e
+  qualquer decisão de desligar/substituir o Apps Script, exige
+  autorização de fase separada).
+- **Testada? (corrigido):** Sim — 10 casos, 100% em memória, sem rede/disco.
+- **Substituída? (corrigido):** Não.
+
 ### DEC-010 — Decisão oficial de e-mails de envio/recebimento
 - **Categoria:** decisão de configuração
 - **Data/origem:** 2026-06-15

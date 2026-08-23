@@ -187,3 +187,60 @@ código sempre pode ser reescrito; memória perdida, não.
 
 **Nenhuma branch foi apagada.** `SAFE TO ARCHIVE` é classificação, não
 autorização — exclusão de branch é gate humano.
+
+---
+
+## 7. Estado pós-PR #41 — auditoria e reconciliação do PR #22, 2026-08-23
+
+Nada abaixo reescreve as seções 1-6; corrige e estende, com data.
+
+**PR #41 MESCLADO.** `main` = `98e32d2`. Suíte 649/0.
+
+### 7.1 PR #22 — auditoria adversarial completa
+
+Decomposto nos 3 arquivos que carrega, cada um auditado item a item
+(idempotência, adapter/driver, erro por anexo, falha de rede, PII,
+efeitos colaterais) — não apenas classificado em bloco:
+
+| Arquivo | Classificação | Achado |
+|---|---|---|
+| `docs/decisoes/plano-consolidacao-ingestao-distribuicao.md` | **B — AINDA VÁLIDA E ÚTIL**, com **C — precisava atualização pontual** | Recomendação (não construir no Make.com; priorizar Módulo 01) segue de pé — nada no repositório desde 17/08 a contradiz; a linha de `Status` estava desatualizada ("não implementado" — corrigida, factual) |
+| `magnata_os/documental/modulo01/adapters/email_captura.py` | **B — AINDA VÁLIDA E ÚTIL** | Respeita adapter/driver (`Protocol`, zero import de cliente real), reusa `ServicoCriacaoLote` (porta oficial, não duplica nada), idempotência corretamente delegada e comprovada por teste. **Gaps reais encontrados:** falha de rede na busca (`buscar_novas_mensagens`) não tinha tratamento nem teste (fail-loud, agora documentado e travado por teste); "erro parcial" dentro de um lote não tinha teste. Nenhum dos dois exigiu mudar comportamento — só documentar/testar o que já existia |
+| `test_magnata_os_documental_modulo01_email_captura.py` | **C — válida, precisava atualização** | 7→10 casos. 3 novos: anexo vazio/inválido, erro parcial, falha de API propagando sem ser engolida. Verificado adversarialmente (defeito reintroduzido de propósito, testes pegaram) |
+
+**Nenhum código único deste PR já existe em `main` por outro caminho**
+— confirmado por busca (`email_captura`, `plano-consolidacao-ingestao`
+ausentes em `main` antes desta reconciliação).
+
+### 7.2 Ação tomada
+
+PR #22 rebaseado sobre `main` (`98e32d2`) em worktree isolado — **zero
+conflito** (aditivo puro). Suíte geral 649→**659**, 0 regressão.
+Governança 15/15 (a única marca "bloqueada" numa rodada foi o nome da
+branch de trabalho local, não a branch real do PR — falso alarme,
+descartado e confirmado). `git diff --check` limpo. Sem CPF, sem
+segredo, `app.py` intocado. `mergeable_state`: **`clean`**. CI
+(`pytest`, governança): **verde**.
+
+### 7.3 Estratégia escolhida — **B (atualizar) já executada; merge é gate humano**
+
+Não é **A (merge direto)** porque não chegou inalterado — recebeu 3
+testes novos e 1 correção factual. Não é **C (dividir)** — os 3
+arquivos são uma unidade coesa (doc explica o porquê do adapter; testes
+sem o adapter não têm sentido; splitar perderia a proveniência). Não é
+**D/E** — nada aqui está superseded ou obsoleto.
+
+**Por que não foi mesclado automaticamente**, apesar de tecnicamente
+tão seguro quanto o PR #41: PR #41 era uma correção isolada de
+ferramenta interna (sensor). O PR #22 introduz **capacidade nova** (um
+adapter que ainda não existe em `main`) e **formaliza uma decisão de
+direção** ("não construir no Make.com; priorizar Módulo 01") num
+documento que vira fonte citável. Mesmo sendo aditivo, testado e
+zero-risco de produção (nada o chama ainda), isso é "decisão
+arquitetural"/"mudança de escopo de capacidade", que `CLAUDE.md` §12-I
+e a missão desta etapa (§13) mantêm como gate humano — a própria
+classificação anterior desta Central Command (§5, "**Decidir.**") já
+apontava nessa direção antes desta auditoria.
+
+**Atualiza:** `DECISIONS.md` DEC-009 · `WORK_IN_PROGRESS.md` WIP-004 ·
+`NEXT_ACTIONS.md` NXT-005.

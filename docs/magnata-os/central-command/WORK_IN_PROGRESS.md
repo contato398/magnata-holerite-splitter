@@ -43,6 +43,11 @@ Legenda: 🟡 EM EVOLUÇÃO · 🚫 PLANEJADO MAS NÃO EXECUTADO
 - **Estado:** plano de direção registrado, próxima ação concreta
   (adapter de e-mail para o Módulo 01) aguardando confirmação — ver DEC-009
 - **Status:** 🚫 PLANEJADO MAS NÃO EXECUTADO
+- **Correção declarada (2026-08-23):** adapter implementado e auditado
+  na mesma branch (PR #22), 10 testes, suíte geral 649→659, rebaseado
+  sobre `main` atual, `clean`, CI/governança verdes — ver DEC-009.
+  **Status corrigido: 🟡 EM EVOLUÇÃO** (pronto para merge, gate humano
+  pendente; não conectado a fonte de e-mail real).
 
 ### WIP-005 — Correção da regressão em `_status_funcionario_elegivel`
 - **Branch:** `fix/status-funcionario-pii`
