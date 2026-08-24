@@ -50,5 +50,18 @@
     "magnata-governance.yml",
     "magnata-testes.yml",
     "orquestrador-sensor.yml"
-  ]
+  ],
+  "sessao_2026_08_24_checkpoint": {
+    "nota": "Checkpoint de fechamento de sessão, aditivo -- não reaudita nem reescreve os campos acima. Ver HANDOFF.md 'Checkpoint de sessão' para o texto completo.",
+    "main_sha_confirmado_via_git": "76b0046b17883fb20f7102d3cf24cf2b90c2f26c",
+    "branch_local_atual": "fix/orquestrador-v1-reconciliacao",
+    "prs_abertos": [
+      {"numero": 49, "titulo": "Gmail Fase 1 (ClienteGmailReadOnly)", "estado": "aberto", "ci": "verde", "mergeable_state": "clean"},
+      {"numero": 51, "titulo": "motor V1 -- DLQ, auditoria, replay, concorrência real", "estado": "aberto", "ci": "verde", "mergeable_state": "clean"}
+    ],
+    "prs_fechados_nesta_sessao": [
+      {"numero": 50, "motivo": "substituído por #51 -- branch original não passava no gate de governança de nome de branch"}
+    ],
+    "missao_pendente": "Consolidação de contexto/tokens do Grande Orquestrador -- plano aprovado, implementação NÃO iniciada. Ver /root/.claude/plans/async-nibbling-toucan.md (só existe na máquina desta sessão, não no repositório)."
+  }
 }
