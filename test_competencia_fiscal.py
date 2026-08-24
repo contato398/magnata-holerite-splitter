@@ -61,6 +61,23 @@ def test_competencia_com_acentuacao_alternativa_e_reconhecida():
     assert _detectar_competencia_fiscal(texto) == 'Marco 2026' or _detectar_competencia_fiscal(texto) == 'Março 2026'
 
 
+def test_competencia_periodo_apuracao_sem_preposicao_de_e_reconhecida():
+    """Achado real em produção (24/08/2026): o RELATÓRIO DA DECLARAÇÃO
+    COMPLETA - DCTFWeb emitido pela Receita Federal rotula o campo como
+    "Período apuração" (sem "de") -- diferente do Recibo de Entrega do
+    mesmo DCTFWeb, que usa "Período de apuração" (com "de"). Antes desta
+    correção, a Declaração completa nunca tinha competência comprovada e
+    caía sempre em "Competência fiscal não detectada", mesmo com o valor
+    certo (06/2026) presente no texto -- reproduzido aqui a partir do
+    layout real (dado sintético, sem CNPJ/nome real)."""
+    texto = (
+        'RELATÓRIO DA DECLARAÇÃO COMPLETA - DCTFWeb\n'
+        'Nome do Contribuinte EMPRESA SINTETICA LTDA\n'
+        'Período apuração 06/2026 Número do Recibo 50000000000000\n'
+    )
+    assert _detectar_competencia_fiscal(texto) == 'Junho 2026'
+
+
 # ── _detectar_competencia_fiscal — adversarial: nunca adivinha ──────────
 
 def test_sem_nenhum_marcador_devolve_none_em_vez_de_adivinhar():

@@ -5395,7 +5395,15 @@ def _detectar_competencia_fiscal(texto: str):
     if not texto:
         return None
 
-    marcador = r'(?:Compet[êe]ncia|Per[íi]odo\s+de\s+(?:Apura[çc][ãa]o|Refer[êe]ncia))'
+    # "de" opcional entre "Período" e "Apuração"/"Referência": achado real em
+    # produção (24/08/2026) -- o RELATÓRIO DA DECLARAÇÃO COMPLETA - DCTFWeb
+    # emitido pela Receita Federal usa o rótulo de campo "Período apuração"
+    # (sem "de"), diferente do Recibo de Entrega do mesmo DCTFWeb, que usa
+    # "Período de apuração" (com "de"). Sem essa opcionalidade, a Declaração
+    # completa nunca tinha competência comprovada e caía sempre em
+    # "Competência fiscal não detectada", mesmo com o valor certo presente
+    # no texto.
+    marcador = r'(?:Compet[êe]ncia|Per[íi]odo\s+(?:de\s+)?(?:Apura[çc][ãa]o|Refer[êe]ncia))'
     nomes_meses = ['janeiro', 'fevereiro', 'marco', 'abril', 'maio', 'junho',
                    'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro']
 
