@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import dataclasses
 import sqlite3
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Protocol
@@ -57,6 +58,7 @@ class RegistroExecucao:
 class RepositorioExecucoes(Protocol):
     def buscar_por_event_id(self, event_id: str) -> Optional[RegistroExecucao]: ...
     def salvar(self, registro: RegistroExecucao) -> None: ...
+    def criar_se_novo(self, registro: RegistroExecucao) -> bool: ...
     def listar_todos(self) -> List[RegistroExecucao]: ...
     def registrar_auditoria(
         self,
@@ -77,12 +79,30 @@ class RepositorioExecucoesEmMemoria:
     def __init__(self) -> None:
         self._dados: dict = {}
         self._auditoria: dict = {}  # event_id -> list of RegistroAuditoria
+        # Lock so criar_se_novo seja realmente atomico entre threads --
+        # sem isso, duas threads podem ambas ver event_id ausente e
+        # ambas "ganhar" a reivindicacao (achado da reconciliacao: prova
+        # com threading.Barrier em motor.processar mostrou dupla
+        # execucao de acao externa sem essa exclusao mutua).
+        self._lock = threading.Lock()
 
     def buscar_por_event_id(self, event_id: str) -> Optional[RegistroExecucao]:
         return self._dados.get(event_id)
 
     def salvar(self, registro: RegistroExecucao) -> None:
         self._dados[registro.event_id] = registro
+
+    def criar_se_novo(self, registro: RegistroExecucao) -> bool:
+        """Reivindicacao atomica: cria o registro SOMENTE se event_id
+        ainda nao existir. Retorna True se esta chamada "ganhou" (o
+        chamador pode prosseguir para executar a Acao), False se outra
+        chamada ja reivindicou este event_id (o chamador deve tratar
+        como evento existente, nunca reexecutar a Acao)."""
+        with self._lock:
+            if registro.event_id in self._dados:
+                return False
+            self._dados[registro.event_id] = registro
+            return True
 
     def listar_todos(self) -> List[RegistroExecucao]:
         return list(self._dados.values())
@@ -226,6 +246,46 @@ class RepositorioExecucoesSQLite:
             ),
         )
         self._conn.commit()
+
+    def criar_se_novo(self, registro: RegistroExecucao) -> bool:
+        """Reivindicacao atomica via PRIMARY KEY do SQLite -- ao contrario
+        de salvar() (INSERT ... ON CONFLICT DO UPDATE, um upsert), este
+        INSERT puro falha com IntegrityError se event_id ja existir. A
+        constraint e garantida pelo proprio motor SQLite entre conexoes/
+        threads/processos diferentes (nao depende de nenhum lock em
+        Python) -- fecha a janela de corrida em que dois workers
+        concorrentes verificam "evento novo?" antes de qualquer um
+        escrever, e ambos concluem que sim.
+
+        Retorna True se esta chamada ganhou a reivindicacao (pode
+        prosseguir para executar a Acao), False se outra chamada ja
+        reivindicou este event_id primeiro."""
+        try:
+            self._conn.execute(
+                '''INSERT INTO execucoes (event_id, event_type, estado, nivel_autonomia, acao,
+                    resultado, evidencia, attempt, next_retry_at, last_error_classe,
+                    last_error_at, criado_em, atualizado_em, evento_json,
+                    manualmente_reiniciado_por, manualmente_reiniciado_em, motivo_reinicio_manual)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                (
+                    registro.event_id, registro.event_type, registro.estado.value,
+                    registro.nivel_autonomia, registro.acao, registro.resultado,
+                    registro.evidencia, registro.attempt,
+                    registro.next_retry_at.isoformat() if registro.next_retry_at else None,
+                    registro.last_error_classe,
+                    registro.last_error_at.isoformat() if registro.last_error_at else None,
+                    registro.criado_em.isoformat(), registro.atualizado_em.isoformat(),
+                    registro.evento_json,
+                    registro.manualmente_reiniciado_por,
+                    registro.manualmente_reiniciado_em.isoformat() if registro.manualmente_reiniciado_em else None,
+                    registro.motivo_reinicio_manual,
+                ),
+            )
+            self._conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            self._conn.rollback()
+            return False
 
     def listar_todos(self) -> List[RegistroExecucao]:
         cur = self._conn.execute('SELECT event_id FROM execucoes')

@@ -258,8 +258,17 @@ class TestCrashBeforeSave:
         assert registro is not None
         assert registro.estado == EstadoExecucao.SUCCEEDED
 
-    def test_crash_apos_acao_idempotencia_protege_retry(self):
-        """Retry após crash recebe side effect idempotente de ação."""
+    def test_crash_apos_acao_deixa_evento_preso_ate_replay_manual(self):
+        """Crash após ação (antes de salvar SUCCEEDED) NÃO é retomado por
+        um processar() comum -- essa é a troca deliberada feita na
+        reconciliação de concorrência (ver comentário em
+        motor.py:processar e TRANSICOES_VALIDAS): um segundo processar()
+        para um evento "em andamento" nunca reexecuta a Ação (fecha a
+        corrida de dupla execução de efeito externo). O preço é que um
+        crash real do worker original deixa o evento preso até um
+        replay() manual explícito -- gate humano, nunca automático,
+        porque só um humano pode confirmar fora de banda que o worker
+        anterior realmente morreu."""
         side_effects = []
 
         def acao_idempotente(evento):
@@ -300,7 +309,13 @@ class TestCrashBeforeSave:
             assert 'evt-crash-6' in side_effects
             repo1.fechar()
 
-            # SESSÃO 2: Restart e retry
+            # SESSÃO 2: Restart -- um processar() comum NÃO reexecuta.
+            # O registro ficou em RECEIVED (única gravação que
+            # criar_se_novo fez; SUCCEEDED nunca foi persistido pelo
+            # crash). Isso é "em andamento" do ponto de vista de
+            # processar(), então ele recusa e devolve como está --
+            # nunca reexecuta a Ação sem saber se o worker 1 morreu de
+            # verdade ou só está lento.
             repo2 = RepositorioExecucoesSQLite(db_path)
 
             motor2 = MotorOrquestrador(
@@ -308,10 +323,24 @@ class TestCrashBeforeSave:
                 acoes={TipoEvento.GIT_MAIN_AVANCOU: acao_idempotente},
             )
 
-            resultado = motor2.processar(evento)
-            assert resultado.estado == EstadoExecucao.SUCCEEDED
+            resultado_processar = motor2.processar(evento)
+            assert resultado_processar.estado == EstadoExecucao.RECEIVED
+            # Ação NÃO foi reexecutada por um processar() comum
+            assert side_effects.count('evt-crash-6') == 1
 
-            # Side effect não duplicou (idempotência mantida)
+            # SESSÃO 2 (continuação): operador confirma fora de banda que
+            # o worker 1 morreu e chama replay() explicitamente -- a
+            # única forma correta de destravar este evento.
+            resultado_replay = motor2.replay(
+                'evt-crash-6', 'operador-teste',
+                'worker 1 confirmado morto -- crash de IO, ver log da sessão 1',
+            )
+            assert resultado_replay.estado == EstadoExecucao.SUCCEEDED
+
+            # Side effect não duplicou (idempotência mantida mesmo com a
+            # Ação sendo chamada de novo pelo replay -- porque a própria
+            # Ação de teste é idempotente; o motor não garante isso por
+            # si só para Ações não-idempotentes, replay sempre reexecuta)
             assert side_effects.count('evt-crash-6') == 1
 
             repo2.fechar()

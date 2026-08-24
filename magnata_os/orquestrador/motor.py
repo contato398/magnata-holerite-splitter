@@ -129,6 +129,12 @@ class MotorOrquestrador:
         existente = self._repo.buscar_por_event_id(evento.event_id)
         if existente is not None and existente.estado in (
             EstadoExecucao.SUCCEEDED, EstadoExecucao.IGNORED, EstadoExecucao.FAILED_FINAL,
+            # SUPERSEDED tambem nao tem transicao de saida em
+            # TRANSICOES_VALIDAS (achado da reconciliacao) -- faltava
+            # aqui, entao caia no ramo "em andamento" por engano e
+            # levantava TransicaoInvalida em vez de devolver o registro
+            # terminal como os outros tres.
+            EstadoExecucao.SUPERSEDED,
         ):
             self._emitir(
                 'evento_duplicado_ignorado',
@@ -155,15 +161,59 @@ class MotorOrquestrador:
                           retentativa=True)
             return self._executar_e_registrar(existente, evento, acao)
 
-        agora_ = agora()
-        registro = existente or RegistroExecucao(
-            event_id=evento.event_id, event_type=evento.event_type.value,
-            estado=EstadoExecucao.RECEIVED, nivel_autonomia=-1, acao='',
-            resultado=None, evidencia=None, attempt=0,
-            next_retry_at=None, last_error_classe=None, last_error_at=None,
-            criado_em=agora_, atualizado_em=agora_,
-            evento_json=_serializar_evento(evento),
-        )
+        if existente is None:
+            # REIVINDICACAO ATOMICA: fecha a janela de corrida em que dois
+            # workers concorrentes chegam aqui ao mesmo tempo para o MESMO
+            # event_id novo -- sem isso, ambos veriam existente=None e
+            # ambos executariam a Acao (prova: threading.Barrier forcando
+            # a corrida mostrou dupla execucao de efeito externo antes
+            # deste fix). criar_se_novo() e atomico no nivel do
+            # repositorio (PRIMARY KEY no SQLite, threading.Lock em
+            # memoria) -- nunca dois chamadores ganham para o mesmo
+            # event_id.
+            agora_ = agora()
+            candidato = RegistroExecucao(
+                event_id=evento.event_id, event_type=evento.event_type.value,
+                estado=EstadoExecucao.RECEIVED, nivel_autonomia=-1, acao='',
+                resultado=None, evidencia=None, attempt=0,
+                next_retry_at=None, last_error_classe=None, last_error_at=None,
+                criado_em=agora_, atualizado_em=agora_,
+                evento_json=_serializar_evento(evento),
+            )
+            ganhou = self._repo.criar_se_novo(candidato)
+            if not ganhou:
+                # Perdeu a corrida -- outro worker ja reivindicou este
+                # event_id. NUNCA executar a Acao aqui: devolve o estado
+                # que o vencedor ja tiver persistido (pode ainda nao ser
+                # terminal -- quem chama de novo mais tarde ve o estado
+                # final). Falha nunca e silenciosa, mas aqui nao ha falha
+                # -- so quem chegou depois, entao apenas cede.
+                perdedor_encontrou = self._repo.buscar_por_event_id(evento.event_id)
+                self._emitir(
+                    'evento_perdeu_corrida_de_criacao', event_id=evento.event_id,
+                )
+                return perdedor_encontrou if perdedor_encontrou is not None else candidato
+            registro = candidato
+        else:
+            # Evento ja existe mas nao esta em estado terminal (checado
+            # acima) nem em FAILED_RETRYABLE (retomada explicita acima) --
+            # ou seja, esta em RECEIVED/VALIDATED/CLASSIFIED/EXECUTING/
+            # WAITING_GATE/SUPERSEDED: "em andamento" ou aguardando gate,
+            # nunca um convite para reprocessar do zero. NUNCA retomar/
+            # reexecutar aqui: um segundo processar() para o mesmo
+            # event_id enquanto o primeiro ainda esta em andamento e a
+            # MESMA classe de corrida que criar_se_novo() fecha para
+            # evento novo -- aqui fecha a versao "evento ja existe mas
+            # ainda em andamento" (achado da reconciliacao: sem este
+            # bloqueio, um segundo worker via o registro em RECEIVED/
+            # VALIDATED/etc. e reexecutava a Acao do zero, mesmo com
+            # criar_se_novo() ja fechando a janela do evento
+            # completamente novo).
+            self._emitir(
+                'evento_em_andamento_ignorado', event_id=evento.event_id,
+                estado_atual=existente.estado.value,
+            )
+            return existente
         self._emitir('evento_recebido', event_id=evento.event_id, tipo=evento.event_type.value)
 
         # 2) VALIDACAO -- so chegar aqui ja significa Evento bem formado
@@ -300,18 +350,46 @@ class MotorOrquestrador:
             self._emitir('erro_ao_registrar_auditoria', event_id=registro.event_id, erro=str(e))
         return registro
 
+    # Estados que replay() aceita como ponto de partida. FAILED_FINAL e o
+    # caso original (Point 3). Os demais foram abertos na reconciliação
+    # de concorrência: depois que processar() passou a recusar retomar
+    # um evento "em andamento" (fecha a corrida de dupla execução de
+    # Ação externa -- ver comentário em TRANSICOES_VALIDAS), um crash do
+    # worker original entre a reivindicação e o estado terminal deixa o
+    # evento preso num desses estados para sempre, e replay() manual é a
+    # única saída (gate humano -- nunca automático).
+    _ESTADOS_REPLAYAVEIS = (
+        EstadoExecucao.FAILED_FINAL,
+        EstadoExecucao.RECEIVED,
+        EstadoExecucao.VALIDATED,
+        EstadoExecucao.CLASSIFIED,
+        EstadoExecucao.EXECUTING,
+        EstadoExecucao.WAITING_GATE,
+    )
+
     def replay(self, event_id: str, solicitado_por: str, motivo: str) -> RegistroExecucao:
-        """Replay manual e explícito de um evento que falhou permanentemente.
+        """Replay manual e explícito de um evento parado -- falhou
+        permanentemente (FAILED_FINAL) ou ficou preso "em andamento"
+        porque o worker que o reivindicou morreu antes de um estado
+        terminal (RECEIVED/VALIDATED/CLASSIFIED/EXECUTING/WAITING_GATE).
 
         Point 3 da Missão de Fechamento: Replay Controlado
         - Manual: usuário solicita explicitamente
         - Explícito: não automático, com provenance (quem, quando, por quê)
         - Rastreado: registro atualizado com metadados de replay
 
+        Quem chama isto para um evento que NÃO está em FAILED_FINAL está
+        confirmando, fora de banda, que o worker anterior realmente
+        morreu -- nunca chamar isto só porque um evento está demorando;
+        processar() de novo é seguro e não reexecuta a Ação enquanto o
+        worker original ainda pode estar vivo (ver motor.py:processar).
+
         Args:
-            event_id: Evento a ser repetido (deve estar em FAILED_FINAL)
+            event_id: Evento a ser repetido (ver _ESTADOS_REPLAYAVEIS)
             solicitado_por: Identificação de quem solicitou (user/system)
-            motivo: Razão para o replay (observação human-readable)
+            motivo: Razão para o replay (observação human-readable --
+                para um replay de estado "em andamento", deve registrar
+                como foi confirmado que o worker morreu)
 
         Returns:
             RegistroExecucao atualizado após retry bem-sucedido (ou falha nova)
@@ -321,10 +399,10 @@ class MotorOrquestrador:
         if registro is None:
             raise ValueError(f'Evento não encontrado: {event_id}')
 
-        if registro.estado != EstadoExecucao.FAILED_FINAL:
+        if registro.estado not in self._ESTADOS_REPLAYAVEIS:
             raise ValueError(
-                f'Só eventos em FAILED_FINAL podem ser replicados; '
-                f'{event_id} está em {registro.estado.value}'
+                f'Evento em {registro.estado.value} não é replayável; '
+                f'estados aceitos: {[e.value for e in self._ESTADOS_REPLAYAVEIS]}'
             )
 
         if registro.evento_json is None:
