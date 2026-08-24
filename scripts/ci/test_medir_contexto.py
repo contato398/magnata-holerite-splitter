@@ -1,19 +1,4 @@
-"""Regressão da medição de contexto e do alerta de 3 estados.
-
-Cobre coisas que o script promete e que não podem regredir em silêncio
-(CLAUDE.md §4):
-
-1. bootstrap ausente é ERRO (2), nunca "0 chars" silencioso;
-2. classificação NORMAL/ATENCAO/TROCAR_SESSAO é só aritmética sobre o
-   TIER 0 medido — nunca inventa "tokens reais de sessão";
-3. as três camadas são cumulativas (TIER 0 ⊆ TIER 1 ⊆ TIER 2) contra o
-   estado real do repositório — trava a integração, não só a função
-   isolada, do mesmo jeito que `test_central_command_sensor.py` faz para
-   o sensor;
-4. `avaliar()` é o contrato que `central_command_sensor.py` consome para
-   popular `ESTADO.json['contexto']` — sua forma não pode mudar em
-   silêncio.
-"""
+"""Regressão da medição de contexto e do alerta de 3 estados."""
 import importlib.util
 import json
 import pathlib
@@ -29,7 +14,6 @@ _spec.loader.exec_module(medir)
 
 
 def test_bootstrap_real_existe_e_tem_as_tres_partes():
-    """Contra o repositório de verdade: HANDOFF/ESTADO/INDEX precisam existir."""
     resultado = medir._medir(medir.TIER0)
     assert not resultado['faltando'], resultado['faltando']
     assert len(resultado['arquivos']) == 3
@@ -37,7 +21,6 @@ def test_bootstrap_real_existe_e_tem_as_tres_partes():
 
 
 def test_tier0_esta_contido_em_tier1_no_corpus_real():
-    """TIER 1 nunca pode ser menor que TIER 0 — é TIER 0 mais 5 arquivos."""
     estado = medir.coletar()
     t0 = estado['tier0_bootstrap_minimo']['chars']
     t1 = estado['tier1_onboarding_completo']['chars']
@@ -46,25 +29,16 @@ def test_tier0_esta_contido_em_tier1_no_corpus_real():
 
 
 def test_razao_tier0_e_pequena_no_repositorio_real():
-    """Confirma numericamente a promessa de HANDOFF.md: contexto mínimo primeiro.
-
-    Não trava um número exato (o corpus cresce) — trava a promessa: o
-    bootstrap fica bem abaixo do corpus total, nunca próximo dele.
-    """
     estado = medir.coletar()
     assert estado['razao_tier0_sobre_total'] < 0.20, (
-        'TIER 0 deixou de ser "mínimo" frente ao corpus — revisar o que mudou'
+        'TIER 0 deixou de ser mínimo frente ao corpus — revisar o que mudou'
     )
 
 
 def test_bootstrap_ausente_e_erro_nao_zero_silencioso(monkeypatch):
-    """Falha nunca é silenciosa: bootstrap sumido tem que gritar, não medir 0."""
     monkeypatch.setattr(medir, 'TIER0', [pathlib.Path('/caminho/que/nao/existe.md')])
     monkeypatch.setattr(sys, 'argv', ['medir_contexto.py'])
-
-    codigo = medir.main()
-
-    assert codigo == 2, 'bootstrap ausente precisa retornar erro, não 0'
+    assert medir.main() == 2
 
 
 def test_classificar_status_normal_dentro_dos_dois_limites():
@@ -80,7 +54,6 @@ def test_classificar_status_trocar_sessao_acima_do_limite_maior():
 
 
 def test_classificar_status_e_so_aritmetica_sem_estado_escondido():
-    """Mesma entrada, mesma saída — nada de scoring, nada de estado global."""
     a = medir.classificar_status(9000, 8000, 12000)
     b = medir.classificar_status(9000, 8000, 12000)
     assert a == b == medir.ATENCAO
@@ -131,9 +104,7 @@ def test_cli_saida_trocar_sessao_e_codigo_3_com_mensagem_exata(monkeypatch, caps
 
 def test_saida_json_tem_as_chaves_que_o_relatorio_promete(monkeypatch, capsys):
     monkeypatch.setattr(sys, 'argv', ['medir_contexto.py', '--json'])
-
     medir.main()
-
     dado = json.loads(capsys.readouterr().out)
     for chave in (
         'tier0_bootstrap_minimo', 'tier1_onboarding_completo', 'tier2_corpus_total',
@@ -142,3 +113,29 @@ def test_saida_json_tem_as_chaves_que_o_relatorio_promete(monkeypatch, capsys):
         'status_contexto', 'mensagem', 'medido_em',
     ):
         assert chave in dado, f'chave {chave} sumiu da saída --json'
+
+
+def test_estado_contexto_nao_mede_a_si_mesmo(tmp_path, monkeypatch):
+    """Regressão do bug real de auto-inflação encontrado em 2026-08-24."""
+    estado = tmp_path / 'ESTADO.json'
+    base = {'main_sha': 'abc1234', 'testes': {'passando': 10, 'falhando': 0}}
+    estado.write_text(json.dumps({**base, 'contexto': {'lixo': 'x' * 10000}}), encoding='utf-8')
+    monkeypatch.setattr(medir, 'ESTADO', estado)
+
+    com_telemetria_grande = len(medir._texto_para_medicao(estado))
+
+    estado.write_text(json.dumps({**base, 'contexto': {'lixo': 'y'}}), encoding='utf-8')
+    com_telemetria_pequena = len(medir._texto_para_medicao(estado))
+
+    assert com_telemetria_grande == com_telemetria_pequena
+
+
+def test_avaliar_padrao_e_compacto_para_auto_fact():
+    """ESTADO recebe resumo, não o mapa completo de arquivos dos três tiers."""
+    estado = medir.avaliar(limite_atencao=1_000_000, limite_trocar=2_000_000)
+    assert 'tier0_tokens_aprox' in estado
+    assert 'tier2_tokens_aprox' in estado
+    assert 'tier0_bootstrap_minimo' not in estado
+    assert 'tier1_onboarding_completo' not in estado
+    assert 'tier2_corpus_total' not in estado
+    assert 'metrica' in estado
