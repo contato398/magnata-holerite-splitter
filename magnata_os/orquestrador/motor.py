@@ -22,6 +22,10 @@ from datetime import timedelta
 from typing import Callable, Dict, Optional, Tuple
 
 from .classificador_falha import ClasseFalha, classificar
+from .configuracao import (
+    aplicar_kill_switch_bloqueio,
+    modo_seco_executavel,
+)
 from .eventos import EstadoExecucao, Evento, agora, validar_transicao
 from .politica_autonomia import NivelAutonomia, nivel_para
 from .repositorio_execucoes import RegistroExecucao, RepositorioExecucoes
@@ -121,6 +125,8 @@ class MotorOrquestrador:
 
         # 3) CLASSIFICACAO + POLITICA DE AUTONOMIA
         nivel = nivel_para(evento.event_type)
+        # KILL_SWITCH: se ativado, força HUMAN_REQUIRED para tudo
+        nivel = NivelAutonomia(aplicar_kill_switch_bloqueio(int(nivel)))
         registro.nivel_autonomia = int(nivel)
         registro = self._transicionar(registro, EstadoExecucao.CLASSIFIED)
         self._emitir('evento_classificado', event_id=evento.event_id, nivel=nivel.name)
@@ -157,6 +163,18 @@ class MotorOrquestrador:
         registro = self._transicionar(registro, EstadoExecucao.EXECUTING)
         registro.attempt += 1
         self._emitir('acao_executando', event_id=evento.event_id, tentativa=registro.attempt)
+
+        # DRY_RUN: simula execucao sem side effect
+        if modo_seco_executavel(registro.acao):
+            registro = self._transicionar(registro, EstadoExecucao.SUCCEEDED)
+            registro.resultado = 'DRY_RUN: simulacao concluida sem side effect'
+            registro.evidencia = 'Orquestrador rodou em modo seco (ORQUESTRADOR_DRY_RUN=1)'
+            self._repo.salvar(registro)
+            self._emitir(
+                'acao_dry_run', event_id=evento.event_id, acao=registro.acao,
+                tentativa=registro.attempt,
+            )
+            return registro
 
         try:
             resultado = acao(evento)
