@@ -365,7 +365,7 @@ def main() -> int:
     print(f"  CPF em doc      : {len(atual['cpf_em_documentacao'])}")
     print(f"  workflows       : {len(atual['workflows'])}")
     print(f"  autoriz. app.py : {atual['autorizacoes_app_py']}")
-    print(f"  contexto (TIER0): ~{atual['contexto']['tier0_bootstrap_minimo']['tokens_aprox']} tokens aprox. "
+    print(f"  contexto (TIER0): ~{atual['contexto']['tier0_tokens_aprox']} tokens aprox. "
           f"— {atual['contexto']['status_contexto']}")
     print(f"  graphify snapshot: {atual['graphify_snapshot_status']}"
           f" · HANDOFF vs main: {atual['session_handoff_freshness']}")
