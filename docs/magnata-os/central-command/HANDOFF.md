@@ -108,3 +108,99 @@ registrada nesta etapa é a de **infraestrutura de disparo automático**
 (`MATRIZ_AUTONOMIA.md` §4) — decidir se um job de CI pode abrir PR
 automático com o snapshot do sensor, sem nunca commitar direto em
 `main`.
+
+---
+
+## Checkpoint de sessão — 2026-08-24
+
+> ⚠️ Checkpoint aditivo de fechamento de sessão — **não é a
+> reescrita completa** deste `HANDOFF.md` (essa reescrita está
+> planejada mas não executada, ver "Missão pendente" abaixo). As
+> seções acima (Etapa 12) continuam sendo a última auditoria formal;
+> este checkpoint só registra o que mudou nesta sessão, para nenhum
+> fato importante ficar só no histórico do chat (`CLAUDE.md` §11/§12-N).
+
+**O que foi concluído:**
+- Motor do Orquestrador (`magnata_os/orquestrador/`): DLQ integrada ao
+  caminho real do motor, auditoria append-only (imutável, persistente,
+  resiliente a falha de escrita), replay manual estendido (cobre
+  eventos presos "em andamento", não só `FAILED_FINAL`), chaos testing
+  6/6 (era 3/6), suite adversarial (DRY_RUN/KILL_SWITCH/retry limits),
+  testes de segurança adversarial.
+- **Retratação formal**: relatório anterior desta sessão
+  (`GRANDE_ORQUESTRADOR_V1_READINESS.md`) declarou "AT_MOST_ONCE
+  garantido" sem prova real — retratado. Um probe determinístico
+  (`threading.Barrier`) provou dupla execução real de Ação externa.
+  Corrigido com reivindicação atômica (`criar_se_novo`, `PRIMARY KEY`
+  do SQLite) + recusa de retomada de evento "em andamento". Ver
+  `GRANDE_ORQUESTRADOR_V1_RECONCILIACAO.md` (substitui o relatório
+  retratado como fonte de verdade).
+- Suite completa local: **794 passed, 1 skipped, 0 failed**, estável
+  em múltiplas execuções — na branch, **não em `main`**.
+- Governança local: 15/15 gates.
+- Migração de branch: `claude/magnata-memory-audit-2c6bps` (não casava
+  a allowlist de nome de branch) → `fix/orquestrador-v1-reconciliacao`
+  (18 commits preservados, mesmos SHAs, mais 1 commit de whitespace).
+  PR **#50 fechado**, **PR #51 aberto** no lugar — CI verde,
+  `mergeable_state: clean`, **não mesclado** (gate humano, `CLAUDE.md`
+  §9, nunca dispensado).
+- Investigação de uma nova missão (otimização de contexto/tokens):
+  confirmado que `HANDOFF.md`/`ESTADO.json`/`INDEX.md` já cumprem o
+  papel de bootstrap/manifest que a missão pedia sob outros nomes;
+  usuário decidiu consolidar em vez de duplicar. Plano aprovado.
+
+**O que ficou incompleto:**
+- **Missão pendente**: implementação do plano de consolidação de
+  contexto (aprovado, zero código escrito). Plano completo em
+  `/root/.claude/plans/async-nibbling-toucan.md` — **só existe na
+  máquina desta sessão, não versionado no repositório.** Próxima
+  sessão precisa: (a) pedir o conteúdo do plano de novo se a máquina
+  não persistir, ou (b) reconstruir a partir deste checkpoint + do
+  pedido original do usuário. Resumo do plano: formalizar contratos
+  L0-L4 sobre os arquivos já existentes (sem duplicar), estender
+  `central_command_sensor.py --atualizar` com campos novos
+  (`generated_at`, `orchestrator_status`, `active_prs`, etc.), criar
+  `scripts/ci/contexto_cli.py` + testes (única lacuna real sem
+  cobertura hoje), medir antes/depois (34k→2,3k palavras já medido
+  sem código novo), abrir PR numa branch compatível com a allowlist
+  desde o início.
+- PR #51 não mesclado (decisão do usuário).
+- 3 branches órfãs de execuções falhas do sensor de CI
+  (`fix/auto-orquestrador-76b0046-{2,3,4}`) não apagadas (sem
+  autorização explícita).
+- E2E interno como trilha única não executado (declarado, não
+  escondido — ver `GRANDE_ORQUESTRADOR_V1_RECONCILIACAO.md` §12).
+
+**Arquivos alterados nesta sessão** (todos em
+`fix/orquestrador-v1-reconciliacao`, não em `main`):
+`magnata_os/orquestrador/{motor,eventos,repositorio_execucoes}.py`,
+7 arquivos `test_magnata_os_orquestrador_*.py` (novos ou reescritos),
+`GRANDE_ORQUESTRADOR_V1_READINESS.md` (retratado, banner),
+`GRANDE_ORQUESTRADOR_V1_RECONCILIACAO.md` (novo, fonte de verdade
+atual), `docs/decisoes/grande-orquestrador-v1-respostas-tecnicas.md`
+(whitespace), e este checkpoint em `HANDOFF.md`/`ESTADO.json`.
+
+**Branch atual:** `fix/orquestrador-v1-reconciliacao` (local e remota),
+19 commits à frente de `main` (HEAD `a5fbcbd` antes deste checkpoint).
+
+**PRs:** #49 aberto (Gmail Fase 1, não tocado nesta sessão) · #50
+fechado (substituído) · #51 aberto, CI verde, aguardando decisão de
+merge.
+
+**Bugs/gates confirmados com evidência (não suposição):**
+- GitHub Actions bloqueado de criar PR (log real:
+  "GitHub Actions is not permitted to create or approve pull
+  requests") — `orquestrador-sensor.yml` nunca fecha ponta-a-ponta
+  sozinho.
+- Health monitor não persiste entre execuções (design documentado no
+  próprio módulo).
+- Merge de PR continua gate humano absoluto (`CLAUDE.md` §9/§12-I) —
+  nenhuma instrução de missão o dispensa.
+
+**Próximo passo exato:** implementar o plano aprovado em
+`/root/.claude/plans/async-nibbling-toucan.md` — 6 mudanças concretas
+(`central_command_sensor.py`, `INDEX.md`, `HANDOFF.md`, `PRS_AND_BRANCHES.md`,
+`scripts/ci/contexto_cli.py` novo, `scripts/ci/test_contexto_cli.py`
+novo), rodar a suite completa de verificação (10 passos, listados no
+plano), abrir PR numa branch já compatível com a allowlist desde o
+início.
