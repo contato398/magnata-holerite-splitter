@@ -409,6 +409,13 @@ F_GUIA_TIPO    = 'fldZc4A6stiQPI8qt'
 F_GUIA_PDF     = 'fldmC813USDUA3eVl'   # PDF GUIA
 F_GUIA_COMPROV = 'fldBSFBpAUvJFMzbH'   # PDF COMPROVANTE (comprovantes de pagamento, VR/VA…)
 F_GUIA_NOME    = 'fldOLOkac6twvlfZR'   # Nome documento
+# Competência (date) — campo já existente na tabela, nunca escrito por
+# nenhum código até 24/08/2026 (achado da investigação de automação
+# DCTFWeb). Confirmado como "Competência" e não outra coisa pela evidência
+# semântica do campo-irmão fldpsfEhel0hrz5Sp, que é uma fórmula
+# DATEADD({F_GUIA_COMPETENCIA}, 1, 'month') — só faz sentido como
+# "Vencimento = Competência + 1 mês", regra padrão de DCTFWeb/FGTS no Brasil.
+F_GUIA_COMPETENCIA = 'fldzYcOOksU1zTRAy'
 # Benefícios (Clientes) — v3.12: Horas Extras/Assiduidade (Sicoob, fatiado
 # por colaborador e fundido por cliente) e VR/VA (lote via Excel+comprovante
 # agregado, ou PIX individual de colaborador novo sem cartão ainda).
@@ -608,6 +615,33 @@ MESES_PT = [
     'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
     'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
 ]
+
+
+def _folha_mensal_para_data(folha_mensal: str) -> str | None:
+    """Converte o formato por extenso já usado internamente para competência
+    ("Junho 2026", retorno de _detectar_competencia_fiscal) para uma data
+    ISO (dia 1 do mês) aceita pelo campo de data do Airtable ("2026-06-01").
+
+    Isolado como função própria (em vez de inline em cada chamador) porque
+    a Missão A da investigação de automação DCTFWeb (24/08/2026) encontrou
+    mais de uma tabela (Guias e Comprovantes, e potencialmente outras no
+    futuro) que precisa dessa mesma conversão para gravar competência como
+    data de verdade, em vez de só como texto embutido no nome do registro.
+    Retorna None se o formato não for reconhecido, para nunca gravar uma
+    data adivinhada."""
+    if not folha_mensal:
+        return None
+    partes = folha_mensal.strip().split()
+    if len(partes) != 2:
+        return None
+    nome_mes, ano_str = partes
+    if not ano_str.isdigit():
+        return None
+    try:
+        mes_num = MESES_PT.index(nome_mes) + 1
+    except ValueError:
+        return None
+    return f'{int(ano_str):04d}-{mes_num:02d}-01'
 
 # ── Rate limiter Airtable ─────────────────────────────────────────────────────
 _last_at_call = 0.0
@@ -5492,10 +5526,21 @@ def _processar_anexo_fiscal(conteudo: bytes, nome_arquivo: str, tipo_doc: str, t
                 'folha_mensal': folha_mensal, 'resultado_fatiamento': resultado_fatiamento}
 
     if tipo_doc in ('DCTFWeb - Recibo de Entrega', 'DCTFWeb - Declaração'):
-        rec_id = _criar_registro(TABLE_GUIAS, {
+        campos_guia = {
             F_GUIA_STATUS: 'Recebido', F_GUIA_TIPO: tipo_doc,
             F_GUIA_NOME: f'{tipo_doc} - {folha_mensal}',
-        })
+        }
+        # Achado da investigação de automação DCTFWeb (24/08/2026, Missão A):
+        # F_GUIA_COMPETENCIA existe na tabela desde sempre mas nunca era
+        # escrito — a única competência gravada ficava embutida como texto
+        # dentro de F_GUIA_NOME, o que impede filtro/busca por competência
+        # real na tabela. data_competencia só falha (None) se o formato de
+        # folha_mensal for inesperado; nesse caso o registro ainda é criado
+        # (mesmo comportamento de antes), só sem a data.
+        data_competencia = _folha_mensal_para_data(folha_mensal)
+        if data_competencia:
+            campos_guia[F_GUIA_COMPETENCIA] = data_competencia
+        rec_id = _criar_registro(TABLE_GUIAS, campos_guia)
         _anexar_attachment(TABLE_GUIAS, rec_id, F_GUIA_PDF, conteudo, nome_arquivo)
         return {'acao': 'arquivado_guia_comprovante', 'tipo_documento': tipo_doc,
                 'folha_mensal': folha_mensal, 'guia_record_id': rec_id}

@@ -30,6 +30,8 @@ import pytest
 from app import (
     _detectar_competencia_fiscal,
     _processar_anexo_fiscal,
+    _folha_mensal_para_data,
+    F_GUIA_COMPETENCIA,
 )
 
 
@@ -257,3 +259,72 @@ def test_processar_anexo_fiscal_com_competencias_ambiguas_vai_para_pendencia():
 
     assert resultado['acao'] == 'competencia_fiscal_nao_detectada'
     mock_fatiador.assert_not_called()
+
+
+# ── Missão A (investigação de automação DCTFWeb, 24/08/2026) ────────────
+# Achado: a tabela "Guias e Comprovantes" já tinha um campo de data
+# "Competência" (F_GUIA_COMPETENCIA) confirmado por evidência semântica
+# (campo-irmão fórmula "Vencimento" = DATEADD(Competência, 1, 'month')),
+# mas nenhum código gravava nele -- a única competência ficava só embutida
+# como texto dentro do nome do registro, impossível de filtrar/buscar como
+# data real. Testes abaixo cobrem a conversão e a gravação no campo.
+
+def test_folha_mensal_para_data_converte_mes_por_extenso_e_ano():
+    assert _folha_mensal_para_data('Junho 2026') == '2026-06-01'
+    assert _folha_mensal_para_data('Janeiro 2027') == '2027-01-01'
+    assert _folha_mensal_para_data('Dezembro 2025') == '2025-12-01'
+
+
+def test_folha_mensal_para_data_nunca_adivinha_em_formato_inesperado():
+    """Mesmo princípio de _detectar_competencia_fiscal: formato não
+    reconhecido devolve None, nunca uma data chutada."""
+    assert _folha_mensal_para_data(None) is None
+    assert _folha_mensal_para_data('') is None
+    assert _folha_mensal_para_data('MêsInventado 2026') is None
+    assert _folha_mensal_para_data('Junho') is None
+    assert _folha_mensal_para_data('06/2026') is None
+
+
+def test_processar_anexo_fiscal_guia_com_competencia_grava_campo_data():
+    """Achado da Missão A: antes desta correção, F_GUIA_COMPETENCIA nunca
+    era enviado a Airtable -- este teste falha na versão anterior do
+    código porque 'fields' não continha a chave do campo."""
+    texto_com_marcador = 'DCTFWeb - Recibo de Entrega\nPeríodo de Apuração 06/2026\nRecibo: 123456\n'
+
+    mock_post = Mock(return_value=_resposta_criar_registro('recGUIA1'))
+    with patch('app._at_throttle'), \
+         patch('app.requests.post', mock_post), \
+         patch('app._anexar_attachment') as mock_anexar:
+        resultado = _processar_anexo_fiscal(
+            b'conteudo-fake', 'recibo.pdf', 'DCTFWeb - Recibo de Entrega', texto_com_marcador,
+        )
+
+    assert resultado['acao'] == 'arquivado_guia_comprovante'
+    assert resultado['folha_mensal'] == 'Junho 2026'
+    mock_anexar.assert_called_once()
+
+    # o payload enviado ao Airtable para criar o registro da Guia inclui a
+    # data de competência no campo já existente, não só texto no nome
+    _, kwargs = mock_post.call_args
+    campos_enviados = kwargs['json']['fields']
+    assert campos_enviados[F_GUIA_COMPETENCIA] == '2026-06-01'
+
+
+def test_processar_anexo_fiscal_declaracao_com_competencia_grava_campo_data():
+    texto_com_marcador = (
+        'RELATÓRIO DA DECLARAÇÃO COMPLETA - DCTFWeb\n'
+        'Período apuração 06/2026 Número do Recibo 50000000000000\n'
+    )
+
+    mock_post = Mock(return_value=_resposta_criar_registro('recGUIA2'))
+    with patch('app._at_throttle'), \
+         patch('app.requests.post', mock_post), \
+         patch('app._anexar_attachment'):
+        resultado = _processar_anexo_fiscal(
+            b'conteudo-fake', 'declaracao.pdf', 'DCTFWeb - Declaração', texto_com_marcador,
+        )
+
+    assert resultado['acao'] == 'arquivado_guia_comprovante'
+    _, kwargs = mock_post.call_args
+    campos_enviados = kwargs['json']['fields']
+    assert campos_enviados[F_GUIA_COMPETENCIA] == '2026-06-01'
