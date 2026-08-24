@@ -58,6 +58,15 @@ class RepositorioExecucoes(Protocol):
     def buscar_por_event_id(self, event_id: str) -> Optional[RegistroExecucao]: ...
     def salvar(self, registro: RegistroExecucao) -> None: ...
     def listar_todos(self) -> List[RegistroExecucao]: ...
+    def registrar_auditoria(
+        self,
+        event_id: str,
+        estado_anterior: str,
+        estado_novo: str,
+        registrado_em: datetime,
+        motivo: Optional[str] = None,
+    ) -> None: ...
+    def listar_auditoria(self, event_id: str) -> List['RegistroAuditoria']: ...
 
 
 class RepositorioExecucoesEmMemoria:
@@ -66,6 +75,7 @@ class RepositorioExecucoesEmMemoria:
 
     def __init__(self) -> None:
         self._dados: dict = {}
+        self._auditoria: dict = {}  # event_id -> list of RegistroAuditoria
 
     def buscar_por_event_id(self, event_id: str) -> Optional[RegistroExecucao]:
         return self._dados.get(event_id)
@@ -75,6 +85,30 @@ class RepositorioExecucoesEmMemoria:
 
     def listar_todos(self) -> List[RegistroExecucao]:
         return list(self._dados.values())
+
+    def registrar_auditoria(
+        self,
+        event_id: str,
+        estado_anterior: str,
+        estado_novo: str,
+        registrado_em: datetime,
+        motivo: Optional[str] = None,
+    ) -> None:
+        """Registra transição no log append-only em memória."""
+        entrada = RegistroAuditoria(
+            event_id=event_id,
+            estado_anterior=estado_anterior,
+            estado_novo=estado_novo,
+            registrado_em=registrado_em,
+            motivo=motivo,
+        )
+        if event_id not in self._auditoria:
+            self._auditoria[event_id] = []
+        self._auditoria[event_id].append(entrada)
+
+    def listar_auditoria(self, event_id: str) -> List[RegistroAuditoria]:
+        """Recupera histórico de transições para um evento."""
+        return self._auditoria.get(event_id, [])
 
 
 _DDL = '''CREATE TABLE IF NOT EXISTS execucoes (
@@ -97,6 +131,26 @@ _DDL = '''CREATE TABLE IF NOT EXISTS execucoes (
     motivo_reinicio_manual TEXT
 )'''
 
+_DDL_AUDIT = '''CREATE TABLE IF NOT EXISTS auditoria (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL,
+    estado_anterior TEXT NOT NULL,
+    estado_novo TEXT NOT NULL,
+    registrado_em TEXT NOT NULL,
+    motivo TEXT
+)'''
+
+
+@dataclasses.dataclass(frozen=True)
+class RegistroAuditoria:
+    """Entrada imutável no log de auditoria append-only."""
+
+    event_id: str
+    estado_anterior: str
+    estado_novo: str
+    registrado_em: datetime
+    motivo: Optional[str] = None
+
 
 class RepositorioExecucoesSQLite:
     """Persistencia real, arquivo local (nunca producao -- o caminho e
@@ -107,6 +161,7 @@ class RepositorioExecucoesSQLite:
         caminho_db.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(caminho_db))
         self._conn.execute(_DDL)
+        self._conn.execute(_DDL_AUDIT)
         self._conn.commit()
 
     def buscar_por_event_id(self, event_id: str) -> Optional[RegistroExecucao]:
@@ -169,6 +224,45 @@ class RepositorioExecucoesSQLite:
     def listar_todos(self) -> List[RegistroExecucao]:
         cur = self._conn.execute('SELECT event_id FROM execucoes')
         return [self.buscar_por_event_id(r[0]) for r in cur.fetchall()]
+
+    def registrar_auditoria(
+        self,
+        event_id: str,
+        estado_anterior: str,
+        estado_novo: str,
+        registrado_em: datetime,
+        motivo: Optional[str] = None,
+    ) -> None:
+        """Registra transição de estado no log append-only."""
+        self._conn.execute(
+            '''INSERT INTO auditoria (event_id, estado_anterior, estado_novo, registrado_em, motivo)
+               VALUES (?,?,?,?,?)''',
+            (
+                event_id,
+                estado_anterior,
+                estado_novo,
+                registrado_em.isoformat(),
+                motivo,
+            ),
+        )
+        self._conn.commit()
+
+    def listar_auditoria(self, event_id: str) -> List[RegistroAuditoria]:
+        """Recupera histórico completo de transições para um evento (append-only)."""
+        cur = self._conn.execute(
+            'SELECT event_id, estado_anterior, estado_novo, registrado_em, motivo FROM auditoria WHERE event_id = ? ORDER BY id ASC',
+            (event_id,),
+        )
+        return [
+            RegistroAuditoria(
+                event_id=r[0],
+                estado_anterior=r[1],
+                estado_novo=r[2],
+                registrado_em=datetime.fromisoformat(r[3]),
+                motivo=r[4],
+            )
+            for r in cur.fetchall()
+        ]
 
     def fechar(self) -> None:
         self._conn.close()

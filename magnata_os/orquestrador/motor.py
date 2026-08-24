@@ -284,8 +284,20 @@ class MotorOrquestrador:
 
     def _transicionar(self, registro: RegistroExecucao, novo_estado: EstadoExecucao) -> RegistroExecucao:
         validar_transicao(registro.estado, novo_estado)
+        estado_anterior = registro.estado
         registro.estado = novo_estado
         registro.atualizado_em = agora()
+        # Registrar transição no log append-only
+        try:
+            self._repo.registrar_auditoria(
+                event_id=registro.event_id,
+                estado_anterior=estado_anterior.value,
+                estado_novo=novo_estado.value,
+                registrado_em=registro.atualizado_em,
+            )
+        except Exception as e:
+            # Log de auditoria não deve bloquear o processamento
+            self._emitir('erro_ao_registrar_auditoria', event_id=registro.event_id, erro=str(e))
         return registro
 
     def replay(self, event_id: str, solicitado_por: str, motivo: str) -> RegistroExecucao:
