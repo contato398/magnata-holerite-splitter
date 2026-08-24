@@ -1,8 +1,18 @@
 {
   "autorizacoes_app_py": 13,
   "branches_fora_de_main": [
+    "claude/evolution-api-instances-1s9raa",
     "claude/magnata-central-command-0n0713",
-    "fix/orquestrador-gatilho-ci",
+    "claude/magnata-memory-audit-2c6bps",
+    "feat/magnata-os-claude-powerpack",
+    "feat/magnata-os-documental-modulo01-fase5-painel",
+    "fix/adr-modulo01-http-wiring",
+    "fix/auto-orquestrador-76b0046-2",
+    "fix/auto-orquestrador-76b0046-3",
+    "fix/auto-orquestrador-76b0046-4",
+    "fix/competencia-fiscal-periodo-apuracao-sem-de",
+    "fix/gmail-adapter-fase1-inerte",
+    "fix/recibos-outros-documentos",
     "fix/status-funcionario-pii"
   ],
   "cpf_em_documentacao": [],
@@ -39,9 +49,9 @@
     "WORK_IN_PROGRESS.md"
   ],
   "links_quebrados": [],
-  "main_assunto": "Merge pull request #48 from contato398/fix/plano-modo-sombra-captura-email",
-  "main_data": "2026-08-23 20:43:29 -0300",
-  "main_sha": "2176268",
+  "main_assunto": "Merge pull request #47 from contato398/fix/orquestrador-gatilho-ci",
+  "main_data": "2026-08-23 20:57:04 -0300",
+  "main_sha": "76b0046",
   "testes": {
     "falhando": 0,
     "passando": 690
