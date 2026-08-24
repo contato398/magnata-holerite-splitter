@@ -133,10 +133,17 @@ class TestChaosEventoCorrempido:
     """Evento corrompido."""
 
     def test_evento_sem_event_type_necessario(self):
-        """Evento sem event_type obrigatório é rejeitado."""
-        # Tentar criar Evento sem event_type deve falhar na assinatura
-        # (não é None-able)
-        with pytest.raises(TypeError):
+        """Evento com event_type=None é rejeitado em __post_init__.
+
+        Achado da reconciliação: dataclass nao valida tipo em runtime
+        por si so (Python nao enforca type hints) -- a validacao
+        explicita foi adicionada em Evento.__post_init__ porque motor.py
+        despacha por evento.event_type.value em multiplos pontos; sem
+        essa checagem, o erro so apareceria como AttributeError
+        (NoneType tem no attribute value) no primeiro uso, nao na
+        construcao do evento.
+        """
+        with pytest.raises(ValueError):
             Evento(
                 event_id='evt-chaos-3',
                 event_type=None,  # Inválido

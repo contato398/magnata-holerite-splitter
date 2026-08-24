@@ -120,6 +120,10 @@ class Evento:
     def __post_init__(self) -> None:
         if not self.event_id:
             raise ValueError('event_id obrigatorio -- e a chave de idempotencia')
+        if self.event_type is None:
+            raise ValueError(
+                'event_type obrigatorio -- motor.py despacha por evento.event_type.value'
+            )
         if self.sensibilidade != Sensibilidade.PUBLICO and len(self.payload_referencia) > 500:
             raise ValueError(
                 'payload_referencia parece grande demais para ser so uma '

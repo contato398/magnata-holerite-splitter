@@ -67,6 +67,7 @@ class RepositorioExecucoes(Protocol):
         motivo: Optional[str] = None,
     ) -> None: ...
     def listar_auditoria(self, event_id: str) -> List['RegistroAuditoria']: ...
+    def fechar(self) -> None: ...
 
 
 class RepositorioExecucoesEmMemoria:
@@ -109,6 +110,11 @@ class RepositorioExecucoesEmMemoria:
     def listar_auditoria(self, event_id: str) -> List[RegistroAuditoria]:
         """Recupera histórico de transições para um evento."""
         return self._auditoria.get(event_id, [])
+
+    def fechar(self) -> None:
+        """No-op -- sem recurso externo para liberar (paridade de interface
+        com RepositorioExecucoesSQLite, que fecha a conexao real)."""
+        return None
 
 
 _DDL = '''CREATE TABLE IF NOT EXISTS execucoes (
