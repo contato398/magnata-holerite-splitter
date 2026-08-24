@@ -5,6 +5,7 @@ DRY_RUN: simulacao sem side effect.
 KILL_SWITCH: bloqueio de autonomia.
 """
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -17,12 +18,31 @@ from magnata_os.orquestrador.configuracao import (
     esta_kill_switch_ativado,
     modo_seco_executavel,
 )
-from magnata_os.orquestrador.eventos import EstadoExecucao, Evento, TipoEvento
+from magnata_os.orquestrador.eventos import EstadoExecucao, Evento, Sensibilidade, TipoEvento
 from magnata_os.orquestrador.motor import MotorOrquestrador, ResultadoAcao
 from magnata_os.orquestrador.politica_autonomia import NivelAutonomia
 from magnata_os.orquestrador.repositorio_execucoes import (
     RepositorioExecucoesEmMemoria,
 )
+
+
+def evento_teste(event_id='evt-test', entity_id='sha-123') -> Evento:
+    """Factory para criar eventos de teste com timestamps válidos."""
+    base_time = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    return Evento(
+        event_id=event_id,
+        event_type=TipoEvento.GIT_MAIN_AVANCOU,
+        source='test',
+        occurred_at=base_time,
+        received_at=base_time,
+        correlation_id='corr-1',
+        entity_type='main',
+        entity_id=entity_id,
+        payload_referencia='nada',
+        sensibilidade=Sensibilidade.PUBLICO,
+        proveniencia='teste',
+        retry_count=0,
+    )
 
 
 class TestDryRun:
@@ -73,20 +93,7 @@ class TestDryRun:
             acoes={TipoEvento.GIT_MAIN_AVANCOU: acao_com_side_effect},
         )
 
-        evento = Evento(
-            event_id='evt-1',
-            event_type=TipoEvento.GIT_MAIN_AVANCOU,
-            source='test',
-            occurred_at='2026-01-01T00:00:00Z',
-            received_at='2026-01-01T00:00:00Z',
-            correlation_id='corr-1',
-            entity_type='main',
-            entity_id='sha-123',
-            payload_referencia='nada',
-            sensibilidade='PUBLICO',
-            proveniencia='teste',
-            retry_count=0,
-        )
+        evento = evento_teste(event_id='evt-1')
 
         # COM DRY_RUN
         with patch.dict(os.environ, {'ORQUESTRADOR_DRY_RUN': '1'}):
@@ -163,20 +170,7 @@ class TestKillSwitch:
             acoes={TipoEvento.GIT_MAIN_AVANCOU: acao_execute_safe},
         )
 
-        evento = Evento(
-            event_id='evt-2',
-            event_type=TipoEvento.GIT_MAIN_AVANCOU,
-            source='test',
-            occurred_at='2026-01-01T00:00:00Z',
-            received_at='2026-01-01T00:00:00Z',
-            correlation_id='corr-2',
-            entity_type='main',
-            entity_id='sha-456',
-            payload_referencia='nada',
-            sensibilidade='PUBLICO',
-            proveniencia='teste',
-            retry_count=0,
-        )
+        evento = evento_teste(event_id='evt-2', entity_id='sha-456')
 
         with TemporaryDirectory() as tmpdir:
             arquivo_kill_switch = Path(tmpdir) / '.orquestrador_kill_switch'

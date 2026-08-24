@@ -26,7 +26,14 @@ class RegistroExecucao:
     estado e persistida via RepositorioExecucoes.salvar -- nunca
     sobrescrita em silencio (quem quiser o historico completo consulta
     o audit log append-only, nao este registro, que so guarda o estado
-    mais recente por event_id)."""
+    mais recente por event_id).
+
+    Adicionalmente rastreia replays manuais (Point 3 da Missão):
+    - evento_json: Evento serializado (para replay)
+    - manualmente_reiniciado_por: Quem pediu o replay (provenance)
+    - manualmente_reiniciado_em: Quando foi solicitado
+    - motivo_reinicio_manual: Por que foi reiniciado
+    """
 
     event_id: str
     event_type: str
@@ -41,6 +48,10 @@ class RegistroExecucao:
     last_error_at: Optional[datetime]
     criado_em: datetime
     atualizado_em: datetime
+    evento_json: Optional[str] = None  # Evento serializado para replay
+    manualmente_reiniciado_por: Optional[str] = None  # Quem pediu replay
+    manualmente_reiniciado_em: Optional[datetime] = None  # Quando
+    motivo_reinicio_manual: Optional[str] = None  # Por que
 
 
 class RepositorioExecucoes(Protocol):
@@ -79,7 +90,11 @@ _DDL = '''CREATE TABLE IF NOT EXISTS execucoes (
     last_error_classe TEXT,
     last_error_at TEXT,
     criado_em TEXT NOT NULL,
-    atualizado_em TEXT NOT NULL
+    atualizado_em TEXT NOT NULL,
+    evento_json TEXT,
+    manualmente_reiniciado_por TEXT,
+    manualmente_reiniciado_em TEXT,
+    motivo_reinicio_manual TEXT
 )'''
 
 
@@ -111,21 +126,30 @@ class RepositorioExecucoesSQLite:
             last_error_at=datetime.fromisoformat(d['last_error_at']) if d['last_error_at'] else None,
             criado_em=datetime.fromisoformat(d['criado_em']),
             atualizado_em=datetime.fromisoformat(d['atualizado_em']),
+            evento_json=d.get('evento_json'),
+            manualmente_reiniciado_por=d.get('manualmente_reiniciado_por'),
+            manualmente_reiniciado_em=datetime.fromisoformat(d['manualmente_reiniciado_em']) if d.get('manualmente_reiniciado_em') else None,
+            motivo_reinicio_manual=d.get('motivo_reinicio_manual'),
         )
 
     def salvar(self, registro: RegistroExecucao) -> None:
         self._conn.execute(
             '''INSERT INTO execucoes (event_id, event_type, estado, nivel_autonomia, acao,
                 resultado, evidencia, attempt, next_retry_at, last_error_classe,
-                last_error_at, criado_em, atualizado_em)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                last_error_at, criado_em, atualizado_em, evento_json,
+                manualmente_reiniciado_por, manualmente_reiniciado_em, motivo_reinicio_manual)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(event_id) DO UPDATE SET
                  estado=excluded.estado, resultado=excluded.resultado,
                  evidencia=excluded.evidencia, attempt=excluded.attempt,
                  next_retry_at=excluded.next_retry_at,
                  last_error_classe=excluded.last_error_classe,
                  last_error_at=excluded.last_error_at,
-                 atualizado_em=excluded.atualizado_em''',
+                 atualizado_em=excluded.atualizado_em,
+                 evento_json=excluded.evento_json,
+                 manualmente_reiniciado_por=excluded.manualmente_reiniciado_por,
+                 manualmente_reiniciado_em=excluded.manualmente_reiniciado_em,
+                 motivo_reinicio_manual=excluded.motivo_reinicio_manual''',
             (
                 registro.event_id, registro.event_type, registro.estado.value,
                 registro.nivel_autonomia, registro.acao, registro.resultado,
@@ -134,6 +158,10 @@ class RepositorioExecucoesSQLite:
                 registro.last_error_classe,
                 registro.last_error_at.isoformat() if registro.last_error_at else None,
                 registro.criado_em.isoformat(), registro.atualizado_em.isoformat(),
+                registro.evento_json,
+                registro.manualmente_reiniciado_por,
+                registro.manualmente_reiniciado_em.isoformat() if registro.manualmente_reiniciado_em else None,
+                registro.motivo_reinicio_manual,
             ),
         )
         self._conn.commit()

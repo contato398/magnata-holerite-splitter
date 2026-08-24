@@ -18,7 +18,8 @@ em silencio.
 from __future__ import annotations
 
 import dataclasses
-from datetime import timedelta
+import json
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Optional, Tuple
 
 from .classificador_falha import ClasseFalha, classificar
@@ -26,7 +27,8 @@ from .configuracao import (
     aplicar_kill_switch_bloqueio,
     modo_seco_executavel,
 )
-from .eventos import EstadoExecucao, Evento, agora, validar_transicao
+from .eventos import EstadoExecucao, Evento, Sensibilidade, TipoEvento, agora, validar_transicao
+from .fila_desistencia import FilaDesistenciaEmMemoria, extrair_para_fila_desistencia
 from .politica_autonomia import NivelAutonomia, nivel_para
 from .repositorio_execucoes import RegistroExecucao, RepositorioExecucoes
 
@@ -56,6 +58,48 @@ class ResultadoAcao:
 Acao = Callable[[Evento], ResultadoAcao]
 
 
+def _serializar_evento(evento: Evento) -> str:
+    """Serializa Evento para JSON (para armazenamento em replay)."""
+    sensibilidade_val = (
+        evento.sensibilidade.value
+        if hasattr(evento.sensibilidade, 'value')
+        else evento.sensibilidade
+    )
+    return json.dumps({
+        'event_id': evento.event_id,
+        'event_type': evento.event_type.value,
+        'source': evento.source,
+        'occurred_at': evento.occurred_at.isoformat(),
+        'received_at': evento.received_at.isoformat(),
+        'correlation_id': evento.correlation_id,
+        'entity_type': evento.entity_type,
+        'entity_id': evento.entity_id,
+        'payload_referencia': evento.payload_referencia,
+        'sensibilidade': sensibilidade_val,
+        'proveniencia': evento.proveniencia,
+        'retry_count': evento.retry_count,
+    })
+
+
+def _desserializar_evento(evento_json: str) -> Evento:
+    """Reconstrói Evento a partir de JSON (para replay)."""
+    d = json.loads(evento_json)
+    return Evento(
+        event_id=d['event_id'],
+        event_type=TipoEvento(d['event_type']),
+        source=d['source'],
+        occurred_at=datetime.fromisoformat(d['occurred_at']),
+        received_at=datetime.fromisoformat(d['received_at']),
+        correlation_id=d['correlation_id'],
+        entity_type=d['entity_type'],
+        entity_id=d['entity_id'],
+        payload_referencia=d['payload_referencia'],
+        sensibilidade=Sensibilidade(d['sensibilidade']),
+        proveniencia=d['proveniencia'],
+        retry_count=d['retry_count'],
+    )
+
+
 class MotorOrquestrador:
     """Pequeno de proposito -- coordena, nao contem logica de negocio.
     Cada Acao e uma funcao registrada por TipoEvento (evento.value); o
@@ -67,10 +111,12 @@ class MotorOrquestrador:
         repositorio: RepositorioExecucoes,
         acoes: Dict[str, Acao],
         observador: Optional[Callable[[str, dict], None]] = None,
+        fila_desistencia: Optional[FilaDesistenciaEmMemoria] = None,
     ) -> None:
         self._repo = repositorio
         self._acoes = acoes
         self._observador = observador
+        self._fila_desistencia = fila_desistencia or FilaDesistenciaEmMemoria()
 
     def _emitir(self, nome: str, **campos) -> None:
         if self._observador is not None:
@@ -116,6 +162,7 @@ class MotorOrquestrador:
             resultado=None, evidencia=None, attempt=0,
             next_retry_at=None, last_error_classe=None, last_error_at=None,
             criado_em=agora_, atualizado_em=agora_,
+            evento_json=_serializar_evento(evento),
         )
         self._emitir('evento_recebido', event_id=evento.event_id, tipo=evento.event_type.value)
 
@@ -198,6 +245,10 @@ class MotorOrquestrador:
             registro.resultado = f'falha final ({classe.value})'
             self._repo.salvar(registro)
             self._emitir('falha_final', event_id=evento.event_id, classe=classe.value)
+            # Registra na fila de desistencia
+            item_dlq = extrair_para_fila_desistencia(registro)
+            if item_dlq:
+                self._fila_desistencia.registrar(item_dlq)
             return registro
 
         # 5) VALIDACAO DO RESULTADO -- nenhuma Acao pode ter escrito em
@@ -211,6 +262,10 @@ class MotorOrquestrador:
                     'acao_bloqueada_caminho_proibido',
                     event_id=evento.event_id, caminho=caminho,
                 )
+                # Registra na fila de desistencia
+                item_dlq = extrair_para_fila_desistencia(registro)
+                if item_dlq:
+                    self._fila_desistencia.registrar(item_dlq)
                 raise AcaoProibida(
                     f'Acao para {evento.event_type.value} escreveu em {caminho}, que e '
                     f'HUMAN_DECISION/protegido -- nunca permitido em nivel EXECUTE_SAFE'
@@ -232,3 +287,86 @@ class MotorOrquestrador:
         registro.estado = novo_estado
         registro.atualizado_em = agora()
         return registro
+
+    def replay(self, event_id: str, solicitado_por: str, motivo: str) -> RegistroExecucao:
+        """Replay manual e explícito de um evento que falhou permanentemente.
+
+        Point 3 da Missão de Fechamento: Replay Controlado
+        - Manual: usuário solicita explicitamente
+        - Explícito: não automático, com provenance (quem, quando, por quê)
+        - Rastreado: registro atualizado com metadados de replay
+
+        Args:
+            event_id: Evento a ser repetido (deve estar em FAILED_FINAL)
+            solicitado_por: Identificação de quem solicitou (user/system)
+            motivo: Razão para o replay (observação human-readable)
+
+        Returns:
+            RegistroExecucao atualizado após retry bem-sucedido (ou falha nova)
+        """
+        # Recuperar o registro original
+        registro = self._repo.buscar_por_event_id(event_id)
+        if registro is None:
+            raise ValueError(f'Evento não encontrado: {event_id}')
+
+        if registro.estado != EstadoExecucao.FAILED_FINAL:
+            raise ValueError(
+                f'Só eventos em FAILED_FINAL podem ser replicados; '
+                f'{event_id} está em {registro.estado.value}'
+            )
+
+        if registro.evento_json is None:
+            raise ValueError(f'Evento não foi persistido para replay: {event_id}')
+
+        # Desserializar evento original
+        evento = _desserializar_evento(registro.evento_json)
+
+        # Marcar como manualmente reiniciado
+        agora_ = agora()
+        registro.manualmente_reiniciado_por = solicitado_por
+        registro.manualmente_reiniciado_em = agora_
+        registro.motivo_reinicio_manual = motivo
+
+        # Resetar para RECEIVED (re-processar do zero)
+        registro = self._transicionar(registro, EstadoExecucao.RECEIVED)
+        registro.attempt = 0
+        registro.next_retry_at = None
+        registro.last_error_classe = None
+        registro.last_error_at = None
+        registro.resultado = None
+        registro.evidencia = None
+
+        self._emitir(
+            'replay_iniciado', event_id=event_id,
+            solicitado_por=solicitado_por, motivo=motivo,
+        )
+
+        # Re-validar, classificar e executar (mesmo fluxo de processar())
+        registro = self._transicionar(registro, EstadoExecucao.VALIDATED)
+
+        # Classificação + Política de Autonomia
+        nivel = nivel_para(evento.event_type)
+        nivel = NivelAutonomia(aplicar_kill_switch_bloqueio(int(nivel)))
+        registro.nivel_autonomia = int(nivel)
+        registro = self._transicionar(registro, EstadoExecucao.CLASSIFIED)
+        self._emitir('evento_classificado_replay', event_id=event_id, nivel=nivel.name)
+
+        if nivel != NivelAutonomia.EXECUTE_SAFE:
+            registro = self._transicionar(registro, EstadoExecucao.WAITING_GATE)
+            registro.resultado = f'replay: gate humano -- nivel {nivel.name}'
+            self._repo.salvar(registro)
+            self._emitir('gate_humano_replay', event_id=event_id, nivel=nivel.name)
+            return registro
+
+        # Executar a ação
+        acao = self._acoes.get(evento.event_type.value)
+        if acao is None:
+            # Ação sumiu -- gate por omissão
+            registro = self._transicionar(registro, EstadoExecucao.WAITING_GATE)
+            registro.resultado = 'replay: acao ausente -- gate por omissao'
+            self._repo.salvar(registro)
+            self._emitir('gate_por_acao_ausente_replay', event_id=event_id)
+            return registro
+
+        # Reexecutar com _executar_e_registrar
+        return self._executar_e_registrar(registro, evento, acao)

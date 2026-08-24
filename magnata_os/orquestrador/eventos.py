@@ -49,6 +49,7 @@ class EstadoExecucao(str, Enum):
 
 # Transicoes permitidas -- fail-safe: qualquer transicao nao listada aqui
 # e invalida por definicao ("nao sei" nunca vira "deve ser essa").
+# FAILED_FINAL -> RECEIVED permite replay manual (Point 3 Missão de Fechamento)
 TRANSICOES_VALIDAS: Mapping[EstadoExecucao, Tuple[EstadoExecucao, ...]] = {
     EstadoExecucao.RECEIVED: (EstadoExecucao.VALIDATED, EstadoExecucao.IGNORED),
     EstadoExecucao.VALIDATED: (EstadoExecucao.CLASSIFIED,),
@@ -61,7 +62,7 @@ TRANSICOES_VALIDAS: Mapping[EstadoExecucao, Tuple[EstadoExecucao, ...]] = {
     ),
     EstadoExecucao.FAILED_RETRYABLE: (EstadoExecucao.EXECUTING, EstadoExecucao.FAILED_FINAL),
     EstadoExecucao.SUCCEEDED: (),
-    EstadoExecucao.FAILED_FINAL: (),
+    EstadoExecucao.FAILED_FINAL: (EstadoExecucao.RECEIVED,),  # replay manual
     EstadoExecucao.IGNORED: (),
     EstadoExecucao.SUPERSEDED: (),
 }

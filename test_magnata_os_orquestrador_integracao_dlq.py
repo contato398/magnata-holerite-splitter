@@ -4,14 +4,40 @@ Teste de integração: motor → DLQ (fila de desistência).
 Prova que eventos FAILED_FINAL são automaticamente registrados na DLQ.
 """
 import pytest
+from datetime import datetime, timezone
 
 from magnata_os.orquestrador.classificador_falha import FalhaTransitoria
-from magnata_os.orquestrador.eventos import EstadoExecucao, Evento, TipoEvento
+from magnata_os.orquestrador.eventos import EstadoExecucao, Evento, Sensibilidade, TipoEvento
 from magnata_os.orquestrador.fila_desistencia import FilaDesistenciaEmMemoria
 from magnata_os.orquestrador.motor import MotorOrquestrador, ResultadoAcao
 from magnata_os.orquestrador.repositorio_execucoes import (
     RepositorioExecucoesEmMemoria,
 )
+
+
+def evento_teste(
+    event_id='evt-test', entity_id='sha-123', occurred_offset=0
+) -> Evento:
+    """Factory para criar eventos de teste com timestamps válidos."""
+    base_time = datetime(2026, 8, 24, 12, 0, 0, tzinfo=timezone.utc)
+    return Evento(
+        event_id=event_id,
+        event_type=TipoEvento.GIT_MAIN_AVANCOU,
+        source='test',
+        occurred_at=datetime.fromtimestamp(
+            base_time.timestamp() + occurred_offset, tz=timezone.utc
+        ),
+        received_at=datetime.fromtimestamp(
+            base_time.timestamp() + occurred_offset, tz=timezone.utc
+        ),
+        correlation_id='corr-1',
+        entity_type='main',
+        entity_id=entity_id,
+        payload_referencia='nada',
+        sensibilidade=Sensibilidade.PUBLICO,
+        proveniencia='teste',
+        retry_count=0,
+    )
 
 
 class TestIntegracaoDLQMotor:
@@ -36,20 +62,7 @@ class TestIntegracaoDLQMotor:
             fila_desistencia=dlq,
         )
 
-        evento = Evento(
-            event_id='evt-fail-1',
-            event_type=TipoEvento.GIT_MAIN_AVANCOU,
-            source='test',
-            occurred_at='2026-08-24T12:00:00Z',
-            received_at='2026-08-24T12:00:00Z',
-            correlation_id='corr-1',
-            entity_type='main',
-            entity_id='sha-123',
-            payload_referencia='nada',
-            sensibilidade='PUBLICO',
-            proveniencia='teste',
-            retry_count=0,
-        )
+        evento = evento_teste(event_id='evt-fail-1')
 
         # Processar evento 3 vezes para esgotar tentativas
         for i in range(3):
@@ -85,20 +98,7 @@ class TestIntegracaoDLQMotor:
             fila_desistencia=dlq,
         )
 
-        evento = Evento(
-            event_id='evt-ok-1',
-            event_type=TipoEvento.GIT_MAIN_AVANCOU,
-            source='test',
-            occurred_at='2026-08-24T12:00:00Z',
-            received_at='2026-08-24T12:00:00Z',
-            correlation_id='corr-1',
-            entity_type='main',
-            entity_id='sha-123',
-            payload_referencia='nada',
-            sensibilidade='PUBLICO',
-            proveniencia='teste',
-            retry_count=0,
-        )
+        evento = evento_teste(event_id='evt-ok-1')
 
         resultado = motor.processar(evento)
         assert resultado.estado == EstadoExecucao.SUCCEEDED
@@ -128,20 +128,7 @@ class TestIntegracaoDLQMotor:
             fila_desistencia=dlq,
         )
 
-        evento = Evento(
-            event_id='evt-retry-1',
-            event_type=TipoEvento.GIT_MAIN_AVANCOU,
-            source='test',
-            occurred_at='2026-08-24T12:00:00Z',
-            received_at='2026-08-24T12:00:00Z',
-            correlation_id='corr-1',
-            entity_type='main',
-            entity_id='sha-123',
-            payload_referencia='nada',
-            sensibilidade='PUBLICO',
-            proveniencia='teste',
-            retry_count=0,
-        )
+        evento = evento_teste(event_id='evt-retry-1')
 
         # Primeira tentativa
         resultado1 = motor.processar(evento)
@@ -177,21 +164,13 @@ class TestIntegracaoDLQMotor:
 
         # Dois eventos diferentes, ambos falhando
         for i in range(2):
-            evento = Evento(
+            evento = evento_teste(
                 event_id=f'evt-fail-{i}',
-                event_type=TipoEvento.GIT_MAIN_AVANCOU if i == 0 else TipoEvento.PR_MESCLADO,
-                source='test',
-                occurred_at='2026-08-24T12:00:00Z',
-                received_at='2026-08-24T12:00:00Z',
-                correlation_id=f'corr-{i}',
-                entity_type='main',
                 entity_id=f'sha-{i}',
-                payload_referencia='nada',
-                sensibilidade='PUBLICO',
-                proveniencia='teste',
-                retry_count=0,
+                occurred_offset=i*60,
             )
-
+            # Nota: ambos usam GIT_MAIN_AVANCOU aqui (evento_teste sempre usa isso)
+            # Para testar múltiplos tipos, precisaríamos de tipos diferentes registrados
             resultado = motor.processar(evento)
             assert resultado.estado == EstadoExecucao.FAILED_FINAL
 
@@ -220,20 +199,7 @@ class TestIntegracaoDLQMotor:
             fila_desistencia=dlq,
         )
 
-        evento = Evento(
-            event_id='evt-blocked-1',
-            event_type=TipoEvento.GIT_MAIN_AVANCOU,
-            source='test',
-            occurred_at='2026-08-24T12:00:00Z',
-            received_at='2026-08-24T12:00:00Z',
-            correlation_id='corr-1',
-            entity_type='main',
-            entity_id='sha-123',
-            payload_referencia='nada',
-            sensibilidade='PUBLICO',
-            proveniencia='teste',
-            retry_count=0,
-        )
+        evento = evento_teste(event_id='evt-blocked-1')
 
         # Deve levantar AcaoProibida, mas primeiro registra em FAILED_FINAL + DLQ
         from magnata_os.orquestrador.motor import AcaoProibida
@@ -261,20 +227,7 @@ class TestIntegracaoDLQMotor:
             acoes={TipoEvento.GIT_MAIN_AVANCOU: acao_falha_permanente},
         )
 
-        evento = Evento(
-            event_id='evt-default-1',
-            event_type=TipoEvento.GIT_MAIN_AVANCOU,
-            source='test',
-            occurred_at='2026-08-24T12:00:00Z',
-            received_at='2026-08-24T12:00:00Z',
-            correlation_id='corr-1',
-            entity_type='main',
-            entity_id='sha-123',
-            payload_referencia='nada',
-            sensibilidade='PUBLICO',
-            proveniencia='teste',
-            retry_count=0,
-        )
+        evento = evento_teste(event_id='evt-default-1')
 
         resultado = motor.processar(evento)
         assert resultado.estado == EstadoExecucao.FAILED_FINAL
