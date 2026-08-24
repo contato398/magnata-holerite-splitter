@@ -10,3 +10,12 @@ openpyxl==3.1.5
 celery==5.3.6
 redis==5.0.1
 psycopg[binary]==3.2.*
+
+# Fase 1 do modo sombra de captura de e-mail (Modulo 01) -- cliente Gmail
+# read-only real em codigo, inerte (nenhum teste ou producao toca Gmail
+# de verdade ate Fase 2 -- autorizacao de fase explcita, CLAUDE.md paragrafo 6).
+# Pinado para estabilidade; importar googleapiclient/google.oauth2 dentro das
+# funcoes, nunca no topo dos modulos (ver magnata_os/CLAUDE.md, "todo servico
+# externo entra por adapter").
+google-api-python-client==2.149.0
+google-auth==2.35.0
