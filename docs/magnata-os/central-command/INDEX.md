@@ -10,6 +10,22 @@ deles. A escala de precedência continua sendo a de `CLAUDE.md` §2.
 **Princípio:** este diretório aponta para as fontes, não as copia.
 Cadeia: **fonte → decisão → implementação → PR/commit → estado atual.**
 
+**Regra explícita (Etapa 13): nunca carregar todas as fontes por
+padrão.** Este índice existe para que uma sessão leia só a linha que
+responde a pergunta que ela tem — não o documento inteiro, e nunca as
+30 fontes de uma vez. Roteamento por categoria, antes da tabela
+detalhada abaixo:
+
+| Categoria | Onde vai |
+|---|---|
+| **PROJECT STATUS** | `HANDOFF.md` (bootstrap) → `ESTADO.json` (fato) |
+| **CODE** | `ARQUITETURA_SNAPSHOT.json` (Graphify, snapshot já gerado) → só então o arquivo específico |
+| **GIT / PR / CI** | GitHub ao vivo (`LIVE_STATE` — nunca herdar número de sessão anterior) |
+| **DECISIONS** | `DECISIONS.md` / `DIRECTIVES.md` (documento temático, `HUMAN_DECISION`) |
+| **HISTORY** | `HISTORICO.md` — só sob demanda, nunca por padrão |
+| **AIRTABLE** | Consulta ao vivo, read-only, só quando a tarefa exigir dado operacional real |
+| **PRODUCTION** | `RISKS.md` + sensor específico — hoje não verificável desta sessão |
+
 ---
 
 ## Onde procurar cada coisa
@@ -32,7 +48,9 @@ Cadeia: **fonte → decisão → implementação → PR/commit → estado atual.
 | O que ainda não sabemos? | [`COBERTURA.md`](COBERTURA.md) |
 | O que existe mas não está no Git, e por quê? | [`FORA_DO_GIT.md`](FORA_DO_GIT.md) |
 | A Fase 5 pode ser recuperada? | [`FASE5_AUDITORIA.md`](FASE5_AUDITORIA.md) |
-| A Central Command está desatualizada? | `scripts/ci/central_command_sensor.py` — compara com [`ESTADO.json`](ESTADO.json) |
+| A Central Command está desatualizada? | `scripts/ci/central_command_sensor.py` — compara com [`ESTADO.json`](ESTADO.json), inclui `graphify_snapshot_status` e `session_handoff_freshness` (Etapa 13) |
+| Quanto custa ler a Central Command? O bootstrap está caro? | `scripts/ci/medir_contexto.py` — TIER 0/1/2 + `status_contexto` (`NORMAL`/`ATENCAO`/`TROCAR_SESSAO`), Etapa 13 |
+| O Orquestrador roda sozinho, sem sessão? | Sim — `.github/workflows/orquestrador-sensor.yml` (cron 6h) + `magnata_os/orquestrador/`. Ver correção declarada em [`HANDOFF.md`](HANDOFF.md) §1 |
 | Como será o banco próprio? | [`BANCO_PROPRIO_MODELO.md`](BANCO_PROPRIO_MODELO.md) |
 | A arquitetura do código mudou? | `scripts/ci/graphify_snapshot.py` — só arestas EXTRACTED |
 | Devemos adotar o Graphify? | [`GRAPHIFY.md`](GRAPHIFY.md) — POC executada |
@@ -85,6 +103,7 @@ produção.
 | 10 | 2026-08-22 | **PR #37 MESCLADO — `main` = `a74cd1c`, suíte 642/0** · #38 auditado adversarialmente e **NÃO mesclado** (gate humano) · 2 `customScript` e 7 views lidos · Make.com ativo descoberto · riscos AT-11..AT-16 | mestre §0-H |
 | 11 | 2026-08-23 | **PRs #39, #40 e #38 MESCLADOS — `main` = `007a4e5`, suíte 649/0** · PII removida da árvore (inclusive o nome real que o #38 deixou) · **40 de 42 branches ainda contaminadas** · `Automation 1` resolvida (script vazio) · `480` não existe no código · Make.com classificado com 4 opções · sensor corrigido (PR #41) · Macro 6A reconciliada · handoff produzido | mestre §0-I |
 | 12 | 2026-08-23 | **PR #41 revalidado e MESCLADO — `main` = `98e32d2`** · **PR #22 (adapter de e-mail) auditado adversarialmente, 3 lacunas de teste fechadas, rebaseado e MESCLADO — `main` = `a18d4b2`** · Central Command reconciliada em PR documental próprio (`main` = `1409454`) · **Graphify rodado sobre o repositório inteiro (com `app.py`)** — zero violação de `CLAUDE.md` §3, comparação entre execuções provada · taxonomia da memória formalizada (`TAXONOMIA_MEMORIA.md`) · matriz de autonomia formalizada e mapeada contra casos reais (`MATRIZ_AUTONOMIA.md`) · arquitetura de eventos formalizada (`ARQUITETURA_EVENTOS.md`) · produção reconfirmada não verificável (rede bloqueada) · lacuna de disparo automático (sem sessão no meio) registrada explicitamente, não resolvida | esta branch |
+| 13 | 2026-08-24 | **PRs #45, #46, #47 MESCLADOS (fora desta sessão) — `main` = `76b0046`** — núcleo executável do Orquestrador + gatilho automático via GitHub Actions, fechando a lacuna que a Etapa 12 registrou como aberta · **correção declarada**: `ORQUESTRADOR.md` §6.2 e `MATRIZ_AUTONOMIA.md` §4 ainda descrevem essa lacuna como aberta — texto não reconciliado, só apontado em `HANDOFF.md` §1 · missão de contexto progressivo: `scripts/ci/medir_contexto.py` (TIER 0/1/2, alerta NORMAL/ATENCAO/TROCAR_SESSAO) integrado a `central_command_sensor.py` e, por herança, ao AUTO_FACT do Orquestrador (`ESTADO.json['contexto']`) — testado ponta a ponta · `HANDOFF.md` ganhou protocolo SESSION_START/END (§0) · `INDEX.md` ganhou roteamento por categoria | branch `fix/contexto-progressivo` |
 
 As Etapas 1-2 nasceram em `claude/magnata-central-command-0n0713`, em
 caminhos que os gates do repositório não autorizam. A Etapa 3 moveu tudo

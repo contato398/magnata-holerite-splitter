@@ -43,6 +43,13 @@ SNAPSHOT = RAIZ / 'docs' / 'magnata-os' / 'central-command' / 'ESTADO.json'
 CC = RAIZ / 'docs' / 'magnata-os' / 'central-command'
 MESTRE = RAIZ / 'docs' / 'magnata-os' / 'MAGNATA_OS_CENTRAL_COMMAND.md'
 
+# scripts/ci/ não é pacote — precisa entrar em sys.path para o import
+# funcionar tanto rodando como script (`python scripts/ci/...py`) quanto
+# carregado via importlib (padrão dos testes e de
+# magnata_os/orquestrador/acoes/atualizar_auto_fact.py).
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import medir_contexto  # noqa: E402 — precisa do sys.path acima antes de importar
+
 
 def _git(*args: str) -> str:
     try:
@@ -123,6 +130,51 @@ def _pii_em_documentacao() -> list[str]:
     return sorted(achados)
 
 
+def _graphify_snapshot_status() -> str:
+    """'ausente' | 'desatualizado' | 'sem_sinal_de_mudanca' — proxy honesto.
+
+    O Graphify roda FORA deste repositório (GRAPHIFY.md §6 — proibido de
+    virar dependência de CI) e `ARQUITETURA_SNAPSHOT.json` não guarda
+    nenhum SHA/commit de referência — não há como saber a idade exata
+    daqui. O único sinal barato e inequívoco: algum arquivo que o
+    snapshot registrou já não existe mais. Isso prova mudança estrutural
+    real. A ausência desse sinal NÃO prova que o snapshot está atual —
+    só que nada óbvio o contradiz (reportar honestamente, sem inventar
+    um "atual" que este script não pode garantir).
+    """
+    snap = CC / 'ARQUITETURA_SNAPSHOT.json'
+    if not snap.exists():
+        return 'ausente'
+    try:
+        dados = json.loads(snap.read_text(encoding='utf-8'))
+    except Exception:
+        return 'ausente'
+    arquivos = dados.get('arquivos') or []
+    if not arquivos:
+        return 'ausente'
+    sumidos = [a for a in arquivos if not (RAIZ / a).exists()]
+    return 'desatualizado' if sumidos else 'sem_sinal_de_mudanca'
+
+
+def _session_handoff_freshness(main_sha_atual: str) -> str:
+    """'atual' | 'desatualizado' | 'indeterminado' | 'ausente'.
+
+    Compara o SHA de `main` que `HANDOFF.md` declara na primeira tabela
+    contra o SHA real de `origin/main` agora. `HANDOFF.md` já se
+    autodeclara "os números envelhecem, rode o sensor" — isto só torna
+    essa checagem mecânica em vez de precisar reler o arquivo à mão.
+    """
+    handoff = CC / 'HANDOFF.md'
+    if not handoff.exists():
+        return 'ausente'
+    m = re.search(r'\*\*`main`\*\*\s*\|\s*`([0-9a-f]{6,40})`', handoff.read_text(encoding='utf-8'))
+    if not m or not main_sha_atual:
+        return 'indeterminado'
+    declarado = m.group(1)
+    n = min(len(declarado), len(main_sha_atual))
+    return 'atual' if declarado[:n] == main_sha_atual[:n] else 'desatualizado'
+
+
 def _resultado_testes() -> dict | None:
     r = subprocess.run(
         (sys.executable, '-m', 'pytest', '-q', '--tb=no'),
@@ -135,8 +187,9 @@ def _resultado_testes() -> dict | None:
 
 
 def coletar(com_testes: bool = False) -> dict:
+    main_sha = _git('rev-parse', '--short', 'origin/main')
     estado = {
-        'main_sha': _git('rev-parse', '--short', 'origin/main'),
+        'main_sha': main_sha,
         'main_assunto': _git('log', '-1', '--format=%s', 'origin/main'),
         'main_data': _git('log', '-1', '--format=%ai', 'origin/main'),
         'branches_fora_de_main': _branches_fora_de_main(),
@@ -151,6 +204,15 @@ def coletar(com_testes: bool = False) -> dict:
         'autorizacoes_app_py': len(list(
             (RAIZ / '.magnata' / 'app-py-authorizations').glob('*.gitblob')
         )) if (RAIZ / '.magnata' / 'app-py-authorizations').exists() else 0,
+        # Missão de contexto progressivo (Etapa 13): AUTO_FACT de custo de
+        # contexto, escrito só por este sensor — nunca HUMAN_DECISION.
+        # Ver TAXONOMIA_MEMORIA.md e MATRIZ_AUTONOMIA.md. Flui automaticamente
+        # para ESTADO.json via magnata_os/orquestrador/acoes/atualizar_auto_fact.py,
+        # que já chama coletar() inteiro — nenhuma mudança nesse caminho foi
+        # necessária.
+        'contexto': medir_contexto.avaliar(),
+        'graphify_snapshot_status': _graphify_snapshot_status(),
+        'session_handoff_freshness': _session_handoff_freshness(main_sha),
     }
     if com_testes:
         estado['testes'] = _resultado_testes()
@@ -303,6 +365,10 @@ def main() -> int:
     print(f"  CPF em doc      : {len(atual['cpf_em_documentacao'])}")
     print(f"  workflows       : {len(atual['workflows'])}")
     print(f"  autoriz. app.py : {atual['autorizacoes_app_py']}")
+    print(f"  contexto (TIER0): ~{atual['contexto']['tier0_tokens_aprox']} tokens aprox. "
+          f"— {atual['contexto']['status_contexto']}")
+    print(f"  graphify snapshot: {atual['graphify_snapshot_status']}"
+          f" · HANDOFF vs main: {atual['session_handoff_freshness']}")
     if atual.get('testes'):
         t = atual['testes']
         print(f"  testes          : {t['passando']} passando, {t['falhando']} falhando")
