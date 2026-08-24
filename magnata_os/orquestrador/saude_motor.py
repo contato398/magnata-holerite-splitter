@@ -7,16 +7,22 @@ Fornece:
 - Taxa de erro, retry, gate
 - Rastreamento de performance
 
-Sem estatefulidade persistida -- metricas em memoria do processo atual.
-Para persistir, integra com Observador e observabilidade.py.
+Ha dois modos complementares:
+- MonitorSaudemotor: contadores em memoria do processo atual;
+- MonitorSaudemotorPersistente: reconstrui a saude a partir do repositorio
+  persistente de execucoes, portanto sobrevive a reinicios do processo.
+
+O modo persistente NAO cria uma segunda fonte de verdade: ele deriva o
+snapshot dos estados ja gravados pelo RepositorioExecucoes.
 """
 from __future__ import annotations
 
 import dataclasses
 from collections import Counter
-from typing import Dict, Optional
+from typing import Dict
 
 from .eventos import EstadoExecucao
+from .repositorio_execucoes import RepositorioExecucoes
 
 
 @dataclasses.dataclass(frozen=True)
@@ -30,16 +36,13 @@ class EstadoSaudemotor:
     eventos_gate_humano: int
     eventos_ignorados: int
 
-    # Taxas (0-1)
-    taxa_sucesso: float  # sucesso / processados
-    taxa_erro_permanente: float  # falha_final / processados
-    taxa_gate_humano: float  # gate / processados
+    taxa_sucesso: float
+    taxa_erro_permanente: float
+    taxa_gate_humano: float
 
-    # Estado de saude (enum-like)
     saude: str  # 'VERDE' | 'AMARELO' | 'VERMELHO'
 
     def resumo_json(self) -> Dict:
-        """Serializa para JSON/dict."""
         return {
             'eventos_processados_total': self.eventos_processados_total,
             'eventos_sucesso': self.eventos_sucesso,
@@ -55,17 +58,14 @@ class EstadoSaudemotor:
 
 
 class MonitorSaudemotor:
-    """Monitor de saude do motor -- atualizado por Observador."""
+    """Monitor em memoria do processo atual."""
 
     def __init__(self) -> None:
         self._contadores: Counter = Counter()
 
     def registrar_evento_estado(self, estado: EstadoExecucao) -> None:
-        """Registra transicao de estado de um evento."""
-        # Incrementa contador geral
         self._contadores['total'] += 1
 
-        # Incrementa por estado
         if estado == EstadoExecucao.SUCCEEDED:
             self._contadores['sucesso'] += 1
         elif estado == EstadoExecucao.FAILED_RETRYABLE:
@@ -78,11 +78,9 @@ class MonitorSaudemotor:
             self._contadores['ignorado'] += 1
 
     def obter_saude(self) -> EstadoSaudemotor:
-        """Calcula snapshot de saude atual."""
         total = self._contadores.get('total', 0)
 
         if total == 0:
-            # Nenhum evento processado ainda
             return EstadoSaudemotor(
                 eventos_processados_total=0,
                 eventos_sucesso=0,
@@ -93,7 +91,7 @@ class MonitorSaudemotor:
                 taxa_sucesso=0.0,
                 taxa_erro_permanente=0.0,
                 taxa_gate_humano=0.0,
-                saude='VERDE',  # Sem dados ainda e saude "OK"
+                saude='VERDE',
             )
 
         sucesso = self._contadores.get('sucesso', 0)
@@ -102,17 +100,16 @@ class MonitorSaudemotor:
         gate = self._contadores.get('gate_humano', 0)
         ignorado = self._contadores.get('ignorado', 0)
 
-        taxa_sucesso = sucesso / total if total > 0 else 0.0
-        taxa_erro_permanente = falha_final / total if total > 0 else 0.0
-        taxa_gate = gate / total if total > 0 else 0.0
+        taxa_sucesso = sucesso / total
+        taxa_erro_permanente = falha_final / total
+        taxa_gate = gate / total
 
-        # Heuristica simples de saude
         if taxa_erro_permanente > 0.3:
-            saude = 'VERMELHO'  # >30% falhas permanentes
+            saude = 'VERMELHO'
         elif taxa_sucesso < 0.6:
-            saude = 'AMARELO'  # <60% sucesso
+            saude = 'AMARELO'
         else:
-            saude = 'VERDE'  # Tudo OK
+            saude = 'VERDE'
 
         return EstadoSaudemotor(
             eventos_processados_total=total,
@@ -128,5 +125,28 @@ class MonitorSaudemotor:
         )
 
     def resetar(self) -> None:
-        """Reseta contadores (para teste ou novo ciclo)."""
         self._contadores.clear()
+
+
+class MonitorSaudemotorPersistente:
+    """Health derivado do estado persistido de execucoes.
+
+    Em vez de manter contadores paralelos, cada leitura reconstroi o
+    snapshot a partir de ``RepositorioExecucoes.listar_todos()``. Assim:
+
+    - reiniciar o processo nao zera a saude;
+    - SQLite hoje e Postgres no futuro podem usar a mesma interface;
+    - um evento que passou por retry e terminou em sucesso conta uma vez,
+      pelo seu estado atual, evitando inflar metricas por transicoes;
+    - o repositorio de execucoes continua sendo a fonte de verdade.
+    """
+
+    def __init__(self, repositorio: RepositorioExecucoes) -> None:
+        self._repositorio = repositorio
+
+    def obter_saude(self) -> EstadoSaudemotor:
+        monitor = MonitorSaudemotor()
+        for registro in self._repositorio.listar_todos():
+            if registro is not None:
+                monitor.registrar_evento_estado(registro.estado)
+        return monitor.obter_saude()
