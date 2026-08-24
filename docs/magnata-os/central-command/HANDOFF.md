@@ -1,6 +1,6 @@
 # HANDOFF — ponto de entrada para a próxima sessão
 
-**Gerado na Etapa 12, 2026-08-23.**
+**Gerado na Etapa 13, 2026-08-24.**
 
 Uma sessão nova deve conseguir continuar **lendo só este arquivo e os 4
 canônicos abaixo** — sem a conversa Macro 6A, que está encerrada.
@@ -9,22 +9,74 @@ canônicos abaixo** — sem a conversa Macro 6A, que está encerrada.
 
 ---
 
+## 0. Protocolo operacional — SESSION_START / SESSION_END
+
+**SESSION_START** (copiar isto para o início de uma sessão nova):
+
+```
+1. Ler: HANDOFF.md + ESTADO.json + INDEX.md — nada mais, de início.
+2. Rodar: python scripts/ci/central_command_sensor.py
+   (reporta main_sha real, divergência, e o bloco `contexto` —
+   status NORMAL/ATENCAO/TROCAR_SESSAO do próprio bootstrap).
+3. Código específico → Graphify (ARQUITETURA_SNAPSHOT.json), nunca
+   ler o repositório inteiro para localizar um símbolo.
+4. Detalhe (TAXONOMIA_MEMORIA/MATRIZ_AUTONOMIA/mestre/histórico) só
+   quando a tarefa exigir — não por precaução.
+```
+
+**SESSION_END** (checklist de fechamento, curto de propósito):
+
+```
+1. ESTADO.json já reflete a realidade? (rodar o sensor de novo)
+2. HANDOFF.md §1 bate com o que mudou nesta sessão? Atualizar só os
+   fatos que mudaram — não reescrever o resto.
+3. Branch, commits, PR: registrados em §3/§4 abaixo?
+4. Alguma divergência nova encontrada (doc vs. código, não só
+   número)? Registrar — nunca corrigir em silêncio (CLAUDE.md §2).
+5. Próxima ação de maior valor (§8) ainda é a certa, ou mudou?
+```
+
+`scripts/ci/medir_contexto.py --json` mede os 3 tiers acima em números;
+não precisa ser lido para seguir o protocolo, só existe para quem quer
+o dado exato.
+
 ## 1. Onde o repositório está
 
-> ⚠️ **Os números abaixo são de 2026-08-23 e envelhecem.** Não confie
+> ⚠️ **Os números abaixo são de 2026-08-24 e envelhecem.** Não confie
 > neles: **execute `python scripts/ci/central_command_sensor.py`** — ele
-> compara o estado real com `ESTADO.json` e diz o que mudou.
+> compara o estado real com `ESTADO.json` e diz o que mudou, incluindo
+> o bloco `contexto` (Etapa 13, ver abaixo).
 
 | | |
 |---|---|
-| **`main`** | `1409454` — *Merge pull request #44* (Etapa 12) |
-| **Suíte** | **659 passando / 0 falhando** |
-| **CI** | 2 workflows, ambos verdes: governança (15/15 gates) e `pytest` |
-| **PII na árvore atual de `main`** | ✅ **nenhuma** |
-| **Central Command** | 30 documentos + `ESTADO.json` + `ARQUITETURA_SNAPSHOT.json` |
-| **Graphify** | ✅ **exercitado sobre o repositório inteiro** (com `app.py`) — zero violação de `CLAUDE.md` §3. Ver `GRAPHIFY.md` §8 |
-| **Produção** | ❌ **NÃO VERIFICÁVEL** — reconfirmado por `WebFetch` nesta etapa (`EGRESS_BLOCKED`) |
-| **PRs abertos** | **Nenhum** |
+| **`main`** | `76b0046` — *Merge pull request #47* (Etapa 13) |
+| **Suíte** | **712 passando / 1 skip / 0 falhando** (verificado nesta sessão, `fix/contexto-progressivo` — inclui os 22 testes novos desta etapa) |
+| **CI** | 3 workflows: governança (15/15 gates), `pytest`, **`orquestrador-sensor.yml`** (novo — ver §3) |
+| **PII na árvore atual de `main`** | ✅ **nenhuma** (não reauditado a fundo nesta etapa, herdado) |
+| **Central Command** | 30 documentos + `ESTADO.json` + `ARQUITETURA_SNAPSHOT.json` + `AUDITORIA_ORQUESTRADOR.jsonl` (novo) |
+| **Graphify** | ✅ exercitado sobre o repositório inteiro (Etapa 12). **Não rerodado nesta etapa** — só consultado como snapshot (`ARQUITETURA_SNAPSHOT.json`), conforme `GRAPHIFY.md` §6 restrição 3 |
+| **Produção** | ❌ **NÃO VERIFICÁVEL** — não testado nesta etapa (herdado de Etapa 12) |
+| **Grande Orquestrador** | 🟢 **NÚCLEO EXECUTÁVEL EXISTE** (`magnata_os/orquestrador/`) + **gatilho automático via GitHub Actions já mesclado** (PRs #45, #46, #47) — ver correção declarada abaixo |
+| **Contexto (Etapa 13, novo)** | TIER 0 ≈ 4.140 tokens aprox. (~4,8% do corpus da Central Command) — `status_contexto: NORMAL`. Ver §3 |
+| **PRs abertos** | **Não reconfirmado ao vivo nesta sessão** (sem acesso a `gh`/API do GitHub) — tratar como `LIVE_STATE` a reconsultar, nunca herdar o "Nenhum" da Etapa 12 |
+
+### Correção declarada (Etapa 13, 2026-08-24)
+
+`ORQUESTRADOR.md` §6.2 e `MATRIZ_AUTONOMIA.md` §4 (Etapa 12) afirmam que
+**"nenhum gatilho automático roda sozinho"** e que isso "não foi
+construído". **Superado, com evidência em `main`:** o commit `cb835cb`
+("núcleo mínimo executável") e as duas fusões seguintes — `PR #46`
+(`fix/orquestrador-nucleo-motor`) e `PR #47`
+(`fix/orquestrador-gatilho-ci`) — já implementaram exatamente essa peça:
+`magnata_os/orquestrador/` (motor de eventos, política de autonomia,
+idempotência, retry) + `.github/workflows/orquestrador-sensor.yml`
+(cron a cada 6h, abre PR, nunca commita em `main`, nunca mescla
+sozinho). Nenhum texto anterior foi reescrito — os dois documentos
+citados continuam com a afirmação original; esta é a correção, não uma
+edição silenciosa. `ORQUESTRADOR.md` §6.2 e `MATRIZ_AUTONOMIA.md` §4
+**precisam de uma etapa de auditoria dedicada** para reconciliar o texto
+inteiro — isto aqui só registra que a lacuna que ambos descrevem como
+aberta já foi fechada em código.
 
 ## 2. Ler primeiro, nesta ordem
 
@@ -41,17 +93,33 @@ python scripts/ci/central_command_sensor.py
 bash scripts/ci/graphify_regenerar.sh --comparar   # opcional, sensor estrutural
 ```
 
-## 3. Merges recentes (Etapa 12)
+## 3. Merges recentes
+
+**Etapa 13 (2026-08-24) — visíveis por evidência local de `git log`, não por consulta ao GitHub:**
 
 | PR | O que trouxe |
 |---|---|
-| **#41** | Correção do sensor (baseline não some mais sem `--com-testes`) — revalidado, rebaseado e **MESCLADO** |
-| **#22** | Adapter de captura de e-mail (Módulo 01) — auditado adversarialmente (3 lacunas de teste fechadas), rebaseado e **MESCLADO**. Adapter em `main`, **inerte** — nenhum caller real |
-| **#44** | Central Command reconciliada com o merge do #22 (DEC-009, WIP-004, NXT-005, PEN-020) |
+| **#45** | Fundação do Orquestrador (`fix/etapa12-orquestrador-fundacao`) — **MESCLADO** |
+| **#46** | Núcleo executável do Orquestrador — motor, eventos, política de autonomia, retry (`fix/orquestrador-nucleo-motor`) — **MESCLADO** |
+| **#47** | Gatilho automático via GitHub Actions, sem sessão (`fix/orquestrador-gatilho-ci`) — **MESCLADO**. Fecha `MATRIZ_AUTONOMIA.md` §4 — ver correção declarada acima |
+
+**Etapa 13 (2026-08-24) — desta sessão, branch `fix/contexto-progressivo`:**
+
+- `scripts/ci/medir_contexto.py` + testes — mede TIER 0/1/2 de contexto e classifica NORMAL/ATENCAO/TROCAR_SESSAO.
+- `scripts/ci/central_command_sensor.py` estendido — `coletar()` agora inclui `contexto`, `graphify_snapshot_status`, `session_handoff_freshness`. Flui automaticamente para `ESTADO.json` via `magnata_os/orquestrador/acoes/atualizar_auto_fact.py`, já existente — nenhuma mudança nesse caminho foi necessária. Testado ponta a ponta (`scripts/ci/orquestrador_sensor_ci.py`) em cópia isolada.
+- Este HANDOFF.md — protocolo SESSION_START/END (§0) + correção declarada acima.
+
+**Etapa 12 (2026-08-23):**
+
+| PR | O que trouxe |
+|---|---|
+| **#41** | Correção do sensor (baseline não some mais sem `--com-testes`) — **MESCLADO** |
+| **#22** | Adapter de captura de e-mail (Módulo 01) — **MESCLADO**. Adapter em `main`, **inerte** — nenhum caller real |
+| **#44** | Central Command reconciliada com o merge do #22 |
 
 ## 4. PRs abertos
 
-**Nenhum.** Único PR aberto anterior (#22) foi mesclado nesta etapa.
+**Não reconfirmado ao vivo nesta sessão** — sem `gh`/API do GitHub disponível. O PR desta sessão (`fix/contexto-progressivo`) ainda não foi aberto no momento em que este HANDOFF foi escrito — ver §17 do relatório da missão para o link, se já existir quando você ler isto. Trate qualquer contagem de "PRs abertos" como `LIVE_STATE` (`TAXONOMIA_MEMORIA.md`) — reconsulte, nunca herde este número.
 
 ## 5. Riscos, em ordem (herdados — não reavaliados nesta etapa)
 
@@ -64,7 +132,8 @@ bash scripts/ci/graphify_regenerar.sh --comparar   # opcional, sensor estrutural
 | 5 | 🟠 **72% de `Folha de Ponto`** calculado dentro do Airtable | `BANCO_PROPRIO_MODELO.md` §2 |
 | 6 | 🟠 **`F_FUNC_STATUS`** escrito fora do código, lido pelo `app.py` | mestre §0-H.7 |
 | 7 | 🟡 **Retry/backoff do adapter de e-mail** — decisão adiada para quando (e se) ligar a fonte real | `PENDING.md` PEN-020 (Etapa 12) |
-| 8 | 🟡 **Nenhum gatilho automático** aciona sensor/Graphify sem sessão no meio | `MATRIZ_AUTONOMIA.md` §4 (Etapa 12) |
+| ~~8~~ | ~~Nenhum gatilho automático aciona sensor/Graphify sem sessão no meio~~ — **RESOLVIDO na Etapa 13**, ver correção declarada em §1 | `MATRIZ_AUTONOMIA.md` §4 (texto do documento em si ainda não reconciliado) |
+| 9 | 🟡 **`ORQUESTRADOR.md` §6.2 e `MATRIZ_AUTONOMIA.md` §4 desatualizados** — descrevem o gatilho automático como inexistente, e já existe em `main` desde `cb835cb`/PR #45-47 | Correção declarada, §1 acima — reconciliação de texto completa ainda pendente |
 
 ## 6. Gates humanos abertos
 
@@ -78,7 +147,8 @@ bash scripts/ci/graphify_regenerar.sh --comparar   # opcional, sensor estrutural
 | 🟠 ADR `Documento` vs. `Item de Ingestão` | `CLAUDE.md` §5 |
 | 🟠 40 branches / apagar branch | `CLAUDE.md` §9 |
 | 🟡 Ligar o adapter de e-mail a uma fonte real | `DECISIONS.md` DEC-009 — precisa autorização de fase (`CLAUDE.md` §6/§12-I) |
-| 🟡 Automatizar disparo do sensor/Graphify sem sessão no meio (novo job de CI) | `MATRIZ_AUTONOMIA.md` §4 — decisão de governança de CI, não técnica |
+| ~~🟡 Automatizar disparo do sensor/Graphify sem sessão no meio~~ | **RESOLVIDO na Etapa 13** para o sensor (`.github/workflows/orquestrador-sensor.yml`) — Graphify continua fora de CI por desenho (`GRAPHIFY.md` §6 restrição 3, não um gate pendente) |
+| 🟠 Reconciliar o texto de `ORQUESTRADOR.md` §6.2 e `MATRIZ_AUTONOMIA.md` §4 com o Orquestrador já existente | Auditoria dedicada — fora do escopo desta missão de contexto |
 
 ## 7. O que só a interface resolve
 
@@ -103,8 +173,18 @@ do alcance de qualquer sessão sem acesso à interface, e mesmo com
 acesso, é escrita externa: gate de `CLAUDE.md` §6, com autorização por
 fase cumprindo (a)–(f).
 
-**Dentro do que uma sessão de código alcança hoje**, a maior lacuna
-registrada nesta etapa é a de **infraestrutura de disparo automático**
-(`MATRIZ_AUTONOMIA.md` §4) — decidir se um job de CI pode abrir PR
-automático com o snapshot do sensor, sem nunca commitar direto em
-`main`.
+**Dentro do que uma sessão de código alcança hoje** (Etapa 13,
+2026-08-24): a lacuna de infraestrutura de disparo automático (item
+acima, Etapas 12→13) está fechada. As duas maiores lacunas que restam
+são:
+
+1. **Reconciliar `ORQUESTRADOR.md` §6.2 e `MATRIZ_AUTONOMIA.md` §4** com
+   o Orquestrador que já existe em código — auditoria de texto, sem
+   risco, sem gate humano (é documentação alcançando o código, não o
+   contrário).
+2. **Adicionar mais `TipoEvento` ao Orquestrador** (ex.: `PR_MESCLADO`,
+   `SUITE_DIVERGIU`, já previstos em `politica_autonomia.py` mas sem
+   `detectar_evento`/Ação implementados) — cada um exige decisão
+   explícita registrada em `DECISIONS.md` antes de ganhar
+   `EXECUTE_SAFE` (`politica_autonomia.py`, comentário do próprio
+   código) — **gate humano por desenho, não por omissão**.

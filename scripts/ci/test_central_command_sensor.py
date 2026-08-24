@@ -12,6 +12,7 @@ avisar ninguém. `CLAUDE.md` §4: falha nunca é silenciosa.
 A regra que estes testes travam: **não medir não é medir zero.**
 """
 import importlib.util
+import json
 import pathlib
 import sys
 
@@ -101,6 +102,8 @@ def test_main_atualizar_sem_com_testes_grava_a_baseline_preservada(tmp_path, mon
             'branches_fora_de_main': [], 'documentos_central_command': [],
             'links_quebrados': [], 'cpf_em_documentacao': [],
             'workflows': [], 'autorizacoes_app_py': 0,
+            'contexto': sensor.medir_contexto.avaliar(),
+            'graphify_snapshot_status': 'ausente', 'session_handoff_freshness': 'indeterminado',
         },
     )
     monkeypatch.setattr(sys, 'argv', ['central_command_sensor.py', '--atualizar'])
@@ -122,3 +125,70 @@ def test_zero_falhas_e_baseline_valida_e_nao_ausencia():
     assert gravar['testes']['falhando'] == 0
     assert gravar['testes']['passando'] == 100
     assert aviso is not None
+
+
+# --- integração com medir_contexto.py e o Orquestrador (Etapa 13) --------
+#
+# atualizar_auto_fact.executar() (magnata_os/orquestrador/acoes/) chama
+# sensor.coletar(com_testes=True) e grava o dicionário inteiro em
+# ESTADO.json -- os testes abaixo travam que 'contexto',
+# 'graphify_snapshot_status' e 'session_handoff_freshness' sempre estejam
+# presentes nesse dicionário, porque é esse o único fio que liga esta
+# medição ao Grande Orquestrador.
+
+def test_coletar_real_inclui_o_bloco_de_contexto():
+    """Contra o repositório de verdade -- não mockado."""
+    atual = sensor.coletar(com_testes=False)
+
+    assert 'contexto' in atual
+    assert atual['contexto']['status_contexto'] in ('NORMAL', 'ATENCAO', 'TROCAR_SESSAO')
+    assert atual['graphify_snapshot_status'] in ('ausente', 'desatualizado', 'sem_sinal_de_mudanca')
+    assert atual['session_handoff_freshness'] in ('ausente', 'atual', 'desatualizado', 'indeterminado')
+
+
+def test_graphify_snapshot_status_ausente_quando_snapshot_nao_existe(tmp_path, monkeypatch):
+    monkeypatch.setattr(sensor, 'CC', tmp_path)
+    assert sensor._graphify_snapshot_status() == 'ausente'
+
+
+def test_graphify_snapshot_status_desatualizado_quando_arquivo_listado_sumiu(tmp_path, monkeypatch):
+    monkeypatch.setattr(sensor, 'CC', tmp_path)
+    monkeypatch.setattr(sensor, 'RAIZ', tmp_path)
+    (tmp_path / 'ARQUITETURA_SNAPSHOT.json').write_text(
+        json.dumps({'arquivos': ['nao_existe_mais.py']}), encoding='utf-8'
+    )
+    assert sensor._graphify_snapshot_status() == 'desatualizado'
+
+
+def test_graphify_snapshot_status_sem_sinal_quando_arquivos_listados_existem(tmp_path, monkeypatch):
+    monkeypatch.setattr(sensor, 'CC', tmp_path)
+    monkeypatch.setattr(sensor, 'RAIZ', tmp_path)
+    presente = tmp_path / 'existe.py'
+    presente.write_text('# ok', encoding='utf-8')
+    (tmp_path / 'ARQUITETURA_SNAPSHOT.json').write_text(
+        json.dumps({'arquivos': ['existe.py']}), encoding='utf-8'
+    )
+    assert sensor._graphify_snapshot_status() == 'sem_sinal_de_mudanca'
+
+
+def test_session_handoff_freshness_ausente_sem_handoff(tmp_path, monkeypatch):
+    monkeypatch.setattr(sensor, 'CC', tmp_path)
+    assert sensor._session_handoff_freshness('abc1234') == 'ausente'
+
+
+def test_session_handoff_freshness_atual_quando_sha_bate(tmp_path, monkeypatch):
+    monkeypatch.setattr(sensor, 'CC', tmp_path)
+    (tmp_path / 'HANDOFF.md').write_text('| **`main`** | `abc1234` — teste |', encoding='utf-8')
+    assert sensor._session_handoff_freshness('abc1234') == 'atual'
+
+
+def test_session_handoff_freshness_desatualizado_quando_sha_diverge(tmp_path, monkeypatch):
+    monkeypatch.setattr(sensor, 'CC', tmp_path)
+    (tmp_path / 'HANDOFF.md').write_text('| **`main`** | `1409454` — teste |', encoding='utf-8')
+    assert sensor._session_handoff_freshness('76b0046') == 'desatualizado'
+
+
+def test_session_handoff_freshness_indeterminado_quando_formato_nao_bate(tmp_path, monkeypatch):
+    monkeypatch.setattr(sensor, 'CC', tmp_path)
+    (tmp_path / 'HANDOFF.md').write_text('sem tabela nenhuma aqui', encoding='utf-8')
+    assert sensor._session_handoff_freshness('76b0046') == 'indeterminado'
