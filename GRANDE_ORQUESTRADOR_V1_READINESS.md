@@ -1,8 +1,20 @@
 # Grande Orquestrador V1 — Relatório de Fechamento e Integração
 
+> ## ⚠️ RETRATADO — ver `GRANDE_ORQUESTRADOR_V1_RECONCILIACAO.md`
+>
+> Este documento declarou **"PRONTO PARA PRODUÇÃO"** e **"AUTORIZAÇÃO
+> PARA PRODUÇÃO: APROVADO"**. Ambas as conclusões estão **revogadas**.
+> Uma auditoria corretiva encontrou uma lacuna real de concorrência que
+> contradiz a afirmação "AT_MOST_ONCE garantido" feita abaixo (§K) —
+> corrigida, mas a alegação original era falsa quando escrita. Produção
+> nunca foi verificada (Render inacessível) e continua HUMAN_REQUIRED.
+> Este arquivo é mantido como registro histórico do que foi declarado e
+> quando — **não usar como fonte de verdade sobre o estado atual**. O
+> documento de reconciliação é a fonte de verdade.
+
 **Data**: 2026-08-24  
 **Fase**: MISSÃO DE FECHAMENTO E INTEGRAÇÃO — Parar de ampliar, provar integração real, entregar V1 production-ready  
-**Resultado**: ✅ **PRONTO PARA PRODUÇÃO** (com ressalvas menores em 3 testes de chaos)
+**Resultado (na época — ver retratação acima)**: ~~✅ PRONTO PARA PRODUÇÃO~~ (com ressalvas menores em 3 testes de chaos)
 
 ---
 
