@@ -9,8 +9,14 @@ ou erros nao-retentaveis) vao para a fila de desistencia:
 - Isolada do fluxo principal (nao bloqueia processamento)
 - Consultavel para auditoria, retry manual, investigacao
 
-Sem persistencia pesada -- usa repositorio_execucoes como fonte.
-Quem quer recuperar um evento da DLQ replica em memoria e retenta.
+Ha duas representacoes complementares:
+
+- ``FilaDesistenciaEmMemoria`` recebe notificacoes do processo atual;
+- ``VisaoFilaDesistenciaPersistente`` reconstroi a fila ativa a partir do
+  ``RepositorioExecucoes``, sem tabela, banco ou fonte de verdade paralela.
+
+A visao persistente e deliberadamente somente leitura. Recuperacao continua
+passando pelas politicas do Orquestrador; consultar a DLQ nunca dispara replay.
 """
 from __future__ import annotations
 
@@ -19,7 +25,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from .eventos import EstadoExecucao
-from .repositorio_execucoes import RegistroExecucao
+from .repositorio_execucoes import RegistroExecucao, RepositorioExecucoes
 
 
 @dataclasses.dataclass(frozen=True)
@@ -56,8 +62,40 @@ class FilaDesistenciaEmMemoria:
         return [item for item in self._items if item.event_type == event_type]
 
 
+class VisaoFilaDesistenciaPersistente:
+    """Visao somente leitura dos eventos atualmente em ``FAILED_FINAL``.
+
+    O repositorio de execucoes continua sendo a unica fonte de verdade. Cada
+    consulta deriva um snapshot novo, portanto sobrevive a restart e acompanha
+    replay manual sem sincronizacao paralela: quando o estado deixa de ser
+    ``FAILED_FINAL``, o item deixa a fila *ativa*. O historico append-only da
+    transicao permanece em ``RepositorioExecucoes.listar_auditoria``.
+    """
+
+    def __init__(self, repositorio: RepositorioExecucoes) -> None:
+        self._repositorio = repositorio
+
+    def listar_todos(self) -> List[ItemFilaDesistencia]:
+        """Retorna a DLQ ativa em ordem deterministica de entrada."""
+        itens = (
+            extrair_para_fila_desistencia(
+                registro,
+                registrado_em=registro.atualizado_em,
+            )
+            for registro in self._repositorio.listar_todos()
+            if registro is not None
+        )
+        presentes = [item for item in itens if item is not None]
+        return sorted(presentes, key=lambda item: (item.registrado_em, item.event_id))
+
+    def listar_por_event_type(self, event_type: str) -> List[ItemFilaDesistencia]:
+        """Filtra o snapshot persistente por tipo de evento."""
+        return [item for item in self.listar_todos() if item.event_type == event_type]
+
+
 def extrair_para_fila_desistencia(
     registro: RegistroExecucao,
+    registrado_em: Optional[datetime] = None,
 ) -> Optional[ItemFilaDesistencia]:
     """Extrai um evento de FAILED_FINAL para a fila de desistencia.
 
@@ -72,5 +110,5 @@ def extrair_para_fila_desistencia(
         ultimo_erro_classe=registro.last_error_classe,
         ultimo_erro_at=registro.last_error_at,
         resultado_final=registro.resultado or 'desconhecido',
-        registrado_em=datetime.now(timezone.utc),
+        registrado_em=registrado_em or datetime.now(timezone.utc),
     )
