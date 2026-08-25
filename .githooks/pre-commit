@@ -210,6 +210,10 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_magnata_os_orquestrador_concurrency.py"
   "test_magnata_os_orquestrador_crash_consistency.py"
   "test_magnata_os_orquestrador_fila_desistencia.py"
+  # Excecao exata da persistencia duravel do Orquestrador (2026-08-25).
+  # Mantem test_ bloqueado por padrao e libera somente o teste contratual
+  # do adapter Postgres inerte.
+  "test_magnata_os_orquestrador_postgres.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

@@ -289,6 +289,8 @@ def test_supervisor_shadow_resume_health_dlq_e_estado_em_andamento():
     resumo = snapshot.resumo_json()
 
     assert resumo['modo'] == 'SHADOW'
+    assert resumo['contrato'] == 'magnata_os.orquestrador.supervisor.v1'
+    assert resumo['schema_version'] == 1
     assert resumo['dlq_ativa_event_ids'] == ['falha-final']
     assert resumo['eventos_em_andamento_event_ids'] == ['preso']
     assert resumo['estados'] == {'EXECUTING': 1, 'FAILED_FINAL': 1}

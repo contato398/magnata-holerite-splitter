@@ -2209,6 +2209,56 @@ test_90_other_orchestrator_file_still_blocked() {
   rm -f magnata_os/orquestrador/autorrecuperacao_extra.py
 }
 
+# TEST 91: a persistencia duravel libera somente os seis novos caminhos
+# exatos. Supervisor e seu teste ja pertencem ao perimetro da fase anterior.
+test_91_orchestrator_durable_persistence_exact_files_accepted() {
+  run_test 91 "Os 6 caminhos exatos da persistencia duravel sao aceitos" "PASS"
+
+  cd "$TEST_REPO"
+  mkdir -p magnata_os/orquestrador/migrations docs/decisoes
+  local files=(
+    "magnata_os/orquestrador/repositorio_execucoes_postgres.py"
+    "magnata_os/orquestrador/fabrica_repositorio_execucoes.py"
+    "magnata_os/orquestrador/migrations/0001_repositorio_execucoes.sql"
+    "magnata_os/orquestrador/migrations/0001_repositorio_execucoes_rollback.sql"
+    "docs/decisoes/persistencia-duravel-orquestrador-v1.md"
+    "test_magnata_os_orquestrador_postgres.py"
+  )
+  local file
+  for file in "${files[@]}"; do
+    echo "# persistencia duravel" > "$file"
+  done
+  git add "${files[@]}"
+
+  if git commit -m "feat: teste 91 caminhos exatos da persistencia duravel" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD "${files[@]}" 2>/dev/null || true
+  rm -f "${files[@]}"
+}
+
+# TEST 92: uma migration adicional nao recebe autorizacao por diretorio.
+test_92_other_orchestrator_migration_still_blocked() {
+  run_test 92 "Outra migration do Orquestrador continua bloqueada" "FAIL"
+
+  cd "$TEST_REPO"
+  mkdir -p magnata_os/orquestrador/migrations
+  echo "SELECT 1;" > magnata_os/orquestrador/migrations/0002_nao_autorizada.sql
+  git add magnata_os/orquestrador/migrations/0002_nao_autorizada.sql
+
+  if git commit -m "feat: teste 92 migration nao autorizada" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD magnata_os/orquestrador/migrations/0002_nao_autorizada.sql 2>/dev/null || true
+  rm -f magnata_os/orquestrador/migrations/0002_nao_autorizada.sql
+}
+
 main() {
   echo -e "${BLUE}===================================="
   echo "SUÍTE DE TESTES DE GOVERNANÇA"
@@ -2315,6 +2365,8 @@ main() {
   test_88_other_scripts_file_still_blocked || true
   test_89_autorecovery_exact_files_accepted || true
   test_90_other_orchestrator_file_still_blocked || true
+  test_91_orchestrator_durable_persistence_exact_files_accepted || true
+  test_92_other_orchestrator_migration_still_blocked || true
 
   # Report
   echo ""

@@ -468,6 +468,16 @@ ALLOWED_PATHS=(
   "^test_magnata_os_orquestrador_concurrency\.py$"
   "^test_magnata_os_orquestrador_crash_consistency\.py$"
   "^test_magnata_os_orquestrador_fila_desistencia\.py$"
+  # Excecao exata e restrita (branch
+  # fix/orquestrador-persistencia-duravel, 2026-08-25) — adapter Postgres
+  # inerte e contrato versionado do supervisor. Nao libera o diretorio de
+  # migrations nem qualquer outro arquivo do Orquestrador.
+  "^magnata_os/orquestrador/repositorio_execucoes_postgres\.py$"
+  "^magnata_os/orquestrador/fabrica_repositorio_execucoes\.py$"
+  "^magnata_os/orquestrador/migrations/0001_repositorio_execucoes\.sql$"
+  "^magnata_os/orquestrador/migrations/0001_repositorio_execucoes_rollback\.sql$"
+  "^docs/decisoes/persistencia-duravel-orquestrador-v1\.md$"
+  "^test_magnata_os_orquestrador_postgres\.py$"
 )
 
 # ============================================================================
