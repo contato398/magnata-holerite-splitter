@@ -2,9 +2,10 @@
 
 **Data:** 2026-08-25
 
-**Estado:** nucleo V1 mesclado pelo PR #56 em
-`main@bc42bbccd5cf2d0794d3ab6d708ab9b7b0d20d74`; prova multiprocesso em
-evolucao local, ainda sem commit/PR/merge/deploy
+**Estado:** nucleo V1 mesclado pelo PR #56; prova multiprocesso/restart
+mesclada pelo PR #57 em
+`main@bfcdbfb3963338b6c31a6e030a7ccfab2b1bb4ac`; visao persistente da DLQ
+ativa em evolucao local, ainda sem commit/PR/merge/deploy
 
 **Base original:** `main@988722d0816315f9d60d89f83e683542463a3a88` (PR #55)
 
@@ -107,10 +108,13 @@ Os testes cobrem:
 - O coordenador ainda nao esta conectado a um scheduler/servico permanente.
 - O SQLite do workflow atual e efemero em cada runner do GitHub Actions;
   portanto nao prova recuperacao entre runs autonomos.
-- A `FilaDesistenciaEmMemoria` continua em memoria. `FAILED_FINAL` e a
-  auditoria persistem no repositorio, mas a lista materializada da DLQ nao
-  sobrevive restart. Tornar a DLQ persistentemente append-only exige uma
-  decisao propria de armazenamento.
+- A fila de notificacao do processo continua em memoria, mas a DLQ ativa agora
+  possui uma visao persistente, somente leitura, derivada dos registros em
+  `FAILED_FINAL`. Ela sobrevive restart sem criar tabela ou fonte paralela.
+- O historico de transicoes continua append-only na auditoria. A visao ativa
+  nao guarda uma segunda copia historica do payload: depois de replay manual
+  bem-sucedido, o item sai da fila ativa e sua passagem por `FAILED_FINAL`
+  permanece na auditoria.
 - Nenhum backend Postgres foi implementado ou provisionado.
 - Nenhum acesso externo, deploy ou mudanca de configuracao foi realizado.
 

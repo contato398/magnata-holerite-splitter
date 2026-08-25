@@ -14,9 +14,14 @@ from magnata_os.orquestrador.eventos import EstadoExecucao
 from magnata_os.orquestrador.fila_desistencia import (
     FilaDesistenciaEmMemoria,
     ItemFilaDesistencia,
+    VisaoFilaDesistenciaPersistente,
     extrair_para_fila_desistencia,
 )
-from magnata_os.orquestrador.repositorio_execucoes import RegistroExecucao
+from magnata_os.orquestrador.repositorio_execucoes import (
+    RegistroExecucao,
+    RepositorioExecucoesEmMemoria,
+    RepositorioExecucoesSQLite,
+)
 
 
 def _registro_falha_final(
@@ -249,3 +254,71 @@ class TestExtrairParaFilaDesistencia:
         depois = datetime.now(timezone.utc)
 
         assert antes <= item.registrado_em <= depois
+
+
+class TestVisaoFilaDesistenciaPersistente:
+    """A DLQ ativa e derivada do repositorio, inclusive depois de restart."""
+
+    def test_deriva_somente_failed_final_sem_duplicar_fonte(self):
+        repo = RepositorioExecucoesEmMemoria()
+        falha = _registro_falha_final(event_id='evt-falha')
+        sucesso = _registro_falha_final(event_id='evt-sucesso')
+        sucesso.estado = EstadoExecucao.SUCCEEDED
+        repo.salvar(falha)
+        repo.salvar(sucesso)
+
+        visao = VisaoFilaDesistenciaPersistente(repo)
+
+        assert [item.event_id for item in visao.listar_todos()] == ['evt-falha']
+        assert visao.listar_todos()[0].registrado_em == falha.atualizado_em
+
+    def test_filtro_e_ordem_sao_deterministicos(self):
+        repo = RepositorioExecucoesEmMemoria()
+        mais_novo = _registro_falha_final(
+            event_id='evt-b', event_type='PR_MESCLADO'
+        )
+        mais_antigo = _registro_falha_final(
+            event_id='evt-a', event_type='GIT_MAIN_AVANCOU'
+        )
+        mais_novo.atualizado_em = datetime.fromisoformat('2026-08-24T12:02:00')
+        mais_antigo.atualizado_em = datetime.fromisoformat('2026-08-24T12:01:00')
+        repo.salvar(mais_novo)
+        repo.salvar(mais_antigo)
+
+        visao = VisaoFilaDesistenciaPersistente(repo)
+
+        assert [item.event_id for item in visao.listar_todos()] == ['evt-a', 'evt-b']
+        assert [
+            item.event_id
+            for item in visao.listar_por_event_type('GIT_MAIN_AVANCOU')
+        ] == ['evt-a']
+
+    def test_sqlite_sobrevive_restart_sem_tabela_dlq_paralela(self, tmp_path):
+        caminho = tmp_path / 'orquestrador.sqlite3'
+        falha = _registro_falha_final(event_id='evt-restart')
+        repo = RepositorioExecucoesSQLite(caminho)
+        repo.salvar(falha)
+        assert [
+            item.event_id
+            for item in VisaoFilaDesistenciaPersistente(repo).listar_todos()
+        ] == ['evt-restart']
+        repo.fechar()
+
+        repo_reaberto = RepositorioExecucoesSQLite(caminho)
+        itens = VisaoFilaDesistenciaPersistente(repo_reaberto).listar_todos()
+        assert [item.event_id for item in itens] == ['evt-restart']
+        assert itens[0].registrado_em == falha.atualizado_em
+        repo_reaberto.fechar()
+
+    def test_replay_resolvido_sai_da_fila_ativa(self):
+        repo = RepositorioExecucoesEmMemoria()
+        registro = _registro_falha_final(event_id='evt-resolvido')
+        repo.salvar(registro)
+        visao = VisaoFilaDesistenciaPersistente(repo)
+        assert len(visao.listar_todos()) == 1
+
+        registro.estado = EstadoExecucao.SUCCEEDED
+        registro.resultado = 'replay manual validado'
+        repo.salvar(registro)
+
+        assert visao.listar_todos() == []
