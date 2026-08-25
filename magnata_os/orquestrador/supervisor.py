@@ -46,6 +46,8 @@ class SnapshotSupervisor:
 
     def resumo_json(self) -> Dict:
         return {
+            'contrato': 'magnata_os.orquestrador.supervisor.v1',
+            'schema_version': 1,
             'modo': self.modo.value,
             'gerado_em': self.gerado_em.isoformat(),
             'saude': self.saude.resumo_json(),
