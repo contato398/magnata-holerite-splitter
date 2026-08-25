@@ -6,7 +6,7 @@ Verifica:
 - Extracto de RegistroExecucao para ItemFilaDesistencia
 - Filtragem e auditoria
 """
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -240,12 +240,12 @@ class TestExtrairParaFilaDesistencia:
         item = extrair_para_fila_desistencia(registro)
         assert item.resultado_final == 'desconhecido'
 
-    def test_timestamp_registrado_em_e_utcnow(self):
+    def test_timestamp_registrado_em_e_utc(self):
         """Item tem registrado_em = agora quando extraido."""
         registro = _registro_falha_final()
 
-        antes = datetime.utcnow()
+        antes = datetime.now(timezone.utc)
         item = extrair_para_fila_desistencia(registro)
-        depois = datetime.utcnow()
+        depois = datetime.now(timezone.utc)
 
         assert antes <= item.registrado_em <= depois

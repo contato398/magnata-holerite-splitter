@@ -459,12 +459,14 @@ ALLOWED_PATHS=(
   "^magnata_os/orquestrador/autorrecuperacao\.py$"
   "^magnata_os/orquestrador/politica_recuperacao\.py$"
   "^magnata_os/orquestrador/eventos\.py$"
+  "^magnata_os/orquestrador/fila_desistencia\.py$"
   "^magnata_os/orquestrador/motor\.py$"
   "^magnata_os/orquestrador/repositorio_execucoes\.py$"
   "^docs/decisoes/autorrecuperacao-segura-v1\.md$"
   "^test_magnata_os_orquestrador_autorrecuperacao\.py$"
   "^test_magnata_os_orquestrador_concurrency\.py$"
   "^test_magnata_os_orquestrador_crash_consistency\.py$"
+  "^test_magnata_os_orquestrador_fila_desistencia\.py$"
 )
 
 # ============================================================================

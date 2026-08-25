@@ -1,7 +1,10 @@
 """Provas da autorrecuperacao segura, inclusive restart e concorrencia."""
+import multiprocessing
+import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -44,6 +47,70 @@ def _evento(event_id: str, tipo: TipoEvento = TipoEvento.GIT_MAIN_AVANCOU) -> Ev
         sensibilidade=Sensibilidade.PUBLICO,
         proveniencia='teste_autorrecuperacao',
     )
+
+
+def _anexar_marcador(caminho: str, texto: str) -> None:
+    """Efeito observavel e atomico entre processos, restrito ao tmp do teste."""
+    descritor = os.open(caminho, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(descritor, f'{texto}\n'.encode('utf-8'))
+        os.fsync(descritor)
+    finally:
+        os.close(descritor)
+
+
+def _worker_crash_real(caminho_db: str, marcador: str, event_id: str) -> None:
+    """Processo isolado que morre dentro da Acao, sem finally nem close."""
+    repo = RepositorioExecucoesSQLite(Path(caminho_db))
+
+    def acao(evento):
+        _anexar_marcador(marcador, evento.event_id)
+        os._exit(73)
+
+    motor = MotorOrquestrador(
+        repo,
+        {TipoEvento.GIT_MAIN_AVANCOU.value: acao},
+    )
+    motor.processar(_evento(event_id))
+
+
+def _worker_retry_multiprocesso(
+    caminho_db: str,
+    marcador: str,
+    barreira,
+    resultados,
+) -> None:
+    """Worker independente para provar o CAS do SQLite entre processos."""
+    repo = None
+    try:
+        class RepositorioComBarreira(RepositorioExecucoesSQLite):
+            def reivindicar_retry(self, event_id, reivindicado_em):
+                barreira.wait(timeout=10)
+                return super().reivindicar_retry(event_id, reivindicado_em)
+
+        repo = RepositorioComBarreira(Path(caminho_db))
+
+        def acao(evento):
+            _anexar_marcador(marcador, evento.event_id)
+            time.sleep(0.1)
+            return ResultadoAcao(sucesso=True, evidencia='retry multiprocesso unico')
+
+        motor = MotorOrquestrador(
+            repo,
+            {TipoEvento.GIT_MAIN_AVANCOU.value: acao},
+        )
+        coordenador = CoordenadorAutorrecuperacao(
+            repo,
+            motor,
+            relogio=lambda: INSTANTE,
+        )
+        decisoes = [resultado.decisao.value for resultado in coordenador.executar_ciclo()]
+        resultados.put(('ok', decisoes))
+    except BaseException as exc:  # pragma: no cover - devolvido ao processo pai
+        resultados.put(('erro', f'{type(exc).__name__}: {exc}'))
+    finally:
+        if repo is not None:
+            repo.fechar()
 
 
 def _preparar_falha_retentavel(repo, evento, acao):
@@ -261,6 +328,154 @@ def test_trilha_de_recuperacao_sobrevive_restart_sqlite(tmp_path):
         'RETRY_AUTORIZADO',
         'RETRY_EXECUTADO',
     ]
+    repo_final.fechar()
+
+
+def test_restart_sqlite_preserva_metadados_de_autonomia_e_acao(tmp_path):
+    """O snapshot persistido precisa explicar quem decidiu e o que executou."""
+    db = tmp_path / 'orquestrador.sqlite3'
+    evento = _evento('metadados-restart')
+    repo = RepositorioExecucoesSQLite(db)
+    motor = MotorOrquestrador(
+        repo,
+        {
+            evento.event_type.value: lambda _: ResultadoAcao(
+                sucesso=True,
+                evidencia='metadados persistidos',
+            )
+        },
+    )
+
+    concluido = motor.processar(evento)
+    assert concluido.nivel_autonomia == 4
+    assert concluido.acao == TipoEvento.GIT_MAIN_AVANCOU.value
+    repo.fechar()
+
+    repo_reaberto = RepositorioExecucoesSQLite(db)
+    persistido = repo_reaberto.buscar_por_event_id(evento.event_id)
+    assert persistido.nivel_autonomia == 4
+    assert persistido.acao == TipoEvento.GIT_MAIN_AVANCOU.value
+    assert persistido.estado == EstadoExecucao.SUCCEEDED
+    repo_reaberto.fechar()
+
+
+def test_crash_real_de_processo_nao_dispara_auto_replay(tmp_path):
+    """SIG-like exit prova que EXECUTING persiste antes do efeito externo.
+
+    O processo filho realiza um efeito local observavel e morre via
+    ``os._exit`` dentro da Acao. Um novo processo logico encontra o evento
+    preso, registra escalonamento e nunca executa a Acao automaticamente.
+    """
+    db = tmp_path / 'orquestrador.sqlite3'
+    marcador = tmp_path / 'efeitos.log'
+    event_id = 'crash-processo-real'
+    contexto = multiprocessing.get_context('spawn')
+    processo = contexto.Process(
+        target=_worker_crash_real,
+        args=(str(db), str(marcador), event_id),
+    )
+
+    processo.start()
+    processo.join(timeout=15)
+    if processo.is_alive():
+        processo.terminate()
+        processo.join(timeout=5)
+        pytest.fail('worker de crash real nao terminou no prazo')
+
+    assert processo.exitcode == 73
+    assert marcador.read_text(encoding='utf-8').splitlines() == [event_id]
+
+    repo_reaberto = RepositorioExecucoesSQLite(db)
+    preso = repo_reaberto.buscar_por_event_id(event_id)
+    assert preso.estado == EstadoExecucao.EXECUTING
+    assert preso.nivel_autonomia == 4
+    assert preso.acao == TipoEvento.GIT_MAIN_AVANCOU.value
+    assert MonitorSaudemotorPersistente(repo_reaberto).obter_saude().saude == 'AMARELO'
+
+    chamadas_apos_restart = []
+
+    def acao_que_nao_pode_rodar(evento):
+        chamadas_apos_restart.append(evento.event_id)
+        _anexar_marcador(str(marcador), f'reexecutado:{evento.event_id}')
+        return ResultadoAcao(sucesso=True, evidencia='nao deveria executar')
+
+    motor_reaberto = MotorOrquestrador(
+        repo_reaberto,
+        {TipoEvento.GIT_MAIN_AVANCOU.value: acao_que_nao_pode_rodar},
+    )
+    decisoes = CoordenadorAutorrecuperacao(
+        repo_reaberto,
+        motor_reaberto,
+        relogio=lambda: preso.atualizado_em + timedelta(hours=1),
+    ).executar_ciclo()
+
+    assert [resultado.decisao for resultado in decisoes] == [
+        DecisaoRecuperacao.ESCALAR_HUMANO
+    ]
+    assert chamadas_apos_restart == []
+    assert marcador.read_text(encoding='utf-8').splitlines() == [event_id]
+    assert repo_reaberto.buscar_por_event_id(event_id).estado == EstadoExecucao.EXECUTING
+    assert [r.decisao for r in repo_reaberto.listar_recuperacoes(event_id)] == [
+        'ESCALAR_HUMANO'
+    ]
+    repo_reaberto.fechar()
+
+
+def test_dois_processos_de_recovery_executam_um_unico_retry_sqlite(tmp_path):
+    """Processos independentes provam o CAS, nao apenas threads Python."""
+    db = tmp_path / 'orquestrador.sqlite3'
+    marcador = tmp_path / 'retries.log'
+    evento = _evento('retry-multiprocesso')
+
+    repo_inicial = RepositorioExecucoesSQLite(db)
+
+    def primeira_tentativa(_evento_recebido):
+        raise FalhaTransitoria('falha anterior ao efeito')
+
+    _, registro = _preparar_falha_retentavel(
+        repo_inicial,
+        evento,
+        primeira_tentativa,
+    )
+    registro.next_retry_at = INSTANTE - timedelta(seconds=1)
+    repo_inicial.salvar(registro)
+    repo_inicial.fechar()
+
+    contexto = multiprocessing.get_context('spawn')
+    barreira = contexto.Barrier(2)
+    resultados = contexto.Queue()
+    processos = [
+        contexto.Process(
+            target=_worker_retry_multiprocesso,
+            args=(str(db), str(marcador), barreira, resultados),
+        )
+        for _ in range(2)
+    ]
+    for processo in processos:
+        processo.start()
+    for processo in processos:
+        processo.join(timeout=20)
+        if processo.is_alive():
+            processo.terminate()
+            processo.join(timeout=5)
+            pytest.fail('worker multiprocesso nao terminou no prazo')
+
+    respostas = [resultados.get(timeout=5) for _ in processos]
+    assert all(processo.exitcode == 0 for processo in processos)
+    assert all(status == 'ok' for status, _ in respostas), respostas
+
+    repo_final = RepositorioExecucoesSQLite(db)
+    persistido = repo_final.buscar_por_event_id(evento.event_id)
+    assert persistido.estado == EstadoExecucao.SUCCEEDED
+    assert persistido.attempt == 2
+    assert marcador.read_text(encoding='utf-8').splitlines() == [evento.event_id]
+    decisoes = [decisao for _, lista in respostas for decisao in lista]
+    assert decisoes.count(DecisaoRecuperacao.RETRY_EXECUTADO.value) == 1
+    assert decisoes.count(DecisaoRecuperacao.IGNORADO_CONCORRENCIA.value) == 1
+    assert [
+        entrada.motivo
+        for entrada in repo_final.listar_auditoria(evento.event_id)
+    ].count('retry_reivindicado_atomicamente') == 1
     repo_final.fechar()
 
 

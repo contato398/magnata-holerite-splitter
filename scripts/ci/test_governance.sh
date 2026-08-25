@@ -2152,10 +2152,10 @@ test_88_other_scripts_file_still_blocked() {
   rm -f scripts/outro_script_qualquer.py
 }
 
-# TEST 89: a fase de autorrecuperacao libera somente seus nove caminhos
+# TEST 89: a fase de autorrecuperacao libera somente seus onze caminhos
 # exatos (codigo, decisao e testes), usando a mesma fonte canonica do hook.
 test_89_autorecovery_exact_files_accepted() {
-  run_test 89 "Os 9 caminhos exatos da autorrecuperacao segura sao aceitos" "PASS"
+  run_test 89 "Os 11 caminhos exatos da autorrecuperacao segura sao aceitos" "PASS"
 
   cd "$TEST_REPO"
   mkdir -p magnata_os/orquestrador docs/decisoes
@@ -2163,12 +2163,14 @@ test_89_autorecovery_exact_files_accepted() {
     "magnata_os/orquestrador/autorrecuperacao.py"
     "magnata_os/orquestrador/politica_recuperacao.py"
     "magnata_os/orquestrador/eventos.py"
+    "magnata_os/orquestrador/fila_desistencia.py"
     "magnata_os/orquestrador/motor.py"
     "magnata_os/orquestrador/repositorio_execucoes.py"
     "docs/decisoes/autorrecuperacao-segura-v1.md"
     "test_magnata_os_orquestrador_autorrecuperacao.py"
     "test_magnata_os_orquestrador_concurrency.py"
     "test_magnata_os_orquestrador_crash_consistency.py"
+    "test_magnata_os_orquestrador_fila_desistencia.py"
   )
   local file
   for file in "${files[@]}"; do
