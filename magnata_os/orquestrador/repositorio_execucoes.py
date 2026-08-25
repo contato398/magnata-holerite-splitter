@@ -289,7 +289,10 @@ class RepositorioExecucoesSQLite:
                 manualmente_reiniciado_por, manualmente_reiniciado_em, motivo_reinicio_manual)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(event_id) DO UPDATE SET
-                 estado=excluded.estado, resultado=excluded.resultado,
+                 estado=excluded.estado,
+                 nivel_autonomia=excluded.nivel_autonomia,
+                 acao=excluded.acao,
+                 resultado=excluded.resultado,
                  evidencia=excluded.evidencia, attempt=excluded.attempt,
                  next_retry_at=excluded.next_retry_at,
                  last_error_classe=excluded.last_error_classe,

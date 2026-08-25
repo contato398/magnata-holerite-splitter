@@ -15,7 +15,7 @@ Quem quer recuperar um evento da DLQ replica em memoria e retenta.
 from __future__ import annotations
 
 import dataclasses
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from .eventos import EstadoExecucao
@@ -72,5 +72,5 @@ def extrair_para_fila_desistencia(
         ultimo_erro_classe=registro.last_error_classe,
         ultimo_erro_at=registro.last_error_at,
         resultado_final=registro.resultado or 'desconhecido',
-        registrado_em=datetime.utcnow(),
+        registrado_em=datetime.now(timezone.utc),
     )

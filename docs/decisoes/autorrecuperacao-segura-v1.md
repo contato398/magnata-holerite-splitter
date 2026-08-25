@@ -2,9 +2,14 @@
 
 **Data:** 2026-08-25
 
-**Estado:** implementada em branch local, ainda sem commit/PR/merge/deploy
+**Estado:** nucleo V1 mesclado pelo PR #56 em
+`main@bc42bbccd5cf2d0794d3ab6d708ab9b7b0d20d74`; prova multiprocesso em
+evolucao local, ainda sem commit/PR/merge/deploy
 
-**Base:** `main@988722d0816315f9d60d89f83e683542463a3a88` (PR #55)
+**Base original:** `main@988722d0816315f9d60d89f83e683542463a3a88` (PR #55)
+
+**Base da prova multiprocesso:**
+`main@bc42bbccd5cf2d0794d3ab6d708ab9b7b0d20d74` (PR #56)
 
 ## 1. Problema
 
@@ -111,3 +116,32 @@ Os testes cobrem:
 
 Esses limites impedem declarar autorrecuperacao operacional 24h ou pronta em
 producao. A entrega desta fase e o nucleo local, persistente e testavel.
+
+## 9. Aprofundamento de restart/recovery entre processos
+
+A primeira prova de restart fechava e reabria o SQLite dentro do mesmo
+interpretador Python. Isso comprova persistencia da conexao, mas nao reproduz
+integralmente a morte abrupta de um worker nem a concorrencia entre processos
+independentes.
+
+A ampliacao sobre o PR #56 adiciona provas com processos criados por `spawn`:
+
+1. um worker persiste `EXECUTING`, realiza um efeito local observavel e morre
+   dentro da Acao por `os._exit`, sem `finally` nem fechamento gracioso;
+2. a instancia seguinte encontra o evento preso, apresenta health `AMARELO`,
+   registra `ESCALAR_HUMANO` e nao repete automaticamente o efeito;
+3. dois processos independentes disputam o mesmo retry vencido e somente um
+   atravessa o compare-and-swap do SQLite e executa a Acao;
+4. a auditoria registra uma unica reivindicacao atomica e o evento termina com
+   `attempt=2`, sem duplicacao.
+
+Durante essa prova foi encontrado um defeito real no `salvar()` do SQLite:
+depois da reivindicacao inicial, os campos `nivel_autonomia` e `acao` eram
+atualizados apenas no objeto em memoria. O `ON CONFLICT` persistia estado e
+resultado, mas deixava os dois metadados nos valores iniciais `-1` e vazio.
+Isso comprometia proveniencia depois de restart. A ampliacao persiste ambos e
+prova a reabertura com os valores efetivamente decididos pelo motor.
+
+O timestamp da DLQ em memoria passa a ser UTC timezone-aware. Esta ampliacao
+nao torna a DLQ materializada persistente, nao cria tabela nova e nao muda o
+limite deliberado da secao 8.

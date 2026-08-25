@@ -203,12 +203,13 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # rotina de reconciliação de backlog por competência (macro §5), mesmo
   # padrão nominal.
   "test_reconciliacao_backlog_holerite_ponto.py"
-  # Excecoes exatas da autorrecuperacao segura (2026-08-25). Os tres
+  # Excecoes exatas da autorrecuperacao segura (2026-08-25). Os quatro
   # testes sao permanentes do Orquestrador; nenhum outro test_*.py e
   # liberado por prefixo.
   "test_magnata_os_orquestrador_autorrecuperacao.py"
   "test_magnata_os_orquestrador_concurrency.py"
   "test_magnata_os_orquestrador_crash_consistency.py"
+  "test_magnata_os_orquestrador_fila_desistencia.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
