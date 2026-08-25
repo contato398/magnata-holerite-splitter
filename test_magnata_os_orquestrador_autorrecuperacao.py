@@ -28,6 +28,11 @@ from magnata_os.orquestrador.repositorio_execucoes import (
     RepositorioExecucoesSQLite,
 )
 from magnata_os.orquestrador.saude_motor import MonitorSaudemotorPersistente
+from magnata_os.orquestrador.supervisor import (
+    ModoSupervisor,
+    PermissaoSupervisorAtivoAusente,
+    SupervisorOrquestrador,
+)
 
 
 INSTANTE = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
@@ -212,6 +217,106 @@ def test_falha_da_auditoria_bloqueia_retry_antes_do_side_effect():
 
     assert chamadas == ['retry-sem-audit']
     assert repo.buscar_por_event_id('retry-sem-audit').estado == EstadoExecucao.FAILED_RETRYABLE
+
+
+def test_supervisor_shadow_observa_sem_escrever_nem_executar():
+    repo = RepositorioExecucoesEmMemoria()
+    chamadas = []
+
+    def acao(evento):
+        chamadas.append(evento.event_id)
+        raise FalhaTransitoria('timeout')
+
+    _, registro = _preparar_falha_retentavel(repo, _evento('shadow-retry'), acao)
+    registro.next_retry_at = INSTANTE - timedelta(seconds=1)
+    repo.salvar(registro)
+    auditoria_antes = list(repo.listar_auditoria(registro.event_id))
+    recuperacoes_antes = list(repo.listar_recuperacoes(registro.event_id))
+
+    snapshot = SupervisorOrquestrador(
+        repo,
+        modo=ModoSupervisor.SHADOW,
+        relogio=lambda: INSTANTE,
+    ).executar_ciclo()
+
+    assert snapshot.retry_vencido_event_ids == ('shadow-retry',)
+    assert snapshot.recuperacoes == ()
+    assert chamadas == ['shadow-retry']
+    assert repo.buscar_por_event_id(registro.event_id).estado == EstadoExecucao.FAILED_RETRYABLE
+    assert repo.listar_auditoria(registro.event_id) == auditoria_antes
+    assert repo.listar_recuperacoes(registro.event_id) == recuperacoes_antes
+
+
+def test_supervisor_shadow_resume_health_dlq_e_estado_em_andamento():
+    repo = RepositorioExecucoesEmMemoria()
+    repo.salvar(_registro('falha-final', EstadoExecucao.FAILED_FINAL))
+    repo.salvar(_registro('preso', EstadoExecucao.EXECUTING))
+
+    snapshot = SupervisorOrquestrador(
+        repo,
+        relogio=lambda: INSTANTE,
+    ).executar_ciclo()
+    resumo = snapshot.resumo_json()
+
+    assert resumo['modo'] == 'SHADOW'
+    assert resumo['dlq_ativa_event_ids'] == ['falha-final']
+    assert resumo['eventos_em_andamento_event_ids'] == ['preso']
+    assert resumo['estados'] == {'EXECUTING': 1, 'FAILED_FINAL': 1}
+    assert resumo['recuperacoes_total'] == 0
+
+
+def test_supervisor_active_sem_gate_expresso_falha_antes_de_recuperar():
+    repo = RepositorioExecucoesEmMemoria()
+    coordenador = CoordenadorAutorrecuperacao(
+        repo,
+        MotorOrquestrador(repo, {}),
+        relogio=lambda: INSTANTE,
+    )
+
+    with pytest.raises(PermissaoSupervisorAtivoAusente):
+        SupervisorOrquestrador(
+            repo,
+            modo=ModoSupervisor.ACTIVE,
+            coordenador=coordenador,
+            relogio=lambda: INSTANTE,
+        ).executar_ciclo()
+
+
+def test_supervisor_active_com_gate_reutiliza_coordenador_existente():
+    repo = RepositorioExecucoesEmMemoria()
+    chamadas = []
+
+    def acao(evento):
+        chamadas.append(evento.event_id)
+        if len(chamadas) == 1:
+            raise FalhaTransitoria('timeout antes do efeito')
+        return ResultadoAcao(sucesso=True, evidencia='recuperado pelo supervisor')
+
+    motor, registro = _preparar_falha_retentavel(
+        repo, _evento('active-retry'), acao
+    )
+    registro.next_retry_at = INSTANTE - timedelta(seconds=1)
+    repo.salvar(registro)
+    coordenador = CoordenadorAutorrecuperacao(
+        repo, motor, relogio=lambda: INSTANTE
+    )
+
+    snapshot = SupervisorOrquestrador(
+        repo,
+        modo=ModoSupervisor.ACTIVE,
+        coordenador=coordenador,
+        autorizar_execucao_ativa=True,
+        relogio=lambda: INSTANTE,
+    ).executar_ciclo()
+
+    assert [r.decisao for r in snapshot.recuperacoes] == [
+        DecisaoRecuperacao.RETRY_EXECUTADO
+    ]
+    assert repo.buscar_por_event_id('active-retry').estado == EstadoExecucao.SUCCEEDED
+    assert chamadas == ['active-retry', 'active-retry']
+    assert snapshot.estados == {'SUCCEEDED': 1}
+    assert snapshot.retry_vencido_event_ids == ()
+    assert snapshot.saude.eventos_sucesso == 1
 
 
 def test_kill_switch_e_reavaliado_e_bloqueia_retry_existente():
