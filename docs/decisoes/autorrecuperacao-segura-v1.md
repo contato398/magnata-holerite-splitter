@@ -3,9 +3,9 @@
 **Data:** 2026-08-25
 
 **Estado:** nucleo V1 mesclado pelo PR #56; prova multiprocesso/restart
-mesclada pelo PR #57 em
-`main@bfcdbfb3963338b6c31a6e030a7ccfab2b1bb4ac`; visao persistente da DLQ
-ativa em evolucao local, ainda sem commit/PR/merge/deploy
+mesclada pelo PR #57; visao persistente da DLQ ativa mesclada pelo PR #58 em
+`main@c01933231c844768fe7207fbbba2950972479247`; supervisor periodico em
+shadow mode em evolucao local, ainda sem commit/PR/merge/deploy
 
 **Base original:** `main@988722d0816315f9d60d89f83e683542463a3a88` (PR #55)
 
@@ -105,7 +105,11 @@ Os testes cobrem:
 
 ## 8. Limites restantes
 
-- O coordenador ainda nao esta conectado a um scheduler/servico permanente.
+- O workflow periodico executa o supervisor somente em shadow mode. Ele gera
+  snapshot de health, DLQ, retries vencidos e eventos em andamento, sem
+  reivindicar retry, gravar auditoria ou chamar Acao.
+- O modo ativo existe como composicao sobre o coordenador atual, mas exige gate
+  explicito em codigo e ainda nao esta habilitado no workflow nem em producao.
 - O SQLite do workflow atual e efemero em cada runner do GitHub Actions;
   portanto nao prova recuperacao entre runs autonomos.
 - A fila de notificacao do processo continua em memoria, mas a DLQ ativa agora
@@ -149,3 +153,16 @@ prova a reabertura com os valores efetivamente decididos pelo motor.
 O timestamp da DLQ em memoria passa a ser UTC timezone-aware. Esta ampliacao
 nao torna a DLQ materializada persistente, nao cria tabela nova e nao muda o
 limite deliberado da secao 8.
+
+## 10. Supervisor periodico em shadow mode
+
+O supervisor nao e um segundo Orquestrador. Ele le o mesmo
+`RepositorioExecucoes` usado pelo motor, health e DLQ, e produz um snapshot
+serializavel para observabilidade e futuro painel. O cron existente chama o
+modo `SHADOW`, que por contrato nao executa recuperacoes nem produz escrita
+operacional.
+
+O modo `ACTIVE` apenas delega ao `CoordenadorAutorrecuperacao` existente e
+exige `autorizar_execucao_ativa=True` no ponto de composicao. Variavel de
+ambiente isolada nao basta para remover esse gate. Essa separacao permite
+acumular evidencia operacional antes de habilitar autonomia consequencial.
