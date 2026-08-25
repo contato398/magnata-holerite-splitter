@@ -335,9 +335,10 @@ class TestDuplaExecucaoForcada:
             assert len(execucoes) == 0
             # O vencedor bateu no timeout do barrier sozinho (classificado
             # como falha permanente -- RuntimeError desconhecida); o
-            # perdedor foi recusado antes de qualquer tentativa
+            # perdedor foi recusado antes de qualquer tentativa e ja
+            # enxerga EXECUTING, persistido pelo vencedor antes da Acao
             assert EstadoExecucao.FAILED_FINAL in resultados
-            assert EstadoExecucao.RECEIVED in resultados
+            assert EstadoExecucao.EXECUTING in resultados
 
     def test_dupla_execucao_evento_novo_cinco_workers_com_delay(self):
         """5 workers verdadeiramente concorrentes (Ação com sleep real)
@@ -381,7 +382,7 @@ class TestDuplaExecucaoForcada:
             # verdadeiramente concorrentes
             assert len(execucoes) == 1
             assert resultados.count(EstadoExecucao.SUCCEEDED) == 1
-            assert resultados.count(EstadoExecucao.RECEIVED) == 4
+            assert resultados.count(EstadoExecucao.EXECUTING) == 4
 
             # Caminho comum pós-conclusão continua correto: novo
             # processar() reconhece SUCCEEDED, não reexecuta

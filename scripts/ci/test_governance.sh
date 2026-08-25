@@ -2152,6 +2152,60 @@ test_88_other_scripts_file_still_blocked() {
   rm -f scripts/outro_script_qualquer.py
 }
 
+# TEST 89: a fase de autorrecuperacao libera somente seus nove caminhos
+# exatos (codigo, decisao e testes), usando a mesma fonte canonica do hook.
+test_89_autorecovery_exact_files_accepted() {
+  run_test 89 "Os 9 caminhos exatos da autorrecuperacao segura sao aceitos" "PASS"
+
+  cd "$TEST_REPO"
+  mkdir -p magnata_os/orquestrador docs/decisoes
+  local files=(
+    "magnata_os/orquestrador/autorrecuperacao.py"
+    "magnata_os/orquestrador/politica_recuperacao.py"
+    "magnata_os/orquestrador/eventos.py"
+    "magnata_os/orquestrador/motor.py"
+    "magnata_os/orquestrador/repositorio_execucoes.py"
+    "docs/decisoes/autorrecuperacao-segura-v1.md"
+    "test_magnata_os_orquestrador_autorrecuperacao.py"
+    "test_magnata_os_orquestrador_concurrency.py"
+    "test_magnata_os_orquestrador_crash_consistency.py"
+  )
+  local file
+  for file in "${files[@]}"; do
+    echo "# autorrecuperacao segura" > "$file"
+  done
+  git add "${files[@]}"
+
+  if git commit -m "feat: teste 89 caminhos exatos da autorrecuperacao" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD "${files[@]}" 2>/dev/null || true
+  rm -f "${files[@]}"
+}
+
+# TEST 90: nome semelhante no mesmo pacote continua bloqueado. A excecao
+# nao abre magnata_os/orquestrador/ inteiro.
+test_90_other_orchestrator_file_still_blocked() {
+  run_test 90 "Outro arquivo do Orquestrador continua bloqueado" "FAIL"
+
+  cd "$TEST_REPO"
+  mkdir -p magnata_os/orquestrador
+  echo "# fora do escopo" > magnata_os/orquestrador/autorrecuperacao_extra.py
+  git add magnata_os/orquestrador/autorrecuperacao_extra.py
+
+  if git commit -m "feat: teste 90 caminho semelhante nao autorizado" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+
+  git reset -q HEAD magnata_os/orquestrador/autorrecuperacao_extra.py 2>/dev/null || true
+  rm -f magnata_os/orquestrador/autorrecuperacao_extra.py
+}
+
 main() {
   echo -e "${BLUE}===================================="
   echo "SUÍTE DE TESTES DE GOVERNANÇA"
@@ -2256,6 +2310,8 @@ main() {
   test_86_allowed_paths_single_source_of_truth || true
   test_87_pacote_holerite_ponto_files_accepted || true
   test_88_other_scripts_file_still_blocked || true
+  test_89_autorecovery_exact_files_accepted || true
+  test_90_other_orchestrator_file_still_blocked || true
 
   # Report
   echo ""

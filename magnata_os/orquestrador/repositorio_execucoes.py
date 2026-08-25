@@ -59,6 +59,9 @@ class RepositorioExecucoes(Protocol):
     def buscar_por_event_id(self, event_id: str) -> Optional[RegistroExecucao]: ...
     def salvar(self, registro: RegistroExecucao) -> None: ...
     def criar_se_novo(self, registro: RegistroExecucao) -> bool: ...
+    def reivindicar_retry(
+        self, event_id: str, reivindicado_em: datetime,
+    ) -> Optional[RegistroExecucao]: ...
     def listar_todos(self) -> List[RegistroExecucao]: ...
     def registrar_auditoria(
         self,
@@ -69,6 +72,8 @@ class RepositorioExecucoes(Protocol):
         motivo: Optional[str] = None,
     ) -> None: ...
     def listar_auditoria(self, event_id: str) -> List['RegistroAuditoria']: ...
+    def registrar_recuperacao(self, registro: 'RegistroRecuperacao') -> None: ...
+    def listar_recuperacoes(self, event_id: str) -> List['RegistroRecuperacao']: ...
     def fechar(self) -> None: ...
 
 
@@ -79,6 +84,7 @@ class RepositorioExecucoesEmMemoria:
     def __init__(self) -> None:
         self._dados: dict = {}
         self._auditoria: dict = {}  # event_id -> list of RegistroAuditoria
+        self._recuperacoes: dict = {}  # event_id -> list of RegistroRecuperacao
         # Lock so criar_se_novo seja realmente atomico entre threads --
         # sem isso, duas threads podem ambas ver event_id ausente e
         # ambas "ganhar" a reivindicacao (achado da reconciliacao: prova
@@ -103,6 +109,35 @@ class RepositorioExecucoesEmMemoria:
                 return False
             self._dados[registro.event_id] = registro
             return True
+
+    def reivindicar_retry(
+        self, event_id: str, reivindicado_em: datetime,
+    ) -> Optional[RegistroExecucao]:
+        """Reivindica atomicamente uma retentativa.
+
+        A mudanca ``FAILED_RETRYABLE -> EXECUTING`` e a contagem da
+        tentativa acontecem dentro do mesmo lock. Se outro worker ja
+        reivindicou, retorna ``None`` e nenhuma Acao deve ser chamada.
+        """
+        with self._lock:
+            registro = self._dados.get(event_id)
+            if registro is None or registro.estado != EstadoExecucao.FAILED_RETRYABLE:
+                return None
+            estado_anterior = registro.estado
+            registro.estado = EstadoExecucao.EXECUTING
+            registro.attempt += 1
+            registro.next_retry_at = None
+            registro.atualizado_em = reivindicado_em
+            self._auditoria.setdefault(event_id, []).append(
+                RegistroAuditoria(
+                    event_id=event_id,
+                    estado_anterior=estado_anterior.value,
+                    estado_novo=EstadoExecucao.EXECUTING.value,
+                    registrado_em=reivindicado_em,
+                    motivo='retry_reivindicado_atomicamente',
+                )
+            )
+            return registro
 
     def listar_todos(self) -> List[RegistroExecucao]:
         return list(self._dados.values())
@@ -130,6 +165,12 @@ class RepositorioExecucoesEmMemoria:
     def listar_auditoria(self, event_id: str) -> List[RegistroAuditoria]:
         """Recupera histórico de transições para um evento."""
         return self._auditoria.get(event_id, [])
+
+    def registrar_recuperacao(self, registro: 'RegistroRecuperacao') -> None:
+        self._recuperacoes.setdefault(registro.event_id, []).append(registro)
+
+    def listar_recuperacoes(self, event_id: str) -> List['RegistroRecuperacao']:
+        return list(self._recuperacoes.get(event_id, []))
 
     def fechar(self) -> None:
         """No-op -- sem recurso externo para liberar (paridade de interface
@@ -166,6 +207,16 @@ _DDL_AUDIT = '''CREATE TABLE IF NOT EXISTS auditoria (
     motivo TEXT
 )'''
 
+_DDL_RECUPERACAO = '''CREATE TABLE IF NOT EXISTS auditoria_recuperacao (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL,
+    decisao TEXT NOT NULL,
+    estado_observado TEXT NOT NULL,
+    registrado_em TEXT NOT NULL,
+    motivo TEXT NOT NULL,
+    evidencia TEXT
+)'''
+
 
 @dataclasses.dataclass(frozen=True)
 class RegistroAuditoria:
@@ -178,6 +229,22 @@ class RegistroAuditoria:
     motivo: Optional[str] = None
 
 
+@dataclasses.dataclass(frozen=True)
+class RegistroRecuperacao:
+    """Decisao imutavel da autorrecuperacao, separada das transicoes.
+
+    Esta trilha e append-only e guarda tanto tentativas executadas quanto
+    decisoes fail-safe de aguardar, abrir circuito ou escalar ao humano.
+    """
+
+    event_id: str
+    decisao: str
+    estado_observado: str
+    registrado_em: datetime
+    motivo: str
+    evidencia: Optional[str] = None
+
+
 class RepositorioExecucoesSQLite:
     """Persistencia real, arquivo local (nunca producao -- o caminho e
     sempre local ao processo que roda o motor: CI efemero ou sessao)."""
@@ -188,6 +255,7 @@ class RepositorioExecucoesSQLite:
         self._conn = sqlite3.connect(str(caminho_db))
         self._conn.execute(_DDL)
         self._conn.execute(_DDL_AUDIT)
+        self._conn.execute(_DDL_RECUPERACAO)
         self._conn.commit()
 
     def buscar_por_event_id(self, event_id: str) -> Optional[RegistroExecucao]:
@@ -287,6 +355,49 @@ class RepositorioExecucoesSQLite:
             self._conn.rollback()
             return False
 
+    def reivindicar_retry(
+        self, event_id: str, reivindicado_em: datetime,
+    ) -> Optional[RegistroExecucao]:
+        """Compare-and-swap persistente para impedir retry duplicado.
+
+        Apenas um processo consegue trocar ``FAILED_RETRYABLE`` por
+        ``EXECUTING``. A transicao, o incremento de ``attempt`` e a
+        auditoria correspondente pertencem a uma unica transacao.
+        """
+        try:
+            cur = self._conn.execute(
+                '''UPDATE execucoes
+                   SET estado = ?, attempt = attempt + 1, next_retry_at = NULL,
+                       atualizado_em = ?
+                   WHERE event_id = ? AND estado = ?''',
+                (
+                    EstadoExecucao.EXECUTING.value,
+                    reivindicado_em.isoformat(),
+                    event_id,
+                    EstadoExecucao.FAILED_RETRYABLE.value,
+                ),
+            )
+            if cur.rowcount != 1:
+                self._conn.rollback()
+                return None
+            self._conn.execute(
+                '''INSERT INTO auditoria
+                   (event_id, estado_anterior, estado_novo, registrado_em, motivo)
+                   VALUES (?,?,?,?,?)''',
+                (
+                    event_id,
+                    EstadoExecucao.FAILED_RETRYABLE.value,
+                    EstadoExecucao.EXECUTING.value,
+                    reivindicado_em.isoformat(),
+                    'retry_reivindicado_atomicamente',
+                ),
+            )
+            self._conn.commit()
+            return self.buscar_por_event_id(event_id)
+        except Exception:
+            self._conn.rollback()
+            raise
+
     def listar_todos(self) -> List[RegistroExecucao]:
         cur = self._conn.execute('SELECT event_id FROM execucoes')
         return [self.buscar_por_event_id(r[0]) for r in cur.fetchall()]
@@ -326,6 +437,42 @@ class RepositorioExecucoesSQLite:
                 estado_novo=r[2],
                 registrado_em=datetime.fromisoformat(r[3]),
                 motivo=r[4],
+            )
+            for r in cur.fetchall()
+        ]
+
+    def registrar_recuperacao(self, registro: RegistroRecuperacao) -> None:
+        self._conn.execute(
+            '''INSERT INTO auditoria_recuperacao
+               (event_id, decisao, estado_observado, registrado_em, motivo, evidencia)
+               VALUES (?,?,?,?,?,?)''',
+            (
+                registro.event_id,
+                registro.decisao,
+                registro.estado_observado,
+                registro.registrado_em.isoformat(),
+                registro.motivo,
+                registro.evidencia,
+            ),
+        )
+        self._conn.commit()
+
+    def listar_recuperacoes(self, event_id: str) -> List[RegistroRecuperacao]:
+        cur = self._conn.execute(
+            '''SELECT event_id, decisao, estado_observado, registrado_em,
+                      motivo, evidencia
+               FROM auditoria_recuperacao
+               WHERE event_id = ? ORDER BY id ASC''',
+            (event_id,),
+        )
+        return [
+            RegistroRecuperacao(
+                event_id=r[0],
+                decisao=r[1],
+                estado_observado=r[2],
+                registrado_em=datetime.fromisoformat(r[3]),
+                motivo=r[4],
+                evidencia=r[5],
             )
             for r in cur.fetchall()
         ]

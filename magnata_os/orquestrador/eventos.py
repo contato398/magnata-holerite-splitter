@@ -80,7 +80,11 @@ TRANSICOES_VALIDAS: Mapping[EstadoExecucao, Tuple[EstadoExecucao, ...]] = {
         EstadoExecucao.SUCCEEDED, EstadoExecucao.FAILED_RETRYABLE, EstadoExecucao.FAILED_FINAL,
         EstadoExecucao.RECEIVED,
     ),
-    EstadoExecucao.FAILED_RETRYABLE: (EstadoExecucao.EXECUTING, EstadoExecucao.FAILED_FINAL),
+    EstadoExecucao.FAILED_RETRYABLE: (
+        EstadoExecucao.EXECUTING,
+        EstadoExecucao.FAILED_FINAL,
+        EstadoExecucao.WAITING_GATE,
+    ),
     EstadoExecucao.SUCCEEDED: (),
     EstadoExecucao.FAILED_FINAL: (EstadoExecucao.RECEIVED,),  # replay manual
     EstadoExecucao.IGNORED: (),

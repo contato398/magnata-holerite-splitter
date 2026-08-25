@@ -310,9 +310,9 @@ class TestCrashBeforeSave:
             repo1.fechar()
 
             # SESSÃO 2: Restart -- um processar() comum NÃO reexecuta.
-            # O registro ficou em RECEIVED (única gravação que
-            # criar_se_novo fez; SUCCEEDED nunca foi persistido pelo
-            # crash). Isso é "em andamento" do ponto de vista de
+            # O registro ficou em EXECUTING, persistido antes da Acao;
+            # SUCCEEDED nunca foi persistido pelo crash. Isso e "em
+            # andamento" do ponto de vista de
             # processar(), então ele recusa e devolve como está --
             # nunca reexecuta a Ação sem saber se o worker 1 morreu de
             # verdade ou só está lento.
@@ -324,7 +324,7 @@ class TestCrashBeforeSave:
             )
 
             resultado_processar = motor2.processar(evento)
-            assert resultado_processar.estado == EstadoExecucao.RECEIVED
+            assert resultado_processar.estado == EstadoExecucao.EXECUTING
             # Ação NÃO foi reexecutada por um processar() comum
             assert side_effects.count('evt-crash-6') == 1
 
