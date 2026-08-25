@@ -157,9 +157,44 @@ class MotorOrquestrador:
                 self._repo.salvar(existente)
                 self._emitir('gate_por_acao_ausente', event_id=evento.event_id)
                 return existente
+
+            # Uma retentativa nao pode reutilizar cegamente a decisao de
+            # autonomia da primeira tentativa: KILL_SWITCH e politica sao
+            # relidos imediatamente antes de qualquer nova Acao. Isso fecha
+            # o bypass em que um evento FAILED_RETRYABLE podia executar
+            # mesmo depois de a automacao ter sido suspensa.
+            nivel_retry = NivelAutonomia(
+                aplicar_kill_switch_bloqueio(int(nivel_para(evento.event_type)))
+            )
+            if nivel_retry != NivelAutonomia.EXECUTE_SAFE:
+                existente.nivel_autonomia = int(nivel_retry)
+                existente = self._transicionar(existente, EstadoExecucao.WAITING_GATE)
+                existente.resultado = f'retry bloqueado -- nivel {nivel_retry.name}'
+                self._repo.salvar(existente)
+                self._emitir(
+                    'retry_bloqueado_por_politica',
+                    event_id=evento.event_id,
+                    nivel=nivel_retry.name,
+                )
+                return existente
+
+            # Compare-and-swap no repositorio. Dois workers podem observar
+            # FAILED_RETRYABLE ao mesmo tempo, mas somente um consegue
+            # persistir FAILED_RETRYABLE -> EXECUTING e incrementar attempt.
+            # O perdedor nunca chama a Acao.
+            reivindicado = self._repo.reivindicar_retry(evento.event_id, agora())
+            if reivindicado is None:
+                atual = self._repo.buscar_por_event_id(evento.event_id)
+                self._emitir(
+                    'retry_perdeu_corrida_de_reivindicacao',
+                    event_id=evento.event_id,
+                )
+                return atual if atual is not None else existente
             self._emitir('evento_recebido', event_id=evento.event_id, tipo=evento.event_type.value,
                           retentativa=True)
-            return self._executar_e_registrar(existente, evento, acao)
+            return self._executar_e_registrar(
+                reivindicado, evento, acao, retry_ja_reivindicado=True,
+            )
 
         if existente is None:
             # REIVINDICACAO ATOMICA: fecha a janela de corrida em que dois
@@ -251,14 +286,24 @@ class MotorOrquestrador:
         return self._executar_e_registrar(registro, evento, acao)
 
     def _executar_e_registrar(
-        self, registro: RegistroExecucao, evento: Evento, acao: Acao,
+        self,
+        registro: RegistroExecucao,
+        evento: Evento,
+        acao: Acao,
+        retry_ja_reivindicado: bool = False,
     ) -> RegistroExecucao:
         """Passos 4 (execucao) a 6 (registro), compartilhados entre a
         primeira tentativa e cada retentativa -- para que os dois
         caminhos apliquem exatamente a mesma validacao de resultado
         (nenhum caminho proibido) e a mesma contagem de tentativas."""
-        registro = self._transicionar(registro, EstadoExecucao.EXECUTING)
-        registro.attempt += 1
+        if not retry_ja_reivindicado:
+            registro = self._transicionar(registro, EstadoExecucao.EXECUTING)
+            registro.attempt += 1
+
+            # Persistir EXECUTING antes do side effect. Se o worker morrer
+            # durante a Acao, o restart encontra um evento preso e exige
+            # replay humano; nunca confunde o crash com retry seguro.
+            self._repo.salvar(registro)
         self._emitir('acao_executando', event_id=evento.event_id, tentativa=registro.attempt)
 
         # DRY_RUN: simula execucao sem side effect
@@ -460,3 +505,17 @@ class MotorOrquestrador:
 
         # Reexecutar com _executar_e_registrar
         return self._executar_e_registrar(registro, evento, acao)
+
+    def carregar_evento(self, event_id: str) -> Evento:
+        """Reconstrói o envelope persistido sem expor o formato JSON.
+
+        Usado por coordenadores externos ao motor (como a
+        autorrecuperacao) depois que eles aplicam suas proprias politicas.
+        Nao executa Acao e nao muda estado.
+        """
+        registro = self._repo.buscar_por_event_id(event_id)
+        if registro is None:
+            raise ValueError(f'Evento não encontrado: {event_id}')
+        if registro.evento_json is None:
+            raise ValueError(f'Evento não foi persistido: {event_id}')
+        return _desserializar_evento(registro.evento_json)

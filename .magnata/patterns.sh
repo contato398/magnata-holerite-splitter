@@ -451,6 +451,20 @@ ALLOWED_PATHS=(
   "^src/sync_new_employees\.py$"
   "^test_leitura_ponto\.py$"
   "^test_folha_ponto_v2_21\.py$"
+  # Excecao exata e restrita (branch
+  # fix/orquestrador-autorrecuperacao-segura, 2026-08-25) — nucleo de
+  # autorrecuperacao sobre health persistente. Somente os arquivos
+  # efetivamente alterados por esta fase; nao libera "^magnata_os/",
+  # "^docs/decisoes/" nem "^test_" de forma ampla.
+  "^magnata_os/orquestrador/autorrecuperacao\.py$"
+  "^magnata_os/orquestrador/politica_recuperacao\.py$"
+  "^magnata_os/orquestrador/eventos\.py$"
+  "^magnata_os/orquestrador/motor\.py$"
+  "^magnata_os/orquestrador/repositorio_execucoes\.py$"
+  "^docs/decisoes/autorrecuperacao-segura-v1\.md$"
+  "^test_magnata_os_orquestrador_autorrecuperacao\.py$"
+  "^test_magnata_os_orquestrador_concurrency\.py$"
+  "^test_magnata_os_orquestrador_crash_consistency\.py$"
 )
 
 # ============================================================================
