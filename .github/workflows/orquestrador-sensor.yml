@@ -62,8 +62,18 @@ jobs:
       - name: Observar health, DLQ e recovery em shadow mode
         # Usa o mesmo repositorio do run. Este passo nunca reivindica retry,
         # nunca chama Acao e nunca altera sistemas externos; apenas publica
-        # no log o snapshot que futuramente alimentara o painel operacional.
-        run: python scripts/ci/orquestrador_supervisor_shadow.py
+        # no log e em artifact o snapshot que futuramente alimentara o painel.
+        run: |
+          python scripts/ci/orquestrador_supervisor_shadow.py \
+            --output .orquestrador_ci/supervisor-shadow.json
+
+      - name: Preservar evidencia do supervisor shadow
+        uses: actions/upload-artifact@v4
+        with:
+          name: supervisor-shadow-${{ github.run_id }}
+          path: .orquestrador_ci/supervisor-shadow.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Verificar se algo mudou
         id: mudou
