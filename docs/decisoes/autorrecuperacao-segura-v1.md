@@ -3,9 +3,9 @@
 **Data:** 2026-08-25
 
 **Estado:** nucleo V1 mesclado pelo PR #56; prova multiprocesso/restart
-mesclada pelo PR #57; visao persistente da DLQ ativa mesclada pelo PR #58 em
-`main@c01933231c844768fe7207fbbba2950972479247`; supervisor periodico em
-shadow mode em evolucao local, ainda sem commit/PR/merge/deploy
+mesclada pelo PR #57; visao persistente da DLQ ativa mesclada pelo PR #58;
+supervisor periodico em shadow mode mesclado pelo PR #59 em
+`main@810b1e1d4d88cdb8cf1e495932cba946b0167b99`; sem modo ativo e sem deploy
 
 **Base original:** `main@988722d0816315f9d60d89f83e683542463a3a88` (PR #55)
 
@@ -166,3 +166,10 @@ O modo `ACTIVE` apenas delega ao `CoordenadorAutorrecuperacao` existente e
 exige `autorizar_execucao_ativa=True` no ponto de composicao. Variavel de
 ambiente isolada nao basta para remover esse gate. Essa separacao permite
 acumular evidencia operacional antes de habilitar autonomia consequencial.
+
+Cada ciclo agendado tambem preserva o JSON do snapshot como artifact do
+GitHub Actions por 14 dias. O artifact e evidencia observacional temporaria:
+nao contem o SQLite, nao e memoria operacional, nao habilita recovery e nao
+se torna uma segunda fonte de verdade. A persistencia duravel entre runs
+continua dependendo de um backend do `RepositorioExecucoes` explicitamente
+projetado, testado e provisionado sob gate proprio.

@@ -1,6 +1,9 @@
 """Provas da autorrecuperacao segura, inclusive restart e concorrencia."""
+import json
 import multiprocessing
 import os
+import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -245,6 +248,33 @@ def test_supervisor_shadow_observa_sem_escrever_nem_executar():
     assert repo.buscar_por_event_id(registro.event_id).estado == EstadoExecucao.FAILED_RETRYABLE
     assert repo.listar_auditoria(registro.event_id) == auditoria_antes
     assert repo.listar_recuperacoes(registro.event_id) == recuperacoes_antes
+
+
+def test_script_supervisor_shadow_preserva_snapshot_json_atomico(tmp_path):
+    db = tmp_path / 'execucoes.db'
+    output = tmp_path / 'evidencias' / 'supervisor-shadow.json'
+
+    processo = subprocess.run(
+        [
+            sys.executable,
+            'scripts/ci/orquestrador_supervisor_shadow.py',
+            '--db',
+            str(db),
+            '--output',
+            str(output),
+        ],
+        cwd=Path(__file__).parent,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert processo.returncode == 0, processo.stderr
+    snapshot = json.loads(output.read_text(encoding='utf-8'))
+    assert snapshot['modo'] == 'SHADOW'
+    assert snapshot['recuperacoes_total'] == 0
+    assert json.loads(processo.stdout) == snapshot
+    assert not output.with_suffix('.json.tmp').exists()
 
 
 def test_supervisor_shadow_resume_health_dlq_e_estado_em_andamento():
