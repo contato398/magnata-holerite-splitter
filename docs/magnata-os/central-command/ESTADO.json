@@ -1,83 +1,39 @@
 {
   "autorizacoes_app_py": 13,
   "branches_fora_de_main": [
+    "claude/evolution-api-instances-1s9raa",
+    "claude/magnata-central-command-0n0713",
+    "claude/magnata-memory-audit-2c6bps",
     "feat/magnata-os-claude-powerpack",
     "feat/magnata-os-documental-modulo01-fase5-painel",
-    "fix/recibos-outros-documentos"
+    "fix/adr-modulo01-http-wiring",
+    "fix/auto-orquestrador-33bcde3-10",
+    "fix/auto-orquestrador-76b0046-2",
+    "fix/auto-orquestrador-76b0046-3",
+    "fix/auto-orquestrador-76b0046-4",
+    "fix/auto-orquestrador-76b0046-5",
+    "fix/auto-orquestrador-76b0046-6",
+    "fix/auto-orquestrador-810b1e1-9",
+    "fix/auto-orquestrador-bc42bbc-7",
+    "fix/auto-orquestrador-bfcdbfb-8",
+    "fix/competencia-fiscal-periodo-apuracao-sem-de",
+    "fix/gmail-adapter-fase1-inerte",
+    "fix/orquestrador-v1-reconciliacao",
+    "fix/recibos-outros-documentos",
+    "fix/status-funcionario-pii"
   ],
   "contexto": {
     "limite_atencao_tokens": 8000,
     "limite_trocar_sessao_tokens": 12000,
-    "medido_em": "2026-08-24T18:43:36.778227+00:00",
+    "medido_em": "2026-08-26T01:58:59.568594+00:00",
     "mensagem": null,
-    "razao_tier0_sobre_total": 0.0696,
-    "razao_tier1_sobre_total": 0.3634,
+    "metrica": "chars//4; ESTADO.contexto excluido da propria medicao",
+    "razao_tier0_sobre_total": 0.0698,
     "status_contexto": "NORMAL",
-    "tier0_bootstrap_minimo": {
-      "arquivos": {
-        "docs\\magnata-os\\central-command\\ESTADO.json": 1346,
-        "docs\\magnata-os\\central-command\\HANDOFF.md": 11048,
-        "docs\\magnata-os\\central-command\\INDEX.md": 12000
-      },
-      "chars": 24394,
-      "faltando": [],
-      "tokens_aprox": 6098
-    },
-    "tier1_onboarding_completo": {
-      "arquivos": {
-        "CLAUDE.md": 16028,
-        "docs\\magnata-os\\MAGNATA_OS_CENTRAL_COMMAND.md": 67812,
-        "docs\\magnata-os\\central-command\\ESTADO.json": 1346,
-        "docs\\magnata-os\\central-command\\HANDOFF.md": 11048,
-        "docs\\magnata-os\\central-command\\INDEX.md": 12000,
-        "docs\\magnata-os\\central-command\\MACRO_6A_RECONCILIACAO.md": 7092,
-        "docs\\magnata-os\\central-command\\MATRIZ_AUTONOMIA.md": 5783,
-        "docs\\magnata-os\\central-command\\TAXONOMIA_MEMORIA.md": 6198
-      },
-      "chars": 127307,
-      "faltando": [],
-      "tokens_aprox": 31826
-    },
-    "tier2_corpus_total": {
-      "arquivos": {
-        "docs\\magnata-os\\central-command\\ACTIONS_COMPLETED.md": 8854,
-        "docs\\magnata-os\\central-command\\AIRTABLE_DESACOPLAMENTO.md": 7215,
-        "docs\\magnata-os\\central-command\\AIRTABLE_LOGICA_OCULTA.md": 24983,
-        "docs\\magnata-os\\central-command\\ARCHITECTURE.md": 4439,
-        "docs\\magnata-os\\central-command\\ARQUITETURA_EVENTOS.md": 5761,
-        "docs\\magnata-os\\central-command\\ARQUITETURA_SNAPSHOT.json": 70932,
-        "docs\\magnata-os\\central-command\\AUDITORIA_ORQUESTRADOR.jsonl": 1269,
-        "docs\\magnata-os\\central-command\\BANCO_PROPRIO_MODELO.md": 8696,
-        "docs\\magnata-os\\central-command\\COBERTURA.md": 8719,
-        "docs\\magnata-os\\central-command\\DECISIONS.md": 13677,
-        "docs\\magnata-os\\central-command\\DIRECTIVES.md": 10918,
-        "docs\\magnata-os\\central-command\\ESTADO.json": 1346,
-        "docs\\magnata-os\\central-command\\FASE5_AUDITORIA.md": 8180,
-        "docs\\magnata-os\\central-command\\FORA_DO_GIT.md": 6748,
-        "docs\\magnata-os\\central-command\\FOUNDATION.md": 12989,
-        "docs\\magnata-os\\central-command\\GRAPHIFY.md": 12455,
-        "docs\\magnata-os\\central-command\\HANDOFF.md": 11048,
-        "docs\\magnata-os\\central-command\\HISTORICO.md": 11936,
-        "docs\\magnata-os\\central-command\\INDEX.md": 12000,
-        "docs\\magnata-os\\central-command\\MACRO_6A.md": 5157,
-        "docs\\magnata-os\\central-command\\MACRO_6A_RECONCILIACAO.md": 7092,
-        "docs\\magnata-os\\central-command\\MATRIZ_AUTONOMIA.md": 5783,
-        "docs\\magnata-os\\central-command\\MEMORIA_SENSIVEL.md": 5415,
-        "docs\\magnata-os\\central-command\\NEXT_ACTIONS.md": 9767,
-        "docs\\magnata-os\\central-command\\ORQUESTRADOR.md": 14801,
-        "docs\\magnata-os\\central-command\\PENDING.md": 6175,
-        "docs\\magnata-os\\central-command\\PII_HISTORICO_PLANO.md": 7124,
-        "docs\\magnata-os\\central-command\\PRS_AND_BRANCHES.md": 15666,
-        "docs\\magnata-os\\central-command\\RISKS.md": 7048,
-        "docs\\magnata-os\\central-command\\SOURCES_AND_PROVENANCE.md": 7907,
-        "docs\\magnata-os\\central-command\\SUPERSEDED_DECISIONS.md": 5356,
-        "docs\\magnata-os\\central-command\\TAXONOMIA_MEMORIA.md": 6198,
-        "docs\\magnata-os\\central-command\\WORK_IN_PROGRESS.md": 4653
-      },
-      "chars": 350307,
-      "faltando": [],
-      "tokens_aprox": 87576
-    }
+    "tier0_chars": 24285,
+    "tier0_tokens_aprox": 6071,
+    "tier2_chars": 348172,
+    "tier2_tokens_aprox": 87043
   },
   "cpf_em_documentacao": [],
   "documentos_central_command": [
@@ -114,10 +70,10 @@
   ],
   "graphify_snapshot_status": "sem_sinal_de_mudanca",
   "links_quebrados": [],
-  "main_assunto": "Merge pull request #47 from contato398/fix/orquestrador-gatilho-ci",
-  "main_data": "2026-08-23 20:57:04 -0300",
-  "main_sha": "76b0046",
-  "session_handoff_freshness": "atual",
+  "main_assunto": "feat(orquestrador): prepara persistencia duravel inerte (#61)",
+  "main_data": "2026-08-25 13:09:01 -0300",
+  "main_sha": "33bcde3",
+  "session_handoff_freshness": "desatualizado",
   "testes": {
     "falhando": 0,
     "passando": 712
