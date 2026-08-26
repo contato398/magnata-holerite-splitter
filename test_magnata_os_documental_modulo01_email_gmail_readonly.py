@@ -185,9 +185,9 @@ def test_paginacao_percorre_todos_os_next_page_tokens():
         paginas={
             None: {
                 'messages': [{'id': 'pagina-1'}],
-                'nextPageToken': 'TOKEN_2',
+                'nextPageToken': 'placeholder',
             },
-            'TOKEN_2': {'messages': [{'id': 'pagina-2'}]},
+            'placeholder': {'messages': [{'id': 'pagina-2'}]},
         },
     )
 
@@ -202,7 +202,7 @@ def test_paginacao_percorre_todos_os_next_page_tokens():
         ('messages.list', {
             'userId': 'me',
             'labelIds': ['LABEL_1'],
-            'pageToken': 'TOKEN_2',
+            'pageToken': 'placeholder',
         }),
     ]
 
