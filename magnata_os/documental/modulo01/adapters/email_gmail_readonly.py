@@ -161,8 +161,8 @@ def _extrair_pdfs(
 
         anexos.append(
             AnexoEmailRecebido(
-                nome_original=str(parte.get('filename') or '').strip(),
-                mime_type=str(parte.get('mimeType') or '').strip(),
+                nome_original=str(parte.get('filename') or ''),
+                mime_type=str(parte.get('mimeType') or ''),
                 conteudo=_decodificar_base64url(dado_b64),
             )
         )

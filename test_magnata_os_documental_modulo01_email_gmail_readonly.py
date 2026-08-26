@@ -277,6 +277,11 @@ def test_politica_pdf_aceita_mime_ou_extensao_e_preserva_origem():
             'body': {'data': _b64(b'E')},
         },
         {
+            'filename': ' arquivo.PDF ',
+            'mimeType': ' Application/PDF ',
+            'body': {'data': _b64(b'G')},
+        },
+        {
             'filename': 'arquivo.txt',
             'mimeType': 'text/plain',
             'body': {'data': _b64(b'F')},
@@ -297,6 +302,7 @@ def test_politica_pdf_aceita_mime_ou_extensao_e_preserva_origem():
         ('arquivo', 'application/pdf', b'C'),
         ('arquivo.txt', 'application/pdf', b'D'),
         ('arquivo.PDF', 'application/pdf', b'E'),
+        (' arquivo.PDF ', ' Application/PDF ', b'G'),
     ]
 
 
