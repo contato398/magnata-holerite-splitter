@@ -10,3 +10,8 @@ openpyxl==3.1.5
 celery==5.3.6
 redis==5.0.1
 psycopg[binary]==3.2.*
+
+# Cliente Gmail readonly. O adapter importa estas dependencias apenas nas
+# funcoes do recurso real; testes e Captura Shadow V1 usam duplos sem rede.
+google-api-python-client==2.149.0
+google-auth==2.35.0
