@@ -551,6 +551,10 @@ TIPO_DOC_REGRAS = [
     # primeiro e o recibo nunca é distinguido.
     ('DCTFWeb - Recibo de Entrega',
         [r'Recibo\s+de\s+Entrega.{0,60}DCTFWeb', r'DCTFWeb.{0,60}Recibo\s+de\s+Entrega']),
+    ('Guia DCTFWeb/DARF',
+        [r'Guia\s+(?:de\s+Recolhimento\s+)?(?:da\s+)?DCTFWeb\b',
+         r'DCTFWeb\s*[-–—:/]?\s*DARF\b',
+         r'DARF\s*[-–—:/]?(?:\s+da)?\s+DCTFWeb\b']),
     ('DCTFWeb - Declaração', [r'\bDCTFWeb\b']),
     ('FGTS', [r'FGTS\s+Digital', r'Guia\s+do\s+FGTS', r'\bGFD\b',
               r'Detalhe\s+da\s+Guia\s+Emitida', r'FGTS\s+Mensal\s+na\s+Guia',
