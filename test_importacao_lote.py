@@ -94,6 +94,7 @@ def test_listar_registros_publico_preserva_get_paginacao_campos_e_filtro():
         assert chamada.kwargs['params']['filterByFormula'] == (
             '{Folha Mensal}="Julho 2026"'
         )
+        assert chamada.kwargs['params']['returnFieldsByFieldId'] == 'true'
     assert get.call_args_list[1].kwargs['params']['offset'] == 'pagina-2'
     post.assert_not_called()
     patch_request.assert_not_called()
