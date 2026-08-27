@@ -47,18 +47,26 @@ class LeitorAirtableSomenteLeitura:
         Porta pública mínima para adapters read-only reutilizarem o mesmo
         transporte autenticado sem depender de ``_listar_todos``.
         """
-        return self._listar_todos(table_id, fields, filter_by_formula)
+        return self._listar_todos(
+            table_id,
+            fields,
+            filter_by_formula,
+            return_fields_by_field_id=True,
+        )
 
     def _listar_todos(
         self,
         table_id: str,
         fields: list[str],
         filter_by_formula: str | None = None,
+        return_fields_by_field_id: bool = False,
     ) -> list[dict]:
         registros: list[dict] = []
         offset = None
         while True:
             params = {'fields[]': fields, 'pageSize': 100}
+            if return_fields_by_field_id:
+                params['returnFieldsByFieldId'] = 'true'
             if filter_by_formula is not None:
                 params['filterByFormula'] = filter_by_formula
             if offset:
