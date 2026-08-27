@@ -219,6 +219,7 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_magnata_os_classificacao_contratos.py"
   "test_magnata_os_classificacao_prestacao_readiness.py"
   "test_magnata_os_classificacao_inventario_prestacao.py"
+  "test_airtable_inventario_prestacao.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
