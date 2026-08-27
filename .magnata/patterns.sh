@@ -390,6 +390,8 @@ ALLOWED_PATHS=(
   # Adapter Airtable shadow de inventario de extratos e seu teste nominal.
   "^magnata_os/documental/importacao_lote/adapters/airtable_inventario_prestacao\.py$"
   "^test_airtable_inventario_prestacao\.py$"
+  # Classificação nominal e conservadora da Guia DCTFWeb/DARF no legado.
+  "^test_classificacao_guia_dctfweb_darf\.py$"
   # Exceção exata e restrita (decisão registrada, branch
   # claude/macro-6a-commit-recovery-k7rsly, 2026-08-12) — Macro 6A,
   # auditoria e esteira documental. Somente estes 8 caminhos exatos de

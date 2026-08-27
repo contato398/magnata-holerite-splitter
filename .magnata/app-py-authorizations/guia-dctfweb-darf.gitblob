@@ -1,0 +1,4 @@
+# Autorizacao nominal: classificacao deterministica de Guia DCTFWeb/DARF.
+# Escopo: somente TIPO_DOC_REGRAS; sem roteamento, persistencia ou efeitos.
+# O blob exato invalida a autorizacao diante de qualquer mudanca adicional.
+31827199c2ba2211aac76796109877b49a32f036  app.py
