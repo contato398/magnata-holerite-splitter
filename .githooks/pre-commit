@@ -221,6 +221,7 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_magnata_os_classificacao_inventario_prestacao.py"
   "test_airtable_inventario_prestacao.py"
   "test_classificacao_guia_dctfweb_darf.py"
+  "test_prestacao_shadow_e2e.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
