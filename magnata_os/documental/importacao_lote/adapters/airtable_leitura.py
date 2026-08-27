@@ -36,11 +36,31 @@ class LeitorAirtableSomenteLeitura:
         self._headers = {'Authorization': f'Bearer {api_key}'}
         self._timeout = timeout
 
-    def _listar_todos(self, table_id: str, fields: list[str]) -> list[dict]:
+    def listar_registros(
+        self,
+        table_id: str,
+        fields: list[str],
+        filter_by_formula: str | None = None,
+    ) -> list[dict]:
+        """Lista registros via GET, com paginação e filtro opcionais.
+
+        Porta pública mínima para adapters read-only reutilizarem o mesmo
+        transporte autenticado sem depender de ``_listar_todos``.
+        """
+        return self._listar_todos(table_id, fields, filter_by_formula)
+
+    def _listar_todos(
+        self,
+        table_id: str,
+        fields: list[str],
+        filter_by_formula: str | None = None,
+    ) -> list[dict]:
         registros: list[dict] = []
         offset = None
         while True:
             params = {'fields[]': fields, 'pageSize': 100}
+            if filter_by_formula is not None:
+                params['filterByFormula'] = filter_by_formula
             if offset:
                 params['offset'] = offset
             r = requests.get(

@@ -59,6 +59,48 @@ def test_leitura_existentes_percorre_paginacao_airtable():
     assert get.call_args_list[1].kwargs['params']['offset'] == 'pagina-2'
 
 
+def test_listar_registros_publico_preserva_get_paginacao_campos_e_filtro():
+    primeira = Mock()
+    primeira.raise_for_status.return_value = None
+    primeira.json.return_value = {
+        'records': [{'id': 'recDOC1'}],
+        'offset': 'pagina-2',
+    }
+    segunda = Mock()
+    segunda.raise_for_status.return_value = None
+    segunda.json.return_value = {'records': [{'id': 'recDOC2'}]}
+    modulo = 'magnata_os.documental.importacao_lote.adapters.airtable_leitura.requests'
+
+    with (
+        patch(f'{modulo}.get', side_effect=[primeira, segunda]) as get,
+        patch(f'{modulo}.post') as post,
+        patch(f'{modulo}.patch') as patch_request,
+        patch(f'{modulo}.put') as put,
+        patch(f'{modulo}.delete') as delete,
+    ):
+        registros = LeitorAirtableSomenteLeitura(
+            'token-sintetico'
+        ).listar_registros(
+            table_id='tblDOCUMENTOS',
+            fields=['Tipo', 'Cliente'],
+            filter_by_formula='{Folha Mensal}="Julho 2026"',
+        )
+
+    assert registros == [{'id': 'recDOC1'}, {'id': 'recDOC2'}]
+    assert get.call_count == 2
+    for chamada in get.call_args_list:
+        assert chamada.args[0].endswith('/tblDOCUMENTOS')
+        assert chamada.kwargs['params']['fields[]'] == ['Tipo', 'Cliente']
+        assert chamada.kwargs['params']['filterByFormula'] == (
+            '{Folha Mensal}="Julho 2026"'
+        )
+    assert get.call_args_list[1].kwargs['params']['offset'] == 'pagina-2'
+    post.assert_not_called()
+    patch_request.assert_not_called()
+    put.assert_not_called()
+    delete.assert_not_called()
+
+
 def _gerar_pdf_real_sintetico(texto: str = 'documento sintetico de teste') -> bytes:
     """PDF de verdade (estrutura válida, parseável por pdfplumber), com
     texto sintético embutido — usado nos testes que passam pela
