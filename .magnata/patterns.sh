@@ -377,6 +377,12 @@ ALLOWED_PATHS=(
   "^magnata_os/documental/importacao_lote/orquestrador\.py$"
   "^test_importacao_lote\.py$"
   "^test_importacao_lote_escrita\.py$"
+  # Excecao exata e restrita (Document Resolution & Routing Shadow V1,
+  # contratos puros) — somente o pacote, seus contratos e o teste nominal.
+  # Nao libera magnata_os/classificacao/ nem test_*.py genericamente.
+  "^magnata_os/classificacao/__init__\.py$"
+  "^magnata_os/classificacao/contratos\.py$"
+  "^test_magnata_os_classificacao_contratos\.py$"
   # Exceção exata e restrita (decisão registrada, branch
   # claude/macro-6a-commit-recovery-k7rsly, 2026-08-12) — Macro 6A,
   # auditoria e esteira documental. Somente estes 8 caminhos exatos de
