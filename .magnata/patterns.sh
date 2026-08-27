@@ -397,6 +397,8 @@ ALLOWED_PATHS=(
   "^scripts/prestacao_readiness_shadow_real\.py$"
   "^test_prestacao_readiness_shadow_real\.py$"
   "^magnata_os/documental/importacao_lote/adapters/airtable_leitura\.py$"
+  "^magnata_os/classificacao/inventario_prestacao_resultados\.py$"
+  "^test_magnata_os_classificacao_inventario_prestacao_resultados\.py$"
   # Classificação nominal e conservadora da Guia DCTFWeb/DARF no legado.
   "^test_classificacao_guia_dctfweb_darf\.py$"
   # Exceção exata e restrita (decisão registrada, branch

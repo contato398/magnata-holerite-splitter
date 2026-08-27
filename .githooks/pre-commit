@@ -223,6 +223,7 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_classificacao_guia_dctfweb_darf.py"
   "test_prestacao_shadow_e2e.py"
   "test_prestacao_readiness_shadow_real.py"
+  "test_magnata_os_classificacao_inventario_prestacao_resultados.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
