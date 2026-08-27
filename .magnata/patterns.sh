@@ -383,6 +383,8 @@ ALLOWED_PATHS=(
   "^magnata_os/classificacao/__init__\.py$"
   "^magnata_os/classificacao/contratos\.py$"
   "^test_magnata_os_classificacao_contratos\.py$"
+  "^magnata_os/classificacao/prestacao_readiness\.py$"
+  "^test_magnata_os_classificacao_prestacao_readiness\.py$"
   # Exceção exata e restrita (decisão registrada, branch
   # claude/macro-6a-commit-recovery-k7rsly, 2026-08-12) — Macro 6A,
   # auditoria e esteira documental. Somente estes 8 caminhos exatos de
