@@ -2259,6 +2259,34 @@ test_92_other_orchestrator_migration_still_blocked() {
   rm -f magnata_os/orquestrador/migrations/0002_nao_autorizada.sql
 }
 
+# TEST 93: o protocolo Codex libera somente AGENTS.md na raiz.
+test_93_root_agents_exact_path_only() {
+  run_test 93 "AGENTS.md raiz e aceito sem liberar variantes ou subdiretorios" "PASS"
+
+  cd "$TEST_REPO"
+  echo "# Protocolo Codex" > AGENTS.md
+  git add AGENTS.md
+  if ! git commit -m "docs: teste 93 protocolo Codex raiz" >/dev/null 2>&1; then
+    test_result "FAIL"
+    git reset -q HEAD AGENTS.md 2>/dev/null || true
+    rm -f AGENTS.md
+    return
+  fi
+
+  mkdir -p subdir
+  echo "# Variante proibida" > subdir/AGENTS.md
+  git add subdir/AGENTS.md
+  if git commit -m "docs: teste 93 variante proibida" >/dev/null 2>&1; then
+    test_result "FAIL"
+  else
+    test_result "PASS"
+  fi
+
+  git reset -q HEAD subdir/AGENTS.md 2>/dev/null || true
+  rm -f subdir/AGENTS.md
+  rmdir subdir 2>/dev/null || true
+}
+
 main() {
   echo -e "${BLUE}===================================="
   echo "SUÍTE DE TESTES DE GOVERNANÇA"
@@ -2367,6 +2395,7 @@ main() {
   test_90_other_orchestrator_file_still_blocked || true
   test_91_orchestrator_durable_persistence_exact_files_accepted || true
   test_92_other_orchestrator_migration_still_blocked || true
+  test_93_root_agents_exact_path_only || true
 
   # Report
   echo ""

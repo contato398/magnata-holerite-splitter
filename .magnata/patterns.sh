@@ -351,6 +351,9 @@ ALLOWED_PATHS=(
   "^MAGNATA_OS_.*\.md$"
   "^\.github/README\.md$"
   "^\.githooks/README\.md$"
+  # Protocolo raiz do Codex. Exceção nominal exata: não libera outros
+  # AGENTS.md em subdiretórios nem qualquer classe genérica de Markdown.
+  "^AGENTS\.md$"
   # Exceção exata e restrita (decisão registrada, branch
   # fix/remetente-dp-email-intake, 2026-08-04) — só estes 4 caminhos
   # exatos, não um padrão genérico. Não libera nenhum outro .gs, .py, .js

@@ -49,15 +49,16 @@ o dado exato.
 
 | | |
 |---|---|
-| **`main`** | `76b0046` — *Merge pull request #47* (Etapa 13) |
+| **`main`** | `073e39d` — *Merge pull request #62* (Gmail Readonly Shadow V1) |
 | **Suíte** | **712 passando / 1 skip / 0 falhando** (verificado nesta sessão, `fix/contexto-progressivo` — inclui os 22 testes novos desta etapa) |
 | **CI** | 3 workflows: governança (15/15 gates), `pytest`, **`orquestrador-sensor.yml`** (novo — ver §3) |
 | **PII na árvore atual de `main`** | ✅ **nenhuma** (não reauditado a fundo nesta etapa, herdado) |
 | **Central Command** | 30 documentos + `ESTADO.json` + `ARQUITETURA_SNAPSHOT.json` + `AUDITORIA_ORQUESTRADOR.jsonl` (novo) |
-| **Graphify** | ✅ exercitado sobre o repositório inteiro (Etapa 12). **Não rerodado nesta etapa** — só consultado como snapshot (`ARQUITETURA_SNAPSHOT.json`), conforme `GRAPHIFY.md` §6 restrição 3 |
+| **Graphify** | ✅ regenerado em cópia isolada após o PR #62: 88 arquivos, 15 módulos, 2.566 arestas `EXTRACTED`, nenhuma violação de acoplamento; inclui `email_gmail_readonly.py` |
 | **Produção** | ❌ **NÃO VERIFICÁVEL** — não testado nesta etapa (herdado de Etapa 12) |
 | **Grande Orquestrador** | 🟢 **NÚCLEO EXECUTÁVEL EXISTE** (`magnata_os/orquestrador/`) + **gatilho automático via GitHub Actions já mesclado** (PRs #45, #46, #47) — ver correção declarada abaixo |
-| **Contexto (Etapa 13, novo)** | TIER 0 ≈ 4.140 tokens aprox. (~4,8% do corpus da Central Command) — `status_contexto: NORMAL`. Ver §3 |
+| **Contexto (Etapa 13)** | TIER 0 ≈ 6.330 tokens — `status_contexto: NORMAL` (medido novamente após o PR #62) |
+| **Gmail Readonly Shadow V1** | ✅ presente em `main`, inerte e somente leitura; adapter e testes específicos/integrados vieram pelo PR #62 |
 | **PRs abertos** | **Não reconfirmado ao vivo nesta sessão** (sem acesso a `gh`/API do GitHub) — tratar como `LIVE_STATE` a reconsultar, nunca herdar o "Nenhum" da Etapa 12 |
 
 ### Correção declarada (Etapa 13, 2026-08-24)
@@ -94,6 +95,12 @@ bash scripts/ci/graphify_regenerar.sh --comparar   # opcional, sensor estrutural
 ```
 
 ## 3. Merges recentes
+
+**Após a Etapa 13 — evidência local em `main`:**
+
+| PR | O que trouxe |
+|---|---|
+| **#62** | Gmail Readonly Shadow V1 inerte, adapter e testes — **MESCLADO** em `073e39d` |
 
 **Etapa 13 (2026-08-24) — visíveis por evidência local de `git log`, não por consulta ao GitHub:**
 
