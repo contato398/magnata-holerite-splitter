@@ -28,6 +28,9 @@ _MESES_PT = (
     "Dezembro",
 )
 
+TABLE_FGTS = "tbl8ehgLa00cE1U3s"
+F_FGTS_CLIENTE = "fldGFwcySH5TXBjDB"
+
 
 def _folha_mensal(competencia_id: str) -> str:
     try:
@@ -53,7 +56,7 @@ def _ids_vinculados(valor: object) -> set[str]:
 
 
 class FonteInventarioPrestacaoAirtableShadow:
-    """Adapter read-only, limitado ao inventario de extratos por cliente."""
+    """Adapter read-only para extratos e FGTS por cliente."""
 
     def __init__(self, leitor: LeitorAirtableSomenteLeitura):
         self._leitor = leitor
@@ -71,20 +74,27 @@ class FonteInventarioPrestacaoAirtableShadow:
             )
 
         folha = _folha_mensal(competencia.entidade_id)
-        registros = self._leitor.listar_registros(
-            table_id=TABLE_EXTRATO,
-            fields=[F_EXT_CLIENTE],
-            filter_by_formula=f'{{Folha Mensal}}="{folha}"',
-        )
-        itens = (
-            ItemInventarioPrestacao(
-                documento_id=registro["id"],
-                tipo_documental=TipoDocumental.EXTRATO_CLIENTE.value,
-                cliente=cliente,
-                competencia=competencia,
+        itens = []
+        for table_id, campo_cliente, tipo_documental in (
+            (TABLE_EXTRATO, F_EXT_CLIENTE, TipoDocumental.EXTRATO_CLIENTE.value),
+            (TABLE_FGTS, F_FGTS_CLIENTE, "FGTS"),
+        ):
+            registros = self._leitor.listar_registros(
+                table_id=table_id,
+                fields=[campo_cliente],
+                filter_by_formula=f'{{Folha Mensal}}="{folha}"',
             )
-            for registro in registros
-            if cliente.entidade_id
-            in _ids_vinculados(registro.get("fields", {}).get(F_EXT_CLIENTE))
-        )
+            itens.extend(
+                ItemInventarioPrestacao(
+                    documento_id=registro["id"],
+                    tipo_documental=tipo_documental,
+                    cliente=cliente,
+                    competencia=competencia,
+                )
+                for registro in registros
+                if cliente.entidade_id
+                in _ids_vinculados(
+                    registro.get("fields", {}).get(campo_cliente)
+                )
+            )
         return tuple(sorted(itens, key=lambda item: item.documento_id))

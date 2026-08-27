@@ -3,6 +3,8 @@ from unittest.mock import Mock
 from magnata_os.classificacao.contratos import ReferenciaCanonica
 from magnata_os.classificacao.inventario_prestacao import FonteInventarioPrestacao
 from magnata_os.documental.importacao_lote.adapters.airtable_inventario_prestacao import (
+    F_FGTS_CLIENTE,
+    TABLE_FGTS,
     FonteInventarioPrestacaoAirtableShadow,
 )
 from magnata_os.documental.importacao_lote.adapters.airtable_leitura import (
@@ -20,37 +22,64 @@ def _consumir(fonte: FonteInventarioPrestacao):
 
 def test_adapter_lista_somente_extrato_do_cliente_e_competencia():
     leitor = Mock()
-    leitor.listar_registros.return_value = [
-        {
-            "id": "recEXTRATO2",
-            "fields": {
-                F_EXT_CLIENTE: [{"id": "recCLIENTE"}],
-                "URL": "https://exemplo.invalid/nao-deve-vazar",
-                "conteudo_bruto": "nao-deve-vazar",
+    leitor.listar_registros.side_effect = [
+        [
+            {
+                "id": "recEXTRATO2",
+                "fields": {
+                    F_EXT_CLIENTE: [{"id": "recCLIENTE"}],
+                    "URL": "https://exemplo.invalid/nao-deve-vazar",
+                    "conteudo_bruto": "nao-deve-vazar",
+                },
             },
-        },
-        {
-            "id": "recOUTROCLIENTE",
-            "fields": {F_EXT_CLIENTE: ["recOUTRO"]},
-        },
-        {
-            "id": "recEXTRATO1",
-            "fields": {F_EXT_CLIENTE: ["recCLIENTE"]},
-        },
+            {
+                "id": "recOUTROCLIENTE",
+                "fields": {F_EXT_CLIENTE: ["recOUTRO"]},
+            },
+            {
+                "id": "recEXTRATO1",
+                "fields": {F_EXT_CLIENTE: ["recCLIENTE"]},
+            },
+        ],
+        [
+            {
+                "id": "recFGTS1",
+                "fields": {
+                    F_FGTS_CLIENTE: ["recCLIENTE"],
+                    "anexo": ["nao-deve-vazar"],
+                },
+            },
+            {
+                "id": "recFGTSOUTRO",
+                "fields": {F_FGTS_CLIENTE: ["recOUTRO"]},
+            },
+        ],
     ]
 
     itens = _consumir(FonteInventarioPrestacaoAirtableShadow(leitor))
 
-    leitor.listar_registros.assert_called_once_with(
-        table_id=TABLE_EXTRATO,
-        fields=[F_EXT_CLIENTE],
-        filter_by_formula='{Folha Mensal}="Julho 2026"',
-    )
+    assert leitor.listar_registros.call_args_list == [
+        (( ), {
+            "table_id": TABLE_EXTRATO,
+            "fields": [F_EXT_CLIENTE],
+            "filter_by_formula": '{Folha Mensal}="Julho 2026"',
+        }),
+        (( ), {
+            "table_id": TABLE_FGTS,
+            "fields": [F_FGTS_CLIENTE],
+            "filter_by_formula": '{Folha Mensal}="Julho 2026"',
+        }),
+    ]
     assert tuple(item.documento_id for item in itens) == (
         "recEXTRATO1",
         "recEXTRATO2",
+        "recFGTS1",
     )
-    assert all(item.tipo_documental == "extrato_cliente" for item in itens)
+    assert tuple(item.tipo_documental for item in itens) == (
+        "extrato_cliente",
+        "extrato_cliente",
+        "FGTS",
+    )
     assert all(
         not hasattr(item, atributo)
         for item in itens
