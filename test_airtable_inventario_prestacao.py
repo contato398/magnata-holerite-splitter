@@ -4,7 +4,9 @@ from magnata_os.classificacao.contratos import ReferenciaCanonica
 from magnata_os.classificacao.inventario_prestacao import FonteInventarioPrestacao
 from magnata_os.documental.importacao_lote.adapters.airtable_inventario_prestacao import (
     F_FGTS_CLIENTE,
+    F_GUIA_TIPO,
     TABLE_FGTS,
+    TABLE_GUIAS,
     FonteInventarioPrestacaoAirtableShadow,
 )
 from magnata_os.documental.importacao_lote.adapters.airtable_leitura import (
@@ -54,6 +56,23 @@ def test_adapter_lista_somente_extrato_do_cliente_e_competencia():
                 "fields": {F_FGTS_CLIENTE: ["recOUTRO"]},
             },
         ],
+        [
+            {
+                "id": "recDCTFDECLARACAO",
+                "fields": {
+                    F_GUIA_TIPO: "DCTFWeb - Declaração",
+                    "PDF GUIA": [{"url": "nao-deve-vazar"}],
+                },
+            },
+            {
+                "id": "recDCTFRECIBO",
+                "fields": {F_GUIA_TIPO: "DCTFWeb - Recibo de Entrega"},
+            },
+            {
+                "id": "recDCTFGENERICO",
+                "fields": {F_GUIA_TIPO: "DCTFWEB"},
+            },
+        ],
     ]
 
     itens = _consumir(FonteInventarioPrestacaoAirtableShadow(leitor))
@@ -69,13 +88,26 @@ def test_adapter_lista_somente_extrato_do_cliente_e_competencia():
             "fields": [F_FGTS_CLIENTE],
             "filter_by_formula": '{Folha Mensal}="Julho 2026"',
         }),
+        (( ), {
+            "table_id": TABLE_GUIAS,
+            "fields": [F_GUIA_TIPO],
+            "filter_by_formula": (
+                'AND({Mês Contabilidade}="Julho 2026",'
+                'OR({Tipo}="DCTFWeb - Declaração",'
+                '{Tipo}="DCTFWeb - Recibo de Entrega"))'
+            ),
+        }),
     ]
     assert tuple(item.documento_id for item in itens) == (
+        "recDCTFDECLARACAO",
+        "recDCTFRECIBO",
         "recEXTRATO1",
         "recEXTRATO2",
         "recFGTS1",
     )
     assert tuple(item.tipo_documental for item in itens) == (
+        "DCTFWeb - Declaração",
+        "DCTFWeb - Recibo de Entrega",
         "extrato_cliente",
         "extrato_cliente",
         "FGTS",
