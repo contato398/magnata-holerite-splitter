@@ -69,8 +69,19 @@ def test_adapter_lista_somente_extrato_do_cliente_e_competencia():
                 "fields": {F_GUIA_TIPO: "DCTFWeb - Recibo de Entrega"},
             },
             {
+                "id": "recGUIADCTFWEB",
+                "fields": {
+                    F_GUIA_TIPO: "Guia DCTFWeb/DARF",
+                    "comprovante": "nao-deve-vazar",
+                },
+            },
+            {
                 "id": "recDCTFGENERICO",
                 "fields": {F_GUIA_TIPO: "DCTFWEB"},
+            },
+            {
+                "id": "recCOMPROVANTEDCTFWEB",
+                "fields": {F_GUIA_TIPO: "Comprovante Guia DCTFWeb/DARF"},
             },
         ],
     ]
@@ -94,7 +105,8 @@ def test_adapter_lista_somente_extrato_do_cliente_e_competencia():
             "filter_by_formula": (
                 'AND({Mês Contabilidade}="Julho 2026",'
                 'OR({Tipo}="DCTFWeb - Declaração",'
-                '{Tipo}="DCTFWeb - Recibo de Entrega"))'
+                '{Tipo}="DCTFWeb - Recibo de Entrega",'
+                '{Tipo}="Guia DCTFWeb/DARF"))'
             ),
         }),
     ]
@@ -104,6 +116,7 @@ def test_adapter_lista_somente_extrato_do_cliente_e_competencia():
         "recEXTRATO1",
         "recEXTRATO2",
         "recFGTS1",
+        "recGUIADCTFWEB",
     )
     assert tuple(item.tipo_documental for item in itens) == (
         "DCTFWeb - Declaração",
@@ -111,6 +124,7 @@ def test_adapter_lista_somente_extrato_do_cliente_e_competencia():
         "extrato_cliente",
         "extrato_cliente",
         "FGTS",
+        "Guia DCTFWeb/DARF",
     )
     assert all(
         not hasattr(item, atributo)

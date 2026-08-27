@@ -35,6 +35,7 @@ F_GUIA_TIPO = "fldZc4A6stiQPI8qt"
 TIPOS_DCTFWEB_DETERMINISTICOS = (
     "DCTFWeb - Declaração",
     "DCTFWeb - Recibo de Entrega",
+    "Guia DCTFWeb/DARF",
 )
 
 
