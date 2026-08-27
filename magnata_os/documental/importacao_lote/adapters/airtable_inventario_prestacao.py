@@ -30,6 +30,12 @@ _MESES_PT = (
 
 TABLE_FGTS = "tbl8ehgLa00cE1U3s"
 F_FGTS_CLIENTE = "fldGFwcySH5TXBjDB"
+TABLE_GUIAS = "tbl6FT1YzK1yqI77l"
+F_GUIA_TIPO = "fldZc4A6stiQPI8qt"
+TIPOS_DCTFWEB_DETERMINISTICOS = (
+    "DCTFWeb - Declaração",
+    "DCTFWeb - Recibo de Entrega",
+)
 
 
 def _folha_mensal(competencia_id: str) -> str:
@@ -97,4 +103,27 @@ class FonteInventarioPrestacaoAirtableShadow:
                     registro.get("fields", {}).get(campo_cliente)
                 )
             )
+
+        filtro_tipos_dctfweb = ",".join(
+            f'{{Tipo}}="{tipo}"' for tipo in TIPOS_DCTFWEB_DETERMINISTICOS
+        )
+        registros_dctfweb = self._leitor.listar_registros(
+            table_id=TABLE_GUIAS,
+            fields=[F_GUIA_TIPO],
+            filter_by_formula=(
+                f'AND({{Mês Contabilidade}}="{folha}",'
+                f'OR({filtro_tipos_dctfweb}))'
+            ),
+        )
+        itens.extend(
+            ItemInventarioPrestacao(
+                documento_id=registro["id"],
+                tipo_documental=tipo_documental,
+                cliente=cliente,
+                competencia=competencia,
+            )
+            for registro in registros_dctfweb
+            if (tipo_documental := registro.get("fields", {}).get(F_GUIA_TIPO))
+            in TIPOS_DCTFWEB_DETERMINISTICOS
+        )
         return tuple(sorted(itens, key=lambda item: item.documento_id))
