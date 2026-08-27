@@ -103,6 +103,8 @@ class TestConcurrentProcessing:
         """SQLite serializa escrita, mantendo AT_MOST_ONCE."""
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / 'test.db'
+            RepositorioExecucoesSQLite(db_path).fechar()
+            inicio = threading.Barrier(3, timeout=10)
 
             execucoes = []
             execucoes_lock = threading.Lock()
@@ -124,6 +126,7 @@ class TestConcurrentProcessing:
                     repositorio=repo,
                     acoes={TipoEvento.GIT_MAIN_AVANCOU: acao_com_registro},
                 )
+                inicio.wait()
                 resultado = motor.processar(evento)
                 with resultados_lock:
                     resultados.append(resultado.estado)
@@ -136,9 +139,15 @@ class TestConcurrentProcessing:
             for t in threads:
                 t.join()
 
-            # Todos completaram com sucesso
+            # O estado observado pelos perdedores depende de o vencedor ainda
+            # estar executando ou ja ter concluido quando eles consultam o DB.
             assert len(resultados) == 3
-            assert all(r == EstadoExecucao.SUCCEEDED for r in resultados)
+            assert set(resultados) <= {
+                EstadoExecucao.RECEIVED,
+                EstadoExecucao.EXECUTING,
+                EstadoExecucao.SUCCEEDED,
+            }
+            assert EstadoExecucao.SUCCEEDED in resultados
 
             # Mas ação foi executada uma vez (idempotência sob concorrência)
             assert len(execucoes) == 1
@@ -348,6 +357,8 @@ class TestDuplaExecucaoForcada:
         sem nova execução) -- o fix não quebrou o caminho comum."""
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / 'test.db'
+            RepositorioExecucoesSQLite(db_path).fechar()
+            inicio = threading.Barrier(5, timeout=10)
             execucoes = []
             execucoes_lock = threading.Lock()
 
@@ -367,6 +378,7 @@ class TestDuplaExecucaoForcada:
                     repositorio=repo,
                     acoes={TipoEvento.GIT_MAIN_AVANCOU: acao_lenta},
                 )
+                inicio.wait()
                 r = motor.processar(evento)
                 with resultados_lock:
                     resultados.append(r.estado)
@@ -381,8 +393,13 @@ class TestDuplaExecucaoForcada:
             # Exatamente uma execução real da Ação, apesar de 5 workers
             # verdadeiramente concorrentes
             assert len(execucoes) == 1
-            assert resultados.count(EstadoExecucao.SUCCEEDED) == 1
-            assert resultados.count(EstadoExecucao.EXECUTING) == 4
+            assert len(resultados) == 5
+            assert set(resultados) <= {
+                EstadoExecucao.RECEIVED,
+                EstadoExecucao.EXECUTING,
+                EstadoExecucao.SUCCEEDED,
+            }
+            assert EstadoExecucao.SUCCEEDED in resultados
 
             # Caminho comum pós-conclusão continua correto: novo
             # processar() reconhece SUCCEEDED, não reexecuta
