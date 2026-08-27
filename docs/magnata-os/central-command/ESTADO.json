@@ -1,8 +1,6 @@
 {
-  "autorizacoes_app_py": 13,
+  "autorizacoes_app_py": 14,
   "branches_fora_de_main": [
-    "bundle/etapa6",
-    "bundle/etapa6-fix",
     "claude/evolution-api-instances-1s9raa",
     "claude/magnata-central-command-0n0713",
     "claude/magnata-memory-audit-2c6bps",
@@ -13,6 +11,7 @@
     "fix/auto-orquestrador-33bcde3-11",
     "fix/auto-orquestrador-33bcde3-12",
     "fix/auto-orquestrador-33bcde3-13",
+    "fix/auto-orquestrador-33bcde3-14",
     "fix/auto-orquestrador-76b0046-2",
     "fix/auto-orquestrador-76b0046-3",
     "fix/auto-orquestrador-76b0046-4",
@@ -21,6 +20,7 @@
     "fix/auto-orquestrador-810b1e1-9",
     "fix/auto-orquestrador-bc42bbc-7",
     "fix/auto-orquestrador-bfcdbfb-8",
+    "fix/auto-orquestrador-f04a48e-15",
     "fix/competencia-fiscal-periodo-apuracao-sem-de",
     "fix/gmail-adapter-fase1-inerte",
     "fix/orquestrador-v1-reconciliacao",
@@ -30,7 +30,7 @@
   "contexto": {
     "limite_atencao_tokens": 8000,
     "limite_trocar_sessao_tokens": 12000,
-    "medido_em": "2026-08-27T00:17:42.908750+00:00",
+    "medido_em": "2026-08-27T22:16:24.603939+00:00",
     "mensagem": null,
     "metrica": "chars//4; ESTADO.contexto excluido da propria medicao",
     "razao_tier0_sobre_total": 0.0695,
@@ -75,10 +75,10 @@
   ],
   "graphify_snapshot_status": "sem_sinal_de_mudanca",
   "links_quebrados": [],
-  "main_assunto": "Merge pull request #62 from contato398/fix/gmail-shadow-v1-reconciliado",
-  "main_data": "2026-08-26 20:47:39 -0300",
-  "main_sha": "073e39d",
-  "session_handoff_freshness": "atual",
+  "main_assunto": "Merge pull request #75 from contato398/fix/prestacao-readiness-shadow-politica",
+  "main_data": "2026-08-27 18:40:16 -0300",
+  "main_sha": "029c348",
+  "session_handoff_freshness": "desatualizado",
   "testes": {
     "falhando": 0,
     "passando": 712
