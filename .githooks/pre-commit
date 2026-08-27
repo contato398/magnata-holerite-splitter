@@ -214,6 +214,9 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # Mantem test_ bloqueado por padrao e libera somente o teste contratual
   # do adapter Postgres inerte.
   "test_magnata_os_orquestrador_postgres.py"
+  # Excecao exata dos contratos puros de classificacao. Mantem test_*
+  # bloqueado por padrao e libera somente este teste nominal.
+  "test_magnata_os_classificacao_contratos.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
