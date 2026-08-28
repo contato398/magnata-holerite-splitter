@@ -401,6 +401,8 @@ ALLOWED_PATHS=(
   "^test_magnata_os_classificacao_inventario_prestacao_resultados\.py$"
   "^magnata_os/classificacao/vinculos_prestacao\.py$"
   "^test_magnata_os_classificacao_vinculos_prestacao\.py$"
+  "^magnata_os/documental/importacao_lote/adapters/airtable_vinculos_prestacao\.py$"
+  "^test_airtable_vinculos_prestacao\.py$"
   # Classificação nominal e conservadora da Guia DCTFWeb/DARF no legado.
   "^test_classificacao_guia_dctfweb_darf\.py$"
   # Exceção exata e restrita (decisão registrada, branch
