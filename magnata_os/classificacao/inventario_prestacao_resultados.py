@@ -9,15 +9,27 @@ from magnata_os.documental.importacao_lote.contratos import (
     TipoDocumental,
 )
 
-from .contratos import ReferenciaCanonica
+from .contratos import (
+    EstadoResolucaoDimensao,
+    ReferenciaCanonica,
+)
 from .prestacao_readiness import ItemInventarioPrestacao
+from .vinculos_prestacao import (
+    FonteVinculosPrestacao,
+    resolver_clientes_validado,
+)
 
 
 class FonteInventarioPrestacaoResultadosShadow:
     """Traduz resultados confirmados para o inventario neutro, sem I/O."""
 
-    def __init__(self, resultados: tuple[ResultadoItem, ...]):
+    def __init__(
+        self,
+        resultados: tuple[ResultadoItem, ...],
+        fonte_vinculos: FonteVinculosPrestacao | None = None,
+    ):
         self._resultados = tuple(resultados)
+        self._fonte_vinculos = fonte_vinculos
 
     def listar(
         self,
@@ -33,7 +45,7 @@ class FonteInventarioPrestacaoResultadosShadow:
 
         itens: dict[str, ItemInventarioPrestacao] = {}
         for resultado in self._resultados:
-            item = _converter_resultado(resultado)
+            item = _converter_resultado(resultado, self._fonte_vinculos)
             if (
                 item is not None
                 and item.cliente == cliente
@@ -45,12 +57,8 @@ class FonteInventarioPrestacaoResultadosShadow:
 
 def _converter_resultado(
     resultado: ResultadoItem,
+    fonte_vinculos: FonteVinculosPrestacao | None,
 ) -> ItemInventarioPrestacao | None:
-    # Em ResultadoItem, somente EXTRATO_CLIENTE resolve diretamente uma
-    # entidade CLIENTE. Holerite resolve FUNCIONARIO e nao pode ser promovido
-    # silenciosamente a cliente sem a relacao oficial funcionario/unidade.
-    if resultado.tipo_documental != TipoDocumental.EXTRATO_CLIENTE:
-        return None
     if resultado.classificacao != ClassificacaoCorrespondencia.EXACT:
         return None
     if not resultado.entidade_resolvida or not resultado.identidade_documental:
@@ -62,7 +70,28 @@ def _converter_resultado(
 
     ano, mes = resultado.competencia_ano_mes_extraido
     competencia = ReferenciaCanonica("COMPETENCIA", f"{ano:04d}-{mes:02d}")
-    cliente = ReferenciaCanonica("CLIENTE", resultado.entidade_resolvida)
+    if resultado.tipo_documental == TipoDocumental.EXTRATO_CLIENTE:
+        cliente = ReferenciaCanonica("CLIENTE", resultado.entidade_resolvida)
+    elif resultado.tipo_documental == TipoDocumental.HOLERITE:
+        if fonte_vinculos is None:
+            return None
+        origem = ReferenciaCanonica("FUNCIONARIO", resultado.entidade_resolvida)
+        try:
+            resolucao = resolver_clientes_validado(
+                fonte_vinculos,
+                origem,
+                competencia,
+            )
+        except Exception:
+            return None
+        if (
+            resolucao.estado != EstadoResolucaoDimensao.RESOLVIDA
+            or len(resolucao.valores_confirmados) != 1
+        ):
+            return None
+        cliente = resolucao.valores_confirmados[0]
+    else:
+        return None
     return ItemInventarioPrestacao(
         documento_id=resultado.identidade_documental,
         tipo_documental=resultado.tipo_documental.value,
