@@ -226,6 +226,10 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_magnata_os_classificacao_inventario_prestacao_resultados.py"
   "test_magnata_os_classificacao_vinculos_prestacao.py"
   "test_airtable_vinculos_prestacao.py"
+  # Excecao exata da migracao segura do classificador documental do
+  # legado (branch fix/classificador-documental-legado-seguro). Mantem
+  # test_* bloqueado por padrao e libera somente este teste nominal.
+  "test_classificador_documental_migracao.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

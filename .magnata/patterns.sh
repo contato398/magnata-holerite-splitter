@@ -405,6 +405,13 @@ ALLOWED_PATHS=(
   "^test_airtable_vinculos_prestacao\.py$"
   # Classificação nominal e conservadora da Guia DCTFWeb/DARF no legado.
   "^test_classificacao_guia_dctfweb_darf\.py$"
+  # Excecao exata e restrita (migração segura do classificador
+  # documental do legado app.py TIPO_DOC_REGRAS, branch
+  # fix/classificador-documental-legado-seguro) — somente o módulo novo
+  # e seu teste nominal. Nao libera magnata_os/classificacao/ nem
+  # test_*.py genericamente.
+  "^magnata_os/classificacao/classificador_documental\.py$"
+  "^test_classificador_documental_migracao\.py$"
   # Exceção exata e restrita (decisão registrada, branch
   # claude/macro-6a-commit-recovery-k7rsly, 2026-08-12) — Macro 6A,
   # auditoria e esteira documental. Somente estes 8 caminhos exatos de
