@@ -110,6 +110,20 @@ suspeito. O resultado de TENTAR aplicar este segundo gate fica em
 (`ResultadoGateIdentificacaoDTO`, dtos_esteira.py) -- DTO próprio,
 independente de `resultado_gate_classificacao`.
 
+PONTE PARA A PRESTAÇÃO DE CONTAS (`ponte_prestacao_holerite.py`, mesma
+fase): quando -- e só quando -- a identificação acima termina de fato
+RESOLVIDA (IDENTIFICACAO/CONCLUIDO, colaborador único), o MESMO `texto`
+já extraído é reaproveitado por `extrair_competencia_de_texto`
+(importacao_lote/dominio.py, função pura já existente) só para observar
+a competência OBSERVADA no documento -- nunca a esperada. O resultado
+sanitizado fica em `ItemResumoLote.holerite_confirmado`
+(`HoleriteConfirmadoDTO`, dtos_esteira.py), `None` em qualquer outro
+caso. Este serviço NUNCA decide se a competência observada bate com a
+esperada nem qual cliente -- essas duas decisões pertencem
+exclusivamente a `ponte_prestacao_holerite.py`, com uma competência
+esperada e uma `FonteVinculosPrestacao` injetadas de fora (nunca
+inferidas do próprio documento -- proibição de validação circular).
+
 ServicoEntradaDocumental (Fase 1) continua aceitando lote_id=None para
 nao quebrar nenhum chamador existente (scripts internos, testes,
 composicao de servicos) -- a garantia de "toda entrada nova tem lote" e
@@ -124,13 +138,16 @@ from datetime import datetime, timezone
 from typing import Callable, List, Optional, Protocol, Sequence
 
 from magnata_os.classificacao.classificador_documental import EstadoClassificacao
+from magnata_os.classificacao.contratos import EstadoResolucaoDimensao, ResolucaoDimensao
 from magnata_os.classificacao.roteamento_documental import decidir_roteamento_de_texto, extrair_texto_seguro
 
 from ..importacao_lote.contratos import CandidatoFuncionario
+from ..importacao_lote.dominio import extrair_competencia_de_texto
 from .dominio_esteira import EtapaEsteira, LoteDocumental, SituacaoEsteira, gerar_correlation_id_lote, gerar_lote_id
 from .dtos_esteira import (
     ItemResumoLote,
     ResumoLote,
+    holerite_confirmado_para_dto,
     resultado_gate_classificacao_erro_tecnico,
     resultado_gate_classificacao_nao_aplicavel,
     resultado_gate_classificacao_promovida,
@@ -486,6 +503,19 @@ class ServicoCriacaoLote:
             and obter_candidatos_funcionario is not None
         )
 
+        # `holerite_confirmado` -- ponte para a Prestação de Contas
+        # (ver ponte_prestacao_holerite.py e dtos_esteira.
+        # HoleriteConfirmadoDTO). Só preenchido quando a identificação
+        # de colaborador terminou de fato RESOLVIDA (nunca AMBIGUA,
+        # NAO_ENCONTRADA, MESTRE_SUSPEITO ou erro técnico) -- reaproveita
+        # o MESMO `texto` já extraído acima (extrair_competencia_de_texto
+        # é pura, nunca reabre o PDF) só para observar a competência
+        # OBSERVADA no documento; NUNCA decide aqui se essa competência
+        # bate com a esperada nem qual cliente -- isso é decisão
+        # exclusiva da ponte, com uma fonte de competência esperada
+        # injetada de fora (nunca o próprio documento).
+        holerite_confirmado = None
+
         if elegivel_para_identificacao:
             try:
                 candidatos_funcionario = obter_candidatos_funcionario()
@@ -504,6 +534,18 @@ class ServicoCriacaoLote:
                     raise RuntimeError('aplicar_resultado_identificacao retornou None inesperadamente')
                 resultado_gate_identificacao = resultado_gate_identificacao_promovida(
                     estado_pos_gate_identificacao)
+                if (
+                    resultado_gate_identificacao.sucesso
+                    and estado_pos_gate_identificacao.situacao == SituacaoEsteira.CONCLUIDO
+                    and isinstance(resultado_identificacao, ResolucaoDimensao)
+                    and resultado_identificacao.estado == EstadoResolucaoDimensao.RESOLVIDA
+                ):
+                    competencia_observada = extrair_competencia_de_texto(texto)
+                    holerite_confirmado = holerite_confirmado_para_dto(
+                        documento.documento_id, documento.hash_sha256,
+                        resultado_identificacao.valores_confirmados[0].entidade_id,
+                        competencia_observada,
+                    )
             except Exception:
                 # Falha SECUNDARIA -- nunca desfaz o Documento, o
                 # roteamento shadow nem o gate de classificacao ja
@@ -523,4 +565,5 @@ class ServicoCriacaoLote:
             roteamento_shadow=roteamento_shadow,
             resultado_gate_classificacao=resultado_gate_classificacao,
             resultado_gate_identificacao=resultado_gate_identificacao,
+            holerite_confirmado=holerite_confirmado,
         )

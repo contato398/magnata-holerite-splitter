@@ -264,6 +264,11 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # antes deste hook existir) -- nunca havia passado por esta checagem
   # ate agora. Libera so este caminho exato.
   "test_magnata_os_documental_modulo01_email_captura.py"
+  # Excecao exata e restrita (primeiro corredor automatizado E2E da
+  # Prestacao de Contas, Holerite primeiro, branch
+  # fix/corredor-prestacao-holerite-e2e). Mantem test_* bloqueado por
+  # padrao e libera somente este teste nominal novo.
+  "test_corredor_prestacao_holerite_e2e.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
