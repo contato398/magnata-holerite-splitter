@@ -10,6 +10,14 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from magnata_os.classificacao.classificador_documental import EstadoClassificacao
+from magnata_os.classificacao.roteamento_documental import (
+    AcaoRoteamento,
+    DecisaoRoteamentoDocumental,
+    EscopoDocumental,
+    MotivoRoteamento,
+)
+from magnata_os.documental.modulo01 import servico_lote as servico_lote_mod
 from magnata_os.documental.modulo01.consultas_esteira import (
     documentos_bloqueados,
     documentos_com_acao_humana_pendente,
@@ -95,12 +103,45 @@ def _criar_documento_registrado(ctx: _Contexto, conteudo: bytes, nome_original: 
     return documento.documento_id
 
 
+def _decisao_resolvida_para_teste() -> DecisaoRoteamentoDocumental:
+    """Decisão de roteamento controlada -- usada só para tornar
+    determinístico o gate REGISTRO->CLASSIFICACAO (magnata_os/
+    documental/modulo01/politica_classificacao.py) nos testes de lote
+    desta fase. O assunto sob teste é a esteira/lote em si (contagens,
+    agregação, consulta), nunca a classificação real de conteúdo de
+    PDF -- os bytes usados nos fixtures destes testes (ex.: b'conteudo
+    1 do lote') nunca foram PDFs válidos, e com pdfplumber funcional
+    (CI) seriam classificados INVALIDA/PDF_INVALIDO de verdade, o que
+    tornaria estes testes acidentalmente sobre bloqueio de PDF inválido
+    -- não sua intenção original."""
+    return DecisaoRoteamentoDocumental(
+        tipo_documental='Holerite',
+        estado_classificacao=EstadoClassificacao.RESOLVIDA,
+        escopo_documental=EscopoDocumental.COLABORADOR,
+        acao_recomendada=AcaoRoteamento.REVISAR_HUMANO,
+        motivo=MotivoRoteamento.PROCESSADOR_AINDA_NAO_DISPONIVEL,
+        processador_disponivel=False,
+        necessita_revisao_humana=True,
+        prioridade_revisao='BAIXA',
+        evidencias_sanitizadas=(),
+        tipos_concorrentes=(),
+    )
+
+
+def _forcar_classificacao_resolvida(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        servico_lote_mod, 'decidir_roteamento',
+        lambda conteudo: _decisao_resolvida_para_teste(),
+    )
+
+
 # ============================================================================
 # 1. lote com varios arquivos
 # ============================================================================
 
-def test_criar_lote_com_varios_arquivos_todos_sucesso():
+def test_criar_lote_com_varios_arquivos_todos_sucesso(monkeypatch):
     ctx = _montar_servicos()
+    _forcar_classificacao_resolvida(monkeypatch)
     arquivos = [
         ArquivoEntradaLote(b'conteudo 1 do lote', 'a.pdf', 'application/pdf'),
         ArquivoEntradaLote(b'conteudo 2 do lote', 'b.pdf', 'application/pdf'),
@@ -126,7 +167,12 @@ def test_criar_lote_com_varios_arquivos_todos_sucesso():
     assert len(documento_ids) == 3  # 3 documentos distintos
     for item in resumo.itens:
         estado = ctx.repo_estados.buscar_por_documento_id(item.documento_id)
-        assert estado.etapa_atual == EtapaEsteira.REGISTRO
+        # Gate REGISTRO->CLASSIFICACAO (PR do gate de classificação):
+        # classificação RESOLVIDA (forçada via _forcar_classificacao_
+        # resolvida) avança automaticamente até CLASSIFICACAO/CONCLUIDO
+        # -- consequência legítima e intencional do novo contrato, não
+        # uma regressão. REGISTRO deixou de ser o repouso final.
+        assert estado.etapa_atual == EtapaEsteira.CLASSIFICACAO
         assert estado.situacao == SituacaoEsteira.CONCLUIDO
         assert estado.lote_id == resumo.lote_id
 
@@ -732,8 +778,9 @@ def test_documentos_por_situacao():
     assert doc_id not in {e.documento_id for e in aguardando}
 
 
-def test_montar_resumo_esteira_agrega_corretamente():
+def test_montar_resumo_esteira_agrega_corretamente(monkeypatch):
     ctx = _montar_servicos()
+    _forcar_classificacao_resolvida(monkeypatch)
     ctx.servico_lote.criar_lote('upload_manual', [
         ArquivoEntradaLote(b'agregado 1', 'a.pdf', 'application/pdf'),
         ArquivoEntradaLote(b'agregado 2', 'b.pdf', 'application/pdf'),
@@ -741,6 +788,8 @@ def test_montar_resumo_esteira_agrega_corretamente():
 
     resumo = montar_resumo_esteira(ctx.repo_estados)
     assert resumo.total_documentos_rastreados == 2
-    assert resumo.por_etapa.get(EtapaEsteira.REGISTRO) == 2
+    # Gate REGISTRO->CLASSIFICACAO: RESOLVIDA avança automaticamente
+    # (consequência legítima e intencional, não regressão).
+    assert resumo.por_etapa.get(EtapaEsteira.CLASSIFICACAO) == 2
     assert resumo.por_situacao.get(SituacaoEsteira.CONCLUIDO) == 2
     assert resumo.total_bloqueados == 0

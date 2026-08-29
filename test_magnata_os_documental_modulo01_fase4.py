@@ -11,6 +11,14 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from magnata_os.classificacao.classificador_documental import EstadoClassificacao
+from magnata_os.classificacao.roteamento_documental import (
+    AcaoRoteamento,
+    DecisaoRoteamentoDocumental,
+    EscopoDocumental,
+    MotivoRoteamento,
+)
+from magnata_os.documental.modulo01 import servico_lote as servico_lote_mod
 from magnata_os.documental.modulo01.api.autorizacao import Perfil, Sujeito
 from magnata_os.documental.modulo01.api.erros import (
     MENSAGEM_ERRO_INTERNO_PADRAO,
@@ -88,6 +96,65 @@ def _montar_ctx(relogio=None) -> _Fixture:
     return _Fixture(repo_docs, repo_hist, repo_lotes, repo_estados, servico_entrada, servico_avanco, servico_lote, ctx_api)
 
 
+def _decisao_resolvida_para_teste() -> DecisaoRoteamentoDocumental:
+    """Decisão de roteamento controlada -- usada só para tornar
+    determinístico o gate REGISTRO->CLASSIFICACAO (magnata_os/
+    documental/modulo01/politica_classificacao.py) nos testes desta
+    fase. O assunto sob teste é a API de consulta (resumo, filtros,
+    paginação, serialização), nunca a classificação real de conteúdo
+    de PDF -- os bytes usados nos fixtures destes testes nunca foram
+    PDFs válidos, e com pdfplumber funcional (CI) seriam classificados
+    INVALIDA/PDF_INVALIDO de verdade, o que tornaria estes testes
+    acidentalmente sobre bloqueio de PDF inválido -- não sua intenção
+    original."""
+    return DecisaoRoteamentoDocumental(
+        tipo_documental='Holerite',
+        estado_classificacao=EstadoClassificacao.RESOLVIDA,
+        escopo_documental=EscopoDocumental.COLABORADOR,
+        acao_recomendada=AcaoRoteamento.REVISAR_HUMANO,
+        motivo=MotivoRoteamento.PROCESSADOR_AINDA_NAO_DISPONIVEL,
+        processador_disponivel=False,
+        necessita_revisao_humana=True,
+        prioridade_revisao='BAIXA',
+        evidencias_sanitizadas=(),
+        tipos_concorrentes=(),
+    )
+
+
+def _decisao_nao_reconhecida_para_teste() -> DecisaoRoteamentoDocumental:
+    """Decisão de roteamento controlada representando NAO_RECONHECIDA
+    -- usada em test_listar_acoes_humanas para produzir, de forma
+    determinística, um documento em CLASSIFICACAO/EM_REVISAO (que já
+    tem próxima ação HUMANA por regra pré-existente), sem depender de
+    classificação real de PDF nem de uma transição manual redundante."""
+    return DecisaoRoteamentoDocumental(
+        tipo_documental='Outro',
+        estado_classificacao=EstadoClassificacao.NAO_RECONHECIDA,
+        escopo_documental=EscopoDocumental.DESCONHECIDO,
+        acao_recomendada=AcaoRoteamento.REVISAR_HUMANO,
+        motivo=MotivoRoteamento.TIPO_NAO_RECONHECIDO,
+        processador_disponivel=False,
+        necessita_revisao_humana=True,
+        prioridade_revisao='MEDIA',
+        evidencias_sanitizadas=(),
+        tipos_concorrentes=(),
+    )
+
+
+def _forcar_classificacao_resolvida(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        servico_lote_mod, 'decidir_roteamento',
+        lambda conteudo: _decisao_resolvida_para_teste(),
+    )
+
+
+def _forcar_classificacao_nao_reconhecida(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        servico_lote_mod, 'decidir_roteamento',
+        lambda conteudo: _decisao_nao_reconhecida_para_teste(),
+    )
+
+
 class _RepositorioDocumentosQueFalhaComSegredo:
     """Duplo de teste: simula uma falha de infraestrutura cuja mensagem
     original contem um segredo -- usado para provar que esse segredo
@@ -118,7 +185,8 @@ class _RepositorioDocumentosQueFalhaComSegredo:
 # 1. resumo
 # ============================================================================
 
-def test_resumo_esteira_agrega_indicadores_corretamente():
+def test_resumo_esteira_agrega_indicadores_corretamente(monkeypatch):
+    _forcar_classificacao_resolvida(monkeypatch)
     fx = _montar_ctx()
     fx.servico_lote.criar_lote('upload_manual', [
         ArquivoEntradaLote(b'resumo doc 1', 'a.pdf', 'application/pdf'),
@@ -128,10 +196,18 @@ def test_resumo_esteira_agrega_indicadores_corretamente():
     resposta = obter_resumo_esteira(fx.ctx_api, SUJEITO_GESTOR)
 
     assert resposta.total_documentos == 2
-    assert resposta.total_por_etapa.get('REGISTRO') == 2
+    # Gate REGISTRO->CLASSIFICACAO (magnata_os/documental/modulo01/
+    # politica_classificacao.py): classificação RESOLVIDA avança
+    # automaticamente para CLASSIFICACAO/CONCLUIDO -- documento não
+    # descansa mais em REGISTRO.
+    assert resposta.total_por_etapa.get('CLASSIFICACAO') == 2
     assert resposta.total_por_situacao.get('CONCLUIDO') == 2
     assert resposta.total_bloqueados == 0
-    assert resposta.total_com_acao_humana == 0
+    # CLASSIFICACAO/CONCLUIDO tem próxima ação HUMANA (regra explícita
+    # de calcular_proxima_acao: a etapa seguinte do fluxo documental
+    # ainda não foi implementada) -- consequência intencional do gate,
+    # não uma regressão.
+    assert resposta.total_com_acao_humana == 2
     assert resposta.total_em_erro == 0
     assert resposta.lotes_recebidos_hoje == 1
     assert resposta.tempo_medio_na_etapa_segundos is not None
@@ -148,7 +224,8 @@ def test_resumo_esteira_limite_parado_negativo_e_filtro_invalido():
 # 2. filtros combinados
 # ============================================================================
 
-def test_listar_documentos_filtros_combinados():
+def test_listar_documentos_filtros_combinados(monkeypatch):
+    _forcar_classificacao_resolvida(monkeypatch)
     fx = _montar_ctx()
     resumo_a = fx.servico_lote.criar_lote(
         'upload_manual', [ArquivoEntradaLote(b'filtro combinado origem a', 'a.pdf', 'application/pdf')],
@@ -157,9 +234,13 @@ def test_listar_documentos_filtros_combinados():
         'outra_origem', [ArquivoEntradaLote(b'filtro combinado origem b', 'b.pdf', 'application/pdf')],
     )
 
+    # Gate REGISTRO->CLASSIFICACAO: classificação RESOLVIDA avança
+    # automaticamente para CLASSIFICACAO/CONCLUIDO, com próxima ação
+    # HUMANA (etapa seguinte ainda não implementada) -- filtro adaptado
+    # para continuar isolando o mesmo documento sob a nova semântica.
     filtro = FiltroDocumentos(
-        origem='upload_manual', etapa=EtapaEsteira.REGISTRO, situacao=SituacaoEsteira.CONCLUIDO,
-        bloqueado=False, acao_humana=False,
+        origem='upload_manual', etapa=EtapaEsteira.CLASSIFICACAO, situacao=SituacaoEsteira.CONCLUIDO,
+        bloqueado=False, acao_humana=True,
     )
     resposta = listar_documentos(fx.ctx_api, SUJEITO_OPERACIONAL, filtro=filtro)
 
@@ -270,7 +351,8 @@ def test_listar_lotes_ordenacao_e_paginacao():
 # 5. documento individual
 # ============================================================================
 
-def test_obter_documento_individual():
+def test_obter_documento_individual(monkeypatch):
+    _forcar_classificacao_resolvida(monkeypatch)
     fx = _montar_ctx()
     resumo = fx.servico_lote.criar_lote(
         'upload_manual', [ArquivoEntradaLote(b'documento individual', 'a.pdf', 'application/pdf')],
@@ -283,7 +365,9 @@ def test_obter_documento_individual():
     assert resposta.nome_original == 'a.pdf'
     assert resposta.lote_id == resumo.lote_id
     assert resposta.origem == 'upload_manual'
-    assert resposta.etapa_atual == 'REGISTRO'
+    # Gate REGISTRO->CLASSIFICACAO: classificação RESOLVIDA avança
+    # automaticamente -- documento não descansa mais em REGISTRO.
+    assert resposta.etapa_atual == 'CLASSIFICACAO'
     assert resposta.situacao == 'CONCLUIDO'
     assert resposta.rastreado_pela_esteira is True
     assert resposta.ultimo_evento is not None
@@ -371,7 +455,15 @@ def test_listar_bloqueios():
     assert item.tempo_bloqueado_segundos >= 0
 
 
-def test_listar_bloqueios_vazio_quando_nada_bloqueado():
+def test_listar_bloqueios_vazio_quando_nada_bloqueado(monkeypatch):
+    # Classificação RESOLVIDA nunca bloqueia (magnata_os/documental/
+    # modulo01/politica_classificacao.py) -- controlada aqui só para
+    # que o teste continue provando "nada bloqueado" sob a nova
+    # semântica, sem depender de bytes que hoje seriam classificados
+    # como PDF_INVALIDO de verdade (o que tornaria este teste,
+    # incorretamente, sobre bloqueio). A regra de que PDF_INVALIDO
+    # bloqueia permanece intacta em produção -- não alterada aqui.
+    _forcar_classificacao_resolvida(monkeypatch)
     fx = _montar_ctx()
     fx.servico_lote.criar_lote('upload_manual', [ArquivoEntradaLote(b'sem bloqueio', 'a.pdf', 'application/pdf')])
 
@@ -384,13 +476,21 @@ def test_listar_bloqueios_vazio_quando_nada_bloqueado():
 # 9. acoes humanas
 # ============================================================================
 
-def test_listar_acoes_humanas():
+def test_listar_acoes_humanas(monkeypatch):
+    # NAO_RECONHECIDA avança automaticamente para CLASSIFICACAO/
+    # EM_REVISAO (gate REGISTRO->CLASSIFICACAO) -- que já tinha, antes
+    # deste gate, próxima ação HUMANA por regra pré-existente de
+    # calcular_proxima_acao. A transição manual para CLASSIFICACAO que
+    # este teste fazia originalmente ficou redundante (e hoje seria
+    # inválida, pois o documento já chega em CLASSIFICACAO sozinho) --
+    # removida; a intenção original do teste (provar que a listagem de
+    # ações humanas inclui o documento) continua preservada.
+    _forcar_classificacao_nao_reconhecida(monkeypatch)
     fx = _montar_ctx()
     resumo = fx.servico_lote.criar_lote(
         'upload_manual', [ArquivoEntradaLote(b'acao humana doc', 'a.pdf', 'application/pdf')],
     )
     documento_id = resumo.itens[0].documento_id
-    fx.servico_avanco.avancar_etapa(documento_id, EtapaEsteira.CLASSIFICACAO, 'corr-1')  # proxima acao HUMANA
 
     resposta = listar_acoes_humanas(fx.ctx_api, SUJEITO_GESTOR)
 
