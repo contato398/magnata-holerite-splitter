@@ -243,6 +243,16 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # e libera somente estes 2 testes nominais.
   "test_politica_classificacao.py"
   "test_gate_classificacao_esteira.py"
+  # Excecao exata e restrita (correcao da incompatibilidade dos testes
+  # de Fase 3/Fase 4 com a nova semantica intencional do gate
+  # REGISTRO->CLASSIFICACAO, mesma branch fix/gate-classificacao-esteira,
+  # 2026-08-29). Estes 2 arquivos ja existiam (mesclados via PR #27,
+  # antes deste hook de governanca existir) -- nunca passaram por esta
+  # checagem ate agora. Libera so estes 2 caminhos exatos para a
+  # correcao pontual dos fixtures/asserts afetados pelo gate; nao libera
+  # "^test_" de forma ampla nem qualquer outro arquivo de Fase 3/4.
+  "test_magnata_os_documental_modulo01_fase3.py"
+  "test_magnata_os_documental_modulo01_fase4.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
