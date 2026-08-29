@@ -41,6 +41,8 @@ from magnata_os.classificacao.roteamento_documental import (
     _TIPOS_COM_PROCESSADOR_AVULSO_COMPATIVEL,
     _traduzir_para_decisao,
     decidir_roteamento,
+    decidir_roteamento_de_texto,
+    extrair_texto_seguro,
 )
 
 
@@ -319,6 +321,47 @@ class TestFluxoCompletoComPdfReal:
         assert decisao.tipo_documental == "Outro"
         assert decisao.acao_recomendada == AcaoRoteamento.REVISAR_HUMANO
         assert decisao.motivo == MotivoRoteamento.TIPO_NAO_RECONHECIDO
+
+
+# ── Bridge de identificação de Holerite avulso: extração única ───────────────
+# (branch fix/identificacao-holerite-avulso -- auditoria read-only prévia
+# confirmou que decidir_roteamento(bytes) misturava bytes->texto e
+# texto->decisão; extraídas aqui como duas funções públicas separadas,
+# reaproveitáveis por servico_lote.py para uma única extração de PDF,
+# compartilhada entre classificação e identificação de colaborador.)
+
+class TestDecidirRoteamentoDeTexto:
+    """decidir_roteamento(bytes) virou wrapper fino de
+    extrair_texto_seguro + decidir_roteamento_de_texto — comportamento
+    externo idêntico ao de antes desta extração, nenhum chamador
+    existente precisa mudar."""
+
+    def test_decidir_roteamento_de_texto_none_e_identico_a_pdf_invalido(self):
+        """PDF vazio/ilegível continua produzindo EXATAMENTE a mesma
+        decisão de PDF_INVALIDO -- nunca vira ERRO_TECNICO_SHADOW."""
+        via_wrapper = decidir_roteamento(b"")
+        via_texto = decidir_roteamento_de_texto(None)
+        assert via_wrapper == via_texto
+        assert via_texto.estado_classificacao == EstadoClassificacao.INVALIDA
+        assert via_texto.motivo == MotivoRoteamento.PDF_INVALIDO
+
+    @pytest.mark.skipif(not _PDFPLUMBER_FUNCIONAL, reason=_MOTIVO_SKIP_PDFPLUMBER)
+    def test_decidir_roteamento_de_texto_produz_mesma_decisao_que_wrapper_para_pdf_real(self):
+        """Extraindo o texto uma vez com `extrair_texto_seguro` e
+        chamando `decidir_roteamento_de_texto` diretamente produz a
+        MESMA decisão que `decidir_roteamento(bytes)` -- prova de que a
+        extração pode ser feita fora, uma única vez, e reaproveitada
+        (ver servico_lote.py)."""
+        pdf_bytes = _pdf_minimo_com_texto("Recibo de Pagamento - Valor Liquido")
+        texto = extrair_texto_seguro(pdf_bytes)
+        assert texto is not None
+        assert decidir_roteamento_de_texto(texto) == decidir_roteamento(pdf_bytes)
+
+    def test_extrair_texto_seguro_e_publica_e_nao_exige_pdfplumber_para_bytes_vazios(self):
+        """Bytes vazios curto-circuitam antes de qualquer import de
+        pdfplumber -- funciona mesmo neste sandbox com pdfplumber
+        quebrado."""
+        assert extrair_texto_seguro(b"") is None
 
 
 # ── Evidências sanitizadas — nenhuma PII/texto bruto no resultado ─────────────

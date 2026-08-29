@@ -136,7 +136,14 @@ class ItemResumoLote:
     `resultado_gate_classificacao` distingue explicitamente falha do
     GATE (tentativa de promover REGISTRO->CLASSIFICACAO) de falha da
     ingestão em si — `sucesso` (acima) NUNCA muda por causa do gate.
-    `None` só quando `roteamento_shadow` também é `None` (mesmas causas)."""
+    `None` só quando `roteamento_shadow` também é `None` (mesmas causas).
+
+    `resultado_gate_identificacao` é o mesmo princípio para o gate
+    seguinte (CLASSIFICACAO->IDENTIFICACAO, só para Holerite avulso
+    RESOLVIDO — ver politica_identificacao_holerite.py): `tentado=False`
+    para qualquer item não elegível (outro tipo documental, duplicado,
+    classificação não RESOLVIDA, gate de classificação sem sucesso,
+    texto indisponível) — nunca confundido com falha."""
 
     nome_original: str
     documento_id: Optional[str]
@@ -145,6 +152,7 @@ class ItemResumoLote:
     erro: Optional[str]
     roteamento_shadow: Optional[RoteamentoShadowDTO] = None
     resultado_gate_classificacao: Optional[ResultadoGateClassificacaoDTO] = None
+    resultado_gate_identificacao: Optional[ResultadoGateIdentificacaoDTO] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -377,6 +385,135 @@ def resultado_gate_classificacao_promovida(
         raise ValueError(
             f'situação inesperada após gate de classificação: {estado.situacao!r}')
     return ResultadoGateClassificacaoDTO(
+        tentado=True, sucesso=True,
+        etapa_resultante=estado.etapa_atual.value,
+        situacao_resultante=estado.situacao.value,
+        motivo=motivo,
+    )
+
+
+# Códigos sanitizados fechados do resultado do GATE de transição
+# CLASSIFICACAO->IDENTIFICACAO (politica_identificacao_holerite.py) --
+# mesmo formato de ResultadoGateClassificacaoDTO acima, DTO próprio e
+# específico (não uma generalização do DTO de classificação -- os dois
+# gates têm famílias de motivo sanitizado diferentes e independentes;
+# generalizar exigiria parametrizar a validação de __post_init__ com um
+# conjunto de motivos por família, mudança maior e mais arriscada do que
+# criar este segundo DTO pequeno e isolado). Distintos dos motivos de
+# `RoteamentoShadowDTO`/`MotivoBloqueio.codigo` -- estes aqui descrevem
+# só o resultado de TENTAR aplicar o gate de identificação.
+MOTIVO_GATE_IDENTIFICACAO_PROMOVIDA = 'IDENTIFICACAO_PROMOVIDA'
+MOTIVO_GATE_IDENTIFICACAO_PROMOVIDA_COM_BLOQUEIO = 'IDENTIFICACAO_PROMOVIDA_COM_BLOQUEIO'
+MOTIVO_GATE_IDENTIFICACAO_PROMOVIDA_EM_REVISAO = 'IDENTIFICACAO_PROMOVIDA_EM_REVISAO'
+MOTIVO_GATE_IDENTIFICACAO_NAO_APLICAVEL = 'GATE_IDENTIFICACAO_NAO_APLICAVEL'
+MOTIVO_ERRO_TECNICO_GATE_IDENTIFICACAO = 'ERRO_TECNICO_GATE_IDENTIFICACAO'
+
+_MOTIVOS_SUCESSO_GATE_IDENTIFICACAO = frozenset({
+    MOTIVO_GATE_IDENTIFICACAO_PROMOVIDA,
+    MOTIVO_GATE_IDENTIFICACAO_PROMOVIDA_COM_BLOQUEIO,
+    MOTIVO_GATE_IDENTIFICACAO_PROMOVIDA_EM_REVISAO,
+})
+
+_MOTIVO_POR_SITUACAO_GATE_IDENTIFICACAO = {
+    SituacaoEsteira.CONCLUIDO: MOTIVO_GATE_IDENTIFICACAO_PROMOVIDA,
+    SituacaoEsteira.BLOQUEADO: MOTIVO_GATE_IDENTIFICACAO_PROMOVIDA_COM_BLOQUEIO,
+    SituacaoEsteira.EM_REVISAO: MOTIVO_GATE_IDENTIFICACAO_PROMOVIDA_EM_REVISAO,
+}
+
+
+@dataclasses.dataclass(frozen=True)
+class ResultadoGateIdentificacaoDTO:
+    """Resultado OBSERVÁVEL de tentar aplicar o gate
+    CLASSIFICACAO->IDENTIFICACAO (`politica_identificacao_holerite.
+    decidir_transicao_identificacao` + `ServicoAvancoEsteira.
+    aplicar_resultado_identificacao`) para UM item de lote. Mesma
+    distinção de 3 casos de `ResultadoGateClassificacaoDTO`:
+
+      A. identificação elegível + tentada + promoção IDENTIFICACAO
+         funcionou -> tentado=True, sucesso=True.
+      B. identificação elegível + tentada + promoção IDENTIFICACAO
+         falhou (erro técnico inesperado) -> tentado=True,
+         sucesso=False, motivo=ERRO_TECNICO_GATE_IDENTIFICACAO.
+      C. identificação não elegível (outro tipo documental que não
+         Holerite, documento duplicado, classificação não RESOLVIDA,
+         gate de classificação sem sucesso, texto indisponível) ->
+         tentado=False, sucesso=False, motivo=GATE_IDENTIFICACAO_NAO_APLICAVEL.
+
+    Falha do gate de identificação NUNCA muda `ItemResumoLote.sucesso`
+    nem `resultado_gate_classificacao` (que refletem, respectivamente,
+    só a INGESTÃO e só o gate ANTERIOR). NUNCA expõe CPF, nome, texto,
+    `str(exc)` ou stack trace — só os códigos sanitizados fechados acima
+    e os valores (já sanitizados) de `EtapaEsteira`/`SituacaoEsteira`.
+    """
+
+    tentado: bool
+    sucesso: bool
+    etapa_resultante: Optional[str]
+    situacao_resultante: Optional[str]
+    motivo: str
+
+    def __post_init__(self) -> None:
+        if not self.tentado:
+            if self.sucesso:
+                raise ValueError('tentado=False exige sucesso=False')
+            if self.etapa_resultante is not None or self.situacao_resultante is not None:
+                raise ValueError(
+                    'tentado=False não pode carregar etapa_resultante/situacao_resultante')
+            if self.motivo != MOTIVO_GATE_IDENTIFICACAO_NAO_APLICAVEL:
+                raise ValueError('tentado=False exige motivo=GATE_IDENTIFICACAO_NAO_APLICAVEL')
+            return
+
+        if self.sucesso:
+            if self.etapa_resultante is None or self.situacao_resultante is None:
+                raise ValueError(
+                    'tentado=True, sucesso=True exige etapa_resultante e situacao_resultante')
+            if self.motivo not in _MOTIVOS_SUCESSO_GATE_IDENTIFICACAO:
+                raise ValueError(f'motivo inválido para gate bem-sucedido: {self.motivo!r}')
+        else:
+            if self.etapa_resultante is not None or self.situacao_resultante is not None:
+                raise ValueError(
+                    'tentado=True, sucesso=False não pode carregar etapa/situacao resultante')
+            if self.motivo != MOTIVO_ERRO_TECNICO_GATE_IDENTIFICACAO:
+                raise ValueError(
+                    'tentado=True, sucesso=False exige motivo=ERRO_TECNICO_GATE_IDENTIFICACAO')
+
+
+def resultado_gate_identificacao_nao_aplicavel() -> ResultadoGateIdentificacaoDTO:
+    """Gate de identificação não foi sequer tentado -- documento não
+    elegível (ver critérios de elegibilidade em servico_lote.py)."""
+    return ResultadoGateIdentificacaoDTO(
+        tentado=False, sucesso=False,
+        etapa_resultante=None, situacao_resultante=None,
+        motivo=MOTIVO_GATE_IDENTIFICACAO_NAO_APLICAVEL,
+    )
+
+
+def resultado_gate_identificacao_erro_tecnico() -> ResultadoGateIdentificacaoDTO:
+    """Gate de identificação foi tentado, mas
+    `decidir_transicao_identificacao`/`aplicar_resultado_identificacao`
+    levantou uma exceção inesperada -- falha SECUNDÁRIA, nunca desfaz o
+    Documento, o roteamento shadow nem o gate de classificação já
+    aplicados. NUNCA expõe `str(exc)`."""
+    return ResultadoGateIdentificacaoDTO(
+        tentado=True, sucesso=False,
+        etapa_resultante=None, situacao_resultante=None,
+        motivo=MOTIVO_ERRO_TECNICO_GATE_IDENTIFICACAO,
+    )
+
+
+def resultado_gate_identificacao_promovida(
+    estado: EstadoEsteiraDocumento,
+) -> ResultadoGateIdentificacaoDTO:
+    """Gate de identificação aplicado com sucesso -- `estado` é o
+    `EstadoEsteiraDocumento` já persistido por
+    `aplicar_resultado_identificacao`. O motivo sanitizado é escolhido
+    pela situação final (CONCLUIDO/BLOQUEADO/EM_REVISAO), nunca
+    inventado."""
+    motivo = _MOTIVO_POR_SITUACAO_GATE_IDENTIFICACAO.get(estado.situacao)
+    if motivo is None:
+        raise ValueError(
+            f'situação inesperada após gate de identificação: {estado.situacao!r}')
+    return ResultadoGateIdentificacaoDTO(
         tentado=True, sucesso=True,
         etapa_resultante=estado.etapa_atual.value,
         situacao_resultante=estado.situacao.value,

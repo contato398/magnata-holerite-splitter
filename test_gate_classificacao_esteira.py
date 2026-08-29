@@ -6,9 +6,13 @@ Cobre o ponto de integração real dentro de
 `DecisaoRoteamentoDocumental` já calculada para o roteamento shadow —
 nunca reclassifica, nunca chama `decidir_roteamento()` duas vezes.
 
-Monkeypatch de `decidir_roteamento` (via `servico_lote_mod`) torna estes
-testes independentes do ambiente de extração de PDF (mesmo padrão já
-usado em test_servico_lote_roteamento_shadow.py).
+Monkeypatch de `extrair_texto_seguro`/`decidir_roteamento_de_texto` (via
+`servico_lote_mod` -- bridge de identificação de Holerite avulso, branch
+fix/identificacao-holerite-avulso: `servico_lote.py` extrai o texto uma
+única vez e decide via essas duas funções, nunca mais
+`decidir_roteamento(bytes)` diretamente) torna estes testes
+independentes do ambiente de extração de PDF (mesmo padrão já usado em
+test_servico_lote_roteamento_shadow.py).
 """
 import collections
 
@@ -95,9 +99,10 @@ def _decisao(estado: EstadoClassificacao, tipo: str = 'Holerite', motivo: Motivo
 class TestDocumentoNovoResolvida:
     def test_avanca_para_classificacao_concluido(self, monkeypatch):
         ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
         monkeypatch.setattr(
-            servico_lote_mod, 'decidir_roteamento',
-            lambda conteudo: _decisao(EstadoClassificacao.RESOLVIDA),
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao(EstadoClassificacao.RESOLVIDA),
         )
         arquivos = [ArquivoEntradaLote(b'conteudo holerite', 'x.pdf', 'application/pdf')]
         resumo = ctx.servico_lote.criar_lote('upload_manual', arquivos)
@@ -111,9 +116,10 @@ class TestDocumentoNovoResolvida:
 
     def test_exatamente_um_evento_de_avanco_para_classificacao(self, monkeypatch):
         ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
         monkeypatch.setattr(
-            servico_lote_mod, 'decidir_roteamento',
-            lambda conteudo: _decisao(EstadoClassificacao.RESOLVIDA),
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao(EstadoClassificacao.RESOLVIDA),
         )
         arquivos = [ArquivoEntradaLote(b'conteudo holerite unico', 'x.pdf', 'application/pdf')]
         resumo = ctx.servico_lote.criar_lote('upload_manual', arquivos)
@@ -135,9 +141,10 @@ class TestDocumentoNovoResolvida:
 
     def test_resultado_gate_indica_promovida(self, monkeypatch):
         ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
         monkeypatch.setattr(
-            servico_lote_mod, 'decidir_roteamento',
-            lambda conteudo: _decisao(EstadoClassificacao.RESOLVIDA),
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao(EstadoClassificacao.RESOLVIDA),
         )
         arquivos = [ArquivoEntradaLote(b'conteudo holerite', 'x.pdf', 'application/pdf')]
         resumo = ctx.servico_lote.criar_lote('upload_manual', arquivos)
@@ -158,9 +165,10 @@ class TestDocumentoNovoResolvida:
 class TestDuplicadoNaoRepeteGate:
     def test_duplicado_nao_tenta_transicao_de_novo(self, monkeypatch):
         ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
         monkeypatch.setattr(
-            servico_lote_mod, 'decidir_roteamento',
-            lambda conteudo: _decisao(EstadoClassificacao.RESOLVIDA),
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao(EstadoClassificacao.RESOLVIDA),
         )
         conteudo = b'mesmo conteudo duas vezes'
         arquivos = [
@@ -204,9 +212,10 @@ class TestDuplicadoNaoRepeteGate:
 class TestAmbiguaGeraDoisEventos:
     def test_avanco_e_bloqueio_registrados(self, monkeypatch):
         ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
         monkeypatch.setattr(
-            servico_lote_mod, 'decidir_roteamento',
-            lambda conteudo: _decisao(EstadoClassificacao.AMBIGUA, tipo='Outro', escopo=EscopoDocumental.DESCONHECIDO),
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao(EstadoClassificacao.AMBIGUA, tipo='Outro', escopo=EscopoDocumental.DESCONHECIDO),
         )
         arquivos = [ArquivoEntradaLote(b'conteudo ambiguo', 'x.pdf', 'application/pdf')]
         resumo = ctx.servico_lote.criar_lote('upload_manual', arquivos)
@@ -227,9 +236,10 @@ class TestAmbiguaGeraDoisEventos:
 
     def test_resultado_gate_indica_promovida_com_bloqueio_e_motivo_proprio(self, monkeypatch):
         ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
         monkeypatch.setattr(
-            servico_lote_mod, 'decidir_roteamento',
-            lambda conteudo: _decisao(EstadoClassificacao.AMBIGUA, tipo='Outro', escopo=EscopoDocumental.DESCONHECIDO),
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao(EstadoClassificacao.AMBIGUA, tipo='Outro', escopo=EscopoDocumental.DESCONHECIDO),
         )
         arquivos = [ArquivoEntradaLote(b'conteudo ambiguo 3', 'x.pdf', 'application/pdf')]
         resumo = ctx.servico_lote.criar_lote('upload_manual', arquivos)
@@ -250,9 +260,10 @@ class TestAmbiguaGeraDoisEventos:
         """BLOQUEADO impede avanço posterior até resolver_bloqueio() --
         comportamento já existente, preservado."""
         ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
         monkeypatch.setattr(
-            servico_lote_mod, 'decidir_roteamento',
-            lambda conteudo: _decisao(EstadoClassificacao.AMBIGUA, tipo='Outro', escopo=EscopoDocumental.DESCONHECIDO),
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao(EstadoClassificacao.AMBIGUA, tipo='Outro', escopo=EscopoDocumental.DESCONHECIDO),
         )
         arquivos = [ArquivoEntradaLote(b'conteudo ambiguo 2', 'x.pdf', 'application/pdf')]
         resumo = ctx.servico_lote.criar_lote('upload_manual', arquivos)
@@ -270,9 +281,10 @@ class TestAmbiguaGeraDoisEventos:
 class TestNaoReconhecidaSemHardBlock:
     def test_em_revisao_sem_motivo_bloqueio(self, monkeypatch):
         ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
         monkeypatch.setattr(
-            servico_lote_mod, 'decidir_roteamento',
-            lambda conteudo: _decisao(EstadoClassificacao.NAO_RECONHECIDA, tipo='Outro', escopo=EscopoDocumental.DESCONHECIDO),
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao(EstadoClassificacao.NAO_RECONHECIDA, tipo='Outro', escopo=EscopoDocumental.DESCONHECIDO),
         )
         arquivos = [ArquivoEntradaLote(b'conteudo desconhecido', 'x.pdf', 'application/pdf')]
         resumo = ctx.servico_lote.criar_lote('upload_manual', arquivos)
@@ -291,9 +303,10 @@ class TestNaoReconhecidaSemHardBlock:
 
     def test_resultado_gate_indica_promovida_em_revisao(self, monkeypatch):
         ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
         monkeypatch.setattr(
-            servico_lote_mod, 'decidir_roteamento',
-            lambda conteudo: _decisao(EstadoClassificacao.NAO_RECONHECIDA, tipo='Outro', escopo=EscopoDocumental.DESCONHECIDO),
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao(EstadoClassificacao.NAO_RECONHECIDA, tipo='Outro', escopo=EscopoDocumental.DESCONHECIDO),
         )
         arquivos = [ArquivoEntradaLote(b'conteudo desconhecido 2', 'x.pdf', 'application/pdf')]
         resumo = ctx.servico_lote.criar_lote('upload_manual', arquivos)
@@ -311,9 +324,10 @@ class TestNaoReconhecidaSemHardBlock:
 class TestPdfInvalidoDistinguivel:
     def test_resultado_gate_indica_promovida_com_bloqueio(self, monkeypatch):
         ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
         monkeypatch.setattr(
-            servico_lote_mod, 'decidir_roteamento',
-            lambda conteudo: _decisao(EstadoClassificacao.INVALIDA, tipo='Outro', escopo=EscopoDocumental.DESCONHECIDO),
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao(EstadoClassificacao.INVALIDA, tipo='Outro', escopo=EscopoDocumental.DESCONHECIDO),
         )
         arquivos = [ArquivoEntradaLote(b'conteudo invalido', 'x.pdf', 'application/pdf')]
         resumo = ctx.servico_lote.criar_lote('upload_manual', arquivos)
@@ -339,10 +353,10 @@ class TestErroTecnicoShadowNaoAvanca:
     def test_documento_permanece_em_registro(self, monkeypatch):
         ctx = _montar_servicos()
 
-        def _decidir_roteamento_quebrado(conteudo):
+        def _extrair_texto_quebrado(conteudo):
             raise RuntimeError('falha técnica simulada')
 
-        monkeypatch.setattr(servico_lote_mod, 'decidir_roteamento', _decidir_roteamento_quebrado)
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', _extrair_texto_quebrado)
 
         arquivos = [ArquivoEntradaLote(b'conteudo qualquer', 'x.pdf', 'application/pdf')]
         resumo = ctx.servico_lote.criar_lote('upload_manual', arquivos)
@@ -384,9 +398,10 @@ class TestFalhaDoGateEmSi:
 
     def test_falha_ao_aplicar_gate_nao_afeta_ingestao(self, monkeypatch):
         ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
         monkeypatch.setattr(
-            servico_lote_mod, 'decidir_roteamento',
-            lambda conteudo: _decisao(EstadoClassificacao.RESOLVIDA),
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao(EstadoClassificacao.RESOLVIDA),
         )
 
         def _aplicar_quebrado(self, documento_id, decisao_transicao, correlation_id):
@@ -430,9 +445,10 @@ class TestFalhaDoGateEmSi:
 class TestEventosSanitizados:
     def test_evento_de_avanco_nao_contem_pii(self, monkeypatch):
         ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
         monkeypatch.setattr(
-            servico_lote_mod, 'decidir_roteamento',
-            lambda conteudo: _decisao(EstadoClassificacao.RESOLVIDA),
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao(EstadoClassificacao.RESOLVIDA),
         )
         arquivos = [ArquivoEntradaLote(b'CPF: 123.456.789-01 texto qualquer', 'x.pdf', 'application/pdf')]
         resumo = ctx.servico_lote.criar_lote('upload_manual', arquivos)
@@ -446,9 +462,10 @@ class TestEventosSanitizados:
 
     def test_evento_de_bloqueio_ambigua_nao_contem_pii(self, monkeypatch):
         ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
         monkeypatch.setattr(
-            servico_lote_mod, 'decidir_roteamento',
-            lambda conteudo: _decisao(EstadoClassificacao.AMBIGUA, tipo='Outro', escopo=EscopoDocumental.DESCONHECIDO),
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao(EstadoClassificacao.AMBIGUA, tipo='Outro', escopo=EscopoDocumental.DESCONHECIDO),
         )
         arquivos = [ArquivoEntradaLote(b'nome: Joao da Silva, CNPJ 12.345.678/0001-90', 'x.pdf', 'application/pdf')]
         resumo = ctx.servico_lote.criar_lote('upload_manual', arquivos)
@@ -466,9 +483,10 @@ class TestEventosSanitizados:
 class TestProximaAcaoAtualizada:
     def test_classificacao_concluido_nao_diz_fase_futura(self, monkeypatch):
         ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
         monkeypatch.setattr(
-            servico_lote_mod, 'decidir_roteamento',
-            lambda conteudo: _decisao(EstadoClassificacao.RESOLVIDA),
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao(EstadoClassificacao.RESOLVIDA),
         )
         arquivos = [ArquivoEntradaLote(b'conteudo holerite', 'x.pdf', 'application/pdf')]
         resumo = ctx.servico_lote.criar_lote('upload_manual', arquivos)

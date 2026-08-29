@@ -129,9 +129,17 @@ def _decisao_resolvida_para_teste() -> DecisaoRoteamentoDocumental:
 
 
 def _forcar_classificacao_resolvida(monkeypatch: pytest.MonkeyPatch) -> None:
+    # servico_lote.py extrai o texto uma única vez (extrair_texto_seguro)
+    # e decide via decidir_roteamento_de_texto -- nunca mais
+    # decidir_roteamento(bytes) diretamente (bridge de identificação de
+    # Holerite avulso, branch fix/identificacao-holerite-avulso). Os
+    # testes desta fase não têm fonte de candidatos injetada
+    # (ServicoCriacaoLote sem fonte_candidatos_funcionario), então o
+    # gate de identificação nunca é tentado aqui mesmo com texto fake.
+    monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
     monkeypatch.setattr(
-        servico_lote_mod, 'decidir_roteamento',
-        lambda conteudo: _decisao_resolvida_para_teste(),
+        servico_lote_mod, 'decidir_roteamento_de_texto',
+        lambda texto: _decisao_resolvida_para_teste(),
     )
 
 
