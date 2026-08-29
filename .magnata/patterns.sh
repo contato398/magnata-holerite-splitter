@@ -412,6 +412,16 @@ ALLOWED_PATHS=(
   # test_*.py genericamente.
   "^magnata_os/classificacao/classificador_documental\.py$"
   "^test_classificador_documental_migracao\.py$"
+  # Excecao exata e restrita (ponte shadow de roteamento documental,
+  # branch fix/roteamento-documental-shadow) — somente o módulo novo
+  # e seu teste nominal. Nao libera magnata_os/classificacao/ nem
+  # test_*.py genericamente. Inclui tambem o modulo neutro de extracao
+  # de texto de PDF, promovido de importacao_lote/orquestrador.py
+  # (_extrair_texto_pdf, privada) para reuso sem duplicacao — nao libera
+  # "^magnata_os/documental/" de forma ampla, so este caminho exato.
+  "^magnata_os/classificacao/roteamento_documental\.py$"
+  "^test_roteamento_documental_shadow\.py$"
+  "^magnata_os/documental/extracao_texto\.py$"
   # Exceção exata e restrita (decisão registrada, branch
   # claude/macro-6a-commit-recovery-k7rsly, 2026-08-12) — Macro 6A,
   # auditoria e esteira documental. Somente estes 8 caminhos exatos de

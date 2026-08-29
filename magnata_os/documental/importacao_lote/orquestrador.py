@@ -18,9 +18,9 @@ só este item, nunca o lote inteiro).
 
 from __future__ import annotations
 
-import io
 from dataclasses import dataclass
 
+from ..extracao_texto import extrair_texto_pdf as _extrair_texto_pdf
 from . import dominio
 from .contratos import (
     CandidatoCliente,
@@ -34,14 +34,12 @@ from .contratos import (
     TipoDocumental,
 )
 
-
-def _extrair_texto_pdf(conteudo: bytes) -> str:
-    import pdfplumber
-    texto = ''
-    with pdfplumber.open(io.BytesIO(conteudo)) as pdf:
-        for pagina in pdf.pages:
-            texto += (pagina.extract_text() or '') + '\n'
-    return texto
+# `_extrair_texto_pdf` foi promovida para `magnata_os/documental/
+# extracao_texto.py` (função pública `extrair_texto_pdf`), para reúso
+# por outros módulos (ex.: classificacao/roteamento_documental.py) sem
+# duplicar a lógica. Reimportada aqui com o nome antigo — nenhum
+# chamador deste módulo (processar_holerite/processar_extrato) precisa
+# mudar; comportamento idêntico.
 
 
 @dataclass
