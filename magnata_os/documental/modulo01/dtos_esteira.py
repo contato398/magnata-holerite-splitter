@@ -18,6 +18,7 @@ from typing import Mapping, Optional, Tuple
 
 from magnata_os.classificacao.roteamento_documental import DecisaoRoteamentoDocumental
 
+from ..importacao_lote.contratos import CompetenciaExtraida, StatusExtracaoCompetencia
 from .dominio import Documento
 from .dominio_esteira import (
     EstadoEsteiraDocumento,
@@ -123,6 +124,67 @@ class RoteamentoShadowDTO:
 
 
 @dataclasses.dataclass(frozen=True)
+class HoleriteConfirmadoDTO:
+    """Observação sanitizada de um Holerite avulso cuja identificação de
+    colaborador terminou RESOLVIDA (ver politica_identificacao_holerite.py
+    e o critério de elegibilidade em `ServicoCriacaoLote._processar_um_
+    arquivo`) -- só os fatos OBSERVADOS no próprio documento, nunca uma
+    decisão de negócio.
+
+    Deliberadamente NUNCA carrega:
+      - "competência esperada" -- essa vem de uma fonte independente,
+        fora deste módulo (ver `ponte_prestacao_holerite.py` e a
+        proibição de validação circular: esperada != observada, nunca
+        `esperada = observada`);
+      - cliente/vínculo -- resolvido só na ponte, nunca aqui (Módulo 01
+        não conhece Prestação de Contas);
+      - CPF, nome ou texto do PDF -- só `documento_id`, `hash_sha256` e
+        `colaborador_entidade_id` (record id do Airtable já resolvido,
+        não é PII).
+
+    `competencia_status` é o código sanitizado de
+    `StatusExtracaoCompetencia` (nunca texto bruto do PDF).
+    `competencia_ano_mes` só é preenchido quando
+    `competencia_status == StatusExtracaoCompetencia.ENCONTRADA.value`."""
+
+    documento_id: str
+    hash_sha256: str
+    colaborador_entidade_id: str
+    competencia_status: str
+    competencia_ano_mes: Optional[Tuple[int, int]] = None
+
+    def __post_init__(self) -> None:
+        if self.competencia_status == StatusExtracaoCompetencia.ENCONTRADA.value:
+            if self.competencia_ano_mes is None:
+                raise ValueError(
+                    'competencia_status ENCONTRADA exige competencia_ano_mes')
+        elif self.competencia_ano_mes is not None:
+            raise ValueError(
+                'competencia_ano_mes só pode existir quando competencia_status é ENCONTRADA')
+
+
+def holerite_confirmado_para_dto(
+    documento_id: str,
+    hash_sha256: str,
+    colaborador_entidade_id: str,
+    competencia_extraida: CompetenciaExtraida,
+) -> HoleriteConfirmadoDTO:
+    """Converte a competência OBSERVADA (extraída do próprio documento --
+    `extrair_competencia_de_texto`, importacao_lote/dominio.py) num
+    `HoleriteConfirmadoDTO`. NUNCA recebe nem decide a competência
+    ESPERADA -- essa comparação só acontece na ponte
+    (`ponte_prestacao_holerite.py`), com uma fonte independente injetada
+    de fora."""
+    return HoleriteConfirmadoDTO(
+        documento_id=documento_id,
+        hash_sha256=hash_sha256,
+        colaborador_entidade_id=colaborador_entidade_id,
+        competencia_status=competencia_extraida.status.value,
+        competencia_ano_mes=competencia_extraida.ano_mes,
+    )
+
+
+@dataclasses.dataclass(frozen=True)
 class ItemResumoLote:
     """Resultado do processamento de UM arquivo dentro de um lote.
 
@@ -143,7 +205,15 @@ class ItemResumoLote:
     RESOLVIDO — ver politica_identificacao_holerite.py): `tentado=False`
     para qualquer item não elegível (outro tipo documental, duplicado,
     classificação não RESOLVIDA, gate de classificação sem sucesso,
-    texto indisponível) — nunca confundido com falha."""
+    texto indisponível) — nunca confundido com falha.
+
+    `holerite_confirmado` só é preenchido quando o gate de identificação
+    acima promoveu o documento para IDENTIFICACAO/CONCLUIDO com
+    colaborador RESOLVIDO (nunca AMBIGUA, NAO_ENCONTRADA, MESTRE_SUSPEITO
+    ou erro técnico) -- `None` em qualquer outro caso, inclusive para os
+    outros 16 tipos documentais e para documento duplicado. Ponte pura
+    para a Prestação de Contas (`ponte_prestacao_holerite.py`); este
+    campo nunca decide cliente nem competência esperada por si só."""
 
     nome_original: str
     documento_id: Optional[str]
@@ -153,6 +223,7 @@ class ItemResumoLote:
     roteamento_shadow: Optional[RoteamentoShadowDTO] = None
     resultado_gate_classificacao: Optional[ResultadoGateClassificacaoDTO] = None
     resultado_gate_identificacao: Optional[ResultadoGateIdentificacaoDTO] = None
+    holerite_confirmado: Optional[HoleriteConfirmadoDTO] = None
 
 
 @dataclasses.dataclass(frozen=True)

@@ -587,6 +587,20 @@ ALLOWED_PATHS=(
   "^magnata_os/documental/modulo01/composicao\.py$"
   "^test_magnata_os_documental_modulo01_email_captura\.py$"
   "^docs/decisoes/composition-root-modulo01-v1\.md$"
+  # Excecao exata e restrita (primeiro corredor automatizado E2E da
+  # Prestacao de Contas, Holerite primeiro, branch
+  # fix/corredor-prestacao-holerite-e2e) — ponte pura Modulo 01 ->
+  # Prestacao que traduz um Holerite avulso ja identificado
+  # (HoleriteConfirmadoDTO, dtos_esteira.py, ja liberado acima) num
+  # ItemInventarioPrestacao (contrato neutro ja existente), so quando
+  # competencia observada bate com uma competencia esperada
+  # INDEPENDENTE (parametro explicito, nunca inferida do documento) e o
+  # colaborador resolve para exatamente 1 cliente (FonteVinculosPrestacao
+  # ja existente, sem alteracao). Nao libera
+  # "^magnata_os/documental/modulo01/" nem "^test_" de forma ampla.
+  "^magnata_os/documental/modulo01/ponte_prestacao_holerite\.py$"
+  "^test_corredor_prestacao_holerite_e2e\.py$"
+  "^docs/decisoes/corredor-prestacao-holerite-e2e-v1\.md$"
 )
 
 # ============================================================================
