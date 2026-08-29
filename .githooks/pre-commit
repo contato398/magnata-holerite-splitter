@@ -253,6 +253,12 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # "^test_" de forma ampla nem qualquer outro arquivo de Fase 3/4.
   "test_magnata_os_documental_modulo01_fase3.py"
   "test_magnata_os_documental_modulo01_fase4.py"
+  # Excecao exata e restrita (primeiro gate controlado
+  # CLASSIFICACAO->IDENTIFICACAO, so Holerite avulso, branch
+  # fix/identificacao-holerite-avulso). Mantem test_* bloqueado por
+  # padrao e libera somente estes 2 testes nominais novos.
+  "test_politica_identificacao_holerite.py"
+  "test_gate_identificacao_holerite_esteira.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

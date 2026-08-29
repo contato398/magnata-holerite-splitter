@@ -9,9 +9,13 @@ nada é persistido, nenhuma etapa da esteira avança para CLASSIFICACAO.
 
 Onde a classificação real (via pdfplumber) não é necessária para o que
 o teste verifica (isolamento de erro, proveniência sem metadados,
-duplicado), o teste monkeypatch a função `decidir_roteamento` importada
-em `servico_lote.py`, tornando esses testes independentes do ambiente
-de extração de PDF. Os 2 testes que precisam de classificação REAL
+duplicado), o teste monkeypatch `extrair_texto_seguro` e/ou
+`decidir_roteamento_de_texto` (bridge de identificação de Holerite
+avulso, branch fix/identificacao-holerite-avulso -- `servico_lote.py`
+extrai o texto uma única vez via `extrair_texto_seguro` e decide via
+`decidir_roteamento_de_texto`, nunca mais `decidir_roteamento(bytes)`
+diretamente), tornando esses testes independentes do ambiente de
+extração de PDF. Os 2 testes que precisam de classificação REAL
 (Holerite resolvido, tipo desconhecido) usam PDFs fabricados via
 reportlab e são pulados explicitamente (nunca escondidos como "passou")
 quando `pdfplumber` está quebrado neste sandbox -- mesmo padrão já
@@ -178,10 +182,10 @@ class TestIsolamentoDeErroTecnico:
     def test_excecao_no_roteamento_nao_afeta_ingestao(self, monkeypatch):
         ctx = _montar_servicos()
 
-        def _decidir_roteamento_quebrado(conteudo_pdf: bytes):
+        def _extrair_texto_quebrado(conteudo_pdf: bytes):
             raise RuntimeError("falha técnica simulada — nunca deve vazar")
 
-        monkeypatch.setattr(servico_lote_mod, 'decidir_roteamento', _decidir_roteamento_quebrado)
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', _extrair_texto_quebrado)
 
         arquivos = [ArquivoEntradaLote(b'conteudo qualquer', 'x.pdf', 'application/pdf')]
         resumo = ctx.servico_lote.criar_lote('upload_manual', arquivos)
@@ -242,10 +246,10 @@ class TestIsolamentoDeErroTecnico:
         assert PanicExceptionFiel.__module__ == 'pyo3_runtime'
         assert PanicExceptionFiel.__name__ == 'PanicException'
 
-        def _decidir_roteamento_panic(conteudo_pdf: bytes):
+        def _extrair_texto_panic(conteudo_pdf: bytes):
             raise PanicExceptionFiel("Python API call failed")
 
-        monkeypatch.setattr(servico_lote_mod, 'decidir_roteamento', _decidir_roteamento_panic)
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', _extrair_texto_panic)
 
         arquivos = [ArquivoEntradaLote(b'conteudo qualquer', 'x.pdf', 'application/pdf')]
         resumo = ctx.servico_lote.criar_lote('upload_manual', arquivos)
@@ -267,10 +271,10 @@ class TestIsolamentoDeErroTecnico:
             pass
         assert PanicException.__module__ != 'pyo3_runtime'
 
-        def _decidir_roteamento_outro_panic(conteudo_pdf: bytes):
+        def _extrair_texto_outro_panic(conteudo_pdf: bytes):
             raise PanicException("nao e o pyo3_runtime de verdade")
 
-        monkeypatch.setattr(servico_lote_mod, 'decidir_roteamento', _decidir_roteamento_outro_panic)
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', _extrair_texto_outro_panic)
 
         arquivos = [ArquivoEntradaLote(b'conteudo qualquer', 'x.pdf', 'application/pdf')]
         with pytest.raises(PanicException):
@@ -279,10 +283,10 @@ class TestIsolamentoDeErroTecnico:
     def test_keyboard_interrupt_nao_e_engolido(self, monkeypatch):
         ctx = _montar_servicos()
 
-        def _decidir_roteamento_interrompe(conteudo_pdf: bytes):
+        def _extrair_texto_interrompe(conteudo_pdf: bytes):
             raise KeyboardInterrupt()
 
-        monkeypatch.setattr(servico_lote_mod, 'decidir_roteamento', _decidir_roteamento_interrompe)
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', _extrair_texto_interrompe)
 
         arquivos = [ArquivoEntradaLote(b'conteudo qualquer', 'x.pdf', 'application/pdf')]
         with pytest.raises(KeyboardInterrupt):
@@ -291,10 +295,10 @@ class TestIsolamentoDeErroTecnico:
     def test_system_exit_nao_e_engolido(self, monkeypatch):
         ctx = _montar_servicos()
 
-        def _decidir_roteamento_sai(conteudo_pdf: bytes):
+        def _extrair_texto_sai(conteudo_pdf: bytes):
             raise SystemExit(1)
 
-        monkeypatch.setattr(servico_lote_mod, 'decidir_roteamento', _decidir_roteamento_sai)
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', _extrair_texto_sai)
 
         arquivos = [ArquivoEntradaLote(b'conteudo qualquer', 'x.pdf', 'application/pdf')]
         with pytest.raises(SystemExit):
@@ -303,10 +307,10 @@ class TestIsolamentoDeErroTecnico:
     def test_generator_exit_nao_e_engolido(self, monkeypatch):
         ctx = _montar_servicos()
 
-        def _decidir_roteamento_generator_exit(conteudo_pdf: bytes):
+        def _extrair_texto_generator_exit(conteudo_pdf: bytes):
             raise GeneratorExit()
 
-        monkeypatch.setattr(servico_lote_mod, 'decidir_roteamento', _decidir_roteamento_generator_exit)
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', _extrair_texto_generator_exit)
 
         arquivos = [ArquivoEntradaLote(b'conteudo qualquer', 'x.pdf', 'application/pdf')]
         with pytest.raises(GeneratorExit):
@@ -320,10 +324,10 @@ class TestIsolamentoDeErroTecnico:
         import asyncio
         ctx = _montar_servicos()
 
-        def _decidir_roteamento_cancelado(conteudo_pdf: bytes):
+        def _extrair_texto_cancelado(conteudo_pdf: bytes):
             raise asyncio.CancelledError()
 
-        monkeypatch.setattr(servico_lote_mod, 'decidir_roteamento', _decidir_roteamento_cancelado)
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', _extrair_texto_cancelado)
 
         arquivos = [ArquivoEntradaLote(b'conteudo qualquer', 'x.pdf', 'application/pdf')]
         with pytest.raises(asyncio.CancelledError):
@@ -335,9 +339,10 @@ class TestIsolamentoDeErroTecnico:
 class TestProvenienciaOrigemNaoGmail:
     def test_sem_metadados_origem_message_id_e_none(self, monkeypatch):
         ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
         monkeypatch.setattr(
-            servico_lote_mod, 'decidir_roteamento',
-            lambda conteudo: _decisao_fake('Holerite', EstadoClassificacao.RESOLVIDA, EscopoDocumental.COLABORADOR),
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao_fake('Holerite', EstadoClassificacao.RESOLVIDA, EscopoDocumental.COLABORADOR),
         )
 
         arquivos = [ArquivoEntradaLote(b'conteudo sem metadados', 'x.pdf', 'application/pdf', metadados=None)]
@@ -350,9 +355,10 @@ class TestProvenienciaOrigemNaoGmail:
 
     def test_metadados_sem_a_chave_origem_message_id_e_none(self, monkeypatch):
         ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
         monkeypatch.setattr(
-            servico_lote_mod, 'decidir_roteamento',
-            lambda conteudo: _decisao_fake('Holerite', EstadoClassificacao.RESOLVIDA, EscopoDocumental.COLABORADOR),
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao_fake('Holerite', EstadoClassificacao.RESOLVIDA, EscopoDocumental.COLABORADOR),
         )
 
         arquivos = [ArquivoEntradaLote(
@@ -365,9 +371,10 @@ class TestProvenienciaOrigemNaoGmail:
 
     def test_metadados_com_origem_message_id_e_repassado(self, monkeypatch):
         ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
         monkeypatch.setattr(
-            servico_lote_mod, 'decidir_roteamento',
-            lambda conteudo: _decisao_fake('Holerite', EstadoClassificacao.RESOLVIDA, EscopoDocumental.COLABORADOR),
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao_fake('Holerite', EstadoClassificacao.RESOLVIDA, EscopoDocumental.COLABORADOR),
         )
 
         arquivos = [ArquivoEntradaLote(
@@ -392,11 +399,15 @@ class TestDuplicado:
         ctx = _montar_servicos()
         chamadas = []
 
-        def _decidir_roteamento_espiao(conteudo: bytes):
+        def _extrair_texto_espiao(conteudo: bytes):
             chamadas.append(conteudo)
-            return _decisao_fake('Holerite', EstadoClassificacao.RESOLVIDA, EscopoDocumental.COLABORADOR)
+            return 'texto fake'
 
-        monkeypatch.setattr(servico_lote_mod, 'decidir_roteamento', _decidir_roteamento_espiao)
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', _extrair_texto_espiao)
+        monkeypatch.setattr(
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao_fake('Holerite', EstadoClassificacao.RESOLVIDA, EscopoDocumental.COLABORADOR),
+        )
 
         conteudo = b'mesmo conteudo duas vezes'
         arquivos = [
@@ -417,7 +428,7 @@ class TestDuplicado:
         # Documento criado (repo_docs continua com só 1 documento).
         assert item_original.roteamento_shadow is not None
         assert item_duplicado.roteamento_shadow is not None
-        assert len(chamadas) == 2  # decidir_roteamento chamado 2x, mesmos bytes
+        assert len(chamadas) == 2  # extrair_texto_seguro chamado 2x, mesmos bytes
         assert chamadas[0] == conteudo
         assert chamadas[1] == conteudo
         # Nenhum novo Documento criado para o duplicado -- só 1 documento
@@ -429,15 +440,21 @@ class TestDuplicado:
 
     def test_bytes_passados_para_roteamento_sao_exatamente_os_mesmos_do_arquivo(self, monkeypatch):
         """`arquivo.conteudo` — nunca releitura, nunca recálculo de
-        hash, nunca cópia — é o que chega em decidir_roteamento."""
+        hash, nunca cópia — é o que chega em extrair_texto_seguro (a
+        extração única, reaproveitada por decidir_roteamento_de_texto e,
+        quando elegível, pela identificação de Holerite)."""
         ctx = _montar_servicos()
         recebido = {}
 
         def _espiao(conteudo: bytes):
             recebido['bytes'] = conteudo
-            return _decisao_fake('Holerite', EstadoClassificacao.RESOLVIDA, EscopoDocumental.COLABORADOR)
+            return 'texto fake'
 
-        monkeypatch.setattr(servico_lote_mod, 'decidir_roteamento', _espiao)
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', _espiao)
+        monkeypatch.setattr(
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao_fake('Holerite', EstadoClassificacao.RESOLVIDA, EscopoDocumental.COLABORADOR),
+        )
 
         conteudo_original = b'bytes identicos e rastreaveis'
         arquivos = [ArquivoEntradaLote(conteudo_original, 'x.pdf', 'application/pdf')]

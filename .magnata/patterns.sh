@@ -559,6 +559,21 @@ ALLOWED_PATHS=(
   "^magnata_os/orquestrador/migrations/0001_repositorio_execucoes_rollback\.sql$"
   "^docs/decisoes/persistencia-duravel-orquestrador-v1\.md$"
   "^test_magnata_os_orquestrador_postgres\.py$"
+  # Excecao exata e restrita (primeiro gate controlado
+  # CLASSIFICACAO->IDENTIFICACAO, so Holerite avulso, branch
+  # fix/identificacao-holerite-avulso) — modulo novo de politica pura de
+  # transicao (nao depende de ItemManifestoHolerite/ConfiguracaoExecucao/
+  # processar_holerite, so de resolver_funcionario ja existente e do
+  # contrato neutro ResolucaoDimensao ja existente em
+  # magnata_os/classificacao/contratos.py). Nao libera
+  # "^magnata_os/documental/modulo01/" nem "^test_" de forma ampla. Os
+  # arquivos ja modificados nesta branch (roteamento_documental.py,
+  # dominio.py, dtos_esteira.py, servico_avanco_esteira.py,
+  # servico_lote.py) ja estavam em ALLOWED_PATHS de branches anteriores —
+  # nao precisam de entrada nova aqui.
+  "^magnata_os/documental/modulo01/politica_identificacao_holerite\.py$"
+  "^test_politica_identificacao_holerite\.py$"
+  "^test_gate_identificacao_holerite_esteira\.py$"
 )
 
 # ============================================================================

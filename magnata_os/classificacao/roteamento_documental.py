@@ -268,7 +268,7 @@ _ESCOPO_POR_TIPO: dict[str, EscopoDocumental] = {
 _TIPOS_COM_PROCESSADOR_AVULSO_COMPATIVEL: frozenset[str] = frozenset()
 
 
-def _extrair_texto_seguro(conteudo_pdf: bytes) -> Optional[str]:
+def extrair_texto_seguro(conteudo_pdf: bytes) -> Optional[str]:
     """Extrai texto do PDF reaproveitando `extrair_texto_pdf`
     (magnata_os/documental/extracao_texto.py) — mesma extração usada por
     processar_holerite/processar_extrato, nenhuma segunda implementação.
@@ -276,7 +276,14 @@ def _extrair_texto_seguro(conteudo_pdf: bytes) -> Optional[str]:
     retorna None — nunca lança, nunca vira string vazia tratada como
     classificável (mesma distinção do legado entre "PDF ilegível" e
     "Documento não reconhecido": app.py, rota /email/webhook, `if not
-    texto.strip()`)."""
+    texto.strip()`).
+
+    Público (auditoria read-only prévia — bridge de identificação de
+    Holerite avulso, branch fix/identificacao-holerite-avulso): permite
+    que um chamador que precise do MESMO texto para mais de uma
+    finalidade (classificação + identificação de colaborador — ver
+    `decidir_roteamento_de_texto` abaixo e `servico_lote.py`) extraia o
+    PDF uma única vez, nunca duas."""
     if not conteudo_pdf:
         return None
     try:
@@ -370,6 +377,32 @@ def _traduzir_para_decisao(resultado: ResultadoClassificacaoDocumental) -> Decis
     )
 
 
+def decidir_roteamento_de_texto(texto: Optional[str]) -> DecisaoRoteamentoDocumental:
+    """Metade B (texto -> decisão) de `decidir_roteamento`, extraída
+    como função pública própria (auditoria read-only prévia — bridge de
+    identificação de Holerite avulso, branch
+    fix/identificacao-holerite-avulso): permite que um chamador que já
+    extraiu o texto uma única vez (via `extrair_texto_seguro`, acima —
+    ex.: `servico_lote.py`, para reaproveitar o MESMO texto também na
+    identificação de colaborador) obtenha a decisão de classificação sem
+    extrair o PDF uma segunda vez.
+
+    `texto is None` reproduz EXATAMENTE a mesma decisão de PDF_INVALIDO
+    que `decidir_roteamento` já produzia para PDF vazio/ilegível —
+    nenhuma mudança de comportamento em relação ao que existia antes
+    desta extração.
+
+    Pura e sem efeitos — não processa, não escreve, não envia, não
+    persiste nada.
+    """
+    if texto is None:
+        return _decisao_revisao(
+            "Outro", EstadoClassificacao.INVALIDA, MotivoRoteamento.PDF_INVALIDO, "ALTA")
+
+    resultado = classificar_documento(texto)
+    return _traduzir_para_decisao(resultado)
+
+
 def decidir_roteamento(conteudo_pdf: bytes) -> DecisaoRoteamentoDocumental:
     """Ponte shadow completa: bytes de PDF avulso -> decisão de
     roteamento. Pura e sem efeitos — não processa, não escreve, não
@@ -384,11 +417,11 @@ def decidir_roteamento(conteudo_pdf: bytes) -> DecisaoRoteamentoDocumental:
         DecisaoRoteamentoDocumental — nunca lança por PDF inválido/
         ilegível (vira REVISAR_HUMANO com estado INVALIDA e
         motivo=PDF_INVALIDO).
-    """
-    texto = _extrair_texto_seguro(conteudo_pdf)
-    if texto is None:
-        return _decisao_revisao(
-            "Outro", EstadoClassificacao.INVALIDA, MotivoRoteamento.PDF_INVALIDO, "ALTA")
 
-    resultado = classificar_documento(texto)
-    return _traduzir_para_decisao(resultado)
+    Wrapper compatível (auditoria read-only prévia): extrai o texto via
+    `extrair_texto_seguro` e delega a decisão a
+    `decidir_roteamento_de_texto` — comportamento externo idêntico ao
+    que existia antes desta extração; nenhum chamador precisa mudar.
+    """
+    texto = extrair_texto_seguro(conteudo_pdf)
+    return decidir_roteamento_de_texto(texto)

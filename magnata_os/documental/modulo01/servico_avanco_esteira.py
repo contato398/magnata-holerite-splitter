@@ -35,6 +35,7 @@ from .dominio_esteira import (
     validar_transicao_etapa,
 )
 from .politica_classificacao import DecisaoTransicaoClassificacao
+from .politica_identificacao_holerite import DecisaoTransicaoIdentificacao
 from .repositorio import RepositorioHistorico
 from .repositorio_esteira import RepositorioEstadosEsteira
 
@@ -147,6 +148,24 @@ def calcular_proxima_acao(
                 'Classificação concluída -- próxima etapa do fluxo '
                 'documental ainda não implementada'
             ),
+            tipo=TipoProximaAcao.HUMANA,
+            prazo=None,
+            responsavel=None,
+        )
+
+    if etapa_atual == EtapaEsteira.IDENTIFICACAO and situacao == SituacaoEsteira.CONCLUIDO:
+        # Mesmo ajuste, mesmo motivo, que o já existente para
+        # CLASSIFICACAO+CONCLUIDO acima: a descrição genérica de
+        # _DESCRICAO_PROXIMA_ACAO[IDENTIFICACAO] ficaria enganosa para um
+        # documento cuja identificação de colaborador JÁ ocorreu (via
+        # politica_identificacao_holerite.decidir_transicao_identificacao,
+        # caso RESOLVIDA -- ver servico_lote.py). Texto deliberadamente
+        # não afirma que a etapa seguinte (VALIDACAO) já é automática --
+        # só que a identificação em si terminou. NUNCA marca a etapa
+        # como automática de forma geral (não altera
+        # _ETAPAS_AUTOMATIZADAS).
+        return ProximaAcao(
+            acao='Identificação concluída -- validação documental pendente',
             tipo=TipoProximaAcao.HUMANA,
             prazo=None,
             responsavel=None,
@@ -320,6 +339,68 @@ class ServicoAvancoEsteira:
         )
         novo_estado = self.avancar_etapa(
             documento_id, EtapaEsteira.CLASSIFICACAO, correlation_id,
+            situacao_nova_etapa=situacao_transitoria,
+            motivo_transicao=decisao_transicao.motivo_transicao,
+        )
+
+        if decisao_transicao.deve_bloquear:
+            novo_estado = self.registrar_bloqueio(
+                documento_id, decisao_transicao.motivo_bloqueio, correlation_id,
+            )
+
+        return novo_estado
+
+    def aplicar_resultado_identificacao(
+        self,
+        documento_id: str,
+        decisao_transicao: DecisaoTransicaoIdentificacao,
+        correlation_id: str,
+    ) -> Optional[EstadoEsteiraDocumento]:
+        """Aplica o resultado de `politica_identificacao_holerite.
+        decidir_transicao_identificacao` -- avança
+        CLASSIFICACAO->IDENTIFICACAO e, quando necessário, registra
+        bloqueio, reutilizando 100% da mecânica já existente
+        (`avancar_etapa`/`registrar_bloqueio` acima). NÃO reimplementa
+        transição, persistência nem evento -- só compõe as duas
+        chamadas já existentes conforme a decisão pura recebida. Mesmo
+        formato de `aplicar_resultado_classificacao` acima.
+
+        CLASSIFICACAO -> IDENTIFICACAO pula SEPARACAO na ordem canônica
+        (`eh_salto_de_etapa`, dominio_esteira.py) -- por isso
+        `motivo_transicao` é OBRIGATÓRIO nesta transição, e todo motivo
+        produzido por `decidir_transicao_identificacao` já é uma string
+        não vazia (ver politica_identificacao_holerite.py), nunca None
+        nem vazio quando `deve_avancar=True`.
+
+        Retorna `None` sem fazer nada se `decisao_transicao.deve_avancar`
+        for `False` (ex.: identificação não elegível/não aplicável --
+        nada estruturado para registrar; ver servico_lote.py).
+
+        Falha após bloqueio parcial (achado da revisão final): quando
+        `deve_bloquear=True`, a situação transitória passada a
+        `avancar_etapa` já é `BLOQUEADO` (nunca `AGUARDANDO`) -- se
+        `registrar_bloqueio` (chamado em seguida) falhar por qualquer
+        motivo, o estado já persistido por `avancar_etapa` fica
+        `IDENTIFICACAO/BLOQUEADO` (só com `motivo_bloqueio=None`
+        temporariamente), nunca `IDENTIFICACAO/AGUARDANDO` -- que
+        `calcular_proxima_acao` traduziria erroneamente como "ainda não
+        implementado", escondendo um documento que na verdade precisa
+        de revisão humana. `avancar_etapa` já bloqueia novo avanço
+        quando `situacao == BLOQUEADO` (`AvancoBloqueadoPorPendencia`) e
+        `calcular_proxima_acao` já trata `BLOQUEADO` com
+        `motivo_bloqueio=None` como "Resolver bloqueio (motivo não
+        informado)" -- nenhum estado novo foi inventado, só a ordem dos
+        dois valores possíveis foi invertida para a mais segura.
+        """
+        if not decisao_transicao.deve_avancar:
+            return None
+
+        situacao_transitoria = (
+            SituacaoEsteira.BLOQUEADO if decisao_transicao.deve_bloquear
+            else decisao_transicao.situacao_identificacao
+        )
+        novo_estado = self.avancar_etapa(
+            documento_id, EtapaEsteira.IDENTIFICACAO, correlation_id,
             situacao_nova_etapa=situacao_transitoria,
             motivo_transicao=decisao_transicao.motivo_transicao,
         )

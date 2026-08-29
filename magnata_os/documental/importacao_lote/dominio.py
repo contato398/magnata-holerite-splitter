@@ -131,6 +131,73 @@ def extrair_cpf_de_texto(texto: str) -> str | None:
     return normalizar_cpf(m.group(0)) if m else None
 
 
+def extrair_cpfs_distintos_de_texto(texto: str) -> tuple[str, ...]:
+    """Extrai TODOS os CPFs distintos (formato XXX.XXX.XXX-XX,
+    normalizados) de um texto — simétrica a `extrair_cnpjs_de_texto`
+    acima, mesmo regex de `extrair_cpf_de_texto` (`_CPF_RE`), só que via
+    `findall` em vez de `search` (auditoria read-only prévia — bridge de
+    identificação de Holerite avulso: usada para distinguir PDF avulso
+    de 1 colaborador de um possível PDF mestre com N colaboradores, sem
+    depender de contagem de páginas — um holerite de 1 colaborador com
+    várias páginas nunca deve virar "mestre" só por ter mais de uma
+    página).
+
+    Ordem determinística: preserva a ordem de primeira ocorrência no
+    texto (nunca ordenação alfabética/numérica, que apagaria a
+    proveniência). CPF é estritamente TRANSITÓRIO — nunca retornado em
+    DTO, evento ou log; o único uso legítimo é contar quantos CPFs
+    distintos existem e, quando exatamente 1, repassar esse valor (só
+    ele, nunca a lista) para `resolver_funcionario`."""
+    if not texto:
+        return ()
+    vistos: dict[str, None] = {}
+    for match in _CPF_RE.findall(texto):
+        cpf_normalizado = normalizar_cpf(match)
+        vistos.setdefault(cpf_normalizado, None)
+    return tuple(vistos.keys())
+
+
+def extrair_nome_funcionario_de_texto(texto: str) -> str | None:
+    """Extrai o nome do colaborador de um Holerite — reimplementação
+    pura (sem importar `app.py`, legado protegido) de
+    `extrair_nome_funcionario` (app.py), restrita SÓ aos marcadores
+    comprovadamente usados por Holerite/Secullum: "Nome do Funcionário"/
+    "Nome do Funcionario" (sem acento). Preserva a lógica útil já
+    comprovada em produção: ler a linha seguinte ao marcador, ignorar a
+    matrícula numérica inicial dessa linha (quando presente) e parar
+    antes de um código numérico de 5/6 dígitos.
+
+    Deliberadamente NÃO inclui o padrão "Colaborador:" — auditoria
+    read-only prévia confirmou (comentário do próprio legado,
+    `app.py::extrair_nome_funcionario`) que esse marcador é específico
+    do formato de Folha de Ponto Manual (v2.99), não de Holerite; uma
+    função de identificação Holerite-específica não deve importar a
+    suposição de layout de outro tipo documental.
+
+    Retorna `None` quando nenhum marcador bate — nunca o literal
+    'Desconhecido' (que no legado é só um placeholder de exibição/log,
+    não um valor de matching)."""
+    if not texto:
+        return None
+    linhas = texto.split('\n')
+    for indice, linha in enumerate(linhas):
+        if 'Nome do Funcionário' in linha or 'Nome do Funcionario' in linha:
+            if indice + 1 >= len(linhas):
+                continue
+            proxima = linhas[indice + 1].strip()
+            partes = proxima.split()
+            if not partes or not partes[0].isdigit():
+                continue
+            nome_partes: list[str] = []
+            for parte in partes[1:]:
+                if re.match(r'^\d{5,6}$', parte):
+                    break
+                nome_partes.append(parte)
+            if nome_partes:
+                return ' '.join(nome_partes)
+    return None
+
+
 # ── Correspondência de colaborador ──────────────────────────────────────
 
 def resolver_funcionario(
