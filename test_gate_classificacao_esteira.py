@@ -439,6 +439,64 @@ class TestFalhaDoGateEmSi:
         # Mensagem da exceção NUNCA vaza.
         assert 'falha simulada' not in resultado_gate.motivo
 
+    def test_ambigua_com_falha_em_registrar_bloqueio_permanece_bloqueado(self, monkeypatch):
+        """Revisão final (mesmo achado e mesma correção já aplicados em
+        aplicar_resultado_identificacao): quando a decisão de
+        classificação exige bloqueio (AMBIGUA), a situação transitória
+        passada a avancar_etapa já nasce BLOQUEADO -- se
+        registrar_bloqueio falhar DEPOIS de avancar_etapa já ter
+        persistido, o documento nunca fica em CLASSIFICACAO/AGUARDANDO
+        (que pareceria "ainda não processado") nem em
+        CLASSIFICACAO/CONCLUIDO -- permanece CLASSIFICACAO/BLOQUEADO,
+        visivelmente pendente de revisão."""
+        ctx = _montar_servicos()
+        monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
+        monkeypatch.setattr(
+            servico_lote_mod, 'decidir_roteamento_de_texto',
+            lambda texto: _decisao(EstadoClassificacao.AMBIGUA, tipo='Outro', escopo=EscopoDocumental.DESCONHECIDO),
+        )
+
+        def _registrar_bloqueio_quebrado(self_avanco, documento_id, motivo, correlation_id):
+            raise RuntimeError('falha técnica simulada em registrar_bloqueio — nunca deve vazar')
+
+        monkeypatch.setattr(
+            servico_lote_mod.ServicoAvancoEsteira, 'registrar_bloqueio', _registrar_bloqueio_quebrado,
+        )
+
+        arquivos = [ArquivoEntradaLote(b'conteudo ambiguo com falha de bloqueio', 'x.pdf', 'application/pdf')]
+        resumo = ctx.servico_lote.criar_lote('upload_manual', arquivos)
+        item = resumo.itens[0]
+
+        # Ingestão nunca é afetada por falha secundária do gate.
+        assert item.sucesso is True
+
+        resultado_gate = item.resultado_gate_classificacao
+        assert resultado_gate is not None
+        assert resultado_gate.tentado is True
+        assert resultado_gate.sucesso is False
+        assert resultado_gate.motivo == MOTIVO_ERRO_TECNICO_GATE_CLASSIFICACAO
+
+        estado = ctx.repo_estados.buscar_por_documento_id(item.documento_id)
+        # avancar_etapa já persistiu com situacao=BLOQUEADO (nasceu
+        # bloqueado) antes de registrar_bloqueio falhar -- motivo_bloqueio
+        # pode estar None porque a segunda gravação falhou, mas a
+        # situação NUNCA regride para AGUARDANDO nem avança para
+        # CONCLUIDO, e o próximo avanço continua impedido.
+        assert estado.etapa_atual == EtapaEsteira.CLASSIFICACAO
+        assert estado.situacao == SituacaoEsteira.BLOQUEADO
+        assert estado.situacao != SituacaoEsteira.CONCLUIDO
+        assert estado.situacao != SituacaoEsteira.AGUARDANDO
+
+        from magnata_os.documental.modulo01.dominio_esteira import AvancoBloqueadoPorPendencia
+        with pytest.raises(AvancoBloqueadoPorPendencia):
+            ctx.servico_avanco.avancar_etapa(item.documento_id, EtapaEsteira.SEPARACAO, 'corr-teste')
+
+        # Mensagem da exceção nunca vaza para DTO nem evento.
+        assert 'falha técnica simulada' not in resultado_gate.motivo
+        eventos = ctx.repo_hist.listar_por_documento(item.documento_id)
+        for evento in eventos:
+            assert 'falha técnica simulada' not in str(evento.detalhes)
+
 
 # ── 12. Nenhum texto/PII nos eventos ──────────────────────────────────────────
 
