@@ -4,6 +4,14 @@
 **Branch:** `fix/competencia-esperada-prestacao`
 **Status:** ✅ Implementado, testado (shadow), pronto para revisão
 
+**Correção registrada em 2026-08-29 (mesma branch, missão corretiva):**
+a auditoria original desta ADR descrevia a ausência de deslocamento
+codificado como "nenhuma exceção real hoje" — formulação imprecisa,
+corrigida abaixo. Existe ao menos uma regra operacional REAL conhecida
+(SKY Tatuí), ainda não ativada por falta de referência canônica
+comprovada no repositório — ver "Exceção operacional pendente — SKY
+Tatuí".
+
 ## Resumo executivo
 
 O corredor Holerite → Readiness (PR #90) recebia a competência esperada
@@ -45,10 +53,14 @@ em `app.py`, `scripts/`, `ConfiguracaoExecucao`, ADRs e testes.
   próprio PDF do Holerite** SOBRESCREVER esse valor quando diverge.
   Isso é exatamente `esperada = observada` de forma indireta — a
   validação circular que esta missão proíbe. **Não foi reaproveitado.**
-- Nenhuma regra de deslocamento de competência POR CLIENTE foi
-  encontrada em nenhum lugar do repositório (código, ADR ou
+- Nenhuma regra de deslocamento de competência POR CLIENTE estava
+  CODIFICADA em nenhum lugar do repositório (código, ADR ou
   documentação) — nenhuma ocorrência de "cliente X usa mês Y" ou
-  equivalente. **Não existe hoje nenhuma exceção real a preservar.**
+  equivalente no momento desta auditoria. **Isso não significa que
+  nenhuma exceção real existe** — uma correção posterior (ver seção
+  "Exceção operacional pendente — SKY Tatuí" abaixo) identificou ao
+  menos uma regra operacional conhecida, ainda sem referência canônica
+  comprovada no repositório para ser ativada com segurança.
 - `avaliar_prestacao_shadow`/`avaliar_prestacao_readiness` — a própria
   assinatura (`cliente`, `competencia` como parâmetros de nível
   superior, separados) já pressupõe que competência pode ser avaliada
@@ -84,7 +96,10 @@ princípio já registrado em `composition-root-modulo01-v1.md`.
 `DeslocamentoCompetenciaCliente(cliente, competencia, tipo_documental=None)`.
 `tipo_documental=None` aplica a qualquer tipo documental daquele
 cliente; um valor explícito restringe a esse tipo só. Lista vazia por
-padrão — reflete o estado real hoje (nenhuma exceção comprovada).
+padrão — reflete o que está CODIFICADO hoje (nenhuma referência
+canônica de cliente com exceção foi comprovada ainda para ativação
+segura; ver "Exceção operacional pendente — SKY Tatuí" abaixo para a
+exceção conhecida e não ativada).
 
 ## Precedência
 
@@ -135,6 +150,50 @@ nunca confundidos: (a) referência temporal para resolver o vínculo
 colaborador→cliente (papel organizacional); (b) o valor comparado
 contra a esperada (papel de validação). Nenhum dos dois papéis deriva a
 esperada a partir da observada.
+
+## Exceção operacional pendente — SKY Tatuí
+
+Existe ao menos uma exceção operacional real: **SKY Tatuí usa
+competência base − 1 mês** (ex.: demais clientes em JULHO/2026, SKY
+Tatuí em JUNHO/2026).
+
+**A regra ainda não foi ativada na política porque sua referência
+canônica não foi comprovada no repositório.**
+
+Auditoria (busca por "SKY"/"Tatuí" em todo o repositório — código,
+testes, fixtures, docs, Central Command): a única ocorrência de "Sky
+Tatuí" como identidade é `recSKY` em `test_fila_envios_v2_23.py`
+(linhas 617/633) — um ID **sintético, local a esse teste**, inventado
+só para exercitar normalização de texto/fatiamento de PDF de uma
+funcionalidade não relacionada (fila de envios legada) — nunca um
+`ReferenciaCanonica("CLIENTE", ...)` real, nunca usado por
+`vinculos_prestacao.py`, `airtable_leitura.py`,
+`airtable_inventario_prestacao.py` ou qualquer fixture da Prestação de
+Contas. Reaproveitá-lo seria inventar uma identidade por coincidência
+de nome — exatamente o que esta missão proíbe.
+
+**Por isso, deliberadamente, nesta correção:**
+
+- `PoliticaCompetenciaPrestacao`/`DeslocamentoCompetenciaCliente`
+  continuam sem nenhum deslocamento ativo — `deslocamentos=()` em
+  qualquer composição real;
+- nenhum ID foi inventado, nenhum nome livre foi hardcoded como
+  `ReferenciaCanonica`;
+- o mecanismo de deslocamento (`DeslocamentoCompetenciaCliente`) já
+  suporta uma competência ABSOLUTA por cliente; a forma como a regra do
+  SKY Tatuí deveria ser expressa (deslocamento relativo, "base − 1 mês",
+  válido para qualquer competência base, inclusive virada de ano) fica
+  para quando a referência canônica existir — implementá-lo antes disso
+  seria construir mecanismo para uma identidade que ainda não existe no
+  sistema, fora do escopo desta correção.
+
+**Gate futuro específico, registrado explicitamente:** antes de ativar
+esta regra, alguém com acesso ao Airtable de produção precisa confirmar
+o `record id` (ou outra referência canônica já usada pelo sistema) do
+cliente "SKY Tatuí"/"Edifício Sky Tatuí" — só então este ADR e
+`competencia_esperada_prestacao.py` devem ganhar o deslocamento real
+(relativo, "base − 1 mês") e os testes de virada de ano/mês normal
+correspondentes.
 
 ## Documentação relacionada
 

@@ -11,7 +11,13 @@ confirmou que:
     Y" em código ou documentação) — por isso este módulo NUNCA
     codifica um cliente específico; só o MECANISMO de exceção, vazio
     por padrão, mesmo padrão já usado por `OverrideRequisitosPrestacao`/
-    `PoliticaRequisitosPrestacao` (politica_requisitos_prestacao.py);
+    `PoliticaRequisitosPrestacao` (politica_requisitos_prestacao.py).
+    Isso NÃO significa ausência de exceção real: há pelo menos uma
+    regra operacional CONHECIDA (SKY Tatuí, competência base − 1 mês),
+    ainda não ativada por falta de referência canônica de cliente
+    comprovada no repositório -- ver docs/decisoes/
+    competencia-esperada-prestacao-v1.md, "Exceção operacional
+    pendente";
   - o legado (`app.py::mes_anterior_info`, `buscar_mes_contabilidade_
     atual`) já resolve uma competência BASE do ciclo a partir do
     relógio (`datetime.now()`) e de uma consulta a uma tabela real do
@@ -109,10 +115,14 @@ class PoliticaCompetenciaPrestacao:
     """Política pura e versionada -- mesmo papel de
     `PoliticaRequisitosPrestacao` (politica_requisitos_prestacao.py),
     aplicado à dimensão competência esperada em vez de requisitos
-    documentais. `deslocamentos=()` (vazio) é o estado real hoje: nenhum
-    cliente tem exceção comprovada (ver auditoria) -- toda resolução usa
-    só a competência base do contexto até uma decisão de negócio
-    concreta adicionar um deslocamento."""
+    documentais. `deslocamentos=()` (vazio) é o que está CODIFICADO
+    hoje -- não uma afirmação de que nenhuma exceção real existe. Há
+    pelo menos uma exceção operacional CONHECIDA (SKY Tatuí, competência
+    base − 1 mês; ver docs/decisoes/competencia-esperada-prestacao-v1.md,
+    seção "Exceção operacional pendente"), ainda não ativada aqui porque
+    sua referência canônica de cliente não foi comprovada no
+    repositório -- nunca hardcoded por nome livre. Até essa referência
+    existir, toda resolução usa só a competência base do contexto."""
 
     version: str
     deslocamentos: Tuple[DeslocamentoCompetenciaCliente, ...] = ()
