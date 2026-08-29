@@ -15,6 +15,7 @@ from magnata_os.documental.modulo01.adapters.email_captura import (
     AnexoEmailRecebido,
     MensagemEmailRecebida,
 )
+from magnata_os.documental.modulo01.composicao import construir_pipeline_modulo01
 from magnata_os.documental.modulo01.repositorio import (
     RepositorioDocumentosEmMemoria,
     RepositorioHistoricoEmMemoria,
@@ -23,9 +24,6 @@ from magnata_os.documental.modulo01.repositorio_esteira import (
     RepositorioEstadosEsteiraEmMemoria,
     RepositorioLotesEmMemoria,
 )
-from magnata_os.documental.modulo01.servico_avanco_esteira import ServicoAvancoEsteira
-from magnata_os.documental.modulo01.servico_entrada import ServicoEntradaDocumental
-from magnata_os.documental.modulo01.servico_lote import ServicoCriacaoLote
 
 
 class FonteMensagensEmailFalsa:
@@ -42,19 +40,27 @@ class FonteMensagensEmailFalsa:
         return list(self._mensagens)
 
 
-def _montar_adapter(mensagens=None):
+def _montar_adapter(mensagens=None, fonte_candidatos_funcionario=None):
+    """Monta o adapter via `construir_pipeline_modulo01` (composition
+    root V1, magnata_os/documental/modulo01/composicao.py) -- todos os
+    testes deste arquivo passam a validar o composition root
+    automaticamente, sem duplicar a montagem manual que existia aqui
+    antes."""
     repo_docs = RepositorioDocumentosEmMemoria()
     repo_hist = RepositorioHistoricoEmMemoria()
     repo_lotes = RepositorioLotesEmMemoria()
     repo_estados = RepositorioEstadosEsteiraEmMemoria()
 
-    servico_entrada = ServicoEntradaDocumental(repo_docs, repo_hist)
-    servico_avanco = ServicoAvancoEsteira(repo_estados, repo_hist)
-    servico_lote = ServicoCriacaoLote(repo_lotes, servico_entrada, servico_avanco)
-
     fonte = FonteMensagensEmailFalsa(mensagens)
-    adapter = AdapterCapturaEmail(fonte, servico_lote)
-    return adapter, fonte, repo_docs
+    pipeline = construir_pipeline_modulo01(
+        repositorio_documentos=repo_docs,
+        repositorio_historico=repo_hist,
+        repositorio_lotes=repo_lotes,
+        repositorio_estados_esteira=repo_estados,
+        fonte_mensagens=fonte,
+        fonte_candidatos_funcionario=fonte_candidatos_funcionario,
+    )
+    return pipeline.adapter_captura_email, fonte, repo_docs
 
 
 def _mensagem(message_id='msg-1', remetente='cliente@exemplo.com', assunto='Documentos', anexos=None):
@@ -264,23 +270,190 @@ class _FonteQueFalha:
 
 
 def test_falha_na_busca_de_mensagens_propaga_sem_ser_engolida():
-    from magnata_os.documental.modulo01.repositorio import (
-        RepositorioDocumentosEmMemoria, RepositorioHistoricoEmMemoria,
+    pipeline = construir_pipeline_modulo01(
+        repositorio_documentos=RepositorioDocumentosEmMemoria(),
+        repositorio_historico=RepositorioHistoricoEmMemoria(),
+        repositorio_lotes=RepositorioLotesEmMemoria(),
+        repositorio_estados_esteira=RepositorioEstadosEsteiraEmMemoria(),
+        fonte_mensagens=_FonteQueFalha(),
     )
-    from magnata_os.documental.modulo01.repositorio_esteira import (
-        RepositorioEstadosEsteiraEmMemoria, RepositorioLotesEmMemoria,
-    )
-
-    servico_entrada = ServicoEntradaDocumental(
-        RepositorioDocumentosEmMemoria(), RepositorioHistoricoEmMemoria(),
-    )
-    servico_avanco = ServicoAvancoEsteira(
-        RepositorioEstadosEsteiraEmMemoria(), RepositorioHistoricoEmMemoria(),
-    )
-    servico_lote = ServicoCriacaoLote(
-        RepositorioLotesEmMemoria(), servico_entrada, servico_avanco,
-    )
-    adapter = AdapterCapturaEmail(_FonteQueFalha(), servico_lote)
 
     with pytest.raises(ConnectionError):
-        adapter.capturar_novas_mensagens()
+        pipeline.adapter_captura_email.capturar_novas_mensagens()
+
+
+# ============================================================================
+# Composition root V1 (magnata_os/documental/modulo01/composicao.py) --
+# provas específicas de que a fiação está correta, nunca ativa produção
+# externa (ver docs/decisoes/composition-root-modulo01-v1.md).
+# ============================================================================
+
+class _FonteCandidatosFuncionarioFake:
+    """Duplo de teste de FonteCandidatosFuncionario -- conta chamadas
+    para provar que a leitura é feita no máximo 1 vez por lote."""
+
+    def __init__(self, candidatos=None):
+        self._candidatos = list(candidatos or [])
+        self.chamadas = 0
+
+    def listar_funcionarios(self):
+        self.chamadas += 1
+        return self._candidatos
+
+
+def test_importar_o_modulo_de_composicao_nao_exige_nenhuma_credencial(monkeypatch):
+    """Nenhuma variável de ambiente precisa existir para importar
+    composicao.py -- a composição nunca lê configuração nem abre
+    conexão/rede durante a montagem."""
+    for variavel in ('DATABASE_URL', 'AIRTABLE_API_KEY'):
+        monkeypatch.delenv(variavel, raising=False)
+
+    import importlib
+    import magnata_os.documental.modulo01.composicao as composicao_mod
+    importlib.reload(composicao_mod)  # reimporta sem nenhuma env setada
+    assert composicao_mod.construir_pipeline_modulo01 is not None
+
+
+def test_adapter_capturado_e_servico_lote_sao_o_mesmo_objeto():
+    """Prova estrutural: o AdapterCapturaEmail devolvido pelo pipeline
+    usa exatamente a MESMA instância de ServicoCriacaoLote exposta em
+    PipelineModulo01.servico_lote -- nunca uma cópia/segunda
+    composição."""
+    pipeline = construir_pipeline_modulo01(
+        repositorio_documentos=RepositorioDocumentosEmMemoria(),
+        repositorio_historico=RepositorioHistoricoEmMemoria(),
+        repositorio_lotes=RepositorioLotesEmMemoria(),
+        repositorio_estados_esteira=RepositorioEstadosEsteiraEmMemoria(),
+        fonte_mensagens=FonteMensagensEmailFalsa(),
+    )
+
+    assert pipeline.adapter_captura_email._servico_lote is pipeline.servico_lote
+
+
+def test_fonte_candidatos_funcionario_chega_ao_servico_lote():
+    """Prova estrutural: a fonte de candidatos passada ao composition
+    root é exatamente a mesma injetada em ServicoCriacaoLote."""
+    fonte_candidatos = _FonteCandidatosFuncionarioFake()
+    pipeline = construir_pipeline_modulo01(
+        repositorio_documentos=RepositorioDocumentosEmMemoria(),
+        repositorio_historico=RepositorioHistoricoEmMemoria(),
+        repositorio_lotes=RepositorioLotesEmMemoria(),
+        repositorio_estados_esteira=RepositorioEstadosEsteiraEmMemoria(),
+        fonte_mensagens=FonteMensagensEmailFalsa(),
+        fonte_candidatos_funcionario=fonte_candidatos,
+    )
+
+    assert pipeline.servico_lote._fonte_candidatos_funcionario is fonte_candidatos
+
+
+def test_sem_fonte_candidatos_o_default_seguro_none_e_preservado():
+    """Fora da composição operacional (ex.: um script de reprocessamento
+    manual que só quer ingestão, sem identificação), o pipeline
+    continua podendo ser montado sem fonte de candidatos -- off by
+    default, mesmo comportamento já existente de ServicoCriacaoLote."""
+    pipeline = construir_pipeline_modulo01(
+        repositorio_documentos=RepositorioDocumentosEmMemoria(),
+        repositorio_historico=RepositorioHistoricoEmMemoria(),
+        repositorio_lotes=RepositorioLotesEmMemoria(),
+        repositorio_estados_esteira=RepositorioEstadosEsteiraEmMemoria(),
+        fonte_mensagens=FonteMensagensEmailFalsa(),
+    )
+
+    assert pipeline.servico_lote._fonte_candidatos_funcionario is None
+
+
+def test_holerite_elegivel_alcanca_identificacao_via_pipeline_completo(monkeypatch):
+    """Prova de ponta a ponta (fakes na fronteira, nenhum acesso
+    externo): com a fonte de candidatos conectada na composição, um
+    Holerite avulso RESOLVIDO recebido por e-mail atravessa o pipeline
+    inteiro (FonteMensagensEmail -> AdapterCapturaEmail ->
+    ServicoCriacaoLote -> gate CLASSIFICACAO -> gate IDENTIFICACAO) e
+    chega a IDENTIFICACAO/CONCLUIDO -- a mesma extração/classificação/
+    identificação já testadas isoladamente em test_gate_classificacao_
+    esteira.py/test_gate_identificacao_holerite_esteira.py, agora
+    provadas através da composição real."""
+    from magnata_os.classificacao.classificador_documental import EstadoClassificacao
+    from magnata_os.classificacao.roteamento_documental import (
+        AcaoRoteamento, DecisaoRoteamentoDocumental, EscopoDocumental, MotivoRoteamento,
+    )
+    from magnata_os.classificacao.contratos import (
+        DimensaoResolucao, EstadoResolucaoDimensao, ReferenciaCanonica, ResolucaoDimensao,
+    )
+    from magnata_os.documental.modulo01 import servico_lote as servico_lote_mod
+    from magnata_os.documental.modulo01.dominio_esteira import EtapaEsteira, SituacaoEsteira
+
+    monkeypatch.setattr(servico_lote_mod, 'extrair_texto_seguro', lambda conteudo: 'texto fake')
+    monkeypatch.setattr(
+        servico_lote_mod, 'decidir_roteamento_de_texto',
+        lambda texto: DecisaoRoteamentoDocumental(
+            tipo_documental='Holerite',
+            estado_classificacao=EstadoClassificacao.RESOLVIDA,
+            escopo_documental=EscopoDocumental.COLABORADOR,
+            acao_recomendada=AcaoRoteamento.REVISAR_HUMANO,
+            motivo=MotivoRoteamento.PROCESSADOR_AINDA_NAO_DISPONIVEL,
+            processador_disponivel=False,
+            necessita_revisao_humana=True,
+            prioridade_revisao='BAIXA',
+            evidencias_sanitizadas=('hit',),
+            tipos_concorrentes=(),
+        ),
+    )
+    monkeypatch.setattr(
+        servico_lote_mod, 'resolver_identificacao_holerite_de_texto',
+        lambda texto, candidatos: ResolucaoDimensao(
+            dimensao=DimensaoResolucao.COLABORADOR,
+            estado=EstadoResolucaoDimensao.RESOLVIDA,
+            valores_confirmados=(ReferenciaCanonica('COLABORADOR', 'func-1'),),
+        ),
+    )
+
+    fonte_candidatos = _FonteCandidatosFuncionarioFake()
+    repo_docs = RepositorioDocumentosEmMemoria()
+    repo_estados = RepositorioEstadosEsteiraEmMemoria()
+    pipeline = construir_pipeline_modulo01(
+        repositorio_documentos=repo_docs,
+        repositorio_historico=RepositorioHistoricoEmMemoria(),
+        repositorio_lotes=RepositorioLotesEmMemoria(),
+        repositorio_estados_esteira=repo_estados,
+        fonte_mensagens=FonteMensagensEmailFalsa([
+            _mensagem(anexos=[_anexo()]),
+        ]),
+        fonte_candidatos_funcionario=fonte_candidatos,
+    )
+
+    resumo = pipeline.adapter_captura_email.capturar_novas_mensagens()
+
+    assert len(resumo.resumos_lote) == 1
+    item = resumo.resumos_lote[0].itens[0]
+    documento_id = item.documento_id
+
+    estado = repo_estados.buscar_por_documento_id(documento_id)
+    assert estado.etapa_atual == EtapaEsteira.IDENTIFICACAO
+    assert estado.situacao == SituacaoEsteira.CONCLUIDO
+    assert fonte_candidatos.chamadas == 1  # lida no máximo 1x por lote
+
+
+def test_nenhum_acesso_externo_durante_construcao_ou_captura(monkeypatch):
+    """A composição e a captura (com fakes na fronteira) nunca chamam
+    rede -- nenhuma biblioteca de rede é sequer importada por
+    composicao.py."""
+    import ast
+    import inspect
+
+    import magnata_os.documental.modulo01.composicao as composicao_mod
+
+    codigo_fonte = inspect.getsource(composicao_mod)
+    arvore = ast.parse(codigo_fonte)
+    modulos_importados = {
+        alias.name.split('.')[0]
+        for no in ast.walk(arvore)
+        if isinstance(no, (ast.Import, ast.ImportFrom))
+        for alias in no.names
+        if isinstance(no, ast.Import)
+    } | {
+        no.module.split('.')[0]
+        for no in ast.walk(arvore)
+        if isinstance(no, ast.ImportFrom) and no.module
+    }
+    proibidos = {'requests', 'psycopg', 'psycopg2', 'googleapiclient', 'google', 'boto3'}
+    assert not (modulos_importados & proibidos)

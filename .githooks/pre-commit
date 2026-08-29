@@ -259,6 +259,11 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # padrao e libera somente estes 2 testes nominais novos.
   "test_politica_identificacao_holerite.py"
   "test_gate_identificacao_holerite_esteira.py"
+  # Excecao exata e restrita (composition root V1 do Modulo 01, branch
+  # fix/composition-root-modulo01-v1). Este arquivo ja existia (mesclado
+  # antes deste hook existir) -- nunca havia passado por esta checagem
+  # ate agora. Libera so este caminho exato.
+  "test_magnata_os_documental_modulo01_email_captura.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

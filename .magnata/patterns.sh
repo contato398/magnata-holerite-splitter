@@ -574,6 +574,19 @@ ALLOWED_PATHS=(
   "^magnata_os/documental/modulo01/politica_identificacao_holerite\.py$"
   "^test_politica_identificacao_holerite\.py$"
   "^test_gate_identificacao_holerite_esteira\.py$"
+  # Excecao exata e restrita (composition root V1 do Modulo 01, branch
+  # fix/composition-root-modulo01-v1) — modulo novo que monta o pipeline
+  # completo (FonteMensagensEmail -> AdapterCapturaEmail ->
+  # ServicoCriacaoLote -> repositorios/FonteCandidatosFuncionario) a
+  # partir de dependencias ja construidas, sem decidir backend, sem ler
+  # env, sem abrir rede/conexao. Nao libera
+  # "^magnata_os/documental/modulo01/" nem "^test_" de forma ampla. O
+  # arquivo de teste ja existia (mesclado antes deste hook existir, mesmo
+  # caso ja registrado para fase3/fase4/gate-classificacao-esteira) —
+  # nunca havia passado por esta checagem ate agora.
+  "^magnata_os/documental/modulo01/composicao\.py$"
+  "^test_magnata_os_documental_modulo01_email_captura\.py$"
+  "^docs/decisoes/composition-root-modulo01-v1\.md$"
 )
 
 # ============================================================================
