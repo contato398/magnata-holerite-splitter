@@ -230,6 +230,10 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # legado (branch fix/classificador-documental-legado-seguro). Mantem
   # test_* bloqueado por padrao e libera somente este teste nominal.
   "test_classificador_documental_migracao.py"
+  # Excecao exata da ponte shadow de roteamento documental (branch
+  # fix/roteamento-documental-shadow). Mantem test_* bloqueado por
+  # padrao e libera somente este teste nominal.
+  "test_roteamento_documental_shadow.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
