@@ -16,6 +16,8 @@ import dataclasses
 from datetime import datetime
 from typing import Mapping, Optional, Tuple
 
+from magnata_os.classificacao.roteamento_documental import DecisaoRoteamentoDocumental
+
 from .dominio import Documento
 from .dominio_esteira import (
     EstadoEsteiraDocumento,
@@ -67,14 +69,76 @@ class ItemEsteiraDocumento:
 
 
 @dataclasses.dataclass(frozen=True)
+class RoteamentoShadowDTO:
+    """Resultado OBSERVÁVEL (não persistido) do roteamento documental
+    shadow (magnata_os/classificacao/roteamento_documental.py) para UM
+    item de lote. Contrato de apresentação/consulta, mesma disciplina
+    de separação já usada neste arquivo para EstadoEsteiraDocumento —
+    quem consome `ItemResumoLote.roteamento_shadow` nunca depende
+    diretamente da forma interna de `DecisaoRoteamentoDocumental`; se
+    esse contrato evoluir, só a função de conversão (`roteamento_shadow_
+    para_dto`, abaixo) muda.
+
+    `executado=False` é reservado para uma evolução futura em que o
+    roteamento shadow simplesmente não foi tentado neste ponto — NUNCA
+    confundir com `executado=True, sucesso=False`, que significa
+    "tentou, mas `decidir_roteamento()` levantou um erro técnico
+    inesperado" (ver `roteamento_shadow_erro_tecnico`). Quando
+    `executado=False`, os demais campos de classificação ficam vazios/
+    None e `motivo` continua obrigatório (código sanitizado do porquê
+    não foi executado).
+
+    NUNCA carrega texto bruto do PDF, CPF, CNPJ, nome de colaborador,
+    assunto/remetente de e-mail ou qualquer payload — só os campos de
+    classificação sanitizados já produzidos por `DecisaoRoteamentoDocumental`
+    mais a proveniência técnica mínima (documento_id, hash_sha256,
+    origem_message_id) para correlação.
+    """
+
+    executado: bool
+    sucesso: bool
+    tipo_documental: Optional[str]
+    estado_classificacao: Optional[str]
+    escopo_documental: Optional[str]
+    acao_recomendada: Optional[str]
+    motivo: str
+    necessita_revisao_humana: bool
+    prioridade_revisao: Optional[str]
+    tipos_concorrentes: Tuple[str, ...]
+    documento_id: str
+    hash_sha256: str
+    origem_message_id: Optional[str]
+
+    def __post_init__(self) -> None:
+        if not self.executado:
+            if self.sucesso:
+                raise ValueError("executado=False exige sucesso=False")
+            campos_detalhe = (
+                self.tipo_documental, self.estado_classificacao,
+                self.escopo_documental, self.acao_recomendada,
+            )
+            if any(campo is not None for campo in campos_detalhe):
+                raise ValueError(
+                    "executado=False não pode carregar campos de classificação preenchidos")
+
+
+@dataclasses.dataclass(frozen=True)
 class ItemResumoLote:
-    """Resultado do processamento de UM arquivo dentro de um lote."""
+    """Resultado do processamento de UM arquivo dentro de um lote.
+
+    `roteamento_shadow` é `None` quando o Documento nunca chegou a
+    existir (falha na própria ingestão — ver `ServicoCriacaoLote.
+    _processar_um_arquivo`) ou quando a criação/avanço do estado inicial
+    da esteira falhou antes do ponto de integração do shadow. Quando o
+    Documento existe (sucesso OU duplicado), `roteamento_shadow` é
+    sempre preenchido — ver `_processar_um_arquivo` para o ponto exato."""
 
     nome_original: str
     documento_id: Optional[str]
     sucesso: bool
     duplicado: bool
     erro: Optional[str]
+    roteamento_shadow: Optional[RoteamentoShadowDTO] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -121,6 +185,70 @@ def proxima_acao_para_dto(proxima_acao: Optional[ProximaAcao]) -> Optional[Proxi
         tipo=proxima_acao.tipo,
         prazo=proxima_acao.prazo,
         responsavel=proxima_acao.responsavel,
+    )
+
+
+# Código sanitizado fixo — nunca a mensagem real da exceção (poderia
+# conter fragmento de texto do PDF ou outro dado sensível). Usado só por
+# `roteamento_shadow_erro_tecnico` abaixo.
+MOTIVO_ERRO_TECNICO_SHADOW = 'ERRO_TECNICO_SHADOW'
+
+
+def roteamento_shadow_para_dto(
+    decisao: DecisaoRoteamentoDocumental,
+    documento_id: str,
+    hash_sha256: str,
+    origem_message_id: Optional[str],
+) -> RoteamentoShadowDTO:
+    """Converte uma `DecisaoRoteamentoDocumental` (classificacao/
+    roteamento_documental.py) no DTO shadow observável. Repassa só
+    campos já sanitizados pela decisão de origem — nunca adiciona texto
+    bruto, CPF, CNPJ ou qualquer PII nova; a proveniência (documento_id/
+    hash_sha256/origem_message_id) vem de fora, do chamador que já tem
+    o Documento em mãos (nunca extraída de novo do conteúdo do PDF)."""
+    return RoteamentoShadowDTO(
+        executado=True,
+        sucesso=True,
+        tipo_documental=decisao.tipo_documental,
+        estado_classificacao=decisao.estado_classificacao.value,
+        escopo_documental=decisao.escopo_documental.value,
+        acao_recomendada=decisao.acao_recomendada.value,
+        motivo=decisao.motivo.value,
+        necessita_revisao_humana=decisao.necessita_revisao_humana,
+        prioridade_revisao=decisao.prioridade_revisao,
+        tipos_concorrentes=decisao.tipos_concorrentes,
+        documento_id=documento_id,
+        hash_sha256=hash_sha256,
+        origem_message_id=origem_message_id,
+    )
+
+
+def roteamento_shadow_erro_tecnico(
+    documento_id: str,
+    hash_sha256: str,
+    origem_message_id: Optional[str],
+) -> RoteamentoShadowDTO:
+    """DTO para quando `decidir_roteamento()` levanta uma exceção
+    inesperada (falha SECUNDÁRIA — nunca desfaz o Documento já
+    persistido nem aborta o lote; ver `ServicoCriacaoLote.
+    _processar_um_arquivo`). NUNCA expõe `str(exc)` — só o código
+    sanitizado fixo `MOTIVO_ERRO_TECNICO_SHADOW`, para que uma mensagem
+    de exceção que por acaso contenha fragmento do PDF nunca vaze para
+    este DTO observável."""
+    return RoteamentoShadowDTO(
+        executado=True,
+        sucesso=False,
+        tipo_documental=None,
+        estado_classificacao=None,
+        escopo_documental=None,
+        acao_recomendada=None,
+        motivo=MOTIVO_ERRO_TECNICO_SHADOW,
+        necessita_revisao_humana=True,
+        prioridade_revisao='ALTA',
+        tipos_concorrentes=(),
+        documento_id=documento_id,
+        hash_sha256=hash_sha256,
+        origem_message_id=origem_message_id,
     )
 
 

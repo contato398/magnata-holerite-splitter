@@ -422,6 +422,17 @@ ALLOWED_PATHS=(
   "^magnata_os/classificacao/roteamento_documental\.py$"
   "^test_roteamento_documental_shadow\.py$"
   "^magnata_os/documental/extracao_texto\.py$"
+  # Excecao exata e restrita (integracao shadow entre ingestao real do
+  # lote e o roteamento documental, branch
+  # fix/roteamento-shadow-integracao-lote) — somente estes 2 arquivos
+  # existentes tocados (dtos_esteira.py ganha RoteamentoShadowDTO +
+  # conversores; servico_lote.py chama decidir_roteamento no ponto
+  # exato onde Documento ja existe e os bytes ainda estao em escopo) e
+  # o teste de integracao nominal. Nao libera
+  # "^magnata_os/documental/modulo01/" nem "^test_" de forma ampla.
+  "^magnata_os/documental/modulo01/dtos_esteira\.py$"
+  "^magnata_os/documental/modulo01/servico_lote\.py$"
+  "^test_servico_lote_roteamento_shadow\.py$"
   # Exceção exata e restrita (decisão registrada, branch
   # claude/macro-6a-commit-recovery-k7rsly, 2026-08-12) — Macro 6A,
   # auditoria e esteira documental. Somente estes 8 caminhos exatos de
