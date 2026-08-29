@@ -234,6 +234,10 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # fix/roteamento-documental-shadow). Mantem test_* bloqueado por
   # padrao e libera somente este teste nominal.
   "test_roteamento_documental_shadow.py"
+  # Excecao exata da integracao shadow entre ingestao real do lote e o
+  # roteamento documental (branch fix/roteamento-shadow-integracao-lote).
+  # Mantem test_* bloqueado por padrao e libera somente este teste nominal.
+  "test_servico_lote_roteamento_shadow.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
