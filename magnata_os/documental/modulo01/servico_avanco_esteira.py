@@ -323,18 +323,31 @@ class ServicoAvancoEsteira:
         nada estruturado para registrar; ver `politica_classificacao.py`
         e `servico_lote.py`).
 
-        Quando `deve_bloquear=True`, a transição de etapa em si usa
-        `SituacaoEsteira.AGUARDANDO` como situação transitória (o valor
-        exato não importa -- `registrar_bloqueio`, chamado em seguida,
-        sempre sobrescreve para `BLOQUEADO` com o motivo estruturado
-        correto); a situação FINAL do documento é sempre a que
-        `registrar_bloqueio` produz, nunca a transitória.
+        Falha após bloqueio parcial (mesmo achado e mesma correção já
+        aplicados em `aplicar_resultado_identificacao`, ver esse
+        método): quando `deve_bloquear=True`, a situação transitória
+        passada a `avancar_etapa` já é `BLOQUEADO` (nunca `AGUARDANDO`)
+        -- se `registrar_bloqueio` (chamado em seguida) falhar por
+        qualquer motivo, o estado já persistido por `avancar_etapa`
+        fica `CLASSIFICACAO/BLOQUEADO` (só com `motivo_bloqueio=None`
+        temporariamente), nunca `CLASSIFICACAO/AGUARDANDO` -- que
+        `calcular_proxima_acao` traduziria erroneamente como "ainda não
+        implementado", escondendo um documento que na verdade precisa
+        de revisão humana. `avancar_etapa` já bloqueia novo avanço
+        quando `situacao == BLOQUEADO` (`AvancoBloqueadoPorPendencia`) e
+        `calcular_proxima_acao` já trata `BLOQUEADO` com
+        `motivo_bloqueio=None` como "Resolver bloqueio (motivo não
+        informado)" -- nenhum estado novo foi inventado, só a ordem dos
+        dois valores possíveis foi invertida para a mais segura. A
+        situação FINAL do documento continua sendo sempre a que
+        `registrar_bloqueio` produz (com o motivo estruturado correto),
+        nunca a transitória.
         """
         if not decisao_transicao.deve_avancar:
             return None
 
         situacao_transitoria = (
-            SituacaoEsteira.AGUARDANDO if decisao_transicao.deve_bloquear
+            SituacaoEsteira.BLOQUEADO if decisao_transicao.deve_bloquear
             else decisao_transicao.situacao_classificacao
         )
         novo_estado = self.avancar_etapa(
