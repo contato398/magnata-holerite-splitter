@@ -238,6 +238,11 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # roteamento documental (branch fix/roteamento-shadow-integracao-lote).
   # Mantem test_* bloqueado por padrao e libera somente este teste nominal.
   "test_servico_lote_roteamento_shadow.py"
+  # Excecao exata do gate controlado REGISTRO->CLASSIFICACAO (branch
+  # fix/gate-classificacao-esteira). Mantem test_* bloqueado por padrao
+  # e libera somente estes 2 testes nominais.
+  "test_politica_classificacao.py"
+  "test_gate_classificacao_esteira.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

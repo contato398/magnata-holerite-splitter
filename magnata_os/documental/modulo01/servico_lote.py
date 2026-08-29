@@ -63,6 +63,27 @@ Roda tambem para documento duplicado (mesmo Documento existente, mesmos
 bytes, funcao pura) -- mantem diagnostico uniforme sem criar novo
 Documento nem alterar a flag `duplicado`.
 
+GATE CONTROLADO REGISTRO -> CLASSIFICACAO (politica_classificacao.py):
+para Documento NOVO cujo roteamento shadow terminou normalmente (nao
+ERRO_TECNICO_SHADOW), a MESMA `DecisaoRoteamentoDocumental` ja calculada
+e traduzida por `decidir_transicao_classificacao` e aplicada via
+`ServicoAvancoEsteira.aplicar_resultado_classificacao` -- nunca uma
+segunda classificacao. CLASSIFICACAO nesta fase significa somente "a
+tentativa de classificacao foi realizada e seu resultado operacional foi
+registrado na esteira", nunca "processador disponivel"/"documento pronto
+para processar". RESOLVIDA avanca com situacao CONCLUIDO mesmo quando a
+acao recomendada pelo roteamento ainda e REVISAR_HUMANO por falta de
+processador avulso (limitacao da PROXIMA fase, nao da classificacao em
+si); AMBIGUA e INVALIDA avancam e ficam BLOQUEADO (motivo estruturado);
+NAO_RECONHECIDA avanca com EM_REVISAO (soft-flag, nunca hard-block).
+Documento duplicado NUNCA tenta esta transicao de novo (idempotencia
+preservada -- reaproveita o estado ja existente do documento original).
+O resultado de TENTAR aplicar o gate (promovido/nao aplicavel/falhou
+tecnicamente) fica em `ItemResumoLote.resultado_gate_classificacao`
+(`ResultadoGateClassificacaoDTO`, dtos_esteira.py) -- distinto de
+`ItemResumoLote.sucesso` (que reflete so a ingestao) e distinto de
+`roteamento_shadow` (que reflete so o resultado da classificacao).
+
 ServicoEntradaDocumental (Fase 1) continua aceitando lote_id=None para
 nao quebrar nenhum chamador existente (scripts internos, testes,
 composicao de servicos) -- a garantia de "toda entrada nova tem lote" e
@@ -79,7 +100,16 @@ from typing import Callable, List, Optional, Sequence
 from magnata_os.classificacao.roteamento_documental import decidir_roteamento
 
 from .dominio_esteira import EtapaEsteira, LoteDocumental, SituacaoEsteira, gerar_correlation_id_lote, gerar_lote_id
-from .dtos_esteira import ItemResumoLote, ResumoLote, roteamento_shadow_erro_tecnico, roteamento_shadow_para_dto
+from .dtos_esteira import (
+    ItemResumoLote,
+    ResumoLote,
+    resultado_gate_classificacao_erro_tecnico,
+    resultado_gate_classificacao_nao_aplicavel,
+    resultado_gate_classificacao_promovida,
+    roteamento_shadow_erro_tecnico,
+    roteamento_shadow_para_dto,
+)
+from .politica_classificacao import decidir_transicao_classificacao
 from .repositorio_esteira import RepositorioLotes
 from .servico_avanco_esteira import ServicoAvancoEsteira
 from .servico_entrada import ServicoEntradaDocumental
@@ -236,6 +266,7 @@ class ServicoCriacaoLote:
         if arquivo.metadados:
             origem_message_id = arquivo.metadados.get('origem_message_id')
 
+        decisao = None
         try:
             decisao = decidir_roteamento(arquivo.conteudo)
             roteamento_shadow = roteamento_shadow_para_dto(
@@ -281,8 +312,47 @@ class ServicoCriacaoLote:
                 documento.documento_id, documento.hash_sha256, origem_message_id,
             )
 
+        # Gate REGISTRO -> CLASSIFICACAO (politica_classificacao.py).
+        # Reaproveita a MESMA `decisao` ja calculada acima -- nunca
+        # reclassifica, nunca rechama decidir_roteamento(). So aplicado
+        # quando: (a) o roteamento shadow terminou normalmente (`decisao`
+        # nao e None -- ERRO_TECNICO_SHADOW e a PanicException absorvida
+        # acima nunca chegam a definir `decisao`, entao o gate
+        # simplesmente nao roda, permanecendo em REGISTRO, conforme
+        # tabela de decisao); e (b) o Documento e NOVO (`criado_agora`) --
+        # duplicado nunca tenta a transicao de novo (idempotencia
+        # preservada, nenhum segundo evento CLASSIFICACAO).
+        #
+        # Falha do GATE em si (distinta de "gate nao aplicavel") NUNCA
+        # muda `ItemResumoLote.sucesso` (que reflete so a INGESTAO) nem
+        # desfaz o Documento/roteamento shadow ja calculados, mesma
+        # filosofia de tolerancia ja usada por `_registrar_evento`
+        # (servico_avanco_esteira.py) -- mas, ao contrario da versao
+        # anterior desta integracao, a falha NAO e mais engolida em
+        # silencio: `ResultadoGateClassificacaoDTO` distingue
+        # explicitamente os 3 casos (promovido / falhou tecnicamente /
+        # nao aplicavel), sem expor `str(exc)`.
+        if decisao is not None and criado_agora:
+            try:
+                decisao_transicao = decidir_transicao_classificacao(decisao)
+                estado_pos_gate = self._servico_avanco.aplicar_resultado_classificacao(
+                    documento.documento_id, decisao_transicao, correlation_id,
+                )
+                if estado_pos_gate is None:
+                    # Nunca deveria ocorrer -- as 4 branches de
+                    # EstadoClassificacao sempre produzem deve_avancar=True
+                    # (ver politica_classificacao.py). Tratado como falha
+                    # tecnica do gate, nao como sucesso silencioso.
+                    raise RuntimeError('aplicar_resultado_classificacao retornou None inesperadamente')
+                resultado_gate = resultado_gate_classificacao_promovida(estado_pos_gate)
+            except Exception:
+                resultado_gate = resultado_gate_classificacao_erro_tecnico()
+        else:
+            resultado_gate = resultado_gate_classificacao_nao_aplicavel()
+
         return ItemResumoLote(
             nome_original=arquivo.nome_original, documento_id=documento.documento_id,
             sucesso=True, duplicado=not criado_agora, erro=None,
             roteamento_shadow=roteamento_shadow,
+            resultado_gate_classificacao=resultado_gate,
         )

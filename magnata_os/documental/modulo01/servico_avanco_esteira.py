@@ -34,6 +34,7 @@ from .dominio_esteira import (
     eh_salto_de_etapa,
     validar_transicao_etapa,
 )
+from .politica_classificacao import DecisaoTransicaoClassificacao
 from .repositorio import RepositorioHistorico
 from .repositorio_esteira import RepositorioEstadosEsteira
 
@@ -129,6 +130,27 @@ def calcular_proxima_acao(
 
     if etapa_atual == EtapaEsteira.AUDITORIA and situacao == SituacaoEsteira.CONCLUIDO:
         return None
+
+    if etapa_atual == EtapaEsteira.CLASSIFICACAO and situacao == SituacaoEsteira.CONCLUIDO:
+        # Achado da auditoria read-only prévia, corrigido aqui: a
+        # descrição genérica de _DESCRICAO_PROXIMA_ACAO[CLASSIFICACAO]
+        # ("implementacao em fase futura") ficaria enganosa para um
+        # documento cuja classificação JÁ ocorreu (via roteamento shadow
+        # + politica_classificacao.decidir_transicao_classificacao,
+        # caso RESOLVIDA -- ver servico_lote.py). Ajuste mínimo e
+        # específico só para esta combinação exata etapa+situação --
+        # NUNCA marca a etapa como automática de forma geral (não altera
+        # _ETAPAS_AUTOMATIZADAS) nem afirma que o PROCESSAMENTO
+        # posterior (fatiamento, vínculo, distribuição) é automático.
+        return ProximaAcao(
+            acao=(
+                'Classificação concluída -- próxima etapa do fluxo '
+                'documental ainda não implementada'
+            ),
+            tipo=TipoProximaAcao.HUMANA,
+            prazo=None,
+            responsavel=None,
+        )
 
     tipo = TipoProximaAcao.AUTOMATICA if etapa_atual in _ETAPAS_AUTOMATIZADAS else TipoProximaAcao.HUMANA
     return ProximaAcao(acao=_DESCRICAO_PROXIMA_ACAO[etapa_atual], tipo=tipo, prazo=None, responsavel=None)
@@ -261,6 +283,52 @@ class ServicoAvancoEsteira:
                 'motivo_transicao': motivo_transicao,
             },
         )
+        return novo_estado
+
+    def aplicar_resultado_classificacao(
+        self,
+        documento_id: str,
+        decisao_transicao: DecisaoTransicaoClassificacao,
+        correlation_id: str,
+    ) -> Optional[EstadoEsteiraDocumento]:
+        """Aplica o resultado de `politica_classificacao.
+        decidir_transicao_classificacao` -- avança REGISTRO->CLASSIFICACAO
+        e, quando necessário, registra bloqueio, reutilizando 100% da
+        mecânica já existente (`avancar_etapa`/`registrar_bloqueio`
+        acima). NÃO reimplementa transição, persistência nem evento --
+        só compõe as duas chamadas já existentes conforme a decisão pura
+        recebida.
+
+        Retorna `None` sem fazer nada se `decisao_transicao.deve_avancar`
+        for `False` (ex.: shadow com erro técnico ou não executado --
+        nada estruturado para registrar; ver `politica_classificacao.py`
+        e `servico_lote.py`).
+
+        Quando `deve_bloquear=True`, a transição de etapa em si usa
+        `SituacaoEsteira.AGUARDANDO` como situação transitória (o valor
+        exato não importa -- `registrar_bloqueio`, chamado em seguida,
+        sempre sobrescreve para `BLOQUEADO` com o motivo estruturado
+        correto); a situação FINAL do documento é sempre a que
+        `registrar_bloqueio` produz, nunca a transitória.
+        """
+        if not decisao_transicao.deve_avancar:
+            return None
+
+        situacao_transitoria = (
+            SituacaoEsteira.AGUARDANDO if decisao_transicao.deve_bloquear
+            else decisao_transicao.situacao_classificacao
+        )
+        novo_estado = self.avancar_etapa(
+            documento_id, EtapaEsteira.CLASSIFICACAO, correlation_id,
+            situacao_nova_etapa=situacao_transitoria,
+            motivo_transicao=decisao_transicao.motivo_transicao,
+        )
+
+        if decisao_transicao.deve_bloquear:
+            novo_estado = self.registrar_bloqueio(
+                documento_id, decisao_transicao.motivo_bloqueio, correlation_id,
+            )
+
         return novo_estado
 
     def registrar_bloqueio(

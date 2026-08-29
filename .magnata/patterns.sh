@@ -433,6 +433,18 @@ ALLOWED_PATHS=(
   "^magnata_os/documental/modulo01/dtos_esteira\.py$"
   "^magnata_os/documental/modulo01/servico_lote\.py$"
   "^test_servico_lote_roteamento_shadow\.py$"
+  # Excecao exata e restrita (gate controlado REGISTRO->CLASSIFICACAO,
+  # branch fix/gate-classificacao-esteira) — modulo novo de politica pura
+  # de transicao (nao depende de RoteamentoShadowDTO, so de
+  # DecisaoRoteamentoDocumental), o metodo novo em
+  # servico_avanco_esteira.py que compoe avancar_etapa/registrar_bloqueio
+  # ja existentes, a chamada em servico_lote.py que reaproveita a MESMA
+  # decisao ja calculada, e os 2 testes nominais. Nao libera
+  # "^magnata_os/documental/modulo01/" nem "^test_" de forma ampla.
+  "^magnata_os/documental/modulo01/politica_classificacao\.py$"
+  "^magnata_os/documental/modulo01/servico_avanco_esteira\.py$"
+  "^test_politica_classificacao\.py$"
+  "^test_gate_classificacao_esteira\.py$"
   # Exceção exata e restrita (decisão registrada, branch
   # claude/macro-6a-commit-recovery-k7rsly, 2026-08-12) — Macro 6A,
   # auditoria e esteira documental. Somente estes 8 caminhos exatos de
