@@ -601,6 +601,20 @@ ALLOWED_PATHS=(
   "^magnata_os/documental/modulo01/ponte_prestacao_holerite\.py$"
   "^test_corredor_prestacao_holerite_e2e\.py$"
   "^docs/decisoes/corredor-prestacao-holerite-e2e-v1\.md$"
+  # Excecao exata e restrita (fonte automatica de competencia esperada
+  # da Prestacao de Contas, branch fix/competencia-esperada-prestacao)
+  # — politica pura e versionada (PoliticaCompetenciaPrestacao,
+  # mesmo padrao ja usado por PoliticaRequisitosPrestacao/
+  # OverrideRequisitosPrestacao) que resolve a competencia esperada a
+  # partir de um contexto de ciclo (fornecido uma vez por execucao,
+  # nunca por documento) + deslocamento opcional por cliente (vazio por
+  # padrao -- nenhuma excecao real comprovada na auditoria). Ajusta
+  # minimamente ponte_prestacao_holerite.py (ja liberado acima) para
+  # resolver cliente antes de perguntar a competencia esperada. Nao
+  # libera "^magnata_os/classificacao/" nem "^test_" de forma ampla.
+  "^magnata_os/classificacao/competencia_esperada_prestacao\.py$"
+  "^test_magnata_os_classificacao_competencia_esperada_prestacao\.py$"
+  "^docs/decisoes/competencia-esperada-prestacao-v1\.md$"
 )
 
 # ============================================================================
