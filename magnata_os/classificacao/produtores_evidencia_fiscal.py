@@ -64,3 +64,52 @@ def hipoteses_fiscais_de_texto(texto: str) -> Tuple[HipoteseTipoDocumental, ...]
     if not evidencias:
         return ()
     return (HipoteseTipoDocumental(tipo_documental=TIPO_GUIA_GENERICA, evidencias=tuple(evidencias)),)
+
+
+def reconciliar_evidencia_fiscal_com_finalidade(texto: str):
+    """Fecha o gap fiscal↔finalidade (missão "CADASTRO CANÔNICO REAL DE
+    REQUISITOS DA PRESTAÇÃO", Fase 10, registrado desde os PRs #96/#97).
+
+    NUNCA infere qual finalidade (FGTS vs. DCTF/DARF) sozinho a partir
+    só do sinal fiscal -- exige que uma descrição de finalidade
+    específica (`finalidade_comprovante_pagamento.sinais_textuais_de_
+    finalidade_pagamento`) já tenha identificado FGTS ou DCTF/DARF no
+    MESMO texto; só então o sinal fiscal estrutural (código de receita,
+    linha digitável, identificador de obrigação) REFORÇA essa mesma
+    finalidade -- nunca decide sozinho, nunca cria um segundo motor
+    (devolve `OcorrenciaSinalFinalidade`, o MESMO tipo já consumido por
+    `hipoteses_de_finalidade_pagamento`/`resolver_tipo_documental`)."""
+    from .finalidade_comprovante_pagamento import (
+        FINALIDADE_DCTF_DARF,
+        FINALIDADE_FGTS,
+        OcorrenciaSinalFinalidade,
+        SinalFinalidadePagamento,
+        sinais_textuais_de_finalidade_pagamento,
+    )
+
+    if not texto:
+        return ()
+    ocorrencias_textuais = sinais_textuais_de_finalidade_pagamento(texto)
+    finalidades_fiscais_ja_identificadas = {
+        ocorrencia.finalidade_sugerida for ocorrencia in ocorrencias_textuais
+        if ocorrencia.finalidade_sugerida in (FINALIDADE_FGTS, FINALIDADE_DCTF_DARF)
+    }
+    if not finalidades_fiscais_ja_identificadas:
+        return ()  # nunca decide sozinho sem descrição já ter identificado a finalidade
+
+    tem_sinal_fiscal_estrutural = bool(
+        _PADRAO_CODIGO_RECEITA.search(texto)
+        or _PADRAO_LINHA_DIGITAVEL_GUIA.search(texto)
+        or _PADRAO_IDENTIFICADOR_OBRIGACAO.search(texto)
+    )
+    if not tem_sinal_fiscal_estrutural:
+        return ()
+
+    return tuple(
+        OcorrenciaSinalFinalidade(
+            sinal=SinalFinalidadePagamento.REFORCO_FISCAL_ESTRUTURAL,
+            finalidade_sugerida=finalidade,
+            referencia='sinal_fiscal_estrutural_coerente',
+        )
+        for finalidade in finalidades_fiscais_ja_identificadas
+    )

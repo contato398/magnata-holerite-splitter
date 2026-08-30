@@ -64,6 +64,13 @@ class ResultadoClientePrestacao:
     competencia: ReferenciaCanonica
     pacote: PacotePrestacaoCliente
     necessidades: Tuple[NecessidadeDocumentoPrestacao, ...] = ()
+    requisitos_nao_configurados: Tuple[str, ...] = ()
+    """Fase 13 (missão "CADASTRO CANÔNICO REAL DE REQUISITOS DA
+    PRESTAÇÃO"): tipos que existem no universo canônico mas NÃO têm
+    regra de obrigatoriedade configurada para este cliente -- NUNCA
+    aparecem em `pacote.tipos_faltantes` (documento faltando é uma
+    coisa; regra ainda não configurada é outra, cláusula pétrea desta
+    missão: "não permitir que ambos apareçam como tipos_faltantes")."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -131,6 +138,7 @@ def executar_ciclo_prestacao(
     requisitos_base: Tuple[RequisitoDocumentalPrestacao, ...],
     resolucoes_ancora: Mapping[ReferenciaCanonica, ResultadoResolucaoSemantico],
     competencias_por_cliente: Mapping[ReferenciaCanonica, ReferenciaCanonica],
+    tipos_condicionais_para_auditoria: Tuple[str, ...] = (),
 ) -> ResultadoCicloPrestacao:
     """Executa 1 ciclo, ponta-a-ponta, sem efeito colateral.
 
@@ -141,7 +149,15 @@ def executar_ciclo_prestacao(
     `competencias_por_cliente`: competência EFETIVA já resolvida por
     cliente (via `PoliticaCompetenciaPrestacao`, ex.: SKY = base - 1
     mês) -- calculada fora deste módulo, na borda, nunca aqui (cláusula
-    pétrea Fase 9: "competência entra uma vez na borda")."""
+    pétrea Fase 9: "competência entra uma vez na borda").
+    `tipos_condicionais_para_auditoria`: tipos "de interesse" (ex.:
+    `REQUISITOS_DIVERGENTES_ENTRE_FONTES`) cujo estado de configuração
+    (Fase 13) é reportado por cliente em `ResultadoClientePrestacao.
+    requisitos_nao_configurados` -- só populado quando `fonte_requisitos`
+    implementa `requisitos_nao_configurados_para` (extensão OPCIONAL,
+    duck-typed, nunca parte obrigatória do Protocol `FonteRequisitosPrestacao`
+    do PR #98 -- uma fonte sem essa extensão simplesmente não relata
+    esta informação, nunca quebra)."""
     resultados = []
     for cliente in fonte_clientes.listar_ativos(contexto):
         competencia = competencias_por_cliente.get(cliente)
@@ -165,8 +181,16 @@ def executar_ciclo_prestacao(
             )
             for tipo in pacote.tipos_faltantes
         )
+        requisitos_nao_configurados = ()
+        if tipos_condicionais_para_auditoria:
+            obter_nao_configurados = getattr(fonte_requisitos, 'requisitos_nao_configurados_para', None)
+            if obter_nao_configurados is not None:
+                requisitos_nao_configurados = obter_nao_configurados(
+                    cliente, contexto, tipos_condicionais_para_auditoria)
+
         resultados.append(ResultadoClientePrestacao(
             cliente=cliente, competencia=competencia, pacote=pacote, necessidades=necessidades,
+            requisitos_nao_configurados=requisitos_nao_configurados,
         ))
 
     return ResultadoCicloPrestacao(contexto=contexto, resultados_por_cliente=tuple(resultados))

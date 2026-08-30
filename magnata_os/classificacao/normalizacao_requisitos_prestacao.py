@@ -47,6 +47,22 @@ TIPOS_DOCUMENTAIS_CANONICOS = frozenset({
     'Comprovante de Pagamento - Horas Extras',
 })
 
+# Reconciliação de vocabulário (Fase 9, missão "CADASTRO CANÔNICO REAL
+# DE REQUISITOS DA PRESTAÇÃO"): auditoria confirmou que o corredor
+# Família B histórico (`importacao_lote/contratos.py::TipoDocumental`,
+# ainda em produção-sombra) chama o mesmo tipo documental por um nome
+# DIFERENTE do motor geral novo -- `'extrato_cliente'` vs. `'Extrato da
+# Folha de Pagamento'`. Nenhum outro par divergente foi encontrado
+# (DCTFWeb/FGTS já usam a MESMA grafia nos dois vocabulários). Esta
+# tradução é EXPLÍCITA e só usada onde as duas fontes precisam ser
+# comparadas (`cadastro_requisitos_prestacao.py`) -- nunca substitui
+# `TipoDocumental.EXTRATO_CLIENTE` no corredor Família B, que continua
+# usando seu próprio valor sem alteração (cláusula: "nunca renomear
+# todo o sistema só por estética").
+TRADUCAO_FAMILIA_B_PARA_MOTOR_GERAL = {
+    'extrato_cliente': 'Extrato da Folha de Pagamento',
+}
+
 
 @dataclasses.dataclass(frozen=True)
 class RegistroRequisitoExterno:
