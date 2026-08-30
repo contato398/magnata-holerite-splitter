@@ -7,6 +7,9 @@ módulo puro em si.
 import pytest
 
 from magnata_os.classificacao.competencia_esperada_prestacao import (
+    DESLOCAMENTO_SKY_TATUI,
+    POLITICA_COMPETENCIA_PRESTACAO_V1,
+    REFERENCIA_CLIENTE_SKY_TATUI,
     ContextoCicloPrestacao,
     DeslocamentoCompetenciaCliente,
     PoliticaCompetenciaPrestacao,
@@ -56,6 +59,24 @@ def test_deslocamento_rejeita_tipo_documental_vazio():
 def test_deslocamento_geral_aceita_tipo_documental_none():
     deslocamento = DeslocamentoCompetenciaCliente(cliente=CLIENTE_A, competencia=(2026, 6))
     assert deslocamento.tipo_documental is None
+
+
+def test_deslocamento_exige_exatamente_um_entre_competencia_e_offset():
+    with pytest.raises(ValueError):
+        DeslocamentoCompetenciaCliente(cliente=CLIENTE_A)  # nenhum dos dois
+    with pytest.raises(ValueError):
+        DeslocamentoCompetenciaCliente(cliente=CLIENTE_A, competencia=(2026, 6), offset_meses=-1)  # os dois
+
+
+def test_deslocamento_relativo_rejeita_offset_zero():
+    with pytest.raises(ValueError):
+        DeslocamentoCompetenciaCliente(cliente=CLIENTE_A, offset_meses=0)
+
+
+def test_deslocamento_relativo_aceita_offset_valido():
+    deslocamento = DeslocamentoCompetenciaCliente(cliente=CLIENTE_A, offset_meses=-1)
+    assert deslocamento.competencia is None
+    assert deslocamento.offset_meses == -1
 
 
 # ============================================================================
@@ -159,6 +180,93 @@ def test_competencia_esperada_para_exige_cliente_tipo_cliente():
     colaborador = ReferenciaCanonica("COLABORADOR", "colab-1")
     with pytest.raises(ValueError):
         politica.competencia_esperada_para(None, colaborador, 'holerite')
+
+
+# ============================================================================
+# Deslocamento RELATIVO -- exceção real do SKY Tatuí (missão "ATIVAR
+# REGRA DE COMPETÊNCIA DO SKY TATUÍ"). Referência canônica confirmada
+# por leitura somente-GET no Airtable (recrqv5NvbC37WfSl) -- ver
+# docs/decisoes/competencia-esperada-prestacao-v1.md.
+# ============================================================================
+
+def test_caso1_sky_com_base_julho_resulta_junho():
+    resultado = POLITICA_COMPETENCIA_PRESTACAO_V1.competencia_esperada_para(
+        ContextoCicloPrestacao(competencia_base=(2026, 7)),
+        REFERENCIA_CLIENTE_SKY_TATUI, 'holerite',
+    )
+    assert resultado == (2026, 6)
+
+
+def test_caso2_sky_com_base_janeiro_vira_o_ano_para_dezembro_anterior():
+    resultado = POLITICA_COMPETENCIA_PRESTACAO_V1.competencia_esperada_para(
+        ContextoCicloPrestacao(competencia_base=(2027, 1)),
+        REFERENCIA_CLIENTE_SKY_TATUI, 'holerite',
+    )
+    assert resultado == (2026, 12)
+
+
+def test_caso3_cliente_comum_continua_usando_a_base():
+    resultado = POLITICA_COMPETENCIA_PRESTACAO_V1.competencia_esperada_para(
+        ContextoCicloPrestacao(competencia_base=(2026, 7)),
+        CLIENTE_A, 'holerite',
+    )
+    assert resultado == (2026, 7)
+
+
+def test_caso6_sky_sem_contexto_e_fail_safe_nunca_inventa():
+    resultado = POLITICA_COMPETENCIA_PRESTACAO_V1.competencia_esperada_para(
+        None, REFERENCIA_CLIENTE_SKY_TATUI, 'holerite',
+    )
+    assert resultado is None
+
+
+def test_caso7_precedencia_especifica_por_tipo_continua_funcionando_com_relativo():
+    politica = PoliticaCompetenciaPrestacao(
+        version='1',
+        deslocamentos=(
+            DESLOCAMENTO_SKY_TATUI,  # geral: offset -1
+            DeslocamentoCompetenciaCliente(
+                REFERENCIA_CLIENTE_SKY_TATUI, tipo_documental='extrato_cliente', offset_meses=-2),
+        ),
+    )
+    contexto = ContextoCicloPrestacao(competencia_base=(2026, 7))
+    # tipo especifico (extrato_cliente) usa o offset proprio (-2)
+    assert politica.competencia_esperada_para(contexto, REFERENCIA_CLIENTE_SKY_TATUI, 'extrato_cliente') == (2026, 5)
+    # outro tipo continua usando o geral do SKY (-1)
+    assert politica.competencia_esperada_para(contexto, REFERENCIA_CLIENTE_SKY_TATUI, 'holerite') == (2026, 6)
+
+
+def test_caso8_conflito_de_deslocamentos_continua_fail_fast():
+    with pytest.raises(ValueError):
+        PoliticaCompetenciaPrestacao(
+            version='1',
+            deslocamentos=(
+                DeslocamentoCompetenciaCliente(REFERENCIA_CLIENTE_SKY_TATUI, offset_meses=-1),
+                DeslocamentoCompetenciaCliente(REFERENCIA_CLIENTE_SKY_TATUI, offset_meses=-2),
+            ),
+        )
+
+
+def test_sky_absoluto_e_relativo_no_mesmo_cliente_ainda_conflita_na_chave():
+    """Mesmo misturando forma absoluta e relativa, a CHAVE de conflito
+    continua sendo (cliente, tipo_documental) -- nunca decide por forma."""
+    with pytest.raises(ValueError):
+        PoliticaCompetenciaPrestacao(
+            version='1',
+            deslocamentos=(
+                DeslocamentoCompetenciaCliente(REFERENCIA_CLIENTE_SKY_TATUI, competencia=(2026, 6)),
+                DeslocamentoCompetenciaCliente(REFERENCIA_CLIENTE_SKY_TATUI, offset_meses=-1),
+            ),
+        )
+
+
+def test_offset_meses_aplica_corretamente_em_varias_viradas():
+    from magnata_os.classificacao.competencia_esperada_prestacao import _aplicar_offset_meses
+    assert _aplicar_offset_meses((2026, 7), -1) == (2026, 6)
+    assert _aplicar_offset_meses((2027, 1), -1) == (2026, 12)
+    assert _aplicar_offset_meses((2026, 1), -1) == (2025, 12)
+    assert _aplicar_offset_meses((2026, 6), 1) == (2026, 7)
+    assert _aplicar_offset_meses((2026, 12), 1) == (2027, 1)
 
 
 # ============================================================================

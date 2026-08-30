@@ -36,6 +36,8 @@ import pytest
 
 from magnata_os.classificacao.classificador_documental import EstadoClassificacao
 from magnata_os.classificacao.competencia_esperada_prestacao import (
+    POLITICA_COMPETENCIA_PRESTACAO_V1,
+    REFERENCIA_CLIENTE_SKY_TATUI,
     ContextoCicloPrestacao,
     DeslocamentoCompetenciaCliente,
     PoliticaCompetenciaPrestacao,
@@ -456,6 +458,55 @@ def test_caso3_competencia_do_ciclo_geral_rejeitada_para_cliente_deslocado(monke
 
     itens_holerite = _confirmar(resumo_lote, contexto, politica_competencia, fonte_vinculos)
     assert itens_holerite == ()  # julho != junho (esperada deste cliente) -- nunca aceito
+
+
+# ============================================================================
+# Exceção REAL do SKY Tatuí (missão "ATIVAR REGRA DE COMPETÊNCIA DO SKY
+# TATUÍ") -- usa a referência canônica confirmada e a política real
+# exportada (POLITICA_COMPETENCIA_PRESTACAO_V1), nunca uma cópia
+# sintética da regra.
+# ============================================================================
+
+def test_sky_com_holerite_junho_e_ciclo_base_julho_e_aceito(monkeypatch):
+    resumo_lote = _processar_lote_holerite(
+        monkeypatch,
+        resolucao_identificacao=_RESOLUCAO_COLABORADOR_UNICO,
+        competencia_observada=_COMPETENCIA_JUNHO,  # SKY = base - 1 mes = junho, quando base = julho
+    )
+    contexto = ContextoCicloPrestacao(competencia_base=COMPETENCIA_BASE)  # julho/2026
+    resolucao_vinculo_sky = ResolucaoDimensao(
+        dimensao=DimensaoResolucao.CLIENTE,
+        estado=EstadoResolucaoDimensao.RESOLVIDA,
+        valores_confirmados=(REFERENCIA_CLIENTE_SKY_TATUI,),
+        confianca=ConfiancaResolucao(NivelConfianca.FORTE),
+    )
+    fonte_vinculos = FonteVinculosPrestacaoFake(resolucao_vinculo_sky)
+
+    itens_holerite = _confirmar(
+        resumo_lote, contexto, POLITICA_COMPETENCIA_PRESTACAO_V1, fonte_vinculos)
+    assert len(itens_holerite) == 1
+    assert itens_holerite[0].cliente == REFERENCIA_CLIENTE_SKY_TATUI
+    assert itens_holerite[0].competencia == COMPETENCIA_DESLOCADA_REF  # 2026-06
+
+
+def test_sky_com_holerite_julho_e_ciclo_base_julho_e_rejeitado(monkeypatch):
+    resumo_lote = _processar_lote_holerite(
+        monkeypatch,
+        resolucao_identificacao=_RESOLUCAO_COLABORADOR_UNICO,
+        competencia_observada=_COMPETENCIA_JULHO,  # SKY exige junho quando base = julho -- julho diverge
+    )
+    contexto = ContextoCicloPrestacao(competencia_base=COMPETENCIA_BASE)
+    resolucao_vinculo_sky = ResolucaoDimensao(
+        dimensao=DimensaoResolucao.CLIENTE,
+        estado=EstadoResolucaoDimensao.RESOLVIDA,
+        valores_confirmados=(REFERENCIA_CLIENTE_SKY_TATUI,),
+        confianca=ConfiancaResolucao(NivelConfianca.FORTE),
+    )
+    fonte_vinculos = FonteVinculosPrestacaoFake(resolucao_vinculo_sky)
+
+    itens_holerite = _confirmar(
+        resumo_lote, contexto, POLITICA_COMPETENCIA_PRESTACAO_V1, fonte_vinculos)
+    assert itens_holerite == ()  # julho != junho (esperada real do SKY) -- nunca aceito
 
 
 # ============================================================================

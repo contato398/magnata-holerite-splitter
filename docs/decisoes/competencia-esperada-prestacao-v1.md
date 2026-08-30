@@ -7,10 +7,13 @@
 **Correção registrada em 2026-08-29 (mesma branch, missão corretiva):**
 a auditoria original desta ADR descrevia a ausência de deslocamento
 codificado como "nenhuma exceção real hoje" — formulação imprecisa,
-corrigida abaixo. Existe ao menos uma regra operacional REAL conhecida
-(SKY Tatuí), ainda não ativada por falta de referência canônica
-comprovada no repositório — ver "Exceção operacional pendente — SKY
-Tatuí".
+corrigida abaixo.
+
+**Ativação registrada em 2026-08-30 (branch
+`fix/competencia-sky-relativa`, missão corretiva curta):** a referência
+canônica do cliente SKY Tatuí foi confirmada por leitura somente-GET no
+Airtable e a regra foi ATIVADA — ver "Exceção operacional — SKY Tatuí"
+abaixo (não é mais "pendente").
 
 ## Resumo executivo
 
@@ -58,9 +61,8 @@ em `app.py`, `scripts/`, `ConfiguracaoExecucao`, ADRs e testes.
   documentação) — nenhuma ocorrência de "cliente X usa mês Y" ou
   equivalente no momento desta auditoria. **Isso não significa que
   nenhuma exceção real existe** — uma correção posterior (ver seção
-  "Exceção operacional pendente — SKY Tatuí" abaixo) identificou ao
-  menos uma regra operacional conhecida, ainda sem referência canônica
-  comprovada no repositório para ser ativada com segurança.
+  "Exceção operacional — SKY Tatuí" abaixo) identificou e, em seguida,
+  confirmou e ativou uma regra operacional real.
 - `avaliar_prestacao_shadow`/`avaliar_prestacao_readiness` — a própria
   assinatura (`cliente`, `competencia` como parâmetros de nível
   superior, separados) já pressupõe que competência pode ser avaliada
@@ -73,7 +75,10 @@ em `app.py`, `scripts/`, `ConfiguracaoExecucao`, ADRs e testes.
 `PoliticaRequisitosPrestacao`/`OverrideRequisitosPrestacao`
 (`politica_requisitos_prestacao.py`, já existente): política pura e
 versionada, com uma lista de exceções (aqui, `DeslocamentoCompetenciaCliente`)
-vazia por padrão. **Por que é independente do documento:** o módulo
+vazia por padrão para quem não tem exceção nenhuma — a exceção real do
+SKY Tatuí (ver "Exceção operacional — SKY Tatuí" abaixo) já vem
+composta em `POLITICA_COMPETENCIA_PRESTACAO_V1`. **Por que é
+independente do documento:** o módulo
 inteiro (`competencia_esperada_prestacao.py`) nunca importa
 `datetime`/`time`/`calendar` (garantido por teste estático AST) e nunca
 recebe o texto do documento — só `ContextoCicloPrestacao` (fornecido de
@@ -93,13 +98,18 @@ princípio já registrado em `composition-root-modulo01-v1.md`.
 
 ## Regras por cliente (deslocamento)
 
-`DeslocamentoCompetenciaCliente(cliente, competencia, tipo_documental=None)`.
-`tipo_documental=None` aplica a qualquer tipo documental daquele
-cliente; um valor explícito restringe a esse tipo só. Lista vazia por
-padrão — reflete o que está CODIFICADO hoje (nenhuma referência
-canônica de cliente com exceção foi comprovada ainda para ativação
-segura; ver "Exceção operacional pendente — SKY Tatuí" abaixo para a
-exceção conhecida e não ativada).
+`DeslocamentoCompetenciaCliente(cliente, competencia=None, tipo_documental=None,
+offset_meses=None)` — exatamente UM entre `competencia` (absoluta, forma
+preservada por compatibilidade) e `offset_meses` (relativa, aplicada sobre
+`ContextoCicloPrestacao.competencia_base` no momento da resolução,
+nunca hardcoded como valor fixo). `tipo_documental=None` aplica o
+deslocamento a qualquer tipo documental daquele cliente; um valor
+explícito restringe a esse tipo só. `PoliticaCompetenciaPrestacao(version="1")`
+(sem argumentos) continua com `deslocamentos=()` — o default seguro
+para quem não tem exceção; a exceção real do SKY Tatuí vem pronta em
+`POLITICA_COMPETENCIA_PRESTACAO_V1` (ver "Exceção operacional — SKY
+Tatuí" abaixo), para quem compõe o corredor real reaproveitar sem
+duplicar a regra.
 
 ## Precedência
 
@@ -151,49 +161,46 @@ colaborador→cliente (papel organizacional); (b) o valor comparado
 contra a esperada (papel de validação). Nenhum dos dois papéis deriva a
 esperada a partir da observada.
 
-## Exceção operacional pendente — SKY Tatuí
+## Exceção operacional — SKY Tatuí (ATIVADA em 2026-08-30)
 
-Existe ao menos uma exceção operacional real: **SKY Tatuí usa
-competência base − 1 mês** (ex.: demais clientes em JULHO/2026, SKY
-Tatuí em JUNHO/2026).
+**Referência canônica confirmada** por leitura somente-GET no Airtable
+(base `appaCpIVj7Q97VhFy`, tabela Clientes `tbl0znyuCEzoCHtCV`, cliente
+"EDIFICIO SKY TATUI"):
 
-**A regra ainda não foi ativada na política porque sua referência
-canônica não foi comprovada no repositório.**
+```
+cliente_ref = recrqv5NvbC37WfSl
+regra       = competência base − 1 mês (RELATIVA, não fixa)
+```
 
-Auditoria (busca por "SKY"/"Tatuí" em todo o repositório — código,
-testes, fixtures, docs, Central Command): a única ocorrência de "Sky
-Tatuí" como identidade é `recSKY` em `test_fila_envios_v2_23.py`
-(linhas 617/633) — um ID **sintético, local a esse teste**, inventado
-só para exercitar normalização de texto/fatiamento de PDF de uma
-funcionalidade não relacionada (fila de envios legada) — nunca um
-`ReferenciaCanonica("CLIENTE", ...)` real, nunca usado por
-`vinculos_prestacao.py`, `airtable_leitura.py`,
-`airtable_inventario_prestacao.py` ou qualquer fixture da Prestação de
-Contas. Reaproveitá-lo seria inventar uma identidade por coincidência
-de nome — exatamente o que esta missão proíbe.
+Exportada em `magnata_os/classificacao/competencia_esperada_prestacao.py`
+como `REFERENCIA_CLIENTE_SKY_TATUI` (a identidade é SEMPRE este record
+id — nunca o nome livre "SKY Tatuí"/"Edifício Sky Tatuí", que só existe
+em comentário para rastreabilidade humana) e `DESLOCAMENTO_SKY_TATUI`
+(`offset_meses=-1`, nunca uma competência absoluta hardcoded — funciona
+para qualquer competência base, inclusive virada de ano: base
+JANEIRO/2027 → esperada DEZEMBRO/2026). Ambas compostas em
+`POLITICA_COMPETENCIA_PRESTACAO_V1`, a política real pronta para quem
+compuser o corredor reaproveitar — nenhuma duplicação da regra em mais
+de um lugar.
 
-**Por isso, deliberadamente, nesta correção:**
+**Histórico da auditoria de identidade** (branch anterior,
+`fix/competencia-esperada-prestacao`): busca por "SKY"/"Tatuí" em todo
+o repositório havia encontrado só `recSKY` em
+`test_fila_envios_v2_23.py` — um ID sintético local a esse teste,
+inventado para uma funcionalidade não relacionada (fila de envios
+legada), nunca reaproveitado. A referência real acima veio de uma
+consulta de leitura nova e específica ao Airtable, autorizada e
+executada nesta correção — não do `recSKY` de teste.
 
-- `PoliticaCompetenciaPrestacao`/`DeslocamentoCompetenciaCliente`
-  continuam sem nenhum deslocamento ativo — `deslocamentos=()` em
-  qualquer composição real;
-- nenhum ID foi inventado, nenhum nome livre foi hardcoded como
-  `ReferenciaCanonica`;
-- o mecanismo de deslocamento (`DeslocamentoCompetenciaCliente`) já
-  suporta uma competência ABSOLUTA por cliente; a forma como a regra do
-  SKY Tatuí deveria ser expressa (deslocamento relativo, "base − 1 mês",
-  válido para qualquer competência base, inclusive virada de ano) fica
-  para quando a referência canônica existir — implementá-lo antes disso
-  seria construir mecanismo para uma identidade que ainda não existe no
-  sistema, fora do escopo desta correção.
-
-**Gate futuro específico, registrado explicitamente:** antes de ativar
-esta regra, alguém com acesso ao Airtable de produção precisa confirmar
-o `record id` (ou outra referência canônica já usada pelo sistema) do
-cliente "SKY Tatuí"/"Edifício Sky Tatuí" — só então este ADR e
-`competencia_esperada_prestacao.py` devem ganhar o deslocamento real
-(relativo, "base − 1 mês") e os testes de virada de ano/mês normal
-correspondentes.
+**Suporte a deslocamento relativo** (`DeslocamentoCompetenciaCliente.
+offset_meses`, `_aplicar_offset_meses`): menor ajuste ao mecanismo já
+existente — a forma absoluta (`competencia: Tuple[int,int]`) foi
+preservada por compatibilidade (nenhum uso real dela foi encontrado que
+justificasse removê-la); as duas formas são mutuamente exclusivas em
+cada `DeslocamentoCompetenciaCliente` (validado em `__post_init__`).
+Aritmética pura de meses (nunca `datetime`/`calendar`), continua
+coberta pelo mesmo teste estático que garante que o módulo nunca
+importa relógio.
 
 ## Documentação relacionada
 
