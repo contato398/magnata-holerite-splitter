@@ -679,6 +679,21 @@ ALLOWED_PATHS=(
   "^test_corredor_extrato_mensal_pos_separacao\.py$"
   "^test_fechamento_cobertura_documental_fila_heterogenea\.py$"
   "^docs/decisoes/fechamento-cobertura-documental-fase2e3-v1\.md$"
+  # Excecao exata e restrita (corredor operacional da prestacao de
+  # contas, branch fix/corredor-operacional-prestacao-v1) — adaptador
+  # generico ResultadoResolucaoSemantico->ItemInventarioPrestacao
+  # (nunca substitui os 2 caminhos existentes, so soma um 3o caminho
+  # generico), pacote logico por cliente (nunca gera ZIP/PDF), extensao
+  # aditiva de PoliticaRequisitosPrestacao (default identico ao
+  # comportamento anterior). Nao libera "^magnata_os/classificacao/"
+  # nem "^test_" de forma ampla.
+  "^magnata_os/classificacao/adaptador_inventario_prestacao\.py$"
+  "^magnata_os/classificacao/pacote_prestacao\.py$"
+  "^magnata_os/classificacao/politica_requisitos_prestacao\.py$"
+  "^test_magnata_os_classificacao_adaptador_inventario_prestacao\.py$"
+  "^test_magnata_os_classificacao_pacote_prestacao\.py$"
+  "^test_corredor_operacional_prestacao_e2e\.py$"
+  "^docs/decisoes/corredor-operacional-prestacao-v1\.md$"
 )
 
 # ============================================================================
