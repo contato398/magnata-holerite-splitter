@@ -642,6 +642,29 @@ ALLOWED_PATHS=(
   "^test_magnata_os_classificacao_resolucao_tipo_documental\.py$"
   "^test_resolucao_tipo_documental_fila_heterogenea\.py$"
   "^docs/decisoes/motor-geral-compreensao-documental-v1\.md$"
+  # Excecao exata e restrita (capacidades transversais do motor
+  # documental, branch fix/capacidades-transversais-documentais) —
+  # evidencia estrutural (contagem, nunca CPF/CNPJ bruto), detector
+  # geral de granularidade (master != tipo documental, dataclass
+  # propria, nunca estende DimensaoResolucao), engine de separacao
+  # MASTER->FILHOS plugavel (generaliza construir_mapa_cliente do
+  # legado, nunca importa app.py), producer de finalidade de
+  # comprovante de pagamento (reusa resolver_tipo_documental, nenhuma
+  # regra de combinacao nova) e a ligacao (so sugestao, sem alterar
+  # TRANSICOES_ETAPA_PERMITIDAS) entre granularidade e EtapaEsteira.
+  # Nao libera "^magnata_os/classificacao/" nem "^test_" de forma ampla.
+  "^magnata_os/classificacao/evidencia_estrutural_documental\.py$"
+  "^magnata_os/classificacao/resolucao_master_documental\.py$"
+  "^magnata_os/classificacao/separacao_documental\.py$"
+  "^magnata_os/classificacao/finalidade_comprovante_pagamento\.py$"
+  "^magnata_os/documental/modulo01/decisao_pos_classificacao\.py$"
+  "^test_magnata_os_classificacao_evidencia_estrutural_documental\.py$"
+  "^test_magnata_os_classificacao_resolucao_master_documental\.py$"
+  "^test_magnata_os_classificacao_separacao_documental\.py$"
+  "^test_magnata_os_classificacao_finalidade_comprovante_pagamento\.py$"
+  "^test_magnata_os_documental_modulo01_decisao_pos_classificacao\.py$"
+  "^test_capacidades_transversais_fila_heterogenea\.py$"
+  "^docs/decisoes/capacidades-transversais-motor-documental-v1\.md$"
 )
 
 # ============================================================================
