@@ -773,6 +773,27 @@ ALLOWED_PATHS=(
   "^test_airtable_holerites_prestacao\.py$"
   "^test_piloto_sky_inventario_real_local_e2e\.py$"
   "^docs/decisoes/inventario-real-prestacao-v1\.md$"
+  # Excecao exata e restrita (automacao documental real V1 -- motor
+  # semantico multi-evidencia, universo documental, automacao por
+  # confianca, branch fix/automacao-documental-semantica-v1) — produtor
+  # adicional de rotulo alternativo de Extrato (nunca altera o
+  # classificador espelho do legado), reconciliacao origem x conteudo
+  # (nunca deixa o Airtable virar cerebro semantico), decisao fina de
+  # automacao por confianca (reusa NivelConfianca/EstadoResolucaoDimensao
+  # ja existentes, nenhum score novo), estrategia de aquisicao
+  # complementar (reusa NecessidadeDocumentoPrestacao.fontes_ainda_nao_
+  # consultadas ja existente), corpus E2E heterogeneo. Nao libera
+  # "^magnata_os/classificacao/" nem "^test_" de forma ampla.
+  "^magnata_os/classificacao/produtores_evidencia_extrato\.py$"
+  "^magnata_os/classificacao/reconciliacao_origem_conteudo\.py$"
+  "^magnata_os/classificacao/automacao_por_confianca\.py$"
+  "^magnata_os/classificacao/estrategia_aquisicao_documental\.py$"
+  "^test_magnata_os_classificacao_produtores_evidencia_extrato\.py$"
+  "^test_magnata_os_classificacao_reconciliacao_origem_conteudo\.py$"
+  "^test_magnata_os_classificacao_automacao_por_confianca\.py$"
+  "^test_magnata_os_classificacao_estrategia_aquisicao_documental\.py$"
+  "^test_corpus_heterogeneo_motor_semantico_e2e\.py$"
+  "^docs/decisoes/automacao-documental-semantica-v1\.md$"
 )
 
 # ============================================================================
