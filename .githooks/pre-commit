@@ -344,6 +344,14 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_magnata_os_classificacao_fonte_inventario_composta.py"
   "test_airtable_holerites_prestacao.py"
   "test_piloto_sky_inventario_real_local_e2e.py"
+  # Excecao exata e restrita (automacao documental real V1, branch
+  # fix/automacao-documental-semantica-v1). Mantem test_* bloqueado por
+  # padrao e libera somente estes testes nominais novos.
+  "test_magnata_os_classificacao_produtores_evidencia_extrato.py"
+  "test_magnata_os_classificacao_reconciliacao_origem_conteudo.py"
+  "test_magnata_os_classificacao_automacao_por_confianca.py"
+  "test_magnata_os_classificacao_estrategia_aquisicao_documental.py"
+  "test_corpus_heterogeneo_motor_semantico_e2e.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
