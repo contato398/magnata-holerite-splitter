@@ -28,33 +28,50 @@ colaborador, ou qualquer granularidade futura, desde que alguém forneça
 o identificador de página certo (nunca uma arquitetura nova por
 granularidade).
 
-Nesta missão, só a estratégia por CNPJ/cliente
-(`estrategia_por_cnpj_cliente`) foi portada — reaproveita
-`extrair_cnpjs_de_texto` (já pura, já em `importacao_lote/dominio.py`).
-GAPS REAIS, registrados e não escondidos (ver ADR):
-  - o fallback por NOME normalizado do legado (`_normalizar_texto_
-    busca` + busca de substring) depende de uma função só existente em
-    `app.py` — não portado nesta missão, permanece cobrindo só o
-    caminho por CNPJ exato;
-  - a estratégia por CPF/colaborador (`construir_mapa_cpf`, fatiador de
-    holerite com múltiplos colaboradores) depende de extratores
-    (`extrair_nome_funcionario`, `extrair_valores_holerite`) ainda não
-    portados para `magnata_os` — fica para missão futura pelo mesmo
-    motivo: portar exigiria reimplementar extração ainda presa a
-    `app.py`, o que expandiria esta missão além do "menor produtor
-    possível" pedido pela Fase E.
+Fase 2E.3 (missão "FECHAMENTO AMPLO DA COBERTURA DOCUMENTAL") completa
+a separação com 2 estratégias adicionais, usando a MESMA engine —
+nenhuma engine nova por granularidade:
+  - `estrategia_por_cnpj_ou_nome_cliente`: adiciona o fallback por NOME
+    normalizado do legado (`_normalizar_texto_busca` + busca de
+    substring, agora `normalizar_texto_busca`, pura, portada aqui) —
+    só quando NENHUM CNPJ aparece na página (CNPJ exato sempre vence,
+    "Fase B" da missão: "CPF/CNPJ exatos > nome"). DESVIO DELIBERADO,
+    REGISTRADO, do legado: 2+ nomes de clientes DIFERENTES batendo na
+    mesma página é tratado como AMBÍGUO (`ENTIDADE_DESCONHECIDA`, nunca
+    escolhe o primeiro por ordem arbitrária) — o legado original
+    (`_carregar_indice_clientes`) resolve isso só pela ordenação
+    "nome mais longo primeiro" e pega o primeiro que bater, sem
+    detectar ambiguidade; a nova regra explícita da missão ("nome
+    ambíguo → revisão") é mais segura e nunca inventa cliente.
+  - `estrategia_por_cpf_colaborador`: generaliza `construir_mapa_cpf`
+    (fatiador de holerite/ponto com múltiplos colaboradores). DESVIO
+    DELIBERADO, REGISTRADO: o legado usa o CPF cru como chave (nenhum
+    índice pré-existente) — aqui exige um índice CPF→colaborador
+    INJETADO (mesmo padrão de `estrategia_por_cnpj_cliente`), porque
+    `extrair_cpfs_distintos_de_texto` documenta que "CPF é estritamente
+    TRANSITÓRIO — nunca retornado em DTO"; sem índice, o CPF cru viraria
+    `GrupoSeparado.entidade_id` (um DTO puro), violando essa regra.
+    Exigir índice também cumpre a cláusula pétrea #10 desta missão
+    ("não inventar colaborador") — CPF desconhecido nunca vira grupo
+    novo, vai para `indices_sem_grupo` como qualquer entidade
+    desconhecida.
 
-Nunca inventa cliente/competência: uma página sem entidade conhecida e
-sem seção corrente aberta vai para `indices_sem_grupo`, nunca para um
-grupo arbitrário.
+Nunca inventa cliente/colaborador/competência: uma página sem entidade
+conhecida e sem seção corrente aberta vai para `indices_sem_grupo`,
+nunca para um grupo arbitrário.
 """
 from __future__ import annotations
 
 import dataclasses
 import enum
+import unicodedata
+import re as _re
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from ..documental.importacao_lote.dominio import extrair_cnpjs_de_texto
+from ..documental.importacao_lote.dominio import (
+    extrair_cnpjs_de_texto,
+    extrair_cpfs_distintos_de_texto,
+)
 
 
 class SituacaoPaginaSeparacao(str, enum.Enum):
@@ -190,6 +207,79 @@ def estrategia_por_cnpj_cliente(
                     SituacaoPaginaSeparacao.ENTIDADE_CONHECIDA, cliente_id, nome,
                 )
         if cnpjs_tomador:
+            return IdentificacaoPagina(SituacaoPaginaSeparacao.ENTIDADE_DESCONHECIDA)
+        return IdentificacaoPagina(SituacaoPaginaSeparacao.SEM_MARCADOR)
+
+    return identificar
+
+
+def normalizar_texto_busca(texto: str) -> str:
+    """Porta pura de `app.py::_normalizar_texto_busca` — NFKD, remove
+    acentos (caracteres combinantes), colapsa espaço, maiúsculas.
+    Nenhuma mudança de comportamento em relação ao legado."""
+    texto_normalizado = unicodedata.normalize('NFKD', texto or '')
+    sem_acentos = ''.join(c for c in texto_normalizado if not unicodedata.combining(c))
+    return _re.sub(r'\s+', ' ', sem_acentos).strip().upper()
+
+
+def estrategia_por_cnpj_ou_nome_cliente(
+    indice_cnpj_para_cliente: Mapping[str, Tuple[str, str]],
+    indice_nomes: Sequence[Tuple[str, str, str]] = (),
+    cnpj_excluido: Optional[str] = None,
+) -> IdentificadorDePagina:
+    """Generaliza `construir_mapa_cliente` por completo (CNPJ exato +
+    fallback por nome normalizado) -- ver "DESVIO DELIBERADO" na
+    docstring do módulo para a diferença de tratamento de ambiguidade.
+
+    `indice_nomes`: sequência de `(nome_normalizado, cliente_id, nome)`
+    -- MESMA forma e MESMA ordenação (nome mais longo primeiro) que
+    `app.py::_carregar_indice_clientes` já produz, injetada por quem
+    chama (nunca lida daqui -- este módulo continua livre de I/O).
+    CNPJ exato sempre vence sobre nome, na própria página."""
+    identificar_por_cnpj = estrategia_por_cnpj_cliente(indice_cnpj_para_cliente, cnpj_excluido)
+
+    def identificar(texto_pagina: str) -> IdentificacaoPagina:
+        resultado_cnpj = identificar_por_cnpj(texto_pagina)
+        if resultado_cnpj.situacao != SituacaoPaginaSeparacao.SEM_MARCADOR:
+            # CNPJ (conhecido ou desconhecido) sempre decide -- nome só
+            # é consultado quando a página não tem NENHUM CNPJ tomador.
+            return resultado_cnpj
+
+        texto_normalizado = normalizar_texto_busca(texto_pagina)
+        encontrados = {
+            (cliente_id, nome) for nome_norm, cliente_id, nome in indice_nomes
+            if nome_norm and nome_norm in texto_normalizado
+        }
+        if len(encontrados) > 1:
+            # Nome ambíguo -- nunca escolhe o primeiro por ordem
+            # arbitrária (Fase B da missão: "nome ambíguo -> revisão").
+            return IdentificacaoPagina(SituacaoPaginaSeparacao.ENTIDADE_DESCONHECIDA)
+        if len(encontrados) == 1:
+            cliente_id, nome = next(iter(encontrados))
+            return IdentificacaoPagina(SituacaoPaginaSeparacao.ENTIDADE_CONHECIDA, cliente_id, nome)
+        return IdentificacaoPagina(SituacaoPaginaSeparacao.SEM_MARCADOR)
+
+    return identificar
+
+
+def estrategia_por_cpf_colaborador(
+    indice_cpf_para_colaborador: Mapping[str, Tuple[str, str]],
+) -> IdentificadorDePagina:
+    """Generaliza a separação por colaborador (`construir_mapa_cpf`) --
+    ver "DESVIO DELIBERADO" na docstring do módulo: exige um índice
+    CPF->colaborador INJETADO (nunca o CPF cru como identidade), porque
+    CPF é estritamente transitório (nunca em DTO). CPF desconhecido
+    nunca vira grupo -- quebra o carry-forward, igual à estratégia de
+    cliente para CNPJ desconhecido."""
+    def identificar(texto_pagina: str) -> IdentificacaoPagina:
+        cpfs_pagina = extrair_cpfs_distintos_de_texto(texto_pagina)
+        for cpf in cpfs_pagina:
+            if cpf in indice_cpf_para_colaborador:
+                colaborador_id, nome = indice_cpf_para_colaborador[cpf]
+                return IdentificacaoPagina(
+                    SituacaoPaginaSeparacao.ENTIDADE_CONHECIDA, colaborador_id, nome,
+                )
+        if cpfs_pagina:
             return IdentificacaoPagina(SituacaoPaginaSeparacao.ENTIDADE_DESCONHECIDA)
         return IdentificacaoPagina(SituacaoPaginaSeparacao.SEM_MARCADOR)
 

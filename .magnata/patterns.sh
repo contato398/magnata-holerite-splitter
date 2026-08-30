@@ -665,6 +665,20 @@ ALLOWED_PATHS=(
   "^test_magnata_os_documental_modulo01_decisao_pos_classificacao\.py$"
   "^test_capacidades_transversais_fila_heterogenea\.py$"
   "^docs/decisoes/capacidades-transversais-motor-documental-v1\.md$"
+  # Excecao exata e restrita (fechamento amplo da cobertura documental,
+  # branch fix/fechamento-cobertura-documental-fase2e3) — produtores
+  # transversais novos (fiscal, ponto, temporal/certidao), cada um
+  # reaproveitando so extratores/padroes ja existentes ou portados do
+  # legado, todos alimentando o MESMO resolver_tipo_documental. Nao
+  # libera "^magnata_os/classificacao/" nem "^test_" de forma ampla.
+  "^magnata_os/classificacao/produtores_evidencia_fiscal\.py$"
+  "^magnata_os/classificacao/produtores_evidencia_ponto\.py$"
+  "^magnata_os/classificacao/produtores_evidencia_temporal\.py$"
+  "^test_magnata_os_classificacao_produtores_evidencia_fiscal_ponto_temporal\.py$"
+  "^test_magnata_os_classificacao_perfis_aplicabilidade_por_familia\.py$"
+  "^test_corredor_extrato_mensal_pos_separacao\.py$"
+  "^test_fechamento_cobertura_documental_fila_heterogenea\.py$"
+  "^docs/decisoes/fechamento-cobertura-documental-fase2e3-v1\.md$"
 )
 
 # ============================================================================

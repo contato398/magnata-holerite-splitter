@@ -5,7 +5,9 @@ from magnata_os.classificacao.contratos import EstadoResolucaoDimensao, Referenc
 from magnata_os.classificacao.finalidade_comprovante_pagamento import (
     FINALIDADE_DCTF_DARF,
     FINALIDADE_FGTS,
+    FINALIDADE_HORAS_EXTRAS,
     FINALIDADE_SALARIO,
+    FINALIDADE_VR_VA,
     OcorrenciaSinalFinalidade,
     SinalFinalidadePagamento,
     hipoteses_de_finalidade_pagamento,
@@ -84,6 +86,32 @@ def test_documento_sem_nenhum_sinal_de_pagamento_nao_encontra_finalidade():
 def test_texto_vazio_nao_produz_nenhuma_ocorrencia():
     assert sinais_textuais_de_finalidade_pagamento('') == ()
     assert sinais_textuais_de_finalidade_pagamento(None) == ()
+
+
+def test_horas_extras_reconhecido_por_descricao_especifica():
+    resultado = _resolver('Recibo de horas extras do período de referência')
+    assert resultado.estado == EstadoResolucaoDimensao.RESOLVIDA
+    assert resultado.valores_confirmados == (
+        ReferenciaCanonica('TIPO_DOCUMENTAL', FINALIDADE_HORAS_EXTRAS),
+    )
+
+
+def test_abreviacao_vr_va_isolada_nunca_resolve_sozinha():
+    """'VR' sozinho, sem frase completa nem estrutura bancária -- nunca
+    decide (Fase F: "VR isolado -> fraca")."""
+    resultado = _resolver('Relatório contém a sigla VR em uma tabela qualquer')
+    assert resultado.estado == EstadoResolucaoDimensao.NAO_ENCONTRADA
+
+
+def test_abreviacao_vr_va_mais_estrutura_bancaria_aumenta_confianca():
+    """Duas evidências FRACAS coerentes (abreviação + estrutura
+    bancária) se reforçam -- mesma regra de combinação já provada em
+    `resolucao_tipo_documental.py`, nunca uma regra nova aqui."""
+    resultado = _resolver('PIX efetuado -- crédito referente a VR do mês')
+    assert resultado.estado == EstadoResolucaoDimensao.RESOLVIDA
+    assert resultado.valores_confirmados == (
+        ReferenciaCanonica('TIPO_DOCUMENTAL', FINALIDADE_VR_VA),
+    )
 
 
 def test_dctf_darf_reconhecido_por_descricao_especifica():

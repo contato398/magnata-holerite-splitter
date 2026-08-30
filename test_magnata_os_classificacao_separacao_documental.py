@@ -15,6 +15,9 @@ from magnata_os.classificacao.separacao_documental import (
     IdentificacaoPagina,
     SituacaoPaginaSeparacao,
     estrategia_por_cnpj_cliente,
+    estrategia_por_cnpj_ou_nome_cliente,
+    estrategia_por_cpf_colaborador,
+    normalizar_texto_busca,
     separar_por_carry_forward,
     texto_do_grupo,
 )
@@ -142,6 +145,88 @@ def test_filhos_separados_reentram_no_mesmo_motor_sem_pipeline_paralelo():
         assert resolucao_tipo.valores_confirmados == (
             ReferenciaCanonica('TIPO_DOCUMENTAL', 'Extrato da Folha de Pagamento'),
         )
+
+
+
+# ============================================================================
+# Fase 2E.3 -- separação por nome (fallback) e por colaborador/CPF
+# ============================================================================
+
+_NOME_CLIENTE_A_NORM = 'CLIENTE A EDIFICIO CENTRAL'
+_NOME_CLIENTE_B_NORM = 'CLIENTE B RESIDENCIAL'
+_INDICE_NOMES = (
+    (_NOME_CLIENTE_A_NORM, 'rec_cliente_a', 'Cliente A Edifício Central'),
+    (_NOME_CLIENTE_B_NORM, 'rec_cliente_b', 'Cliente B Residencial'),
+)
+_CPF_COLAB_A_FMT = '111.444.777-35'
+_CPF_COLAB_B_FMT = '222.555.888-06'
+_INDICE_COLABORADORES = {
+    '11144477735': ('rec_colab_a', 'Colaborador A'),  # chave normalizada (só dígitos)
+    '22255588806': ('rec_colab_b', 'Colaborador B'),
+}
+
+
+def test_normalizar_texto_busca_remove_acentos_e_colapsa_espaco():
+    assert normalizar_texto_busca('  Edifício   Central  ') == 'EDIFICIO CENTRAL'
+
+
+def test_fallback_por_nome_identifica_pagina_sem_cnpj():
+    estrategia = estrategia_por_cnpj_ou_nome_cliente({}, _INDICE_NOMES)
+    identificacao = estrategia('Tomador: Cliente A Edifício Central -- fatura mensal')
+    assert identificacao.situacao == SituacaoPaginaSeparacao.ENTIDADE_CONHECIDA
+    assert identificacao.entidade_id == 'rec_cliente_a'
+
+
+def test_cnpj_sempre_vence_sobre_nome_na_mesma_pagina():
+    cnpj_b = '44555666000172'
+    texto = f'Cliente A Edifício Central -- CNPJ {cnpj_b[:2]}.{cnpj_b[2:5]}.{cnpj_b[5:8]}/{cnpj_b[8:12]}-{cnpj_b[12:]}'
+    estrategia = estrategia_por_cnpj_ou_nome_cliente({cnpj_b: ('rec_cliente_b', 'Cliente B')}, _INDICE_NOMES)
+    identificacao = estrategia(texto)
+    assert identificacao.entidade_id == 'rec_cliente_b'  # CNPJ decide, nunca o nome
+
+
+def test_nome_ambiguo_nunca_escolhe_vencedor_arbitrario():
+    texto = 'Documento menciona Cliente A Edifício Central e também Cliente B Residencial'
+    estrategia = estrategia_por_cnpj_ou_nome_cliente({}, _INDICE_NOMES)
+    identificacao = estrategia(texto)
+    assert identificacao.situacao == SituacaoPaginaSeparacao.ENTIDADE_DESCONHECIDA
+
+
+def test_pagina_sem_cnpj_e_sem_nome_conhecido_fica_sem_marcador():
+    estrategia = estrategia_por_cnpj_ou_nome_cliente({}, _INDICE_NOMES)
+    identificacao = estrategia('texto qualquer sem nenhuma identificacao')
+    assert identificacao.situacao == SituacaoPaginaSeparacao.SEM_MARCADOR
+
+
+def test_separacao_por_cpf_colaborador_agrupa_com_carry_forward():
+    paginas = (
+        f'Colaborador CPF {_CPF_COLAB_A_FMT}\nFolha de Ponto',
+        'pagina de detalhe sem cpf',
+        f'Colaborador CPF {_CPF_COLAB_B_FMT}\nFolha de Ponto',
+    )
+    estrategia = estrategia_por_cpf_colaborador(_INDICE_COLABORADORES)
+    resultado = separar_por_carry_forward(paginas, estrategia)
+    assert len(resultado.grupos) == 2
+    assert resultado.grupos[0].entidade_id == 'rec_colab_a'
+    assert resultado.grupos[0].indices_paginas == (0, 1)
+    assert resultado.grupos[1].entidade_id == 'rec_colab_b'
+    assert resultado.grupos[1].indices_paginas == (2,)
+
+
+def test_cpf_desconhecido_nunca_vira_grupo_novo():
+    paginas = (f'Colaborador CPF {_CPF_COLAB_A_FMT}',)
+    estrategia = estrategia_por_cpf_colaborador({})  # índice vazio -- CPF nunca cadastrado
+    resultado = separar_por_carry_forward(paginas, estrategia)
+    assert resultado.grupos == ()
+    assert resultado.indices_sem_grupo == (0,)
+
+
+def test_grupo_de_colaborador_nunca_expoe_cpf_bruto_como_entidade_id():
+    paginas = (f'Colaborador CPF {_CPF_COLAB_A_FMT}',)
+    estrategia = estrategia_por_cpf_colaborador(_INDICE_COLABORADORES)
+    resultado = separar_por_carry_forward(paginas, estrategia)
+    assert resultado.grupos[0].entidade_id == 'rec_colab_a'  # nunca o CPF em si
+    assert '111' not in resultado.grupos[0].entidade_id
 
 
 def test_documento_ainda_nao_separado_conflita_no_mesmo_motor():
