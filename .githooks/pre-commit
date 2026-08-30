@@ -279,6 +279,12 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # padrao e libera somente estes 2 testes nominais novos.
   "test_magnata_os_classificacao_resolucao_semantica.py"
   "test_resolucao_semantica_corredor_real.py"
+  # Excecao exata e restrita (motor geral de compreensao documental
+  # multi-evidencia, branch fix/motor-geral-compreensao-documental).
+  # Mantem test_* bloqueado por padrao e libera somente estes 2 testes
+  # nominais novos.
+  "test_magnata_os_classificacao_resolucao_tipo_documental.py"
+  "test_resolucao_tipo_documental_fila_heterogenea.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

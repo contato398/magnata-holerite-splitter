@@ -629,6 +629,19 @@ ALLOWED_PATHS=(
   "^test_magnata_os_classificacao_resolucao_semantica\.py$"
   "^test_resolucao_semantica_corredor_real\.py$"
   "^docs/decisoes/resolucao-semantica-fase2e-v1\.md$"
+  # Excecao exata e restrita (motor geral de compreensao documental
+  # multi-evidencia, branch fix/motor-geral-compreensao-documental) —
+  # resolvedor geral de TIPO_DOCUMENTAL (resolucao_tipo_documental.py)
+  # + produtores de evidencia (produtores_evidencia_documental.py) que
+  # traduzem especialistas ja existentes (classificador_documental.py,
+  # extrair_cpfs_distintos_de_texto) em evidencia combinavel — nenhuma
+  # regra de classificacao reimplementada, so composicao multi-evidencia.
+  # Nao libera "^magnata_os/classificacao/" nem "^test_" de forma ampla.
+  "^magnata_os/classificacao/resolucao_tipo_documental\.py$"
+  "^magnata_os/classificacao/produtores_evidencia_documental\.py$"
+  "^test_magnata_os_classificacao_resolucao_tipo_documental\.py$"
+  "^test_resolucao_tipo_documental_fila_heterogenea\.py$"
+  "^docs/decisoes/motor-geral-compreensao-documental-v1\.md$"
 )
 
 # ============================================================================
