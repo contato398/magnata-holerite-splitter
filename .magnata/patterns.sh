@@ -752,6 +752,12 @@ ALLOWED_PATHS=(
   "^magnata_os/documental/importacao_lote/adapters/airtable_colaboradores_esperados_prestacao\.py$"
   "^test_airtable_colaboradores_esperados_prestacao\.py$"
   "^docs/decisoes/fechamento-base-canonica-ciclo-piloto-readonly-v1\.md$"
+  # Excecao exata e restrita (merge PR #100 + validacao live read-only
+  # do Airtable + primeiro piloto real, branch
+  # fix/piloto-real-prestacao-readonly-v1) — correcao do adapter de
+  # Clientes (campo Status real, confirmado por leitura live) e ADR da
+  # validacao. Nao libera nenhum caminho de forma ampla.
+  "^docs/decisoes/piloto-real-prestacao-readonly-v1\.md$"
 )
 
 # ============================================================================
