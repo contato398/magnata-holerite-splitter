@@ -1,5 +1,15 @@
 """Classificador de tipo documental — puro, sem dependências de infraestrutura.
 
+RECONCILIAÇÃO COM O VOCABULÁRIO CANÔNICO (missão "RECONCILIAÇÃO E
+ATIVAÇÃO DA FASE 2E"): `resultado_classificacao_para_resolucao_dimensao`
+(fim deste módulo) traduz `ResultadoClassificacaoDocumental`/
+`EstadoClassificacao` (vocabulário histórico deste classificador, 4
+estados) para `ResolucaoDimensao`/`EstadoResolucaoDimensao`
+(`classificacao/contratos.py`, 8 estados — o vocabulário que
+CLIENTE/COMPETENCIA/COLABORADOR já usam). As 17 regras, a precedência
+histórica e a detecção de colisão continuam INTOCADAS — a tradução só
+acontece DEPOIS que `classificar_documento` já decidiu tudo.
+
 Fonte de verdade: app.py TIPO_DOC_REGRAS (linhas 503-599).
 Reproduz 100% da lógica legada, mas com uma diferença deliberada de
 segurança: o legado decide pelo primeiro tipo que casar, sem checar se
@@ -444,3 +454,108 @@ def classificar_documento(texto: str) -> ResultadoClassificacaoDocumental:
         necessita_revisao_humana=True,
         prioridade_revisao="ALTA",
     )
+
+
+def resultado_classificacao_para_resolucao_dimensao(
+    resultado: "ResultadoClassificacaoDocumental",
+) -> "ResolucaoDimensao":
+    """Traduz o resultado deste classificador para o contrato canônico
+    `ResolucaoDimensao` (dimensão `TIPO_DOCUMENTAL`,
+    `classificacao/contratos.py`) — a MESMA dimensão que
+    CLIENTE/COMPETENCIA/COLABORADOR já usam. Nenhuma regra, precedência
+    ou detecção de colisão é reavaliada aqui -- só traduz uma decisão já
+    tomada.
+
+    Mapeamento:
+      RESOLVIDA (match único, sem colisão)      -> RESOLVIDA, confiança FORTE.
+      RESOLVIDA (colisão resolvida por           -> RESOLVIDA, confiança MODERADA
+        precedência histórica comprovada)           (havia sinal concorrente real,
+                                                      arbitrado por precedente, não
+                                                      um match limpo).
+      AMBIGUA                                   -> AMBIGUA, candidatos = tipos
+                                                      concorrentes.
+      NAO_RECONHECIDA                           -> NAO_ENCONTRADA.
+      INVALIDA                                  -> INVALIDA.
+
+    Evidências: só os identificadores de regra (`regras_matching`) --
+    nunca o texto bruto do documento nem qualquer trecho dele. Cada
+    identificador de regra já é, por desenho de `_REGRAS_COMPILADAS`,
+    um código interno sanitizado (ex.: "recibo_pagamento"), nunca o
+    texto que casou."""
+    # Import local -- evita import circular caso `contratos.py` cresça
+    # no futuro para depender deste pacote; hoje não depende, mas o
+    # padrão já usado em outros módulos de `classificacao/` prefere
+    # import local para tradutores de fronteira.
+    from .contratos import (
+        ConfiancaResolucao,
+        DimensaoResolucao,
+        EstadoResolucaoDimensao,
+        EvidenciaSanitizada,
+        NivelConfianca,
+        ReferenciaCanonica,
+        ResolucaoDimensao,
+    )
+
+    def _evidencias(forca) -> tuple:
+        return tuple(
+            EvidenciaSanitizada(
+                tipo_evidencia="REGEX_PADRAO_TEXTUAL",
+                fonte="classificador_documental",
+                referencia_fonte=identificador_regra,
+                metodo="regex_precedencia_historica",
+                forca=forca,
+            )
+            for identificador_regra in resultado.regras_matching
+        )
+
+    if resultado.estado == EstadoClassificacao.RESOLVIDA:
+        # `tipos_concorrentes` só vem preenchido quando o resultado foi
+        # decidido por precedência histórica sobre uma colisão real
+        # (ver `classificar_documento`) -- nunca no match único e limpo.
+        houve_colisao_arbitrada = bool(resultado.tipos_concorrentes)
+        forca = NivelConfianca.MODERADA if houve_colisao_arbitrada else NivelConfianca.FORTE
+        return ResolucaoDimensao(
+            dimensao=DimensaoResolucao.TIPO_DOCUMENTAL,
+            estado=EstadoResolucaoDimensao.RESOLVIDA,
+            valores_confirmados=(ReferenciaCanonica("TIPO_DOCUMENTAL", resultado.tipo_documental),),
+            candidatos=tuple(
+                ReferenciaCanonica("TIPO_DOCUMENTAL", tipo) for tipo in resultado.tipos_concorrentes
+            ),
+            evidencias=_evidencias(forca),
+            metodo="classificador_regex_v1",
+            confianca=ConfiancaResolucao(forca),
+        )
+
+    if resultado.estado == EstadoClassificacao.AMBIGUA:
+        return ResolucaoDimensao(
+            dimensao=DimensaoResolucao.TIPO_DOCUMENTAL,
+            estado=EstadoResolucaoDimensao.AMBIGUA,
+            candidatos=tuple(
+                ReferenciaCanonica("TIPO_DOCUMENTAL", tipo) for tipo in resultado.tipos_concorrentes
+            ),
+            evidencias=_evidencias(NivelConfianca.FRACA),
+            metodo="classificador_regex_v1",
+            motivos=("classificacao_ambigua",),
+        )
+
+    if resultado.estado == EstadoClassificacao.NAO_RECONHECIDA:
+        return ResolucaoDimensao(
+            dimensao=DimensaoResolucao.TIPO_DOCUMENTAL,
+            estado=EstadoResolucaoDimensao.NAO_ENCONTRADA,
+            metodo="classificador_regex_v1",
+            motivos=("tipo_nao_reconhecido",),
+        )
+
+    if resultado.estado == EstadoClassificacao.INVALIDA:
+        return ResolucaoDimensao(
+            dimensao=DimensaoResolucao.TIPO_DOCUMENTAL,
+            estado=EstadoResolucaoDimensao.INVALIDA,
+            metodo="classificador_regex_v1",
+            motivos=("entrada_invalida",),
+        )
+
+    # EstadoClassificacao é um enum fechado com só as 4 branches acima --
+    # fail-safe explícito, nunca traduz por omissão se um caso novo
+    # aparecer.
+    raise ValueError(
+        f"EstadoClassificacao sem tradução para ResolucaoDimensao: {resultado.estado!r}")

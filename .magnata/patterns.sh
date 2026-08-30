@@ -615,6 +615,20 @@ ALLOWED_PATHS=(
   "^magnata_os/classificacao/competencia_esperada_prestacao\.py$"
   "^test_magnata_os_classificacao_competencia_esperada_prestacao\.py$"
   "^docs/decisoes/competencia-esperada-prestacao-v1\.md$"
+  # Excecao exata e restrita (compositor geral de resolucao semantica,
+  # branch fix/resolucao-semantica-fase2e) — modulo novo e puro que
+  # compoe ResultadoResolucaoSemantico a partir de ResolucaoDimensao ja
+  # produzidas por especialistas existentes (classificador de tipo,
+  # identificacao de colaborador, vinculos, competencia) — nenhuma regra
+  # de classificacao/identificacao/vinculo/competencia reimplementada
+  # aqui, so composicao. Ajustes de tradutor em
+  # classificador_documental.py e politica_identificacao_holerite.py
+  # (ja liberados acima, apenas modificados). Nao libera
+  # "^magnata_os/classificacao/" nem "^test_" de forma ampla.
+  "^magnata_os/classificacao/resolucao_semantica\.py$"
+  "^test_magnata_os_classificacao_resolucao_semantica\.py$"
+  "^test_resolucao_semantica_corredor_real\.py$"
+  "^docs/decisoes/resolucao-semantica-fase2e-v1\.md$"
 )
 
 # ============================================================================

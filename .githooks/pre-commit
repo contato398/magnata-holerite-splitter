@@ -274,6 +274,11 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # Mantem test_* bloqueado por padrao e libera somente este teste
   # nominal novo.
   "test_magnata_os_classificacao_competencia_esperada_prestacao.py"
+  # Excecao exata e restrita (compositor geral de resolucao semantica,
+  # branch fix/resolucao-semantica-fase2e). Mantem test_* bloqueado por
+  # padrao e libera somente estes 2 testes nominais novos.
+  "test_magnata_os_classificacao_resolucao_semantica.py"
+  "test_resolucao_semantica_corredor_real.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

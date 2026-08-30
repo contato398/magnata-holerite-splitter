@@ -50,8 +50,11 @@ import dataclasses
 from typing import Optional, Sequence, Union
 
 from magnata_os.classificacao.contratos import (
+    ConfiancaResolucao,
     DimensaoResolucao,
     EstadoResolucaoDimensao,
+    EvidenciaSanitizada,
+    NivelConfianca,
     ReferenciaCanonica,
     ResolucaoDimensao,
 )
@@ -106,6 +109,73 @@ class MestreSuspeitoIdentificacaoHolerite:
 ResultadoIdentificacaoHolerite = Union[ResolucaoDimensao, MestreSuspeitoIdentificacaoHolerite]
 
 
+def mestre_suspeito_para_resolucao_dimensao(
+    resultado: MestreSuspeitoIdentificacaoHolerite,
+) -> ResolucaoDimensao:
+    """Traduz `MestreSuspeitoIdentificacaoHolerite` para `ResolucaoDimensao`
+    (dimensão COLABORADOR, estado CONFLITO) -- necessário só para quem
+    compõe uma resolução semântica consolidada (missão "RECONCILIAÇÃO E
+    ATIVAÇÃO DA FASE 2E", `classificacao/resolucao_semantica.py`); o
+    gate de identificação em si (`decidir_transicao_identificacao`)
+    continua tratando este caso separadamente de AMBIGUA, como sempre
+    tratou -- esta função só existe para dar a ele uma forma consumível
+    pelo compositor genérico, sem fazer o compositor conhecer
+    "MestreSuspeito" (um conceito específico de Holerite avulso).
+
+    CONFLITO, nunca AMBIGUA: é uma condição documental (2+ identidades
+    no mesmo PDF), não uma colisão de candidatos de cadastro -- os dois
+    estados já existem no contrato exatamente para não serem confundidos
+    (ver `classificacao/contratos.py::EstadoResolucaoDimensao`). Nunca
+    carrega a contagem de CPFs (poderia se aproximar de PII em conjunto
+    com outros campos) além do que já está sanitizado em `motivos`."""
+    return ResolucaoDimensao(
+        dimensao=DimensaoResolucao.COLABORADOR,
+        estado=EstadoResolucaoDimensao.CONFLITO,
+        metodo='deteccao_pdf_mestre_suspeito',
+        motivos=('mestre_suspeito_multiplos_cpfs',),
+    )
+
+
+# Força de evidência por critério de correspondência -- preserva
+# explicitamente o princípio já existente em `resolver_funcionario`
+# (CPF exato tentado antes de nome, nunca o inverso): CPF é sinal mais
+# forte que nome, mesmo quando os dois produzem, sozinhos, um match
+# único e determinístico. Nunca promove nome a FORTE artificialmente.
+_FORCA_POR_CRITERIO = {
+    'cpf_exato': NivelConfianca.FORTE,
+    'nome_normalizado_exato': NivelConfianca.MODERADA,
+}
+
+
+def _evidencia_de_criterio(
+    criterio_usado: Optional[str], entidade_candidata: Optional[ReferenciaCanonica],
+) -> tuple:
+    """Constrói a evidência sanitizada correspondente ao critério que
+    `resolver_funcionario` já usou -- nunca CPF/nome bruto, só o código
+    de critério (já sanitizado, ex.: "cpf_exato") e a força que esse
+    critério sempre teve. `criterio_usado is None` (caso NOT_FOUND, em
+    que nenhum critério chegou a produzir sequer um candidato) não gera
+    evidência nenhuma -- nunca inventa uma evidência para uma tentativa
+    que não aconteceu."""
+    if criterio_usado is None:
+        return ()
+    forca = _FORCA_POR_CRITERIO.get(criterio_usado)
+    if forca is None:
+        # Critério fora do vocabulário conhecido -- fail-safe explícito,
+        # nunca inventa uma força arbitrária para um código novo.
+        raise ValueError(f'criterio_usado sem força de evidência definida: {criterio_usado!r}')
+    return (
+        EvidenciaSanitizada(
+            tipo_evidencia='CORRESPONDENCIA_FUNCIONARIO',
+            fonte='resolver_funcionario',
+            referencia_fonte=criterio_usado,
+            metodo=criterio_usado,
+            forca=forca,
+            entidade_candidata=entidade_candidata,
+        ),
+    )
+
+
 def correspondencia_para_resolucao_dimensao(
     correspondencia: ResultadoCorrespondencia,
 ) -> ResolucaoDimensao:
@@ -118,23 +188,30 @@ def correspondencia_para_resolucao_dimensao(
     paralelo criado.
 
     Nunca carrega CPF ou nome — só `entidade_id` (record id do
-    Airtable, já resolvido, não é PII) em `valores_confirmados` e o
-    código sanitizado de `MotivoSanitizado` em `motivos`."""
+    Airtable, já resolvido, não é PII) em `valores_confirmados`, o
+    código sanitizado de `MotivoSanitizado` em `motivos`, e (missão
+    "RECONCILIAÇÃO E ATIVAÇÃO DA FASE 2E") o critério de correspondência
+    (ex.: "cpf_exato") como `EvidenciaSanitizada` -- nunca o CPF/nome em
+    si, só o código do critério já usado por `resolver_funcionario`."""
     motivos = (correspondencia.motivo.value,)
     metodo = correspondencia.criterio_usado
 
     if correspondencia.classificacao == ClassificacaoCorrespondencia.EXACT:
+        entidade = ReferenciaCanonica('COLABORADOR', correspondencia.entidade_id)
         return ResolucaoDimensao(
             dimensao=DimensaoResolucao.COLABORADOR,
             estado=EstadoResolucaoDimensao.RESOLVIDA,
-            valores_confirmados=(ReferenciaCanonica('COLABORADOR', correspondencia.entidade_id),),
+            valores_confirmados=(entidade,),
+            evidencias=_evidencia_de_criterio(metodo, entidade),
             metodo=metodo,
+            confianca=ConfiancaResolucao(_FORCA_POR_CRITERIO.get(metodo, NivelConfianca.INDETERMINADA)),
             motivos=motivos,
         )
     if correspondencia.classificacao == ClassificacaoCorrespondencia.AMBIGUOUS:
         return ResolucaoDimensao(
             dimensao=DimensaoResolucao.COLABORADOR,
             estado=EstadoResolucaoDimensao.AMBIGUA,
+            evidencias=_evidencia_de_criterio(metodo, None),
             metodo=metodo,
             motivos=motivos,
         )
