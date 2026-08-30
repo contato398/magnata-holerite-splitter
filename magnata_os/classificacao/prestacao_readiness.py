@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 from enum import Enum
-from typing import Tuple
+from typing import Optional, Tuple
 
 from .contratos import (
     DimensaoResolucao,
@@ -43,12 +43,23 @@ class ItemInventarioPrestacao:
     tipo_documental: str
     cliente: ReferenciaCanonica
     competencia: ReferenciaCanonica
+    colaborador: Optional[ReferenciaCanonica] = None
+    """Campo aditivo (Adendo de Regra de Negócio -- Holerite, missão
+    "CADASTRO CANÔNICO REAL DE REQUISITOS DA PRESTAÇÃO"): identidade
+    SANITIZADA (`ReferenciaCanonica('COLABORADOR', id_interno)`, nunca
+    CPF/nome) do colaborador dono do documento, quando aplicável
+    (Holerite e outros documentos de granularidade colaborador).
+    `None` para documentos sem colaborador (Extrato, FGTS, DCTFWeb,
+    Certidão etc.) -- default preserva 100% o comportamento anterior
+    para quem já constrói este DTO sem este campo."""
 
     def __post_init__(self) -> None:
         if not self.documento_id.strip():
             raise ValueError("documento_id deve ser texto nao vazio")
         if not self.tipo_documental.strip():
             raise ValueError("tipo_documental deve ser texto nao vazio")
+        if self.colaborador is not None and self.colaborador.tipo_entidade != "COLABORADOR":
+            raise ValueError("colaborador deve ser referencia canonica de COLABORADOR")
 
 
 @dataclasses.dataclass(frozen=True)

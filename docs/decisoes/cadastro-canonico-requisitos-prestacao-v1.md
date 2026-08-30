@@ -5,7 +5,65 @@
 **Base:** `main @ 6a443b9640c5a8076d03ce025b88d0c73e0c61dd` (PR #98 mesclado)
 **Status:** ✅ Implementado, testado (shadow), pronto para revisão
 
-## Resumo executivo
+## ADENDO DE REGRA DE NEGÓCIO — HOLERITE (2026-08-30)
+
+Correção canônica autorizada pelo negócio, numa mensagem distinta desta
+mesma sessão: **"HOLERITE É OBRIGATÓRIO EM TODA PRESTAÇÃO DE CONTAS"**
+— substitui integralmente o registro original desta missão, que tratava
+Holerite como item divergente/`NAO_CONFIGURADO` (interseção insuficiente
+entre `CAPACIDADES_DOCUMENTO` e `REQUISITOS_BASE_PRESTACAO`).
+
+**O que muda:**
+- Holerite é **base universal** — nunca mais condicional/NAO_CONFIGURADO.
+- Mas NUNCA avaliado pela contagem plana (`RequisitoDocumentalPrestacao`/
+  `avaliar_prestacao_readiness`) — o próprio adendo declara isso
+  insuficiente ("não basta verificar presença do tipo Holerite no
+  inventário"). Avaliado por **cardinalidade colaborador**: cliente →
+  colaboradores esperados → 1 Holerite por colaborador aplicável.
+- Um colaborador vinculado a mais de 1 cliente na competência pode ter
+  o MESMO Holerite (1 identidade documental) válido logicamente em mais
+  de 1 pacote — nunca duplicado fisicamente.
+
+**Peças novas (aditivas, retrocompatíveis):**
+- `ItemInventarioPrestacao.colaborador` (`Optional[ReferenciaCanonica]`,
+  default `None`) — identidade sanitizada do colaborador dono do item.
+- `fonte_colaboradores_esperados_prestacao.py` — `FonteColaboradoresEsperadosPrestacao`
+  (Protocol, mesma família de `FonteClientesPrestacao`/`FonteRequisitosPrestacao`).
+- `holerite_obrigatorio_prestacao.py` — `avaliar_obrigatoriedade_holerite`
+  (pura: cliente + competência + colaboradores esperados + inventário →
+  presentes/faltantes, nunca CPF/nome, só `ReferenciaCanonica('COLABORADOR', id)`).
+- `adaptador_inventario_prestacao.itens_para_multiplos_clientes_do_vinculo`
+  — generaliza o broadcast para vínculo múltiplo GENUÍNO (resolvido pela
+  própria `ResolucaoDimensao(CLIENTE)`, nunca injetado de fora como o
+  broadcast, nunca confundido com ele).
+- `pacote_prestacao.combinar_pacote_com_holerite` — nunca upgrada um
+  pacote já problemático; só rebaixa PRONTO→INCOMPLETO quando falta
+  Holerite de algum colaborador esperado.
+- `ciclo_prestacao.executar_ciclo_prestacao(..., fonte_colaboradores_
+  esperados=None)` — parâmetro opcional; `None` preserva 100% o
+  comportamento anterior (Holerite, se presente na base efetiva de
+  quem chama, continua avaliado pela contagem plana antiga — nunca uma
+  regressão silenciosa para quem já usava esta função).
+- `cadastro_requisitos_prestacao.py`: `HOLERITE_TIPO_DOCUMENTAL`/
+  `HOLERITE_EVIDENCIA` (citando o adendo); removido de `REQUISITOS_
+  DIVERGENTES_ENTRE_FONTES` (agora só `Guia DCTFWeb/DARF`).
+
+**Testes obrigatórios do adendo** (`test_magnata_os_classificacao_holerite_
+obrigatorio_prestacao.py`): cliente com 3 colaboradores esperados/2
+Holerites presentes/1 ausente → pacote INCOMPLETO com necessidade
+sanitizada (nunca CPF/nome); colaborador vinculado a 2 clientes → mesmo
+Holerite, 1 identidade documental, válido em ambos os pacotes; E2E
+completo via `executar_ciclo_prestacao`. Todos os 9 testes passam.
+
+**Decisão de genericidade registrada:** `ciclo_prestacao.py` antes
+provava, por AST, nunca mencionar "holerite" em código executável (uma
+garantia de "nenhum tipo especial"). Esse teste foi ATUALIZADO — não
+enfraquecido — para refletir que Holerite agora é, por decisão de
+negócio explícita, a ÚNICA exceção legítima a essa genericidade; os
+demais termos proibidos (`sky`, `extrato`, `fgts`, `dctfweb`) continuam
+bloqueados sem exceção.
+
+## Resumo executivo (missão original, antes do adendo)
 
 Resolve o maior bloqueio identificado no PR #98 — "requisitos por
 cliente sem fonte com semântica de obrigatoriedade comprovada" — SEM
@@ -22,7 +80,7 @@ vazia (zero clientes configurados) até confirmação humana real.
 | DCTFWeb-Declaração é base, broadcast | idem | idem | ALTA | ✅ |
 | DCTFWeb-Recibo é base, broadcast | idem | idem | ALTA | ✅ |
 | Extrato é base (por cliente) | `CAPACIDADES_DOCUMENTO['Extrato da Folha de Pagamento']` + `REQUISITOS_BASE_PRESTACAO['extrato_cliente']` (tradução) | idem | ALTA | ✅ |
-| Holerite é base | só `CAPACIDADES_DOCUMENTO` | legado | MÉDIA (1 fonte só) | ❌ divergente, registrado |
+| Holerite é base universal, granularidade colaborador | `CAPACIDADES_DOCUMENTO` + **Adendo de Regra de Negócio (2026-08-30, confirmação humana explícita)** | legado + negócio | ALTA (confirmado pelo negócio) | ✅ (ver ADENDO acima) |
 | Guia DCTFWeb/DARF é base | só `REQUISITOS_BASE_PRESTACAO` | classificacao | MÉDIA (1 fonte só) | ❌ divergente, registrado |
 | Horas Extras/Assiduidade/VR/VA/Diárias/Almoço-Janta são obrigatórios por cliente | `CAPACIDADES_BENEFICIOS` — mas só descreve RECONHECIMENTO (keyword/fuzzy), nunca obrigatoriedade | legado | NENHUMA (campos são anexo de output, não flag) | ❌ NAO_CONFIGURADO |
 | SKY = competência base − 1 mês | `DESLOCAMENTO_SKY_TATUI`, `POLITICA_COMPETENCIA_PRESTACAO_V1` | classificacao, já provado em produção-sombra | ALTA | ✅ (já canônica desde PR #91/#92) |
@@ -109,7 +167,7 @@ se sobrepõem.
 | DCTFWeb - Declaração | global | ✅ | — | ✅ (2 fontes) | idem | todos (broadcast) | sim | lista de clientes do ciclo ainda injetada externamente |
 | DCTFWeb - Recibo de Entrega | global | ✅ | — | ✅ (2 fontes) | idem | todos (broadcast) | sim | idem |
 | Extrato da Folha de Pagamento | cliente | ✅ | — | ✅ (2 fontes, tradução de vocabulário) | idem | todos (base universal) | não | separação por nome cautelosa |
-| Holerite | colaborador | ❌ (divergente) | disponível | ⚠️ (1 fonte só) | legado | **0 configurados** | não | NECESSITA CONFIRMAÇÃO HUMANA |
+| Holerite | colaborador (cardinalidade, nunca contagem plana) | ✅ (universal, Adendo de Regra de Negócio) | — | ✅ (decisão de negócio explícita) | Adendo 2026-08-30 | todos (obrigatório por colaborador esperado) | não (multi-cliente via vínculo genuíno, `itens_para_multiplos_clientes_do_vinculo`) | fonte real de `FonteColaboradoresEsperadosPrestacao` ainda não implementada (só Protocol + fixture) |
 | Guia DCTFWeb/DARF | global | ❌ (divergente) | disponível | ⚠️ (1 fonte só) | classificacao | **0 configurados** | broadcast possível | NECESSITA CONFIRMAÇÃO HUMANA |
 | Certidão | cliente | ❌ | disponível | mecanismo provado (E2E) | nenhuma fonte real | 0 no cadastro real (E2E usa cliente sintético) | não | nenhuma fonte real de Certidão ainda |
 | Comprovante de Pagamento - FGTS | cliente | ❌ | não modelado como requisito | reconhecimento robusto (fiscal+finalidade) | classificacao | — | não | não é requisito, é finalidade de um documento já contado como FGTS/outro |
@@ -170,10 +228,16 @@ QUANDO EXECUTAR: só mediante confirmação humana específica e separada.
 
 - Nenhum cliente real configurado no cadastro condicional (v1 começa
   vazio — correto, sem evidência).
-- Holerite e Guia DCTFWeb/DARF permanecem fora da base universal —
-  aguardando confirmação humana explícita, não uma escolha técnica.
+- Guia DCTFWeb/DARF permanece fora da base universal — aguardando
+  confirmação humana explícita, não uma escolha técnica (Holerite JÁ
+  foi confirmado pelo Adendo de Regra de Negócio acima).
 - Nenhuma auditoria de obrigatoriedade de Folha de Ponto foi feita
   nesta missão (fora do escopo declarado nas fases).
+- `FonteColaboradoresEsperadosPrestacao` real (Airtable ou outra fonte)
+  ainda não implementada — só o Protocol + fixture de teste existem
+  (mesmo padrão do PR #98 para clientes/requisitos: Protocol primeiro,
+  adapter real quando houver evidência de onde ler "colaboradores
+  esperados por cliente").
 - Validação live não executada — plano pronto, aguardando gate humano.
 
 ## Documentação relacionada

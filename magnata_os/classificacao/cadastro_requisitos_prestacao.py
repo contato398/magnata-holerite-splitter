@@ -23,13 +23,24 @@ FGTS, DCTFWeb-Declaração, DCTFWeb-Recibo, Extrato da Folha de
 Pagamento — viram `REQUISITOS_BASE_CANONICOS_V1` (nunca inventam
 obrigação: as DUAS fontes já concordavam).
 
-DIVERGÊNCIA (cada uma só numa fonte): Holerite (só em `CAPACIDADES_
-DOCUMENTO`) e Guia DCTFWeb/DARF (só em `REQUISITOS_BASE_PRESTACAO`) —
-NUNCA promovidos a base universal por uma fonte só (cláusula pétrea
-#3: "regra de negócio só entra como canônica se houver evidência
-comprovável" — aqui há evidência de CADA um, mas não CONCORDANTE o
-suficiente para uma obrigação universal); ficam registrados como
-`REQUISITOS_DIVERGENTES_ENTRE_FONTES`, disponíveis para configuração
+ADENDO DE REGRA DE NEGÓCIO — HOLERITE (2026-08-30, confirmado pelo
+negócio numa mensagem distinta, corrigindo o registro original desta
+missão): "HOLERITE É OBRIGATÓRIO EM TODA PRESTAÇÃO DE CONTAS" —
+substitui o tratamento anterior de Holerite como item divergente/
+NAO_CONFIGURADO. Holerite É base universal, mas NUNCA avaliado pela
+contagem plana de `REQUISITOS_BASE_CANONICOS_V1` (o próprio adendo:
+"não basta verificar presença do tipo Holerite no inventário") —
+preserva granularidade COLABORADOR, avaliado por CARDINALIDADE
+(`holerite_obrigatorio_prestacao.avaliar_obrigatoriedade_holerite`:
+cliente → colaboradores esperados → 1 Holerite por colaborador
+aplicável). Ver `HOLERITE_TIPO_DOCUMENTAL`/`HOLERITE_EVIDENCIA` abaixo.
+
+DIVERGÊNCIA REMANESCENTE (só numa fonte): Guia DCTFWeb/DARF (só em
+`REQUISITOS_BASE_PRESTACAO`) — NUNCA promovido a base universal por
+uma fonte só (cláusula pétrea #3: "regra de negócio só entra como
+canônica se houver evidência comprovável" — aqui há evidência, mas não
+CONCORDANTE o suficiente para uma obrigação universal); fica registrado
+em `REQUISITOS_DIVERGENTES_ENTRE_FONTES`, disponível para configuração
 condicional explícita por cliente quando um humano confirmar."""
 from __future__ import annotations
 
@@ -189,13 +200,26 @@ REQUISITOS_BASE_CANONICOS_V1: Tuple[RequisitoCanonico, ...] = (
     ),
 )
 
-# Documentado em UMA fonte canônica só cada -- registrado, NUNCA
-# incluído na base universal (Fase 3: "usar a regra mais conservadora
-# somente se isso não inventar obrigação; caso contrário NAO_
-# CONFIGURADO"). Disponível para `ConfiguracaoCondicionalCliente`
-# explícita quando um humano confirmar para um cliente real.
+# Holerite -- PROMOVIDO a requisito UNIVERSAL por decisão de negócio
+# explícita (Adendo de Regra de Negócio -- Holerite, 2026-08-30).
+# NUNCA em `REQUISITOS_BASE_CANONICOS_V1` (contagem plana, insuficiente
+# para Holerite por decisão do próprio adendo) -- avaliado à parte, por
+# CARDINALIDADE colaborador (`holerite_obrigatorio_prestacao.py`).
+HOLERITE_TIPO_DOCUMENTAL = 'Holerite'
+HOLERITE_EVIDENCIA = (
+    'Adendo de Regra de Negócio -- Holerite (confirmado pelo negócio, '
+    '2026-08-30, mensagem distinta): "HOLERITE E OBRIGATORIO EM TODA '
+    'PRESTACAO DE CONTAS" -- substitui o registro divergente anterior '
+    'desta missao. Granularidade COLABORADOR preservada; nunca avaliado '
+    'pela contagem plana de REQUISITOS_BASE_CANONICOS_V1.'
+)
+
+# Documentado em UMA fonte canônica só -- registrado, NUNCA incluído na
+# base universal (Fase 3: "usar a regra mais conservadora somente se
+# isso não inventar obrigação; caso contrário NAO_CONFIGURADO").
+# Disponível para `ConfiguracaoCondicionalCliente` explícita quando um
+# humano confirmar para um cliente real.
 REQUISITOS_DIVERGENTES_ENTRE_FONTES: Tuple[Tuple[str, str], ...] = (
-    ('Holerite', 'CAPACIDADES_DOCUMENTO (app.py) inclui; REQUISITOS_BASE_PRESTACAO nao inclui'),
     ('Guia DCTFWeb/DARF', 'REQUISITOS_BASE_PRESTACAO inclui; CAPACIDADES_DOCUMENTO (app.py) nao inclui'),
 )
 

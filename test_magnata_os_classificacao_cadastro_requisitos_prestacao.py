@@ -4,6 +4,7 @@ import pytest
 
 from magnata_os.classificacao.cadastro_requisitos_prestacao import (
     CADASTRO_REQUISITOS_PRESTACAO_V1,
+    HOLERITE_TIPO_DOCUMENTAL,
     REQUISITOS_BASE_CANONICOS_V1,
     REQUISITOS_DIVERGENTES_ENTRE_FONTES,
     CadastroRequisitosPrestacao,
@@ -61,7 +62,18 @@ def test_divergentes_nunca_entram_na_base_universal():
     tipos_divergentes = {tipo for tipo, _motivo in REQUISITOS_DIVERGENTES_ENTRE_FONTES}
     tipos_base = {r.tipo_documental for r in REQUISITOS_BASE_CANONICOS_V1}
     assert tipos_divergentes.isdisjoint(tipos_base)
-    assert tipos_divergentes == {'Holerite', 'Guia DCTFWeb/DARF'}
+    assert tipos_divergentes == {'Guia DCTFWeb/DARF'}
+
+
+def test_holerite_e_universal_mas_nunca_via_contagem_plana():
+    """Adendo de Regra de Negócio -- Holerite: universal, mas NUNCA
+    avaliado pela contagem plana de REQUISITOS_BASE_CANONICOS_V1 (a
+    granularidade colaborador exige `holerite_obrigatorio_prestacao.py`)."""
+    assert HOLERITE_TIPO_DOCUMENTAL == 'Holerite'
+    tipos_base = {r.tipo_documental for r in REQUISITOS_BASE_CANONICOS_V1}
+    assert HOLERITE_TIPO_DOCUMENTAL not in tipos_base
+    tipos_divergentes = {tipo for tipo, _motivo in REQUISITOS_DIVERGENTES_ENTRE_FONTES}
+    assert HOLERITE_TIPO_DOCUMENTAL not in tipos_divergentes  # nao e mais divergente -- e universal confirmado
 
 
 def test_cliente_sem_configuracao_condicional_fica_explicitamente_nao_configurado():

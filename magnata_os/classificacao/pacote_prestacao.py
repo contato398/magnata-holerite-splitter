@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import dataclasses
 import enum
-from typing import Tuple
+from typing import Optional, Tuple
 
 from .contratos import ReferenciaCanonica, ResultadoResolucaoSemantico
+from .holerite_obrigatorio_prestacao import TIPO_HOLERITE, ResultadoObrigatoriedadeHolerite
 from .inventario_prestacao import FonteInventarioPrestacao
 from .politica_requisitos_prestacao import PoliticaRequisitosPrestacao
 from .prestacao_readiness import (
@@ -63,6 +64,11 @@ class PacotePrestacaoCliente:
     tipos_obrigatorios: Tuple[str, ...]
     tipos_faltantes: Tuple[str, ...] = ()
     motivos: Tuple[str, ...] = ()
+    holerite: Optional[ResultadoObrigatoriedadeHolerite] = None
+    """Adendo de Regra de Negócio (Holerite): detalhe da obrigatoriedade
+    por cardinalidade colaborador, quando avaliada (ver `combinar_
+    pacote_com_holerite`) -- `None` quando a avaliação não foi pedida
+    (nunca confundir "não avaliado" com "completo")."""
 
     def __post_init__(self) -> None:
         if any(item.cliente != self.cliente for item in self.itens_incluidos):
@@ -113,3 +119,28 @@ def avaliar_e_montar_pacote(
         )
     )
     return montar_pacote_logico(readiness, requisitos, inventario)
+
+
+def combinar_pacote_com_holerite(
+    pacote: PacotePrestacaoCliente,
+    resultado_holerite: ResultadoObrigatoriedadeHolerite,
+) -> PacotePrestacaoCliente:
+    """Adendo de Regra de Negócio (Holerite): combina um pacote JÁ
+    MONTADO (via `montar_pacote_logico`/`avaliar_e_montar_pacote`, sem
+    nenhuma alteração) com a obrigatoriedade do Holerite por
+    cardinalidade colaborador. Nunca upgrada um pacote já problemático
+    (BLOQUEADO/EM_REVISAO continuam como estavam); só rebaixa PRONTO
+    para INCOMPLETO quando falta Holerite de algum colaborador esperado
+    -- nunca o inverso (Holerite completo nunca promove um pacote já
+    incompleto/bloqueado por outro motivo)."""
+    if resultado_holerite.completo:
+        return dataclasses.replace(pacote, holerite=resultado_holerite)
+    novo_estado = pacote.estado
+    if novo_estado == EstadoPacotePrestacao.PRONTO:
+        novo_estado = EstadoPacotePrestacao.INCOMPLETO
+    tipos_faltantes = pacote.tipos_faltantes
+    if TIPO_HOLERITE not in tipos_faltantes:
+        tipos_faltantes = tuple(sorted(tipos_faltantes + (TIPO_HOLERITE,)))
+    return dataclasses.replace(
+        pacote, estado=novo_estado, tipos_faltantes=tipos_faltantes, holerite=resultado_holerite,
+    )

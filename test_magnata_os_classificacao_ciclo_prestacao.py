@@ -98,7 +98,17 @@ def _e_docstring(no_expr: ast.Expr) -> bool:
 
 def test_ciclo_prestacao_nunca_hardcoda_nome_de_cliente():
     """Nenhum identificador literal de cliente (A/B/C/SKY, nomes
-    próprios) em código executável -- só nas fixtures dos testes."""
+    próprios) em código executável -- só nas fixtures dos testes.
+
+    'holerite' foi DELIBERADAMENTE removido da lista de termos
+    proibidos (Adendo de Regra de Negócio -- Holerite): o negócio
+    confirmou que Holerite é obrigatório universal com granularidade
+    própria (colaborador), então este módulo LEGITIMAMENTE importa
+    `TIPO_HOLERITE`/usa o motivo `holerite_obrigatorio_por_colaborador_
+    esperado` -- nunca um cliente/tipo arbitrário, é a ÚNICA exceção
+    explicitamente autorizada. 'sky'/'extrato'/'fgts'/'dctfweb'
+    continuam proibidos -- nenhum outro tipo/cliente ganhou tratamento
+    especial."""
     codigo_fonte = inspect.getsource(modulo)
     arvore = ast.parse(codigo_fonte)
     nos_de_docstring = {
@@ -110,7 +120,7 @@ def test_ciclo_prestacao_nunca_hardcoda_nome_de_cliente():
         if isinstance(no, ast.Constant) and isinstance(no.value, str):
             if id(no) not in nos_de_docstring:
                 literais.add(no.value.lower())
-    proibidos = ['sky', 'holerite', 'extrato', 'fgts', 'dctfweb']
+    proibidos = ['sky', 'extrato', 'fgts', 'dctfweb']
     for termo in proibidos:
         achados = {s for s in literais if termo in s}
         assert not achados, f'termo proibido em literal de código: {termo!r} em {achados!r}'
