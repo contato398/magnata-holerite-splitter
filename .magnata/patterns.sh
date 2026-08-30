@@ -794,6 +794,29 @@ ALLOWED_PATHS=(
   "^test_magnata_os_classificacao_estrategia_aquisicao_documental\.py$"
   "^test_corpus_heterogeneo_motor_semantico_e2e\.py$"
   "^docs/decisoes/automacao-documental-semantica-v1\.md$"
+  # Excecao exata e restrita (integracao real do conteudo documental ao
+  # motor semantico + automacao continua da esteira V1, branch
+  # fix/integracao-conteudo-motor-semantico-v1) — ponte texto->motor
+  # multi-evidencia (agrega produtores ja existentes para o MESMO
+  # resolver_tipo_documental, nunca um segundo motor; reaproveita
+  # extrair_texto_seguro de roteamento_documental.py, nunca uma segunda
+  # extracao de PDF), politica de transicao CLASSIFICACAO->esteira que
+  # usa o motor geral de 8 estados (mesmo contrato DecisaoTransicao
+  # Classificacao ja consumido por ServicoAvancoEsteira, zero mudanca
+  # nessa mecanica), reconciliacao origem x conteudo e competencia
+  # esperada x observada (reusa extrair_competencia_de_texto/
+  # validar_competencia/resolucao_competencia_de_validacao ja
+  # existentes), teste arquitetural (nenhum modulo do corredor importa
+  # Airtable), corpus E2E heterogeneo de 10 casos + metricas. Nao libera
+  # "^magnata_os/classificacao/", "^magnata_os/documental/modulo01/" nem
+  # "^test_" de forma ampla.
+  "^magnata_os/classificacao/ponte_conteudo_motor_semantico\.py$"
+  "^magnata_os/documental/modulo01/politica_classificacao_semantica\.py$"
+  "^test_magnata_os_classificacao_ponte_conteudo_motor_semantico\.py$"
+  "^test_magnata_os_classificacao_arquitetura_sem_dependencia_airtable\.py$"
+  "^test_magnata_os_documental_modulo01_politica_classificacao_semantica\.py$"
+  "^test_magnata_os_documental_modulo01_corpus_heterogeneo_classificacao_semantica\.py$"
+  "^docs/decisoes/integracao-conteudo-motor-semantico-v1\.md$"
 )
 
 # ============================================================================
