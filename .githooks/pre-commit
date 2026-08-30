@@ -352,6 +352,14 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_magnata_os_classificacao_automacao_por_confianca.py"
   "test_magnata_os_classificacao_estrategia_aquisicao_documental.py"
   "test_corpus_heterogeneo_motor_semantico_e2e.py"
+  # Excecao exata e restrita (integracao real do conteudo documental ao
+  # motor semantico + automacao continua da esteira V1, branch
+  # fix/integracao-conteudo-motor-semantico-v1). Mantem test_* bloqueado
+  # por padrao e libera somente estes testes nominais novos.
+  "test_magnata_os_classificacao_ponte_conteudo_motor_semantico.py"
+  "test_magnata_os_classificacao_arquitetura_sem_dependencia_airtable.py"
+  "test_magnata_os_documental_modulo01_politica_classificacao_semantica.py"
+  "test_magnata_os_documental_modulo01_corpus_heterogeneo_classificacao_semantica.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

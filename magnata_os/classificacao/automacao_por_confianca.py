@@ -39,6 +39,29 @@ class DecisaoAutomacao(str, enum.Enum):
     DESCONHECIDO = 'DESCONHECIDO'
 
 
+def decidir_por_estado_dimensao(estado: EstadoResolucaoDimensao) -> DecisaoAutomacao:
+    """Classifica o estado de UMA dimensão isolada (`ResolucaoDimensao.
+    estado`) — extraído de `decidir_proxima_acao` (missão "INTEGRAÇÃO
+    REAL DO CONTEÚDO DOCUMENTAL", Fase 7: "não duplicar decisão") para
+    que qualquer ponto do corredor que só tenha UMA dimensão em mãos
+    (ex.: a ponte conteúdo->motor, que resolve só TIPO_DOCUMENTAL antes
+    de um `ResultadoResolucaoSemantico` completo existir) reaproveite a
+    MESMA classificação, nunca uma segunda tabela de mapeamento.
+    `RESOLVIDA`/`NAO_AVALIADA`/`NAO_APLICAVEL`/`INVALIDA` caem no
+    default `REVISAO_HUMANA` aqui -- só `decidir_proxima_acao` (que
+    também olha `estado_consolidado`) decide `AVANCA_AUTOMATICO` de
+    verdade, nunca esta função isolada."""
+    if estado == EstadoResolucaoDimensao.ERRO_TECNICO:
+        return DecisaoAutomacao.RETRY_TECNICO
+    if estado == EstadoResolucaoDimensao.CONFLITO:
+        return DecisaoAutomacao.CONFLITO
+    if estado == EstadoResolucaoDimensao.AMBIGUA:
+        return DecisaoAutomacao.AMBIGUO
+    if estado == EstadoResolucaoDimensao.NAO_ENCONTRADA:
+        return DecisaoAutomacao.DESCONHECIDO
+    return DecisaoAutomacao.REVISAO_HUMANA
+
+
 def decidir_proxima_acao(resultado: ResultadoResolucaoSemantico) -> DecisaoAutomacao:
     """Pura, sem I/O. Nunca inventa uma decisão a partir de um estado
     que a própria composição semântica não expôs."""
@@ -48,14 +71,12 @@ def decidir_proxima_acao(resultado: ResultadoResolucaoSemantico) -> DecisaoAutom
         return DecisaoAutomacao.RETRY_TECNICO
 
     estados = {r.estado for r in resultado.resolucoes}
-    if EstadoResolucaoDimensao.ERRO_TECNICO in estados:
-        return DecisaoAutomacao.RETRY_TECNICO
-    if EstadoResolucaoDimensao.CONFLITO in estados:
-        return DecisaoAutomacao.CONFLITO
-    if EstadoResolucaoDimensao.AMBIGUA in estados:
-        return DecisaoAutomacao.AMBIGUO
-    if EstadoResolucaoDimensao.NAO_ENCONTRADA in estados:
-        return DecisaoAutomacao.DESCONHECIDO
+    for estado_grave in (
+        EstadoResolucaoDimensao.ERRO_TECNICO, EstadoResolucaoDimensao.CONFLITO,
+        EstadoResolucaoDimensao.AMBIGUA, EstadoResolucaoDimensao.NAO_ENCONTRADA,
+    ):
+        if estado_grave in estados:
+            return decidir_por_estado_dimensao(estado_grave)
     return DecisaoAutomacao.REVISAO_HUMANA
 
 
