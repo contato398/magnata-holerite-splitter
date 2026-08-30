@@ -88,3 +88,35 @@ def test_tipo_origem_vazio_e_rejeitado():
     resolucao = _resolucao_para_texto('Guia do FGTS Digital -- Total FGTS')
     with pytest.raises(ValueError):
         reconciliar_origem_com_resolucao_semantica('', resolucao)
+
+
+# ============================================================================
+# ADENDO OBRIGATÓRIO, item 5.C — alias canônico já comprovado
+# (TRADUCAO_FAMILIA_B_PARA_MOTOR_GERAL) nunca vira CONFLITO falso.
+# ============================================================================
+
+def test_c_alias_canonico_familia_b_nunca_vira_conflito_falso():
+    """origem = 'extrato_cliente' (vocabulário Família B) e conteúdo
+    resolvido = 'Extrato da Folha de Pagamento' (motor geral) são o
+    MESMO tipo canônico -- REFORCO, nunca CONFLITO."""
+    resolucao = _resolucao_para_texto('Extrato Mensal\nExtrato da Folha de Pagamento')
+    reconciliacao = reconciliar_origem_com_resolucao_semantica('extrato_cliente', resolucao)
+    assert reconciliacao.resultado == ResultadoReconciliacaoOrigem.REFORCO
+    assert reconciliacao.tipo_resolvido == 'Extrato da Folha de Pagamento'
+
+
+def test_alias_canonico_funciona_nos_dois_sentidos():
+    """origem já no vocabulário motor geral, conteúdo no vocabulário
+    Família B (caso inverso) -- mesma equivalência, mesmo REFORCO."""
+    resolucao = _resolucao_para_texto('Extrato Mensal\nExtrato da Folha de Pagamento')
+    reconciliacao = reconciliar_origem_com_resolucao_semantica('Extrato da Folha de Pagamento', resolucao)
+    assert reconciliacao.resultado == ResultadoReconciliacaoOrigem.REFORCO
+
+
+def test_divergencia_sem_equivalencia_canonica_continua_conflito():
+    """Nenhuma tradução comprovada existe entre 'Holerite' e 'FGTS' --
+    a normalização nunca inventa uma equivalência, então o CONFLITO
+    genuíno (item 5.D) continua sendo detectado."""
+    resolucao = _resolucao_para_texto('Guia do FGTS Digital -- Total FGTS')
+    reconciliacao = reconciliar_origem_com_resolucao_semantica('Holerite', resolucao)
+    assert reconciliacao.resultado == ResultadoReconciliacaoOrigem.CONFLITO

@@ -14,7 +14,18 @@ Airtable, remetente, qualquer contexto — nunca conteúdo) com o
 documento. Concordância vira `REFORCO` (nunca promove uma evidência
 FRACA a FORTE sozinha — só confirma o que já era verdade); divergência
 vira `CONFLITO` explícito, NUNCA uma reescrita silenciosa da origem
-pelo conteúdo nem do conteúdo pela origem."""
+pelo conteúdo nem do conteúdo pela origem.
+
+CORREÇÃO (ADENDO OBRIGATÓRIO, item 2): antes de comparar, os dois lados
+são normalizados para o vocabulário canônico via `TRADUCAO_FAMILIA_B_
+PARA_MOTOR_GERAL` (já existente, `normalizacao_requisitos_prestacao.py`
+— nunca uma segunda tabela de tradução, nunca fuzzy matching, nunca
+sinônimo inventado). Ex.: origem `'extrato_cliente'` (vocabulário
+Família B) e conteúdo resolvido `'Extrato da Folha de Pagamento'`
+(motor geral) são o MESMO tipo canônico — nunca um `CONFLITO` falso.
+Só uma equivalência JÁ comprovada e registrada nessa tradução conta;
+qualquer outra divergência de nome continua `CONFLITO`, como deve
+ser."""
 from __future__ import annotations
 
 import dataclasses
@@ -22,6 +33,14 @@ import enum
 from typing import Optional
 
 from .contratos import DimensaoResolucao, EstadoResolucaoDimensao, ResultadoResolucaoSemantico
+from .normalizacao_requisitos_prestacao import TRADUCAO_FAMILIA_B_PARA_MOTOR_GERAL
+
+
+def _normalizar_para_vocabulario_canonico(tipo: str) -> str:
+    """Traduz um tipo do vocabulário Família B para o motor geral
+    quando existir equivalência JÁ comprovada — nunca inventa uma
+    tradução nova, nunca aproxima por nome parecido."""
+    return TRADUCAO_FAMILIA_B_PARA_MOTOR_GERAL.get(tipo, tipo)
 
 
 class ResultadoReconciliacaoOrigem(str, enum.Enum):
@@ -64,10 +83,11 @@ def reconciliar_origem_com_resolucao_semantica(
         )
 
     tipo_resolvido = resolucao_tipo.valores_confirmados[0].entidade_id
-    resultado = (
-        ResultadoReconciliacaoOrigem.REFORCO if tipo_resolvido == tipo_origem
-        else ResultadoReconciliacaoOrigem.CONFLITO
+    concordam = (
+        _normalizar_para_vocabulario_canonico(tipo_origem)
+        == _normalizar_para_vocabulario_canonico(tipo_resolvido)
     )
+    resultado = ResultadoReconciliacaoOrigem.REFORCO if concordam else ResultadoReconciliacaoOrigem.CONFLITO
     return ReconciliacaoOrigemConteudo(
         tipo_origem=tipo_origem, tipo_resolvido=tipo_resolvido, resultado=resultado,
     )

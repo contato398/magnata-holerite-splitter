@@ -91,6 +91,41 @@ def test_erro_tecnico_vira_retry():
     assert decidir_proxima_acao(_resolucao(resolucao_tipo)) == DecisaoAutomacao.RETRY_TECNICO
 
 
+def test_erro_tecnico_nunca_vira_revisao_humana_direta():
+    """ADENDO OBRIGATÓRIO item 4: ERRO_TECNICO sempre vira RETRY_TECNICO
+    -- só a política de retry/esgotamento (fora deste módulo) decide
+    quando virar exceção humana; esta função nunca pula direto para
+    REVISAO_HUMANA."""
+    resolucao_tipo = ResolucaoDimensao(dimensao=DimensaoResolucao.TIPO_DOCUMENTAL, estado=EstadoResolucaoDimensao.ERRO_TECNICO)
+    decisao = decidir_proxima_acao(_resolucao(resolucao_tipo))
+    assert decisao == DecisaoAutomacao.RETRY_TECNICO
+    assert decisao != DecisaoAutomacao.REVISAO_HUMANA
+
+
+def test_resolvida_nunca_recalcula_apenas_le_estado_consolidado_existente():
+    """ADENDO OBRIGATÓRIO item 4: 'não duplicar decisão' -- AVANCA_
+    AUTOMATICO só acontece porque `compor_resolucao_semantica` já
+    decidiu RESOLVIDA (todas as exigências do compositor já passaram);
+    este teste prova que uma dimensão TIPO_DOCUMENTAL isoladamente
+    RESOLVIDA, mas com o resultado consolidado marcado como PARCIAL
+    (ex.: outra dimensão pendente), NUNCA avança automático -- a
+    decisão é sempre do `estado_consolidado`, nunca de uma dimensão
+    isolada."""
+    from magnata_os.classificacao.contratos import EstadoResultadoSemantico
+    import dataclasses
+
+    resolucao_tipo = ResolucaoDimensao(
+        dimensao=DimensaoResolucao.TIPO_DOCUMENTAL, estado=EstadoResolucaoDimensao.RESOLVIDA,
+        valores_confirmados=(ReferenciaCanonica('TIPO_DOCUMENTAL', 'FGTS'),),
+    )
+    resultado = _resolucao(resolucao_tipo)
+    resultado_parcial = dataclasses.replace(
+        resultado, estado_consolidado=EstadoResultadoSemantico.PARCIAL, necessita_revisao_humana=True,
+        pronto_para_routing_logico=False,
+    )
+    assert decidir_proxima_acao(resultado_parcial) != DecisaoAutomacao.AVANCA_AUTOMATICO
+
+
 def test_metricas_agregam_lote_e_percentual_correto():
     resolvida = _resolucao_de_texto('Guia do FGTS Digital -- Total FGTS', documento_id='d1')
     desconhecida = _resolucao_de_texto('texto totalmente generico sem sinal', documento_id='d2')

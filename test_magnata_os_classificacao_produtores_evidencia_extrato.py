@@ -1,11 +1,14 @@
 """Testes de `produtores_evidencia_extrato.py` (missão "AUTOMAÇÃO
-DOCUMENTAL REAL V1", §9)."""
+DOCUMENTAL REAL V1", §9 + ADENDO OBRIGATÓRIO item 3/5.E: rótulo
+alternativo é só um SINAL a mais, nunca identidade -- não pode vencer
+sozinho uma evidência estrutural/fiscal forte conflitante)."""
 from magnata_os.classificacao.classificador_documental import classificar_documento
 from magnata_os.classificacao.produtores_evidencia_documental import hipoteses_textuais_de_classificacao
 from magnata_os.classificacao.produtores_evidencia_extrato import (
     TIPO_EXTRATO,
     hipoteses_de_rotulo_alternativo_de_extrato,
 )
+from magnata_os.classificacao.produtores_evidencia_fiscal import hipoteses_fiscais_de_texto
 from magnata_os.classificacao.resolucao_tipo_documental import resolver_tipo_documental
 from magnata_os.classificacao.contratos import EstadoResolucaoDimensao
 
@@ -45,3 +48,22 @@ def test_combinado_com_hipotese_textual_resolve_extrato():
     resolucao = resolver_tipo_documental(hipoteses)
     assert resolucao.estado == EstadoResolucaoDimensao.RESOLVIDA
     assert resolucao.valores_confirmados[0].entidade_id == TIPO_EXTRATO
+
+
+def test_e_rotulo_moderado_nunca_vence_evidencia_fiscal_forte_incompatível():
+    """ADENDO OBRIGATÓRIO item 3/5.E: "Resumo da Folha" continua
+    MODERADA -- nunca identidade. Quando o MESMO texto também carrega
+    evidência fiscal (Código de Receita, já MODERADA/estrutural para
+    FGTS), o resolvedor já existente decide pela evidência mais forte
+    -- este produtor nunca "supera" isso silenciosamente."""
+    texto = 'Resumo da Folha de Pagamento -- mas na verdade Guia do FGTS -- Código de Receita: 0561'
+    hipoteses = (
+        hipoteses_textuais_de_classificacao(classificar_documento(texto))
+        + hipoteses_de_rotulo_alternativo_de_extrato(texto)
+        + hipoteses_fiscais_de_texto(texto)
+    )
+    resolucao = resolver_tipo_documental(hipoteses)
+    assert resolucao.estado == EstadoResolucaoDimensao.RESOLVIDA
+    # FGTS vence -- o rótulo alternativo de Extrato NUNCA decide sozinho
+    # contra uma evidência fiscal concorrente já comprovada mais forte.
+    assert resolucao.valores_confirmados[0].entidade_id == 'FGTS'

@@ -61,6 +61,41 @@ Nenhuma família essencial ficou fora do mapa. Nenhum "classificador por documen
 
 `test_corpus_heterogeneo_motor_semantico_e2e.py` + `test_magnata_os_classificacao_automacao_por_confianca.py` provam a política: RESOLVIDA → `AVANCA_AUTOMATICO`; AMBIGUA/CONFLITO/ERRO_TECNICO/NAO_ENCONTRADA → cada um mapeado para uma categoria própria, nunca confundidos. `MetricasAutomacao` valida internamente que a soma das categorias sempre bate com o total (nunca perde nem duplica um resultado).
 
+## ADENDO OBRIGATÓRIO (review pré-merge, mesmo dia) — 2 correções arquiteturais
+
+Corrigido nesta mesma branch/PR, antes do merge, por review explícito:
+
+1. **`estrategia_aquisicao_documental.py` criava precedência estrutural
+   do Airtable** (`ORDEM_FALLBACK_AQUISICAO` fixa, Airtable primeiro,
+   hardcoded dentro da função). Corrigido: `proxima_fonte_a_consultar`
+   agora recebe `ordem_fontes` como parâmetro explícito, sempre injetado
+   por quem chama; a constante antiga virou `ORDEM_FALLBACK_PADRAO_V1`
+   — só uma sugestão de composição, nunca aplicada automaticamente
+   dentro da função quando uma ordem diferente é informada. Testado com
+   `Gmail+armazenamento` sem Airtable, e com `armazenamento antes de
+   Gmail` — nenhuma mudança de domínio necessária em nenhum dos casos.
+2. **Reconciliação origem×conteúdo comparava por igualdade direta**,
+   sem normalizar vocabulário — `'extrato_cliente'` (Família B) vs.
+   `'Extrato da Folha de Pagamento'` (motor geral) viraria `CONFLITO`
+   falso. Corrigido: ambos os lados são normalizados via
+   `TRADUCAO_FAMILIA_B_PARA_MOTOR_GERAL` (já existente, nunca uma
+   segunda tabela, nunca fuzzy matching) antes de comparar. Uma
+   divergência SEM equivalência canônica comprovada continua `CONFLITO`
+   — testado nos dois sentidos (origem Família B/conteúdo motor geral e
+   vice-versa) e reconfirmado que o caso genuinamente divergente
+   (Holerite declarado, FGTS resolvido) continua `CONFLITO`.
+
+Também confirmado (nenhuma mudança de código necessária, já estava
+correto): `automacao_por_confianca.py` nunca duplica a decisão de
+`compor_resolucao_semantica` (um teste novo prova que uma dimensão
+TIPO_DOCUMENTAL isoladamente `RESOLVIDA`, mas com `estado_consolidado`
+diferente de `RESOLVIDA`, nunca avança automático); `ERRO_TECNICO`
+sempre vira `RETRY_TECNICO`, nunca `REVISAO_HUMANA` direta (novo teste
+explícito). E: um novo teste prova que "Resumo da Folha" (MODERADA,
+`produtores_evidencia_extrato.py`) nunca vence uma evidência fiscal
+forte concorrente (FGTS) no mesmo texto — o sinal continua sendo só um
+sinal, nunca identidade.
+
 ## O que NÃO foi feito (registrado, não escondido)
 
 - A reconciliação origem×conteúdo (§12) está pronta e testada, mas **não foi conectada automaticamente** a nenhum ponto real de ingestão (ex.: `FonteInventarioPrestacaoAirtableShadow` continua atribuindo o tipo pela tabela de origem, sem chamar a reconciliação) — conectar isso exigiria ter, no mesmo ponto, tanto a origem quanto uma resolução semântica já composta do MESMO documento, o que hoje só acontece no corredor de importação por PDF (Família B/Módulo 01), não no corredor Airtable-shadow (que nunca lê o conteúdo do documento). Registrado como o gap real a fechar quando o corredor de leitura de conteúdo for conectado ao inventário Airtable-shadow.
