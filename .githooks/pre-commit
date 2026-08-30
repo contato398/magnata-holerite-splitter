@@ -310,6 +310,14 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_magnata_os_classificacao_adaptador_inventario_prestacao.py"
   "test_magnata_os_classificacao_pacote_prestacao.py"
   "test_corredor_operacional_prestacao_e2e.py"
+  # Excecao exata e restrita (politica operacional real de clientes/
+  # requisitos, branch fix/politica-operacional-prestacao-v1). Mantem
+  # test_* bloqueado por padrao e libera somente estes 4 testes
+  # nominais novos.
+  "test_magnata_os_classificacao_normalizacao_requisitos_prestacao.py"
+  "test_magnata_os_documental_airtable_clientes_prestacao.py"
+  "test_ciclo_prestacao_multicliente_e2e.py"
+  "test_magnata_os_classificacao_ciclo_prestacao.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
