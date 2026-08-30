@@ -7,7 +7,21 @@
   - ponto 12: colaborador vinculado a 2 clientes -> mesmo Holerite
     válido logicamente para ambos os pacotes, 1 identidade documental
     única (nunca duplicada fisicamente).
-"""
+
+HISTÓRICO DE 3 DECISÕES (mesmo humano, mensagens distintas, mesmo dia,
+todas antes de qualquer PR ser mesclado):
+  (a) Adendo original: Holerite universal, cardinalidade colaborador
+      (o que este arquivo testa desde o início).
+  (b) Missão "FECHAMENTO DA BASE CANÔNICA" instruiu reverter (a) para
+      condicional-por-cliente.
+  (c) "ADENDO DE CONTINUIDADE" do mesmo dia revogou (b) explicitamente
+      e restaurou (a) integralmente -- Holerite nunca chegou a virar
+      condicional em produção.
+Efeito líquido: nenhuma mudança de comportamento em relação ao Adendo
+original. Os testes abaixo continuam testando o MECANISMO universal por
+cardinalidade, sem gate por configuração -- ver docs/decisoes/
+fechamento-base-canonica-ciclo-piloto-readonly-v1.md para a cronologia
+completa e transparente."""
 from magnata_os.classificacao.adaptador_inventario_prestacao import (
     itens_para_multiplos_clientes_do_vinculo,
     resultado_semantico_para_item_inventario,
@@ -307,7 +321,10 @@ class _FonteColaboradoresEsperadosFake:
 def test_e2e_ciclo_completo_com_holerite_por_cardinalidade():
     """Ponto 11 ponta-a-ponta: cliente com 3 colaboradores esperados,
     2 Holerites presentes, 1 ausente -> pacote INCOMPLETO via
-    executar_ciclo_prestacao (nunca uma peça isolada)."""
+    executar_ciclo_prestacao (nunca uma peça isolada). Holerite é
+    universal -- nenhuma configuração de `fonte_requisitos` é necessária
+    para acionar a avaliação por cardinalidade (basta `fonte_
+    colaboradores_esperados` estar disponível)."""
     contexto = ContextoCicloPrestacao(competencia_base=(2026, 7))
     resultado_a = _resolucao_holerite(_COLAB_A)
     resultado_b = _resolucao_holerite(_COLAB_B)
@@ -335,3 +352,62 @@ def test_e2e_ciclo_completo_com_holerite_por_cardinalidade():
     necessidades_holerite = [n for n in resultado.necessidades if n.tipo_documental == TIPO_HOLERITE]
     assert len(necessidades_holerite) == 1
     assert necessidades_holerite[0].colaborador == _COLAB_C
+
+
+# ============================================================================
+# ADENDO DE CONTINUIDADE, item 5 -- teste E2E obrigatório adicional:
+# cliente com 4 colaboradores esperados (4/4 completo; 3/4 incompleto
+# com exatamente 1 necessidade sanitizada).
+# ============================================================================
+
+_COLAB_D = ReferenciaCanonica('COLABORADOR', 'rec_colab_d')
+
+
+def test_quatro_colaboradores_esperados_quatro_presentes_holerite_completo():
+    colaboradores_esperados = (_COLAB_A, _COLAB_B, _COLAB_C, _COLAB_D)
+    inventario = tuple(
+        ItemInventarioPrestacao(f'holerite-{c.entidade_id}', TIPO_HOLERITE, _CLIENTE, _COMPETENCIA, colaborador=c)
+        for c in colaboradores_esperados
+    )
+    resultado = avaliar_obrigatoriedade_holerite(_CLIENTE, _COMPETENCIA, colaboradores_esperados, inventario)
+    assert resultado.completo
+    assert resultado.colaboradores_faltantes == ()
+    assert set(resultado.colaboradores_com_holerite) == set(colaboradores_esperados)
+
+
+def test_e2e_quatro_colaboradores_esperados_tres_presentes_pacote_incompleto_com_uma_necessidade():
+    """4 colaboradores esperados, 3 Holerites presentes, 1 ausente (o
+    4º) -> pacote INCOMPLETO via executar_ciclo_prestacao, com
+    EXATAMENTE 1 necessidade sanitizada de Holerite (nunca 1 por tipo
+    faltante genérico, nunca CPF/nome)."""
+    contexto = ContextoCicloPrestacao(competencia_base=(2026, 7))
+    colaboradores_esperados = (_COLAB_A, _COLAB_B, _COLAB_C, _COLAB_D)
+    resolucoes = [_resolucao_holerite(c) for c in colaboradores_esperados[:3]]  # _COLAB_D fica sem Holerite
+    itens = [
+        resultado_semantico_para_item_inventario(f'holerite-{c.entidade_id}', r)
+        for c, r in zip(colaboradores_esperados[:3], resolucoes)
+    ]
+    assert all(item is not None for item in itens)
+
+    resultado_ciclo = executar_ciclo_prestacao(
+        contexto=contexto,
+        fonte_clientes=_FonteClientesUmAtivo(),
+        fonte_requisitos=_FonteRequisitosVazia(),
+        fonte_inventario=_FonteInventarioMemoria(tuple(itens)),
+        requisitos_base=(),
+        resolucoes_ancora={_CLIENTE: resolucoes[0]},
+        competencias_por_cliente={_CLIENTE: _COMPETENCIA},
+        fonte_colaboradores_esperados=_FonteColaboradoresEsperadosFake(colaboradores_esperados),
+    )
+
+    assert len(resultado_ciclo.resultados_por_cliente) == 1
+    resultado = resultado_ciclo.resultados_por_cliente[0]
+    assert resultado.pacote.estado == EstadoPacotePrestacao.INCOMPLETO
+    assert resultado.pacote.holerite.colaboradores_faltantes == (_COLAB_D,)
+
+    necessidades_holerite = [n for n in resultado.necessidades if n.tipo_documental == TIPO_HOLERITE]
+    assert len(necessidades_holerite) == 1
+    assert necessidades_holerite[0].colaborador == _COLAB_D
+    # sanitizado -- nunca CPF (pontuação) nem nome (espaço).
+    assert '.' not in necessidades_holerite[0].colaborador.entidade_id
+    assert ' ' not in necessidades_holerite[0].colaborador.entidade_id

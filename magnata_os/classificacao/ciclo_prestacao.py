@@ -174,10 +174,19 @@ def executar_ciclo_prestacao(
     do PR #98 -- uma fonte sem essa extensão simplesmente não relata
     esta informação, nunca quebra).
     `fonte_colaboradores_esperados`: quando informada, Holerite é
-    avaliado por CARDINALIDADE colaborador (Adendo de Regra de Negócio
-    -- Holerite), nunca só pela presença agregada do tipo no
-    inventário -- `None` (default) preserva o comportamento anterior
-    (Holerite avaliado só pela contagem plana, se estiver na base)."""
+    avaliado por CARDINALIDADE colaborador (`holerite_obrigatorio_
+    prestacao`) para TODO cliente, nunca só pela presença agregada do
+    tipo no inventário -- "HOLERITE É OBRIGATÓRIO EM TODA PRESTAÇÃO DE
+    CONTAS" (Adendo de Regra de Negócio, confirmado pelo negócio numa
+    mensagem distinta; a missão "FECHAMENTO DA BASE CANÔNICA" havia
+    temporariamente gateado essa avaliação por configuração condicional
+    explícita por cliente -- ADENDO DE CONTINUIDADE do mesmo dia
+    REVOGOU esse gate antes deste PR ser mesclado: Holerite volta a ser
+    universal, nunca condicional, ver docs/decisoes/
+    fechamento-base-canonica-ciclo-piloto-readonly-v1.md para o
+    histórico completo das 2 reversões). `None` (default) preserva o
+    comportamento anterior a qualquer um dos adendos (Holerite avaliado
+    só pela contagem plana, se estiver na política efetiva do cliente)."""
     resultados = []
     for cliente in fonte_clientes.listar_ativos(contexto):
         competencia = competencias_por_cliente.get(cliente)

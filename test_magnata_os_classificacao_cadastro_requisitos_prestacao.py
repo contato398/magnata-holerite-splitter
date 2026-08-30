@@ -4,9 +4,12 @@ import pytest
 
 from magnata_os.classificacao.cadastro_requisitos_prestacao import (
     CADASTRO_REQUISITOS_PRESTACAO_V1,
+    CADASTRO_REQUISITOS_PRESTACAO_V2,
     HOLERITE_TIPO_DOCUMENTAL,
     REQUISITOS_BASE_CANONICOS_V1,
+    REQUISITOS_BASE_CANONICOS_V2,
     REQUISITOS_DIVERGENTES_ENTRE_FONTES,
+    REQUISITOS_DIVERGENTES_ENTRE_FONTES_V2,
     CadastroRequisitosPrestacao,
     ConfiguracaoCondicionalCliente,
     EstadoConfiguracaoRequisito,
@@ -66,14 +69,86 @@ def test_divergentes_nunca_entram_na_base_universal():
 
 
 def test_holerite_e_universal_mas_nunca_via_contagem_plana():
-    """Adendo de Regra de Negócio -- Holerite: universal, mas NUNCA
-    avaliado pela contagem plana de REQUISITOS_BASE_CANONICOS_V1 (a
-    granularidade colaborador exige `holerite_obrigatorio_prestacao.py`)."""
+    """Registro HISTÓRICO do cadastro V1 (Adendo de Regra de Negócio --
+    Holerite, vigente em V1): universal, mas NUNCA avaliado pela
+    contagem plana de REQUISITOS_BASE_CANONICOS_V1. Este teste continua
+    verde porque V1 NUNCA é sobrescrito em silêncio (missão "FECHAMENTO
+    DA BASE CANÔNICA" só cria V2) -- mas o comportamento EFETIVO a
+    partir de V2 é outro: ver `test_holerite_nao_e_mais_universal_em_v2`
+    abaixo, que prova a reversão."""
     assert HOLERITE_TIPO_DOCUMENTAL == 'Holerite'
     tipos_base = {r.tipo_documental for r in REQUISITOS_BASE_CANONICOS_V1}
     assert HOLERITE_TIPO_DOCUMENTAL not in tipos_base
     tipos_divergentes = {tipo for tipo, _motivo in REQUISITOS_DIVERGENTES_ENTRE_FONTES}
-    assert HOLERITE_TIPO_DOCUMENTAL not in tipos_divergentes  # nao e mais divergente -- e universal confirmado
+    assert HOLERITE_TIPO_DOCUMENTAL not in tipos_divergentes  # nao e mais divergente -- e universal confirmado (em V1)
+
+
+# ============================================================================
+# CADASTRO V2 -- missão "FECHAMENTO DA BASE CANÔNICA + PREPARAÇÃO DO
+# PRIMEIRO CICLO PILOTO REAL READ-ONLY" (2026-08-30).
+# ============================================================================
+
+def test_guia_dctf_darf_promovido_a_base_universal_em_v2():
+    """Decisão de negócio #1 da missão: Guia DCTFWeb/DARF sai de
+    REQUISITOS_DIVERGENTES_ENTRE_FONTES e entra na base universal V2."""
+    tipos_base_v2 = {r.tipo_documental for r in REQUISITOS_BASE_CANONICOS_V2}
+    assert 'Guia DCTFWeb/DARF' in tipos_base_v2
+    assert REQUISITOS_DIVERGENTES_ENTRE_FONTES_V2 == ()
+
+
+def test_base_v2_preserva_toda_a_base_v1_mais_guia_dctf_darf():
+    tipos_base_v1 = {r.tipo_documental for r in REQUISITOS_BASE_CANONICOS_V1}
+    tipos_base_v2 = {r.tipo_documental for r in REQUISITOS_BASE_CANONICOS_V2}
+    assert tipos_base_v2 == tipos_base_v1 | {'Guia DCTFWeb/DARF'}
+
+
+def test_v1_nunca_e_sobrescrito_pela_existencia_de_v2():
+    """Cláusula constitucional: nunca sobrescrever silenciosamente uma
+    versão anterior -- V1 continua exatamente como era (4 itens, sem
+    Guia DCTFWeb/DARF)."""
+    tipos_base_v1 = {r.tipo_documental for r in REQUISITOS_BASE_CANONICOS_V1}
+    assert tipos_base_v1 == {'FGTS', 'DCTFWeb - Declaração', 'DCTFWeb - Recibo de Entrega', 'Extrato da Folha de Pagamento'}
+    assert CADASTRO_REQUISITOS_PRESTACAO_V1.versao == '1'
+    assert CADASTRO_REQUISITOS_PRESTACAO_V2.versao == '2'
+
+
+def test_holerite_e_universal_por_cardinalidade_tambem_em_v2():
+    """ADENDO DE CONTINUIDADE (mesmo dia, mensagem distinta) revogou a
+    instrução intermediária desta missão que reverteria Holerite para
+    condicional -- Holerite permanece universal em V2, idêntico a V1:
+    nunca na base flat (`REQUISITOS_BASE_CANONICOS_V2` -- a contagem
+    plana nunca foi o mecanismo certo, isso nunca mudou), avaliado por
+    CARDINALIDADE colaborador para TODO cliente
+    (`ciclo_prestacao.executar_ciclo_prestacao`, sem gate por
+    configuração condicional). Ver docs/decisoes/
+    fechamento-base-canonica-ciclo-piloto-readonly-v1.md para a
+    cronologia completa das 3 decisões."""
+    tipos_base_v2 = {r.tipo_documental for r in REQUISITOS_BASE_CANONICOS_V2}
+    assert HOLERITE_TIPO_DOCUMENTAL not in tipos_base_v2
+    tipos_divergentes_v2 = {tipo for tipo, _motivo in REQUISITOS_DIVERGENTES_ENTRE_FONTES_V2}
+    assert HOLERITE_TIPO_DOCUMENTAL not in tipos_divergentes_v2
+    # Cadastro condicional nunca é o mecanismo de obrigatoriedade de
+    # Holerite -- estado_condicional aqui é irrelevante para a avaliação
+    # real (que roda incondicionalmente em executar_ciclo_prestacao),
+    # mas a estrutura permanece consistente: sem entrada explícita,
+    # continua NAO_CONFIGURADO (nunca um terceiro estado inventado).
+    assert CADASTRO_REQUISITOS_PRESTACAO_V2.estado_condicional(
+        'rec_qualquer_cliente', HOLERITE_TIPO_DOCUMENTAL,
+    ) == EstadoConfiguracaoRequisito.NAO_CONFIGURADO
+
+
+def test_fonte_requisitos_canonica_v2_satisfaz_o_protocol_do_pr98():
+    fonte = FonteRequisitosPrestacaoCanonica(CADASTRO_REQUISITOS_PRESTACAO_V2)
+    registros = fonte.registros_para(_CLIENTE, _CONTEXTO)
+    assert registros == ()  # cadastro v2 tambem comeca com zero condicionais configurados
+
+
+def test_base_documental_v2_alimenta_politica_requisitos_sem_dto_novo():
+    requisitos = CADASTRO_REQUISITOS_PRESTACAO_V2.requisitos_base_documentais()
+    assert all(isinstance(r, RequisitoDocumentalPrestacao) for r in requisitos)
+    tipos = {r.tipo_documental for r in requisitos}
+    assert 'Guia DCTFWeb/DARF' in tipos
+    assert HOLERITE_TIPO_DOCUMENTAL not in tipos
 
 
 def test_cliente_sem_configuracao_condicional_fica_explicitamente_nao_configurado():

@@ -100,15 +100,20 @@ def test_ciclo_prestacao_nunca_hardcoda_nome_de_cliente():
     """Nenhum identificador literal de cliente (A/B/C/SKY, nomes
     próprios) em código executável -- só nas fixtures dos testes.
 
-    'holerite' foi DELIBERADAMENTE removido da lista de termos
-    proibidos (Adendo de Regra de Negócio -- Holerite): o negócio
-    confirmou que Holerite é obrigatório universal com granularidade
-    própria (colaborador), então este módulo LEGITIMAMENTE importa
-    `TIPO_HOLERITE`/usa o motivo `holerite_obrigatorio_por_colaborador_
-    esperado` -- nunca um cliente/tipo arbitrário, é a ÚNICA exceção
-    explicitamente autorizada. 'sky'/'extrato'/'fgts'/'dctfweb'
-    continuam proibidos -- nenhum outro tipo/cliente ganhou tratamento
-    especial."""
+    'holerite' continua DELIBERADAMENTE fora da lista de termos
+    proibidos -- Adendo de Regra de Negócio -- Holerite: "HOLERITE É
+    OBRIGATÓRIO EM TODA PRESTAÇÃO DE CONTAS", universal, avaliado por
+    cardinalidade colaborador. A missão "FECHAMENTO DA BASE CANÔNICA"
+    chegou a instruir reverter isso para condicional-por-cliente; um
+    "ADENDO DE CONTINUIDADE" do mesmo humano, no mesmo dia, revogou
+    essa instrução ANTES do PR ser mesclado -- Holerite nunca chegou a
+    virar condicional em produção (histórico completo em
+    docs/decisoes/fechamento-base-canonica-ciclo-piloto-readonly-v1.md).
+    Este módulo continua LEGITIMAMENTE importando `TIPO_HOLERITE`/usando
+    o motivo `holerite_obrigatorio_por_colaborador_esperado` -- nunca um
+    cliente/tipo arbitrário, é a ÚNICA exceção explicitamente
+    autorizada. 'sky'/'extrato'/'fgts'/'dctfweb' continuam proibidos --
+    nenhum outro tipo/cliente ganhou tratamento especial."""
     codigo_fonte = inspect.getsource(modulo)
     arvore = ast.parse(codigo_fonte)
     nos_de_docstring = {
