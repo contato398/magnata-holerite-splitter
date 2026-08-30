@@ -734,6 +734,17 @@ ALLOWED_PATHS=(
   "^magnata_os/classificacao/fonte_colaboradores_esperados_prestacao\.py$"
   "^magnata_os/classificacao/holerite_obrigatorio_prestacao\.py$"
   "^test_magnata_os_classificacao_holerite_obrigatorio_prestacao\.py$"
+  # Excecao exata e restrita (fechamento da base canonica + preparacao
+  # do primeiro ciclo piloto real read-only, branch
+  # fix/ciclo-piloto-prestacao-readonly-v1) — cadastro V2 (Guia
+  # DCTFWeb/DARF promovido a base; Holerite revertido de universal para
+  # condicional, mesma disciplina de qualquer outro tipo condicional),
+  # runner READ-ONLY do ciclo piloto com saida dry-run sanitizada (7
+  # campos fixos, nunca CPF/nome/texto de PDF/token/payload). Nao
+  # libera "^magnata_os/classificacao/" nem "^test_" de forma ampla.
+  "^magnata_os/classificacao/ciclo_piloto_prestacao\.py$"
+  "^test_ciclo_piloto_prestacao_readonly_e2e\.py$"
+  "^docs/decisoes/fechamento-base-canonica-ciclo-piloto-readonly-v1\.md$"
 )
 
 # ============================================================================

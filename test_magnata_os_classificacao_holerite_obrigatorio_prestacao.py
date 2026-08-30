@@ -7,7 +7,19 @@
   - ponto 12: colaborador vinculado a 2 clientes -> mesmo Holerite
     válido logicamente para ambos os pacotes, 1 identidade documental
     única (nunca duplicada fisicamente).
-"""
+
+ATUALIZAÇÃO (missão "FECHAMENTO DA BASE CANÔNICA", 2026-08-30): o
+Adendo que tornava Holerite base universal foi REVERTIDO por nova
+decisão de negócio explícita (mensagem distinta) -- Holerite passou a
+ser CONDICIONAL por cliente. O MECANISMO de avaliação por cardinalidade
+testado aqui (`avaliar_obrigatoriedade_holerite`, `combinar_pacote_com_
+holerite`) continua válido e é reutilizado sem alteração -- só passa a
+ser acionado, em `executar_ciclo_prestacao`, apenas quando o cliente
+estiver `CONFIGURADO_EXIGE` para 'Holerite' (nunca incondicionalmente).
+Os testes de E2E abaixo foram atualizados para configurar Holerite
+explicitamente via `FonteRequisitosPrestacao`, refletindo o
+comportamento real; um teste NOVO prova o caso inverso (cliente sem
+essa configuração nunca recebe necessidade de Holerite)."""
 from magnata_os.classificacao.adaptador_inventario_prestacao import (
     itens_para_multiplos_clientes_do_vinculo,
     resultado_semantico_para_item_inventario,
@@ -288,6 +300,17 @@ class _FonteRequisitosVazia:
         return ()
 
 
+class _FonteRequisitosComHoleriteConfigurado:
+    """Simula um cliente CONFIGURADO_EXIGE para 'Holerite' -- desde a
+    reversão do Adendo (missão "FECHAMENTO DA BASE CANÔNICA"), este é o
+    ÚNICO jeito de `executar_ciclo_prestacao` acionar a avaliação por
+    cardinalidade colaborador."""
+
+    def registros_para(self, cliente, contexto):
+        from magnata_os.classificacao.normalizacao_requisitos_prestacao import RegistroRequisitoExterno
+        return (RegistroRequisitoExterno(TIPO_HOLERITE),)
+
+
 class _FonteInventarioMemoria:
     def __init__(self, itens):
         self._itens = itens
@@ -305,9 +328,11 @@ class _FonteColaboradoresEsperadosFake:
 
 
 def test_e2e_ciclo_completo_com_holerite_por_cardinalidade():
-    """Ponto 11 ponta-a-ponta: cliente com 3 colaboradores esperados,
-    2 Holerites presentes, 1 ausente -> pacote INCOMPLETO via
-    executar_ciclo_prestacao (nunca uma peça isolada)."""
+    """Ponto 11 ponta-a-ponta: cliente CONFIGURADO_EXIGE para Holerite
+    (missão "FECHAMENTO DA BASE CANÔNICA" -- nunca mais incondicional),
+    com 3 colaboradores esperados, 2 Holerites presentes, 1 ausente ->
+    pacote INCOMPLETO via executar_ciclo_prestacao (nunca uma peça
+    isolada)."""
     contexto = ContextoCicloPrestacao(competencia_base=(2026, 7))
     resultado_a = _resolucao_holerite(_COLAB_A)
     resultado_b = _resolucao_holerite(_COLAB_B)
@@ -318,7 +343,7 @@ def test_e2e_ciclo_completo_com_holerite_por_cardinalidade():
     resultado_ciclo = executar_ciclo_prestacao(
         contexto=contexto,
         fonte_clientes=_FonteClientesUmAtivo(),
-        fonte_requisitos=_FonteRequisitosVazia(),
+        fonte_requisitos=_FonteRequisitosComHoleriteConfigurado(),
         fonte_inventario=_FonteInventarioMemoria((item_a, item_b)),
         requisitos_base=(),
         resolucoes_ancora={_CLIENTE: resultado_a},
@@ -335,3 +360,41 @@ def test_e2e_ciclo_completo_com_holerite_por_cardinalidade():
     necessidades_holerite = [n for n in resultado.necessidades if n.tipo_documental == TIPO_HOLERITE]
     assert len(necessidades_holerite) == 1
     assert necessidades_holerite[0].colaborador == _COLAB_C
+
+
+def test_e2e_cliente_sem_holerite_configurado_nunca_gera_necessidade_universal():
+    """Reversão do Adendo (missão "FECHAMENTO DA BASE CANÔNICA"):
+    cliente SEM nenhuma configuração de Holerite, mesmo com
+    `fonte_colaboradores_esperados` disponível e colaboradores
+    faltando Holerite no inventário, NUNCA recebe pacote rebaixado nem
+    necessidade de Holerite -- ausência de configuração NUNCA vira
+    obrigação universal. `Holerite` aparece em `requisitos_nao_
+    configurados` quando auditado, nunca em `tipos_faltantes`."""
+    contexto = ContextoCicloPrestacao(competencia_base=(2026, 7))
+    resultado_a = _resolucao_holerite(_COLAB_A)
+    item_a = resultado_semantico_para_item_inventario(f'holerite-{_COLAB_A.entidade_id}', resultado_a)
+    assert item_a is not None
+
+    resultado_ciclo = executar_ciclo_prestacao(
+        contexto=contexto,
+        fonte_clientes=_FonteClientesUmAtivo(),
+        fonte_requisitos=_FonteRequisitosVazia(),
+        fonte_inventario=_FonteInventarioMemoria((item_a,)),
+        requisitos_base=(),
+        resolucoes_ancora={_CLIENTE: resultado_a},
+        competencias_por_cliente={_CLIENTE: _COMPETENCIA},
+        fonte_colaboradores_esperados=_FonteColaboradoresEsperadosFake((_COLAB_A, _COLAB_B, _COLAB_C)),
+        tipos_condicionais_para_auditoria=(TIPO_HOLERITE,),
+    )
+
+    assert len(resultado_ciclo.resultados_por_cliente) == 1
+    resultado = resultado_ciclo.resultados_por_cliente[0]
+    # Nenhuma avaliação por cardinalidade rodou -- pacote nunca é
+    # rebaixado por Holerite quando o cliente não está configurado.
+    assert resultado.pacote.holerite is None
+    assert TIPO_HOLERITE not in resultado.pacote.tipos_faltantes
+    assert not any(n.tipo_documental == TIPO_HOLERITE for n in resultado.necessidades)
+    # _FonteRequisitosVazia nao implementa requisitos_nao_configurados_para
+    # (extensao opcional) -- entao o auditoria simplesmente nao reporta
+    # nada, nunca quebra (mesma garantia do PR #98/#99).
+    assert resultado.requisitos_nao_configurados == ()

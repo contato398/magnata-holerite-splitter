@@ -35,13 +35,26 @@ preserva granularidade COLABORADOR, avaliado por CARDINALIDADE
 cliente → colaboradores esperados → 1 Holerite por colaborador
 aplicável). Ver `HOLERITE_TIPO_DOCUMENTAL`/`HOLERITE_EVIDENCIA` abaixo.
 
-DIVERGÊNCIA REMANESCENTE (só numa fonte): Guia DCTFWeb/DARF (só em
-`REQUISITOS_BASE_PRESTACAO`) — NUNCA promovido a base universal por
-uma fonte só (cláusula pétrea #3: "regra de negócio só entra como
-canônica se houver evidência comprovável" — aqui há evidência, mas não
-CONCORDANTE o suficiente para uma obrigação universal); fica registrado
-em `REQUISITOS_DIVERGENTES_ENTRE_FONTES`, disponível para configuração
-condicional explícita por cliente quando um humano confirmar."""
+DIVERGÊNCIA REMANESCENTE EM V1 (só numa fonte): Guia DCTFWeb/DARF (só em
+`REQUISITOS_BASE_PRESTACAO`) — registrado em
+`REQUISITOS_DIVERGENTES_ENTRE_FONTES` (V1).
+
+CADASTRO V2 (missão "FECHAMENTO DA BASE CANÔNICA + PREPARAÇÃO DO
+PRIMEIRO CICLO PILOTO REAL READ-ONLY", 2026-08-30) — V1 permanece
+intacto (histórico, nunca sobrescrito); V2 é o cadastro EFETIVO a
+partir desta missão, com 2 decisões de negócio novas, cada uma
+confirmada pelo humano numa mensagem distinta:
+  1) Guia DCTFWeb/DARF PROMOVIDO à base universal (sai de
+     `REQUISITOS_DIVERGENTES_ENTRE_FONTES`, entra em
+     `REQUISITOS_BASE_CANONICOS_V2`).
+  2) Holerite REVERTIDO de "base universal avaliada por cardinalidade
+     para todo cliente" (Adendo, vigente em V1) para "tipo_documental
+     CONDICIONAL, avaliado por cardinalidade só quando o cliente tiver
+     `ConfiguracaoCondicionalCliente(..., CONFIGURADO_EXIGE)` explícita
+     para Holerite" — nunca voltou a ser base universal (nunca esteve
+     em `REQUISITOS_BASE_CANONICOS_V1`/`V2`), só deixou de ser
+     avaliado incondicionalmente para todo cliente. Ver seção "CADASTRO
+     V2" mais abaixo neste arquivo para o detalhe completo."""
 from __future__ import annotations
 
 import dataclasses
@@ -230,4 +243,77 @@ REQUISITOS_DIVERGENTES_ENTRE_FONTES: Tuple[Tuple[str, str], ...] = (
 # (`ConfiguracaoCondicionalCliente`), zero linhas inventadas.
 CADASTRO_REQUISITOS_PRESTACAO_V1 = CadastroRequisitosPrestacao(
     versao='1', requisitos_base=REQUISITOS_BASE_CANONICOS_V1, condicionais=(),
+)
+
+# ============================================================================
+# CADASTRO V2 -- missão "FECHAMENTO DA BASE CANÔNICA + PREPARAÇÃO DO
+# PRIMEIRO CICLO PILOTO REAL READ-ONLY" (2026-08-30).
+#
+# V1 (acima) NUNCA é sobrescrito em silêncio -- permanece intacto como
+# registro histórico do que foi decidido na missão anterior. V2 é uma
+# versão NOVA e EXPLÍCITA, com 2 decisões de negócio confirmadas pelo
+# humano numa mensagem distinta desta mesma sessão:
+#
+#   1) Guia DCTFWeb/DARF é documento comum/base -- PROMOVIDO de
+#      `REQUISITOS_DIVERGENTES_ENTRE_FONTES` (V1) para a base universal
+#      em V2. Reverte, só para este tipo, a cautela da Fase 3 original
+#      ("só interseção das 2 fontes vira base") -- o humano confirmou
+#      que a fonte `REQUISITOS_BASE_PRESTACAO` já é suficiente aqui,
+#      mesmo sem `CAPACIDADES_DOCUMENTO` (app.py) concordar.
+#   2) Holerite NÃO é promovido a requisito universal -- REVERTE o
+#      "Adendo de Regra de Negócio -- Holerite" (vigente em V1, também
+#      confirmado numa mensagem distinta) por uma nova decisão do
+#      negócio, também numa mensagem distinta: "Holerite é documento
+#      individualizado por colaborador/cliente e deve ser exigido
+#      conforme aplicabilidade/política do cliente/ciclo. Ausência de
+#      configuração específica NÃO significa automaticamente que todo
+#      cliente exige Holerite." Holerite JAMAIS esteve em
+#      `REQUISITOS_BASE_CANONICOS_V1`/`V2` (isso não muda) -- o que
+#      muda é que, a partir de V2, ele também deixa de ser avaliado
+#      incondicionalmente para TODO cliente (como `ciclo_prestacao.py`
+#      fazia sempre que uma fonte de colaboradores esperados era
+#      informada). Holerite passa a ser um `tipo_documental`
+#      CONDICIONAL como qualquer outro: só avaliado quando o cadastro
+#      tiver uma `ConfiguracaoCondicionalCliente(tipo_documental=
+#      HOLERITE_TIPO_DOCUMENTAL, estado=CONFIGURADO_EXIGE, ...)`
+#      explícita para aquele cliente. O MECANISMO de avaliação por
+#      cardinalidade colaborador (`holerite_obrigatorio_prestacao.
+#      avaliar_obrigatoriedade_holerite`) não foi descartado -- continua
+#      sendo o único jeito correto de avaliar Holerite quando ele
+#      ESTIVER configurado (nunca a contagem plana); só passa a ser
+#      acionado apenas nesse caso, nunca por padrão. O texto original do
+#      adendo (`HOLERITE_EVIDENCIA` acima) fica preservado tal como
+#      redigido -- registro histórico da decisão original, nunca
+#      apagado (ver docs/decisoes/cadastro-canonico-requisitos-
+#      prestacao-v1.md e a reversão registrada em docs/decisoes/
+#      fechamento-base-canonica-ciclo-piloto-readonly-v1.md).
+# ============================================================================
+
+REQUISITOS_BASE_CANONICOS_V2: Tuple[RequisitoCanonico, ...] = REQUISITOS_BASE_CANONICOS_V1 + (
+    RequisitoCanonico(
+        'Guia DCTFWeb/DARF',
+        evidencia='Decisao de negocio explicita (missao FECHAMENTO DA BASE CANONICA, '
+                  '2026-08-30, confirmada pelo humano numa mensagem distinta): Guia '
+                  'DCTFWeb/DARF e documento comum/base -- promovido de '
+                  'REQUISITOS_DIVERGENTES_ENTRE_FONTES (V1) para a base universal em V2. '
+                  'Documentado em politica_requisitos_prestacao.REQUISITOS_BASE_PRESTACAO; '
+                  'a ausencia em app.py::CAPACIDADES_DOCUMENTO deixou de ser motivo '
+                  'suficiente para excluir da base (decisao humana, nao inferencia automatica).',
+    ),
+)
+
+# Em V2 não sobra nenhum item divergente entre as 2 fontes originais --
+# a única divergência conhecida (Guia DCTFWeb/DARF) foi resolvida acima
+# por decisão humana explícita. Mantida como tupla vazia TIPADA (nunca
+# apagada) para que uma FUTURA divergência real seja registrada aqui,
+# nunca inventada nem silenciosamente ignorada.
+REQUISITOS_DIVERGENTES_ENTRE_FONTES_V2: Tuple[Tuple[str, str], ...] = ()
+
+# Cadastro V2 -- mesma disciplina de V1: zero clientes condicionais
+# inventados. Holerite e qualquer benefício (Horas Extras, Assiduidade,
+# VR, VA, Diárias, Almoço/Janta, Assinatura) continuam disponíveis como
+# `tipo_documental` para `ConfiguracaoCondicionalCliente` quando um
+# humano confirmar para um cliente real -- nenhum foi configurado aqui.
+CADASTRO_REQUISITOS_PRESTACAO_V2 = CadastroRequisitosPrestacao(
+    versao='2', requisitos_base=REQUISITOS_BASE_CANONICOS_V2, condicionais=(),
 )
