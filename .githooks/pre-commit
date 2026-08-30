@@ -332,8 +332,11 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # Excecao exata e restrita (fechamento da base canonica + preparacao
   # do primeiro ciclo piloto real read-only, branch
   # fix/ciclo-piloto-prestacao-readonly-v1). Mantem test_* bloqueado
-  # por padrao e libera somente este teste nominal novo.
+  # por padrao e libera somente estes testes nominais novos.
   "test_ciclo_piloto_prestacao_readonly_e2e.py"
+  # Excecao exata e restrita (ADENDO DE CONTINUIDADE, mesma branch) --
+  # adapter read-only de colaboradores esperados por cliente.
+  "test_airtable_colaboradores_esperados_prestacao.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

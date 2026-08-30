@@ -737,13 +737,20 @@ ALLOWED_PATHS=(
   # Excecao exata e restrita (fechamento da base canonica + preparacao
   # do primeiro ciclo piloto real read-only, branch
   # fix/ciclo-piloto-prestacao-readonly-v1) — cadastro V2 (Guia
-  # DCTFWeb/DARF promovido a base; Holerite revertido de universal para
-  # condicional, mesma disciplina de qualquer outro tipo condicional),
-  # runner READ-ONLY do ciclo piloto com saida dry-run sanitizada (7
-  # campos fixos, nunca CPF/nome/texto de PDF/token/payload). Nao
-  # libera "^magnata_os/classificacao/" nem "^test_" de forma ampla.
+  # DCTFWeb/DARF promovido a base; Holerite permanece universal, avaliado
+  # por cardinalidade colaborador -- ver ADENDO DE CONTINUIDADE, mesma
+  # branch, que revogou uma instrução intermediária desta missão antes
+  # do PR ser mesclado), runner READ-ONLY do ciclo piloto com saida
+  # dry-run sanitizada (7 campos fixos, nunca CPF/nome/texto de PDF/
+  # token/payload), adapter read-only de colaboradores esperados por
+  # cliente (direcao inversa de airtable_vinculos_prestacao.py, nunca
+  # Airtable live). Nao libera "^magnata_os/classificacao/",
+  # "^magnata_os/documental/importacao_lote/adapters/" nem "^test_" de
+  # forma ampla.
   "^magnata_os/classificacao/ciclo_piloto_prestacao\.py$"
   "^test_ciclo_piloto_prestacao_readonly_e2e\.py$"
+  "^magnata_os/documental/importacao_lote/adapters/airtable_colaboradores_esperados_prestacao\.py$"
+  "^test_airtable_colaboradores_esperados_prestacao\.py$"
   "^docs/decisoes/fechamento-base-canonica-ciclo-piloto-readonly-v1\.md$"
 )
 

@@ -101,20 +101,18 @@ def test_ciclo_prestacao_nunca_hardcoda_nome_de_cliente():
     próprios) em código executável -- só nas fixtures dos testes.
 
     'holerite' continua DELIBERADAMENTE fora da lista de termos
-    proibidos. Ela entrou como exceção pelo Adendo de Regra de Negócio
-    -- Holerite (Holerite tratado como base universal); esse adendo foi
-    depois REVERTIDO pela missão "FECHAMENTO DA BASE CANÔNICA"
-    (2026-08-30, nova decisão do negócio numa mensagem distinta):
-    Holerite deixou de ser universal e passou a ser um `tipo_documental`
-    CONDICIONAL como qualquer outro, avaliado por cardinalidade só
-    quando o cliente estiver `CONFIGURADO_EXIGE`. A exceção nesta lista
-    permanece necessária mesmo assim -- este módulo continua
-    LEGITIMAMENTE importando `TIPO_HOLERITE`/usando o motivo
-    `holerite_obrigatorio_por_colaborador_esperado` para a avaliação
-    condicional (`holerite_configurado_exige` em `executar_ciclo_
-    prestacao`) -- nunca um cliente/tipo arbitrário, é a ÚNICA exceção
-    explicitamente autorizada, agora por um motivo diferente do
-    original. 'sky'/'extrato'/'fgts'/'dctfweb' continuam proibidos --
+    proibidos -- Adendo de Regra de Negócio -- Holerite: "HOLERITE É
+    OBRIGATÓRIO EM TODA PRESTAÇÃO DE CONTAS", universal, avaliado por
+    cardinalidade colaborador. A missão "FECHAMENTO DA BASE CANÔNICA"
+    chegou a instruir reverter isso para condicional-por-cliente; um
+    "ADENDO DE CONTINUIDADE" do mesmo humano, no mesmo dia, revogou
+    essa instrução ANTES do PR ser mesclado -- Holerite nunca chegou a
+    virar condicional em produção (histórico completo em
+    docs/decisoes/fechamento-base-canonica-ciclo-piloto-readonly-v1.md).
+    Este módulo continua LEGITIMAMENTE importando `TIPO_HOLERITE`/usando
+    o motivo `holerite_obrigatorio_por_colaborador_esperado` -- nunca um
+    cliente/tipo arbitrário, é a ÚNICA exceção explicitamente
+    autorizada. 'sky'/'extrato'/'fgts'/'dctfweb' continuam proibidos --
     nenhum outro tipo/cliente ganhou tratamento especial."""
     codigo_fonte = inspect.getsource(modulo)
     arvore = ast.parse(codigo_fonte)

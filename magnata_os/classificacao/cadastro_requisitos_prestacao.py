@@ -42,19 +42,27 @@ DIVERGÊNCIA REMANESCENTE EM V1 (só numa fonte): Guia DCTFWeb/DARF (só em
 CADASTRO V2 (missão "FECHAMENTO DA BASE CANÔNICA + PREPARAÇÃO DO
 PRIMEIRO CICLO PILOTO REAL READ-ONLY", 2026-08-30) — V1 permanece
 intacto (histórico, nunca sobrescrito); V2 é o cadastro EFETIVO a
-partir desta missão, com 2 decisões de negócio novas, cada uma
-confirmada pelo humano numa mensagem distinta:
+partir desta missão:
   1) Guia DCTFWeb/DARF PROMOVIDO à base universal (sai de
      `REQUISITOS_DIVERGENTES_ENTRE_FONTES`, entra em
-     `REQUISITOS_BASE_CANONICOS_V2`).
-  2) Holerite REVERTIDO de "base universal avaliada por cardinalidade
-     para todo cliente" (Adendo, vigente em V1) para "tipo_documental
-     CONDICIONAL, avaliado por cardinalidade só quando o cliente tiver
-     `ConfiguracaoCondicionalCliente(..., CONFIGURADO_EXIGE)` explícita
-     para Holerite" — nunca voltou a ser base universal (nunca esteve
-     em `REQUISITOS_BASE_CANONICOS_V1`/`V2`), só deixou de ser
-     avaliado incondicionalmente para todo cliente. Ver seção "CADASTRO
-     V2" mais abaixo neste arquivo para o detalhe completo."""
+     `REQUISITOS_BASE_CANONICOS_V2`) — decisão de negócio confirmada
+     pelo humano numa mensagem distinta.
+  2) Holerite: a mesma missão chegou a instruir uma reversão do Adendo
+     original ("condicional por cliente, nunca universal") — essa
+     instrução foi, por sua vez, REVOGADA por um "ADENDO DE
+     CONTINUIDADE" do humano no mesmo dia, ANTES deste cadastro/PR ser
+     mesclado: "QUALQUER trecho do comando anterior que trate Holerite
+     como condicional... ESTÁ REVOGADO." Holerite volta a ser o que o
+     Adendo original já dizia — base universal avaliada por
+     CARDINALIDADE colaborador para TODO cliente, nunca contagem plana,
+     nunca condicional — e nunca chegou a ser mesclado como
+     "condicional" (a correção aconteceu dentro do mesmo PR, antes do
+     merge). As 3 decisões, nesta ordem, ficam registradas em
+     docs/decisoes/fechamento-base-canonica-ciclo-piloto-readonly-v1.md
+     para transparência total (nenhuma decisão arquitetural em
+     silêncio) -- nunca uma "correção silenciosa" do texto anterior.
+     Ver seção "CADASTRO V2" mais abaixo neste arquivo para o detalhe
+     completo."""
 from __future__ import annotations
 
 import dataclasses
@@ -260,33 +268,38 @@ CADASTRO_REQUISITOS_PRESTACAO_V1 = CadastroRequisitosPrestacao(
 #      ("só interseção das 2 fontes vira base") -- o humano confirmou
 #      que a fonte `REQUISITOS_BASE_PRESTACAO` já é suficiente aqui,
 #      mesmo sem `CAPACIDADES_DOCUMENTO` (app.py) concordar.
-#   2) Holerite NÃO é promovido a requisito universal -- REVERTE o
-#      "Adendo de Regra de Negócio -- Holerite" (vigente em V1, também
-#      confirmado numa mensagem distinta) por uma nova decisão do
-#      negócio, também numa mensagem distinta: "Holerite é documento
-#      individualizado por colaborador/cliente e deve ser exigido
-#      conforme aplicabilidade/política do cliente/ciclo. Ausência de
-#      configuração específica NÃO significa automaticamente que todo
-#      cliente exige Holerite." Holerite JAMAIS esteve em
-#      `REQUISITOS_BASE_CANONICOS_V1`/`V2` (isso não muda) -- o que
-#      muda é que, a partir de V2, ele também deixa de ser avaliado
-#      incondicionalmente para TODO cliente (como `ciclo_prestacao.py`
-#      fazia sempre que uma fonte de colaboradores esperados era
-#      informada). Holerite passa a ser um `tipo_documental`
-#      CONDICIONAL como qualquer outro: só avaliado quando o cadastro
-#      tiver uma `ConfiguracaoCondicionalCliente(tipo_documental=
-#      HOLERITE_TIPO_DOCUMENTAL, estado=CONFIGURADO_EXIGE, ...)`
-#      explícita para aquele cliente. O MECANISMO de avaliação por
-#      cardinalidade colaborador (`holerite_obrigatorio_prestacao.
-#      avaliar_obrigatoriedade_holerite`) não foi descartado -- continua
-#      sendo o único jeito correto de avaliar Holerite quando ele
-#      ESTIVER configurado (nunca a contagem plana); só passa a ser
-#      acionado apenas nesse caso, nunca por padrão. O texto original do
-#      adendo (`HOLERITE_EVIDENCIA` acima) fica preservado tal como
-#      redigido -- registro histórico da decisão original, nunca
-#      apagado (ver docs/decisoes/cadastro-canonico-requisitos-
-#      prestacao-v1.md e a reversão registrada em docs/decisoes/
-#      fechamento-base-canonica-ciclo-piloto-readonly-v1.md).
+#   2) Holerite -- HISTÓRICO DE 3 DECISÕES, todas do mesmo humano, cada
+#      uma numa mensagem distinta, todas dentro desta mesma missão,
+#      ANTES deste PR ser mesclado (nenhuma chegou a virar comportamento
+#      em produção antes da seguinte):
+#        a) Adendo original (vigente em V1): "HOLERITE É OBRIGATÓRIO EM
+#           TODA PRESTAÇÃO DE CONTAS" -- universal, avaliado por
+#           CARDINALIDADE colaborador, nunca contagem plana.
+#        b) Esta missão ("FECHAMENTO DA BASE CANÔNICA") inicialmente
+#           instruiu REVERTER (a) para "Holerite é documento
+#           individualizado... deve ser exigido conforme
+#           aplicabilidade/política do cliente/ciclo" -- condicional,
+#           via `ConfiguracaoCondicionalCliente(..., CONFIGURADO_EXIGE)`.
+#        c) Um "ADENDO DE CONTINUIDADE" do mesmo humano, no mesmo dia,
+#           REVOGOU (b) explicitamente ("QUALQUER trecho do comando
+#           anterior que trate Holerite como condicional... ESTÁ
+#           REVOGADO") e restaurou (a) integralmente: Holerite volta a
+#           ser universal, avaliado por cardinalidade para TODO cliente,
+#           nunca condicional.
+#      DECISÃO EFETIVA EM V2 (resultado de a→b→c, decisão (c) prevalece):
+#      Holerite é universal, igual a V1 -- JAMAIS esteve em
+#      `REQUISITOS_BASE_CANONICOS_V1`/`V2` (a contagem plana nunca foi o
+#      mecanismo certo, isso nunca mudou em nenhuma das 3 decisões) --
+#      avaliado por CARDINALIDADE colaborador
+#      (`holerite_obrigatorio_prestacao.avaliar_obrigatoriedade_holerite`)
+#      SEMPRE que uma fonte de colaboradores esperados estiver disponível
+#      em `ciclo_prestacao.executar_ciclo_prestacao`, nunca gateado por
+#      configuração condicional. O texto do Adendo original
+#      (`HOLERITE_EVIDENCIA` acima) e a instrução intermediária (b) que
+#      foi revogada ficam registrados, nunca apagados -- ver
+#      docs/decisoes/cadastro-canonico-requisitos-prestacao-v1.md e
+#      docs/decisoes/fechamento-base-canonica-ciclo-piloto-readonly-v1.md
+#      para a cronologia completa e transparente das 3 decisões.
 # ============================================================================
 
 REQUISITOS_BASE_CANONICOS_V2: Tuple[RequisitoCanonico, ...] = REQUISITOS_BASE_CANONICOS_V1 + (
@@ -310,10 +323,13 @@ REQUISITOS_BASE_CANONICOS_V2: Tuple[RequisitoCanonico, ...] = REQUISITOS_BASE_CA
 REQUISITOS_DIVERGENTES_ENTRE_FONTES_V2: Tuple[Tuple[str, str], ...] = ()
 
 # Cadastro V2 -- mesma disciplina de V1: zero clientes condicionais
-# inventados. Holerite e qualquer benefício (Horas Extras, Assiduidade,
-# VR, VA, Diárias, Almoço/Janta, Assinatura) continuam disponíveis como
-# `tipo_documental` para `ConfiguracaoCondicionalCliente` quando um
-# humano confirmar para um cliente real -- nenhum foi configurado aqui.
+# inventados. Benefícios (Horas Extras, Assiduidade, VR, VA, Diárias,
+# Almoço/Janta, Assinatura) continuam disponíveis como `tipo_documental`
+# para `ConfiguracaoCondicionalCliente` quando um humano confirmar para
+# um cliente real -- nenhum foi configurado aqui. Holerite NÃO é um
+# candidato a condicional (é universal, ver acima) -- continua sendo um
+# `tipo_documental` válido no universo canônico, mas sua obrigatoriedade
+# nunca passa por `ConfiguracaoCondicionalCliente`.
 CADASTRO_REQUISITOS_PRESTACAO_V2 = CadastroRequisitosPrestacao(
     versao='2', requisitos_base=REQUISITOS_BASE_CANONICOS_V2, condicionais=(),
 )

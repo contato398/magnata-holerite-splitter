@@ -112,40 +112,29 @@ def test_v1_nunca_e_sobrescrito_pela_existencia_de_v2():
     assert CADASTRO_REQUISITOS_PRESTACAO_V2.versao == '2'
 
 
-def test_holerite_nao_e_mais_universal_em_v2():
-    """Decisão de negócio #2 da missão (reversão do Adendo, mensagem
-    distinta do humano): Holerite NUNCA esteve na base universal (nem
-    em V1 nem em V2) -- mas a partir de V2 ele TAMBÉM deixa de ser
-    avaliado incondicionalmente para todo cliente. Sem nenhuma
-    ConfiguracaoCondicionalCliente explícita, um cliente qualquer fica
-    NAO_CONFIGURADO para Holerite -- nunca CONFIGURADO_NAO_EXIGE nem
-    CONFIGURADO_EXIGE por omissão."""
+def test_holerite_e_universal_por_cardinalidade_tambem_em_v2():
+    """ADENDO DE CONTINUIDADE (mesmo dia, mensagem distinta) revogou a
+    instrução intermediária desta missão que reverteria Holerite para
+    condicional -- Holerite permanece universal em V2, idêntico a V1:
+    nunca na base flat (`REQUISITOS_BASE_CANONICOS_V2` -- a contagem
+    plana nunca foi o mecanismo certo, isso nunca mudou), avaliado por
+    CARDINALIDADE colaborador para TODO cliente
+    (`ciclo_prestacao.executar_ciclo_prestacao`, sem gate por
+    configuração condicional). Ver docs/decisoes/
+    fechamento-base-canonica-ciclo-piloto-readonly-v1.md para a
+    cronologia completa das 3 decisões."""
     tipos_base_v2 = {r.tipo_documental for r in REQUISITOS_BASE_CANONICOS_V2}
     assert HOLERITE_TIPO_DOCUMENTAL not in tipos_base_v2
+    tipos_divergentes_v2 = {tipo for tipo, _motivo in REQUISITOS_DIVERGENTES_ENTRE_FONTES_V2}
+    assert HOLERITE_TIPO_DOCUMENTAL not in tipos_divergentes_v2
+    # Cadastro condicional nunca é o mecanismo de obrigatoriedade de
+    # Holerite -- estado_condicional aqui é irrelevante para a avaliação
+    # real (que roda incondicionalmente em executar_ciclo_prestacao),
+    # mas a estrutura permanece consistente: sem entrada explícita,
+    # continua NAO_CONFIGURADO (nunca um terceiro estado inventado).
     assert CADASTRO_REQUISITOS_PRESTACAO_V2.estado_condicional(
         'rec_qualquer_cliente', HOLERITE_TIPO_DOCUMENTAL,
     ) == EstadoConfiguracaoRequisito.NAO_CONFIGURADO
-
-
-def test_holerite_pode_ser_configurado_condicionalmente_em_v2():
-    """Holerite continua sendo um tipo_documental válido -- só que agora
-    exige configuração explícita por cliente, como qualquer outro
-    condicional (nunca universal por padrão)."""
-    cadastro = CadastroRequisitosPrestacao(
-        versao='teste-v2-holerite-condicional', requisitos_base=REQUISITOS_BASE_CANONICOS_V2,
-        condicionais=(
-            ConfiguracaoCondicionalCliente(
-                'rec_1', HOLERITE_TIPO_DOCUMENTAL, EstadoConfiguracaoRequisito.CONFIGURADO_EXIGE,
-                evidencia='configuracao sintetica de teste -- prova que Holerite aceita condicional em V2',
-            ),
-        ),
-    )
-    assert cadastro.estado_condicional('rec_1', HOLERITE_TIPO_DOCUMENTAL) == EstadoConfiguracaoRequisito.CONFIGURADO_EXIGE
-    registros = cadastro.registros_condicionais_para('rec_1')
-    assert len(registros) == 1
-    assert registros[0].tipo_documental == HOLERITE_TIPO_DOCUMENTAL
-    # Outro cliente, sem configuração, continua NAO_CONFIGURADO -- nunca herda.
-    assert cadastro.estado_condicional('rec_2', HOLERITE_TIPO_DOCUMENTAL) == EstadoConfiguracaoRequisito.NAO_CONFIGURADO
 
 
 def test_fonte_requisitos_canonica_v2_satisfaz_o_protocol_do_pr98():

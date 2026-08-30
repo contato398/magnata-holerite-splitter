@@ -173,19 +173,20 @@ def executar_ciclo_prestacao(
     duck-typed, nunca parte obrigatória do Protocol `FonteRequisitosPrestacao`
     do PR #98 -- uma fonte sem essa extensão simplesmente não relata
     esta informação, nunca quebra).
-    `fonte_colaboradores_esperados`: quando informada E o cliente tiver
-    'Holerite' CONFIGURADO_EXIGE (via `fonte_requisitos` -- checado pela
-    presença de um registro válido de tipo 'Holerite' na política
-    efetiva do cliente), Holerite é avaliado por CARDINALIDADE
-    colaborador (`holerite_obrigatorio_prestacao`), nunca só pela
-    presença agregada do tipo no inventário. Holerite NUNCA é avaliado
-    incondicionalmente para todo cliente (decisão revertida pela missão
-    "FECHAMENTO DA BASE CANÔNICA", 2026-08-30 -- o Adendo anterior que
-    tornava Holerite universal foi corrigido por nova decisão de
-    negócio explícita, numa mensagem distinta): ausência de configuração
-    específica para Holerite nunca vira obrigação -- fica
-    `NAO_CONFIGURADO`, como qualquer outro tipo condicional (ver
-    `ResultadoClientePrestacao.requisitos_nao_configurados`)."""
+    `fonte_colaboradores_esperados`: quando informada, Holerite é
+    avaliado por CARDINALIDADE colaborador (`holerite_obrigatorio_
+    prestacao`) para TODO cliente, nunca só pela presença agregada do
+    tipo no inventário -- "HOLERITE É OBRIGATÓRIO EM TODA PRESTAÇÃO DE
+    CONTAS" (Adendo de Regra de Negócio, confirmado pelo negócio numa
+    mensagem distinta; a missão "FECHAMENTO DA BASE CANÔNICA" havia
+    temporariamente gateado essa avaliação por configuração condicional
+    explícita por cliente -- ADENDO DE CONTINUIDADE do mesmo dia
+    REVOGOU esse gate antes deste PR ser mesclado: Holerite volta a ser
+    universal, nunca condicional, ver docs/decisoes/
+    fechamento-base-canonica-ciclo-piloto-readonly-v1.md para o
+    histórico completo das 2 reversões). `None` (default) preserva o
+    comportamento anterior a qualquer um dos adendos (Holerite avaliado
+    só pela contagem plana, se estiver na política efetiva do cliente)."""
     resultados = []
     for cliente in fonte_clientes.listar_ativos(contexto):
         competencia = competencias_por_cliente.get(cliente)
@@ -197,36 +198,24 @@ def executar_ciclo_prestacao(
             # de banda, não um pacote fictício).
             continue
 
-        politica, resultados_normalizacao = _politica_efetiva_para_cliente(
+        politica, _resultados_normalizacao = _politica_efetiva_para_cliente(
             cliente, contexto, requisitos_base, fonte_requisitos)
         pacote = avaliar_e_montar_pacote(cliente, competencia, resolucao_ancora, fonte_inventario, politica)
 
-        # Holerite CONFIGURADO_EXIGE para este cliente? (missão
-        # "FECHAMENTO DA BASE CANÔNICA": nunca incondicional -- só
-        # quando a política efetiva do cliente, montada a partir da
-        # fonte de requisitos, já inclui 'Holerite' como um registro
-        # VÁLIDO. `_politica_efetiva_para_cliente` já normalizou os
-        # registros crus; aqui só verificamos o que sobreviveu.)
-        holerite_configurado_exige = any(
-            resultado.requisito is not None and resultado.requisito.tipo_documental == TIPO_HOLERITE
-            for resultado in resultados_normalizacao
-        )
-
         resultado_holerite = None
-        if fonte_colaboradores_esperados is not None and holerite_configurado_exige:
+        if fonte_colaboradores_esperados is not None:
             colaboradores_esperados = fonte_colaboradores_esperados.colaboradores_esperados_para(cliente, contexto)
             resultado_holerite = avaliar_obrigatoriedade_holerite(
                 cliente, competencia, colaboradores_esperados, pacote.itens_incluidos)
             pacote = combinar_pacote_com_holerite(pacote, resultado_holerite)
 
         # TIPO_HOLERITE só ganha tratamento por-colaborador quando a
-        # avaliação por cardinalidade de fato rodou (cliente configurado
-        # E fonte de colaboradores esperados disponível) -- sem isso,
-        # preserva o comportamento de contagem plana (se 'Holerite'
-        # estiver na política efetiva do cliente) para retrocompatibilidade.
+        # fonte de colaboradores esperados foi informada -- sem ela,
+        # preserva o comportamento anterior (contagem plana, se
+        # 'Holerite' estiver na base efetiva) para retrocompatibilidade.
         tipos_para_necessidade_generica = (
             tuple(tipo for tipo in pacote.tipos_faltantes if tipo != TIPO_HOLERITE)
-            if resultado_holerite is not None
+            if fonte_colaboradores_esperados is not None
             else pacote.tipos_faltantes
         )
         necessidades = tuple(

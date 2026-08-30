@@ -1,22 +1,30 @@
 """E2E do primeiro CICLO PILOTO real, READ-ONLY (missão "FECHAMENTO DA
 BASE CANÔNICA + PREPARAÇÃO DO PRIMEIRO CICLO PILOTO REAL READ-ONLY").
 
-Usa o CADASTRO CANÔNICO V2 (`CADASTRO_REQUISITOS_PRESTACAO_V2`) --
-Guia DCTFWeb/DARF já na base universal, Holerite NUNCA universal.
+Usa o CADASTRO CANÔNICO V2 (`CADASTRO_REQUISITOS_PRESTACAO_V2`) -- Guia
+DCTFWeb/DARF já na base universal. Holerite é universal (ADENDO DE
+CONTINUIDADE revogou, no mesmo dia, a instrução intermediária desta
+missão que o tornaria condicional -- ver docs/decisoes/
+fechamento-base-canonica-ciclo-piloto-readonly-v1.md), avaliado por
+CARDINALIDADE colaborador para TODO cliente com `fonte_colaboradores_
+esperados` disponível -- por isso, nesta suíte, a fonte fake devolve
+zero colaboradores esperados para os clientes que não são o foco do
+teste de Holerite (vacuamente satisfeito, sem impacto no pacote) e só
+popula colaboradores reais para `_CLIENTE_HOLERITE_INCOMPLETO`.
+
 5 clientes sintéticos (nenhum cliente real ainda existe -- mesma
 disciplina já usada em `test_ciclo_prestacao_cadastro_canonico_e2e.py`):
 
-  - `_CLIENTE_COMUM`: zero condicionais, base V2 inteira presente ->
-    PRONTO. Prova "sem configuração de Holerite/benefício -> NAO_
-    CONFIGURADO, nunca requisito universal".
-  - `_CLIENTE_HOLERITE_CONFIGURADO`: CONFIGURADO_EXIGE para Holerite,
-    3 colaboradores esperados / 2 Holerites presentes / 1 ausente ->
-    INCOMPLETO por cardinalidade (nunca contagem plana).
-  - `_CLIENTE_GUIA_AUSENTE_HOLERITE_NC`: zero condicionais, base
-    completa EXCETO Guia DCTFWeb/DARF (documento realmente ausente) ->
-    INCOMPLETO só por Guia DCTFWeb/DARF -- Holerite continua NAO_
-    CONFIGURADO, nunca aparece em tipos_faltantes junto (prova que os
-    dois nunca se confundem).
+  - `_CLIENTE_COMUM`: zero condicionais, base V2 inteira presente,
+    zero colaboradores esperados -> PRONTO. Prova "sem configuração de
+    benefício -> NAO_CONFIGURADO, nunca requisito universal".
+  - `_CLIENTE_HOLERITE_INCOMPLETO`: 3 colaboradores esperados / 2
+    Holerites presentes / 1 ausente -> INCOMPLETO por cardinalidade
+    (nunca contagem plana, nunca gateado por configuração condicional).
+  - `_CLIENTE_GUIA_AUSENTE`: zero condicionais, zero colaboradores
+    esperados (Holerite vacuamente satisfeito), base completa EXCETO
+    Guia DCTFWeb/DARF (documento realmente ausente) -> INCOMPLETO só
+    por Guia DCTFWeb/DARF.
   - `_CLIENTE_BENEFICIO_CONDICIONAL`: CONFIGURADO_EXIGE para "Horas
     Extras", documento presente -> PRONTO, benefício nunca NAO_
     CONFIGURADO (foi configurado).
@@ -81,13 +89,13 @@ from magnata_os.documental.importacao_lote.contratos import (
 from magnata_os.documental.importacao_lote.dominio import validar_competencia
 
 _CLIENTE_COMUM = ReferenciaCanonica('CLIENTE', 'rec_comum')
-_CLIENTE_HOLERITE_CONFIGURADO = ReferenciaCanonica('CLIENTE', 'rec_holerite_configurado')
-_CLIENTE_GUIA_AUSENTE_HOLERITE_NC = ReferenciaCanonica('CLIENTE', 'rec_guia_ausente')
+_CLIENTE_HOLERITE_INCOMPLETO = ReferenciaCanonica('CLIENTE', 'rec_holerite_incompleto')
+_CLIENTE_GUIA_AUSENTE = ReferenciaCanonica('CLIENTE', 'rec_guia_ausente')
 _CLIENTE_BENEFICIO_CONDICIONAL = ReferenciaCanonica('CLIENTE', 'rec_beneficio_condicional')
 _SKY = REFERENCIA_CLIENTE_SKY_TATUI
 
 _TODOS_OS_CLIENTES = (
-    _CLIENTE_COMUM, _CLIENTE_HOLERITE_CONFIGURADO, _CLIENTE_GUIA_AUSENTE_HOLERITE_NC,
+    _CLIENTE_COMUM, _CLIENTE_HOLERITE_INCOMPLETO, _CLIENTE_GUIA_AUSENTE,
     _CLIENTE_BENEFICIO_CONDICIONAL, _SKY,
 )
 
@@ -101,18 +109,19 @@ _COLAB_C = ReferenciaCanonica('COLABORADOR', 'rec_colab_c')
 
 _TIPO_HORAS_EXTRAS = 'Comprovante de Pagamento - Horas Extras'
 
-_TIPOS_PARA_AUDITORIA = (HOLERITE_TIPO_DOCUMENTAL, _TIPO_HORAS_EXTRAS)
+_TIPOS_PARA_AUDITORIA = (_TIPO_HORAS_EXTRAS,)
+# Holerite não entra na auditoria de "não configurado": desde o ADENDO
+# DE CONTINUIDADE, sua obrigatoriedade nunca passa por
+# `ConfiguracaoCondicionalCliente` -- é universal, avaliada à parte por
+# cardinalidade (ver docstring do módulo).
 
-# Cadastro do E2E: base REAL V2 (comprovada) + 2 condicionais SINTÉTICOS
-# (só os clientes são sintéticos -- base e mecanismo são os reais).
+# Cadastro do E2E: base REAL V2 (comprovada) + 1 condicional SINTÉTICO
+# (só o cliente é sintético -- base e mecanismo são os reais). Holerite
+# nunca é um `ConfiguracaoCondicionalCliente` (não é mais o mecanismo
+# usado para ele, ver docstring do módulo).
 _CADASTRO_E2E = CadastroRequisitosPrestacao(
     versao='e2e-ciclo-piloto', requisitos_base=CADASTRO_REQUISITOS_PRESTACAO_V2.requisitos_base,
     condicionais=(
-        ConfiguracaoCondicionalCliente(
-            _CLIENTE_HOLERITE_CONFIGURADO.entidade_id, HOLERITE_TIPO_DOCUMENTAL,
-            EstadoConfiguracaoRequisito.CONFIGURADO_EXIGE,
-            evidencia='configuracao sintetica de teste -- cliente confirmado a exigir Holerite',
-        ),
         ConfiguracaoCondicionalCliente(
             _CLIENTE_BENEFICIO_CONDICIONAL.entidade_id, _TIPO_HORAS_EXTRAS,
             EstadoConfiguracaoRequisito.CONFIGURADO_EXIGE,
@@ -128,12 +137,16 @@ class _FonteClientesFake:
 
 
 class _FonteColaboradoresEsperadosFake:
-    """Só relevante para o cliente CONFIGURADO_EXIGE em Holerite -- para
-    qualquer outro cliente, `executar_ciclo_prestacao` nem chega a
-    consultar esta fonte (Holerite não configurado = nunca avaliado)."""
+    """Holerite é universal (avaliado por cardinalidade sempre que esta
+    fonte está disponível, ADENDO DE CONTINUIDADE) -- para manter o
+    teste focado, só `_CLIENTE_HOLERITE_INCOMPLETO` tem colaboradores
+    esperados de fato; para os demais, a fonte devolve `()` (vacuamente
+    satisfeito, sem impacto algum no pacote)."""
 
     def colaboradores_esperados_para(self, cliente, contexto):
-        return (_COLAB_A, _COLAB_B, _COLAB_C)
+        if cliente == _CLIENTE_HOLERITE_INCOMPLETO:
+            return (_COLAB_A, _COLAB_B, _COLAB_C)
+        return ()
 
 
 class _FonteInventarioMemoria:
@@ -273,10 +286,10 @@ def test_ciclo_piloto_readonly_e2e_com_cadastro_v2():
         ('fgts-holerite-cfg', 'FGTS Digital\nGuia do FGTS\nTotal FGTS'),
         ('guia-dctf-darf-holerite-cfg', 'Guia de Recolhimento DCTFWeb'),
     ):
-        _, item = _item_textual(doc_id, texto, _CLIENTE_HOLERITE_CONFIGURADO)
+        _, item = _item_textual(doc_id, texto, _CLIENTE_HOLERITE_INCOMPLETO)
         fonte_inventario.adicionar(item)
-    fonte_inventario.adicionar(_item_holerite_colaborador('holerite-a', _CLIENTE_HOLERITE_CONFIGURADO, _COLAB_A))
-    fonte_inventario.adicionar(_item_holerite_colaborador('holerite-b', _CLIENTE_HOLERITE_CONFIGURADO, _COLAB_B))
+    fonte_inventario.adicionar(_item_holerite_colaborador('holerite-a', _CLIENTE_HOLERITE_INCOMPLETO, _COLAB_A))
+    fonte_inventario.adicionar(_item_holerite_colaborador('holerite-b', _CLIENTE_HOLERITE_INCOMPLETO, _COLAB_B))
     # _COLAB_C nunca recebe Holerite -- de propósito, prova a lacuna.
 
     # ---- Cliente GUIA_AUSENTE_HOLERITE_NC: tudo OK, SEM Guia DCTFWeb/DARF, SEM Holerite ----
@@ -284,7 +297,7 @@ def test_ciclo_piloto_readonly_e2e_com_cadastro_v2():
         ('extrato-guia-ausente', 'Extrato Mensal\nExtrato da Folha de Pagamento'),
         ('fgts-guia-ausente', 'FGTS Digital\nGuia do FGTS\nTotal FGTS'),
     ):
-        _, item = _item_textual(doc_id, texto, _CLIENTE_GUIA_AUSENTE_HOLERITE_NC)
+        _, item = _item_textual(doc_id, texto, _CLIENTE_GUIA_AUSENTE)
         fonte_inventario.adicionar(item)
 
     # ---- Cliente BENEFICIO_CONDICIONAL: base completa + Horas Extras presente ----
@@ -304,7 +317,7 @@ def test_ciclo_piloto_readonly_e2e_com_cadastro_v2():
     # ---- Broadcast DCTFWeb Declaração + Recibo para os 4 clientes normais ----
     resolucao_tipo_dctf_decl = _resolucao_tipo_textual('Comprovante emitido pelo sistema DCTFWeb da empresa')
     resolucao_tipo_dctf_recibo = _resolucao_tipo_textual('Recibo de Entrega da DCTFWeb referente à competência')
-    clientes_normais = (_CLIENTE_COMUM, _CLIENTE_HOLERITE_CONFIGURADO, _CLIENTE_GUIA_AUSENTE_HOLERITE_NC, _CLIENTE_BENEFICIO_CONDICIONAL)
+    clientes_normais = (_CLIENTE_COMUM, _CLIENTE_HOLERITE_INCOMPLETO, _CLIENTE_GUIA_AUSENTE, _CLIENTE_BENEFICIO_CONDICIONAL)
     for doc_id, resolucao_tipo in (('dctf-declaracao-global', resolucao_tipo_dctf_decl), ('dctf-recibo-global', resolucao_tipo_dctf_recibo)):
         resultado_broadcast = _compor(
             _perfil_documento_broadcast(),
@@ -351,11 +364,11 @@ def test_ciclo_piloto_readonly_e2e_com_cadastro_v2():
     resolucoes_ancora = {
         _CLIENTE_COMUM: _resultado_documento_cliente(
             'ancora-comum', _CLIENTE_COMUM, (2026, 7), _resolucao_tipo_textual('FGTS Digital\nGuia do FGTS\nTotal FGTS')),
-        _CLIENTE_HOLERITE_CONFIGURADO: _resultado_documento_cliente(
-            'ancora-holerite-cfg', _CLIENTE_HOLERITE_CONFIGURADO, (2026, 7),
+        _CLIENTE_HOLERITE_INCOMPLETO: _resultado_documento_cliente(
+            'ancora-holerite-cfg', _CLIENTE_HOLERITE_INCOMPLETO, (2026, 7),
             _resolucao_tipo_textual('FGTS Digital\nGuia do FGTS\nTotal FGTS')),
-        _CLIENTE_GUIA_AUSENTE_HOLERITE_NC: _resultado_documento_cliente(
-            'ancora-guia-ausente', _CLIENTE_GUIA_AUSENTE_HOLERITE_NC, (2026, 7),
+        _CLIENTE_GUIA_AUSENTE: _resultado_documento_cliente(
+            'ancora-guia-ausente', _CLIENTE_GUIA_AUSENTE, (2026, 7),
             _resolucao_tipo_textual('FGTS Digital\nGuia do FGTS\nTotal FGTS')),
         _CLIENTE_BENEFICIO_CONDICIONAL: _resultado_documento_cliente(
             'ancora-beneficio', _CLIENTE_BENEFICIO_CONDICIONAL, (2026, 7),
@@ -363,8 +376,8 @@ def test_ciclo_piloto_readonly_e2e_com_cadastro_v2():
         _SKY: resultado_fgts_sky,
     }
     competencias_por_cliente = {
-        _CLIENTE_COMUM: _COMPETENCIA_BASE, _CLIENTE_HOLERITE_CONFIGURADO: _COMPETENCIA_BASE,
-        _CLIENTE_GUIA_AUSENTE_HOLERITE_NC: _COMPETENCIA_BASE, _CLIENTE_BENEFICIO_CONDICIONAL: _COMPETENCIA_BASE,
+        _CLIENTE_COMUM: _COMPETENCIA_BASE, _CLIENTE_HOLERITE_INCOMPLETO: _COMPETENCIA_BASE,
+        _CLIENTE_GUIA_AUSENTE: _COMPETENCIA_BASE, _CLIENTE_BENEFICIO_CONDICIONAL: _COMPETENCIA_BASE,
         _SKY: _COMPETENCIA_SKY,
     }
 
@@ -380,32 +393,31 @@ def test_ciclo_piloto_readonly_e2e_com_cadastro_v2():
     assert all(isinstance(linha, LinhaDryRunCicloPiloto) for linha in linhas)
     por_cliente = {linha.cliente_id: linha for linha in linhas}
 
-    # ---- Cliente comum: PRONTO, Holerite e Horas Extras NAO_CONFIGURADO ----
+    # ---- Cliente comum: PRONTO (zero colaboradores esperados -> Holerite vacuamente OK); Horas Extras NAO_CONFIGURADO ----
     comum = por_cliente[_CLIENTE_COMUM.entidade_id]
     assert comum.estado == EstadoPacotePrestacao.PRONTO.value
     assert comum.faltantes == ()
-    assert set(comum.nao_configurados) == {HOLERITE_TIPO_DOCUMENTAL, _TIPO_HORAS_EXTRAS}
+    assert set(comum.nao_configurados) == {_TIPO_HORAS_EXTRAS}
     assert not comum.em_revisao
 
-    # ---- Cliente Holerite configurado: INCOMPLETO por cardinalidade ----
-    holerite_cfg = por_cliente[_CLIENTE_HOLERITE_CONFIGURADO.entidade_id]
-    assert holerite_cfg.estado == EstadoPacotePrestacao.INCOMPLETO.value
-    assert HOLERITE_TIPO_DOCUMENTAL in holerite_cfg.faltantes
-    assert HOLERITE_TIPO_DOCUMENTAL not in holerite_cfg.nao_configurados  # foi configurado, nunca "nao configurado"
+    # ---- Cliente Holerite incompleto: INCOMPLETO por cardinalidade (universal, nunca gateado por configuração) ----
+    holerite_incompleto = por_cliente[_CLIENTE_HOLERITE_INCOMPLETO.entidade_id]
+    assert holerite_incompleto.estado == EstadoPacotePrestacao.INCOMPLETO.value
+    assert HOLERITE_TIPO_DOCUMENTAL in holerite_incompleto.faltantes
+    assert HOLERITE_TIPO_DOCUMENTAL not in holerite_incompleto.nao_configurados  # nunca via cadastro condicional
 
-    # ---- Cliente Guia ausente: INCOMPLETO SÓ por Guia DCTFWeb/DARF; Holerite continua NAO_CONFIGURADO ----
-    guia_ausente = por_cliente[_CLIENTE_GUIA_AUSENTE_HOLERITE_NC.entidade_id]
+    # ---- Cliente Guia ausente: INCOMPLETO SÓ por Guia DCTFWeb/DARF; Holerite vacuamente OK (zero esperados) ----
+    guia_ausente = por_cliente[_CLIENTE_GUIA_AUSENTE.entidade_id]
     assert guia_ausente.estado == EstadoPacotePrestacao.INCOMPLETO.value
     assert guia_ausente.faltantes == ('Guia DCTFWeb/DARF',)
     assert HOLERITE_TIPO_DOCUMENTAL not in guia_ausente.faltantes
-    assert HOLERITE_TIPO_DOCUMENTAL in guia_ausente.nao_configurados
-    assert not (set(guia_ausente.faltantes) & set(guia_ausente.nao_configurados))
+    assert HOLERITE_TIPO_DOCUMENTAL not in guia_ausente.nao_configurados  # Holerite nunca aparece via este mecanismo
 
     # ---- Cliente benefício condicional: PRONTO, Horas Extras NUNCA "nao configurado" ----
     beneficio = por_cliente[_CLIENTE_BENEFICIO_CONDICIONAL.entidade_id]
     assert beneficio.estado == EstadoPacotePrestacao.PRONTO.value
     assert _TIPO_HORAS_EXTRAS not in beneficio.nao_configurados
-    assert HOLERITE_TIPO_DOCUMENTAL in beneficio.nao_configurados  # Holerite nunca foi configurado para este cliente
+    assert HOLERITE_TIPO_DOCUMENTAL not in beneficio.nao_configurados  # Holerite nunca passa pelo cadastro condicional
 
     # ---- SKY: competência efetiva deslocada, PRONTO ----
     sky = por_cliente[_SKY.entidade_id]
