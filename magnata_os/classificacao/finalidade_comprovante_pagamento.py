@@ -42,6 +42,7 @@ FINALIDADE_DCTF_DARF = 'Comprovante de Pagamento - DCTF/DARF'
 FINALIDADE_VR_VA = 'Comprovante de Pagamento - VR/VA'
 FINALIDADE_ASSIDUIDADE = 'Comprovante de Pagamento - Assiduidade'
 FINALIDADE_DIARIAS = 'Comprovante de Pagamento - Diárias'
+FINALIDADE_HORAS_EXTRAS = 'Comprovante de Pagamento - Horas Extras'
 
 
 class SinalFinalidadePagamento(str, enum.Enum):
@@ -52,6 +53,13 @@ class SinalFinalidadePagamento(str, enum.Enum):
     DESCRICAO_VR_VA = 'DESCRICAO_VR_VA'
     DESCRICAO_ASSIDUIDADE = 'DESCRICAO_ASSIDUIDADE'
     DESCRICAO_DIARIAS = 'DESCRICAO_DIARIAS'
+    DESCRICAO_HORAS_EXTRAS = 'DESCRICAO_HORAS_EXTRAS'
+    # Fase 2E.3 (Fase F): abreviação isolada ("VR"/"VA" fora de uma
+    # frase característica) -- SEMPRE FRACA, estruturalmente, nunca
+    # decide sozinha ("'VR' na descrição sozinho -> FRACA"). Reforça
+    # (nunca substitui) uma finalidade já sustentada por descrição
+    # específica -- mesmo papel que ESTRUTURA_BANCARIA já tem.
+    ABREVIACAO_VR_VA = 'ABREVIACAO_VR_VA'
 
 
 _FORCA_POR_SINAL = {
@@ -62,6 +70,8 @@ _FORCA_POR_SINAL = {
     SinalFinalidadePagamento.DESCRICAO_VR_VA: NivelConfianca.MODERADA,
     SinalFinalidadePagamento.DESCRICAO_ASSIDUIDADE: NivelConfianca.MODERADA,
     SinalFinalidadePagamento.DESCRICAO_DIARIAS: NivelConfianca.MODERADA,
+    SinalFinalidadePagamento.DESCRICAO_HORAS_EXTRAS: NivelConfianca.MODERADA,
+    SinalFinalidadePagamento.ABREVIACAO_VR_VA: NivelConfianca.FRACA,
 }
 
 
@@ -118,11 +128,23 @@ _PADROES_DESCRICAO: Tuple[Tuple[str, SinalFinalidadePagamento, re.Pattern], ...]
      re.compile(r'pr[eê]mio\s+de\s+assiduidade', re.IGNORECASE)),
     (FINALIDADE_DIARIAS, SinalFinalidadePagamento.DESCRICAO_DIARIAS,
      re.compile(r'pagamento\s+de\s+di[aá]rias', re.IGNORECASE)),
+    (FINALIDADE_HORAS_EXTRAS, SinalFinalidadePagamento.DESCRICAO_HORAS_EXTRAS,
+     re.compile(r'pagamento\s+de\s+horas\s+extras|recibo\s+de\s+horas\s+extras', re.IGNORECASE)),
 )
 
 _PADRAO_ESTRUTURA_BANCARIA = re.compile(
     r'comprovante\s+de\s+(?:transfer[eê]ncia|pagamento)|\bted\b|\bpix\b', re.IGNORECASE,
 )
+
+# Abreviação isolada -- nunca decide sozinha (ver SinalFinalidadePagamento.
+# ABREVIACAO_VR_VA, sempre FRACA). Emitida independentemente da frase
+# completa (_PADROES_DESCRICAO acima): sozinha, o resolvedor geral já
+# garante que 1 FRACA isolada -> NAO_ENCONTRADA; só quando reforçada por
+# OUTRO sinal (estrutura bancária, ou a própria frase completa) a força
+# combinada sobe (2+ FRACA -> MODERADA, regra já existente e não
+# duplicada aqui -- Fase F: "VR isolado -> fraca; + estrutura bancária
+# + referência -> pode aumentar confiança").
+_PADRAO_ABREVIACAO_VR_VA = re.compile(r'\bVR\b|\bVA\b')
 
 
 def sinais_textuais_de_finalidade_pagamento(texto: str) -> Tuple[OcorrenciaSinalFinalidade, ...]:
@@ -141,6 +163,20 @@ def sinais_textuais_de_finalidade_pagamento(texto: str) -> Tuple[OcorrenciaSinal
                 sinal=sinal, finalidade_sugerida=finalidade, referencia=padrao.pattern,
             ))
             finalidades_encontradas.add(finalidade)
+
+    if _PADRAO_ABREVIACAO_VR_VA.search(texto):
+        # Sempre FRACA, sempre emitida (mesmo sem a frase completa) --
+        # nunca decide sozinha; combinada com outro sinal fraco (ex.:
+        # estrutura bancária) reforça para MODERADA (Fase F: "VR
+        # isolado -> fraca; + estrutura bancária + referência -> pode
+        # aumentar confiança" -- regra de combinação já existente em
+        # resolver_tipo_documental, não duplicada aqui).
+        ocorrencias.append(OcorrenciaSinalFinalidade(
+            sinal=SinalFinalidadePagamento.ABREVIACAO_VR_VA,
+            finalidade_sugerida=FINALIDADE_VR_VA,
+            referencia='abreviacao_vr_va_isolada',
+        ))
+        finalidades_encontradas.add(FINALIDADE_VR_VA)
 
     if _PADRAO_ESTRUTURA_BANCARIA.search(texto):
         for finalidade in finalidades_encontradas:

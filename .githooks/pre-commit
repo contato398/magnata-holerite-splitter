@@ -296,6 +296,13 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_magnata_os_classificacao_finalidade_comprovante_pagamento.py"
   "test_magnata_os_documental_modulo01_decisao_pos_classificacao.py"
   "test_capacidades_transversais_fila_heterogenea.py"
+  # Excecao exata e restrita (fechamento amplo da cobertura documental,
+  # branch fix/fechamento-cobertura-documental-fase2e3). Mantem test_*
+  # bloqueado por padrao e libera somente estes 4 testes nominais novos.
+  "test_magnata_os_classificacao_produtores_evidencia_fiscal_ponto_temporal.py"
+  "test_magnata_os_classificacao_perfis_aplicabilidade_por_familia.py"
+  "test_corredor_extrato_mensal_pos_separacao.py"
+  "test_fechamento_cobertura_documental_fila_heterogenea.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
