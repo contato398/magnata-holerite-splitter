@@ -711,6 +711,29 @@ ALLOWED_PATHS=(
   "^test_ciclo_prestacao_multicliente_e2e\.py$"
   "^test_magnata_os_classificacao_ciclo_prestacao\.py$"
   "^docs/decisoes/politica-operacional-prestacao-v1\.md$"
+  # Excecao exata e restrita (cadastro canonico real de requisitos da
+  # prestacao, branch fix/cadastro-canonico-requisitos-prestacao-v1) —
+  # cadastro declarativo versionado (base = intersecao comprovada de 2
+  # fontes canonicas, zero clientes condicionais inventados),
+  # reconciliacao fiscal<->finalidade, prova de vinculo de beneficio
+  # (reaproveita FonteVinculosPrestacao existente, nenhuma peca nova).
+  # Nao libera "^magnata_os/classificacao/" nem "^test_" de forma ampla.
+  "^magnata_os/classificacao/cadastro_requisitos_prestacao\.py$"
+  "^test_magnata_os_classificacao_cadastro_requisitos_prestacao\.py$"
+  "^test_magnata_os_classificacao_reconciliacao_fiscal_finalidade\.py$"
+  "^test_magnata_os_classificacao_vinculo_beneficio_prestacao\.py$"
+  "^test_ciclo_prestacao_cadastro_canonico_e2e\.py$"
+  "^docs/decisoes/cadastro-canonico-requisitos-prestacao-v1\.md$"
+  # Excecao exata e restrita (Adendo de Regra de Negocio -- Holerite,
+  # mesma branch fix/cadastro-canonico-requisitos-prestacao-v1) —
+  # Holerite promovido a base universal com granularidade colaborador
+  # (cardinalidade, nunca contagem plana), fonte de colaboradores
+  # esperados (Protocol) e avaliacao pura de obrigatoriedade, ambos
+  # aditivos e retrocompativeis. Nao libera "^magnata_os/classificacao/"
+  # nem "^test_" de forma ampla.
+  "^magnata_os/classificacao/fonte_colaboradores_esperados_prestacao\.py$"
+  "^magnata_os/classificacao/holerite_obrigatorio_prestacao\.py$"
+  "^test_magnata_os_classificacao_holerite_obrigatorio_prestacao\.py$"
 )
 
 # ============================================================================

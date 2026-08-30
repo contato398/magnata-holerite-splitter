@@ -79,7 +79,13 @@ def resultado_semantico_para_item_inventario(
     sendo gerado — nunca descoberto/inventado por este módulo (ver
     `itens_para_clientes_broadcast` para múltiplos clientes de uma vez,
     sempre preservando o MESMO `documento_id` — identidade documental
-    única, nunca duplicada fisicamente)."""
+    única, nunca duplicada fisicamente).
+
+    Quando a dimensão COLABORADOR está RESOLVIDA (Holerite, Folha de
+    Ponto etc.), o item carrega essa identidade SANITIZADA (`Referencia
+    Canonica('COLABORADOR', id)`, nunca CPF/nome) — usado pela
+    obrigatoriedade por cardinalidade do Holerite (Adendo de Regra de
+    Negócio, `holerite_obrigatorio_prestacao.py`)."""
     tipo = _valor_unico_resolvido(resolucao, DimensaoResolucao.TIPO_DOCUMENTAL)
     if tipo is None:
         return None
@@ -101,12 +107,49 @@ def resultado_semantico_para_item_inventario(
         if cliente is None:
             return None
 
+    colaborador = _valor_unico_resolvido(resolucao, DimensaoResolucao.COLABORADOR)
+
     return ItemInventarioPrestacao(
         documento_id=documento_id,
         tipo_documental=tipo.entidade_id,
         cliente=cliente,
         competencia=competencia,
+        colaborador=colaborador,
     )
+
+
+def itens_para_multiplos_clientes_do_vinculo(
+    documento_id: str,
+    resolucao: ResultadoResolucaoSemantico,
+) -> Tuple[ItemInventarioPrestacao, ...]:
+    """Adendo de Regra de Negócio (Holerite), ponto 5/12: quando a
+    dimensão CLIENTE resolveu RESOLVIDA com 2+ valores confirmados —
+    um colaborador genuinamente vinculado a mais de um cliente na
+    competência, resolvido pelo MESMO `FonteVinculosPrestacao` já
+    existente (nunca inferido aqui, nunca filename) — gera 1 item por
+    cliente, MESMO `documento_id`/`colaborador` em todos (identidade
+    documental única, nunca duplicada fisicamente). Diferente de
+    `itens_para_clientes_broadcast`: aqui a lista de clientes vem da
+    PRÓPRIA resolução (vínculo real, já apurado), nunca injetada de
+    fora — nunca confundir vínculo múltiplo genuíno com broadcast
+    (documento global sem cliente nenhum resolvido)."""
+    resolucao_cliente = next(
+        (item for item in resolucao.resolucoes if item.dimensao == DimensaoResolucao.CLIENTE), None,
+    )
+    if resolucao_cliente is None or resolucao_cliente.estado != EstadoResolucaoDimensao.RESOLVIDA:
+        return ()
+    itens = []
+    for cliente in resolucao_cliente.valores_confirmados:
+        tipo = _valor_unico_resolvido(resolucao, DimensaoResolucao.TIPO_DOCUMENTAL)
+        competencia = _valor_unico_resolvido(resolucao, DimensaoResolucao.COMPETENCIA)
+        if tipo is None or competencia is None:
+            return ()
+        colaborador = _valor_unico_resolvido(resolucao, DimensaoResolucao.COLABORADOR)
+        itens.append(ItemInventarioPrestacao(
+            documento_id=documento_id, tipo_documental=tipo.entidade_id,
+            cliente=cliente, competencia=competencia, colaborador=colaborador,
+        ))
+    return tuple(itens)
 
 
 def itens_para_clientes_broadcast(

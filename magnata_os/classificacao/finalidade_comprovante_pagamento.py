@@ -60,6 +60,15 @@ class SinalFinalidadePagamento(str, enum.Enum):
     # (nunca substitui) uma finalidade já sustentada por descrição
     # específica -- mesmo papel que ESTRUTURA_BANCARIA já tem.
     ABREVIACAO_VR_VA = 'ABREVIACAO_VR_VA'
+    # Fase 2E.4 (missão "CADASTRO CANÔNICO REAL DE REQUISITOS DA
+    # PRESTAÇÃO", Fase 10 -- fecha o gap fiscal↔finalidade registrado
+    # nos PRs #96/#97): sinal estrutural FISCAL (código de receita,
+    # linha digitável, identificador de obrigação --
+    # `produtores_evidencia_fiscal.py`) coerente com uma finalidade JÁ
+    # identificada por descrição -- SEMPRE FRACA, nunca decide sozinho,
+    # nunca infere qual finalidade sem a descrição já ter identificado
+    # uma (ver `reconciliar_evidencia_fiscal_com_finalidade`).
+    REFORCO_FISCAL_ESTRUTURAL = 'REFORCO_FISCAL_ESTRUTURAL'
 
 
 _FORCA_POR_SINAL = {
@@ -72,6 +81,7 @@ _FORCA_POR_SINAL = {
     SinalFinalidadePagamento.DESCRICAO_DIARIAS: NivelConfianca.MODERADA,
     SinalFinalidadePagamento.DESCRICAO_HORAS_EXTRAS: NivelConfianca.MODERADA,
     SinalFinalidadePagamento.ABREVIACAO_VR_VA: NivelConfianca.FRACA,
+    SinalFinalidadePagamento.REFORCO_FISCAL_ESTRUTURAL: NivelConfianca.FRACA,
 }
 
 

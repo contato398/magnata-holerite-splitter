@@ -25,15 +25,22 @@ existia isoladamente; este módulo só ORQUESTRA."""
 from __future__ import annotations
 
 import dataclasses
-from typing import Mapping, Tuple
+from typing import Mapping, Optional, Tuple
 
 from .competencia_esperada_prestacao import ContextoCicloPrestacao
 from .contratos import ReferenciaCanonica, ResultadoResolucaoSemantico
 from .fonte_clientes_prestacao import FonteClientesPrestacao
+from .fonte_colaboradores_esperados_prestacao import FonteColaboradoresEsperadosPrestacao
 from .fonte_requisitos_prestacao import FonteRequisitosPrestacao
+from .holerite_obrigatorio_prestacao import TIPO_HOLERITE, avaliar_obrigatoriedade_holerite
 from .inventario_prestacao import FonteInventarioPrestacao
 from .normalizacao_requisitos_prestacao import normalizar_requisitos
-from .pacote_prestacao import EstadoPacotePrestacao, PacotePrestacaoCliente, avaliar_e_montar_pacote
+from .pacote_prestacao import (
+    EstadoPacotePrestacao,
+    PacotePrestacaoCliente,
+    avaliar_e_montar_pacote,
+    combinar_pacote_com_holerite,
+)
 from .politica_requisitos_prestacao import OverrideRequisitosPrestacao, PoliticaRequisitosPrestacao
 from .prestacao_readiness import RequisitoDocumentalPrestacao
 
@@ -50,12 +57,19 @@ class NecessidadeDocumentoPrestacao:
     tipo_documental: str
     motivo_exigencia: str
     fontes_ainda_nao_consultadas: Tuple[str, ...] = ()
+    colaborador: Optional[ReferenciaCanonica] = None
+    """Adendo de Regra de Negócio (Holerite): identidade SANITIZADA
+    (`ReferenciaCanonica('COLABORADOR', id)`, nunca CPF/nome) do
+    colaborador cujo Holerite está faltando -- `None` para necessidades
+    de tipos sem granularidade colaborador (FGTS, Extrato, DCTFWeb)."""
 
     def __post_init__(self) -> None:
         if not self.tipo_documental.strip():
             raise ValueError('tipo_documental deve ser texto nao vazio')
         if not self.motivo_exigencia.strip():
             raise ValueError('motivo_exigencia deve ser texto nao vazio')
+        if self.colaborador is not None and self.colaborador.tipo_entidade != 'COLABORADOR':
+            raise ValueError('colaborador deve ser referencia canonica de COLABORADOR')
 
 
 @dataclasses.dataclass(frozen=True)
@@ -64,6 +78,13 @@ class ResultadoClientePrestacao:
     competencia: ReferenciaCanonica
     pacote: PacotePrestacaoCliente
     necessidades: Tuple[NecessidadeDocumentoPrestacao, ...] = ()
+    requisitos_nao_configurados: Tuple[str, ...] = ()
+    """Fase 13 (missão "CADASTRO CANÔNICO REAL DE REQUISITOS DA
+    PRESTAÇÃO"): tipos que existem no universo canônico mas NÃO têm
+    regra de obrigatoriedade configurada para este cliente -- NUNCA
+    aparecem em `pacote.tipos_faltantes` (documento faltando é uma
+    coisa; regra ainda não configurada é outra, cláusula pétrea desta
+    missão: "não permitir que ambos apareçam como tipos_faltantes")."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -131,6 +152,8 @@ def executar_ciclo_prestacao(
     requisitos_base: Tuple[RequisitoDocumentalPrestacao, ...],
     resolucoes_ancora: Mapping[ReferenciaCanonica, ResultadoResolucaoSemantico],
     competencias_por_cliente: Mapping[ReferenciaCanonica, ReferenciaCanonica],
+    tipos_condicionais_para_auditoria: Tuple[str, ...] = (),
+    fonte_colaboradores_esperados: Optional[FonteColaboradoresEsperadosPrestacao] = None,
 ) -> ResultadoCicloPrestacao:
     """Executa 1 ciclo, ponta-a-ponta, sem efeito colateral.
 
@@ -141,7 +164,20 @@ def executar_ciclo_prestacao(
     `competencias_por_cliente`: competência EFETIVA já resolvida por
     cliente (via `PoliticaCompetenciaPrestacao`, ex.: SKY = base - 1
     mês) -- calculada fora deste módulo, na borda, nunca aqui (cláusula
-    pétrea Fase 9: "competência entra uma vez na borda")."""
+    pétrea Fase 9: "competência entra uma vez na borda").
+    `tipos_condicionais_para_auditoria`: tipos "de interesse" (ex.:
+    `REQUISITOS_DIVERGENTES_ENTRE_FONTES`) cujo estado de configuração
+    (Fase 13) é reportado por cliente em `ResultadoClientePrestacao.
+    requisitos_nao_configurados` -- só populado quando `fonte_requisitos`
+    implementa `requisitos_nao_configurados_para` (extensão OPCIONAL,
+    duck-typed, nunca parte obrigatória do Protocol `FonteRequisitosPrestacao`
+    do PR #98 -- uma fonte sem essa extensão simplesmente não relata
+    esta informação, nunca quebra).
+    `fonte_colaboradores_esperados`: quando informada, Holerite é
+    avaliado por CARDINALIDADE colaborador (Adendo de Regra de Negócio
+    -- Holerite), nunca só pela presença agregada do tipo no
+    inventário -- `None` (default) preserva o comportamento anterior
+    (Holerite avaliado só pela contagem plana, se estiver na base)."""
     resultados = []
     for cliente in fonte_clientes.listar_ativos(contexto):
         competencia = competencias_por_cliente.get(cliente)
@@ -157,16 +193,51 @@ def executar_ciclo_prestacao(
             cliente, contexto, requisitos_base, fonte_requisitos)
         pacote = avaliar_e_montar_pacote(cliente, competencia, resolucao_ancora, fonte_inventario, politica)
 
+        resultado_holerite = None
+        if fonte_colaboradores_esperados is not None:
+            colaboradores_esperados = fonte_colaboradores_esperados.colaboradores_esperados_para(cliente, contexto)
+            resultado_holerite = avaliar_obrigatoriedade_holerite(
+                cliente, competencia, colaboradores_esperados, pacote.itens_incluidos)
+            pacote = combinar_pacote_com_holerite(pacote, resultado_holerite)
+
+        # TIPO_HOLERITE só ganha tratamento por-colaborador quando a
+        # fonte de colaboradores esperados foi informada -- sem ela,
+        # preserva o comportamento anterior (contagem plana, se
+        # 'Holerite' estiver na base efetiva) para retrocompatibilidade.
+        tipos_para_necessidade_generica = (
+            tuple(tipo for tipo in pacote.tipos_faltantes if tipo != TIPO_HOLERITE)
+            if fonte_colaboradores_esperados is not None
+            else pacote.tipos_faltantes
+        )
         necessidades = tuple(
             NecessidadeDocumentoPrestacao(
                 cliente=cliente, competencia=competencia, tipo_documental=tipo,
                 motivo_exigencia='requisito_documental_da_politica_efetiva',
                 fontes_ainda_nao_consultadas=('gmail', 'airtable', 'armazenamento_documental'),
             )
-            for tipo in pacote.tipos_faltantes
+            for tipo in tipos_para_necessidade_generica
         )
+        if resultado_holerite is not None and resultado_holerite.colaboradores_faltantes:
+            necessidades = necessidades + tuple(
+                NecessidadeDocumentoPrestacao(
+                    cliente=cliente, competencia=competencia, tipo_documental=TIPO_HOLERITE,
+                    motivo_exigencia='holerite_obrigatorio_por_colaborador_esperado',
+                    fontes_ainda_nao_consultadas=('gmail', 'airtable', 'armazenamento_documental'),
+                    colaborador=colaborador_faltante,
+                )
+                for colaborador_faltante in resultado_holerite.colaboradores_faltantes
+            )
+
+        requisitos_nao_configurados = ()
+        if tipos_condicionais_para_auditoria:
+            obter_nao_configurados = getattr(fonte_requisitos, 'requisitos_nao_configurados_para', None)
+            if obter_nao_configurados is not None:
+                requisitos_nao_configurados = obter_nao_configurados(
+                    cliente, contexto, tipos_condicionais_para_auditoria)
+
         resultados.append(ResultadoClientePrestacao(
             cliente=cliente, competencia=competencia, pacote=pacote, necessidades=necessidades,
+            requisitos_nao_configurados=requisitos_nao_configurados,
         ))
 
     return ResultadoCicloPrestacao(contexto=contexto, resultados_por_cliente=tuple(resultados))
