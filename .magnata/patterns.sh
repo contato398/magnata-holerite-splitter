@@ -758,6 +758,21 @@ ALLOWED_PATHS=(
   # Clientes (campo Status real, confirmado por leitura live) e ADR da
   # validacao. Nao libera nenhum caminho de forma ampla.
   "^docs/decisoes/piloto-real-prestacao-readonly-v1\.md$"
+  # Excecao exata e restrita (inventario documental real da prestacao +
+  # preparacao do primeiro piloto completo SKY, branch
+  # fix/inventario-real-prestacao-v1) — fonte composta de inventario
+  # (agrega fontes existentes, nunca pipeline separado por familia),
+  # adapter read-only de Holerites (reaproveita FonteVinculosPrestacao
+  # ja existente), piloto SKY completo local com fixtures do schema
+  # real (nunca Airtable live). Nao libera "^magnata_os/classificacao/",
+  # "^magnata_os/documental/importacao_lote/adapters/" nem "^test_" de
+  # forma ampla.
+  "^magnata_os/classificacao/fonte_inventario_composta\.py$"
+  "^magnata_os/documental/importacao_lote/adapters/airtable_holerites_prestacao\.py$"
+  "^test_magnata_os_classificacao_fonte_inventario_composta\.py$"
+  "^test_airtable_holerites_prestacao\.py$"
+  "^test_piloto_sky_inventario_real_local_e2e\.py$"
+  "^docs/decisoes/inventario-real-prestacao-v1\.md$"
 )
 
 # ============================================================================

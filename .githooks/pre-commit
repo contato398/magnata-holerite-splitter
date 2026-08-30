@@ -337,6 +337,13 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # Excecao exata e restrita (ADENDO DE CONTINUIDADE, mesma branch) --
   # adapter read-only de colaboradores esperados por cliente.
   "test_airtable_colaboradores_esperados_prestacao.py"
+  # Excecao exata e restrita (inventario documental real da prestacao +
+  # preparacao do primeiro piloto completo SKY, branch
+  # fix/inventario-real-prestacao-v1). Mantem test_* bloqueado por
+  # padrao e libera somente estes testes nominais novos.
+  "test_magnata_os_classificacao_fonte_inventario_composta.py"
+  "test_airtable_holerites_prestacao.py"
+  "test_piloto_sky_inventario_real_local_e2e.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
