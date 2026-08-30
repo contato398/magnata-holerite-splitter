@@ -694,6 +694,23 @@ ALLOWED_PATHS=(
   "^test_magnata_os_classificacao_pacote_prestacao\.py$"
   "^test_corredor_operacional_prestacao_e2e\.py$"
   "^docs/decisoes/corredor-operacional-prestacao-v1\.md$"
+  # Excecao exata e restrita (politica operacional real de clientes/
+  # requisitos, branch fix/politica-operacional-prestacao-v1) — fontes
+  # canonicas substituiveis de clientes/requisitos, normalizacao pura,
+  # adapter Airtable read-only de clientes (reaproveita
+  # LeitorAirtableSomenteLeitura ja existente, nenhum cliente HTTP
+  # novo), orquestrador de ciclo (so leitura, sem side effects). Nao
+  # libera "^magnata_os/classificacao/" nem "^test_" de forma ampla.
+  "^magnata_os/classificacao/fonte_clientes_prestacao\.py$"
+  "^magnata_os/classificacao/fonte_requisitos_prestacao\.py$"
+  "^magnata_os/classificacao/normalizacao_requisitos_prestacao\.py$"
+  "^magnata_os/classificacao/ciclo_prestacao\.py$"
+  "^magnata_os/documental/importacao_lote/adapters/airtable_clientes_prestacao\.py$"
+  "^test_magnata_os_classificacao_normalizacao_requisitos_prestacao\.py$"
+  "^test_magnata_os_documental_airtable_clientes_prestacao\.py$"
+  "^test_ciclo_prestacao_multicliente_e2e\.py$"
+  "^test_magnata_os_classificacao_ciclo_prestacao\.py$"
+  "^docs/decisoes/politica-operacional-prestacao-v1\.md$"
 )
 
 # ============================================================================
