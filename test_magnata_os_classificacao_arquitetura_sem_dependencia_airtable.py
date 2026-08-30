@@ -1,8 +1,10 @@
 """Teste arquitetural (missão "INTEGRAÇÃO REAL DO CONTEÚDO DOCUMENTAL AO
-MOTOR SEMÂNTICO", Fase 21): nenhum módulo do corredor
-CONTEÚDO->MOTOR->ESTEIRA construído nesta e nas missões anteriores
-importa Airtable -- Airtable é bridge/fonte substituível, nunca cérebro
-nem dependência estrutural do motor (CLAUDE.md §3, "Airtable é
+MOTOR SEMÂNTICO", Fase 21; estendido pela missão "CORREDOR AUTÔNOMO
+PÓS-CLASSIFICAÇÃO V1", Fase 27): nenhum módulo do corredor
+CONTEÚDO->MOTOR->PERFIL->IDENTIFICAÇÃO->VALIDAÇÃO->INVENTÁRIO->
+READINESS->PACOTE construído nesta e nas missões anteriores importa
+Airtable -- Airtable é bridge/fonte substituível, nunca cérebro nem
+dependência estrutural do motor (CLAUDE.md §3, "Airtable é
 legado/adapter temporário").
 
 Verificação por AST (nunca por busca textual solta, que teria falsos
@@ -14,8 +16,12 @@ import inspect
 
 from magnata_os.classificacao import (
     automacao_por_confianca,
+    identificacao_documental,
+    inventario_prestacao_memoria,
+    perfil_aplicabilidade_documental,
     ponte_conteudo_motor_semantico,
     reconciliacao_origem_conteudo,
+    resolucao_documento_prestacao,
 )
 from magnata_os.documental.modulo01 import politica_classificacao_semantica
 
@@ -24,6 +30,10 @@ _MODULOS_DO_CORREDOR_SEMANTICO = (
     reconciliacao_origem_conteudo,
     automacao_por_confianca,
     politica_classificacao_semantica,
+    identificacao_documental,
+    perfil_aplicabilidade_documental,
+    resolucao_documento_prestacao,
+    inventario_prestacao_memoria,
 )
 
 
@@ -61,3 +71,43 @@ def test_politica_classificacao_semantica_aceita_tipo_origem_como_string_generic
     manual, armazenamento) pode preencher o mesmo parâmetro."""
     assinatura = inspect.signature(politica_classificacao_semantica.decidir_transicao_classificacao_semantica)
     assert set(assinatura.parameters) == {'texto', 'tipo_origem', 'competencia_esperada'}
+
+
+def test_resolver_documento_prestacao_so_recebe_fontes_via_protocol_injetado():
+    """Fase 27: `fonte_vinculos` é tipado contra `FonteVinculosPrestacao`
+    (Protocol, `vinculos_prestacao.py`) -- não um cliente Airtable
+    concreto. Provado por substituição: um objeto Python puro qualquer
+    (duck-typed contra o Protocol) resolve o mesmo corredor até
+    RESOLVIDO_E_AVANCOU sem o módulo saber que não é Airtable."""
+    from magnata_os.classificacao.contratos import (
+        DimensaoResolucao,
+        EstadoResolucaoDimensao,
+        ReferenciaCanonica,
+        ResolucaoDimensao,
+    )
+    from magnata_os.classificacao.resolucao_documento_prestacao import (
+        ContextoResolucaoDocumentoPrestacao,
+        EstadoCorredorDocumentoPrestacao,
+        processar_documento_prestacao,
+    )
+    from magnata_os.documental.importacao_lote.contratos import CandidatoFuncionario
+
+    class _FonteVinculosPuroPython:
+        """Nunca importa Airtable, boto3, psycopg2 nem qualquer driver
+        -- só implementa o Protocol via duck typing."""
+
+        def resolver_clientes(self, origem, competencia):
+            return ResolucaoDimensao(
+                dimensao=DimensaoResolucao.CLIENTE, estado=EstadoResolucaoDimensao.RESOLVIDA,
+                valores_confirmados=(ReferenciaCanonica('CLIENTE', 'cli-qualquer'),),
+            )
+
+    contexto = ContextoResolucaoDocumentoPrestacao(
+        documento_id='doc-arquitetura', hash_sha256='a' * 64, competencia_esperada=(2026, 7),
+        candidatos_colaborador=[CandidatoFuncionario(func_id='f1', cpf='11122233344', nome_normalizado='X')],
+        fonte_vinculos=_FonteVinculosPuroPython(),
+    )
+    resultado = processar_documento_prestacao(
+        'Recibo de Pagamento -- Total de Vencimentos\nCompetência: 07/2026\nCPF: 111.222.333-44', contexto,
+    )
+    assert resultado.estado == EstadoCorredorDocumentoPrestacao.RESOLVIDO_E_AVANCOU

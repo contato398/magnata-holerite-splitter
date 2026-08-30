@@ -179,9 +179,13 @@ class TestResolverIdentificacaoHoleriteDeTexto:
         monkeypatch.setattr(
             importacao_dominio, 'resolver_funcionario', _resolver_funcionario_nunca_deveria_ser_chamado,
         )
-        import magnata_os.documental.modulo01.politica_identificacao_holerite as politica_mod
+        # Núcleo movido para `identificacao_documental.py` (missão
+        # "CORREDOR AUTÔNOMO PÓS-CLASSIFICAÇÃO V1", Fase 8: extração
+        # genérica, `politica_identificacao_holerite.py` só delega) --
+        # o import a substituir agora vive lá, não mais neste módulo.
+        import magnata_os.classificacao.identificacao_documental as identificacao_mod
         monkeypatch.setattr(
-            politica_mod, 'resolver_funcionario', _resolver_funcionario_nunca_deveria_ser_chamado,
+            identificacao_mod, 'resolver_funcionario', _resolver_funcionario_nunca_deveria_ser_chamado,
         )
 
         resultado = resolver_identificacao_holerite_de_texto(texto, candidatos)

@@ -817,6 +817,29 @@ ALLOWED_PATHS=(
   "^test_magnata_os_documental_modulo01_politica_classificacao_semantica\.py$"
   "^test_magnata_os_documental_modulo01_corpus_heterogeneo_classificacao_semantica\.py$"
   "^docs/decisoes/integracao-conteudo-motor-semantico-v1\.md$"
+  # Excecao exata e restrita (corredor autonomo pos-classificacao V1,
+  # branch fix/corredor-autonomo-pos-classificacao-v1) — cadastro
+  # declarativo de perfil de aplicabilidade por tipo ja resolvido
+  # (reusa PerfilAplicabilidadeResolucao/RegraAplicabilidadeDimensao ja
+  # existentes, nenhum contrato novo), identificacao generica de
+  # colaborador (extraida de politica_identificacao_holerite.py, que
+  # continua existindo e so passa a delegar), orquestrador que compoe
+  # ponte+perfil+identificacao+competencia+vinculo+compor_resolucao_
+  # semantica+adaptador_inventario_prestacao (todos ja existentes,
+  # nenhum duplicado) ate o item de inventario, sink de inventario em
+  # memoria idempotente (referencia local/piloto, nunca Airtable/
+  # Postgres real), corpus E2E de 10 casos (A-J) + metricas. Nao libera
+  # "^magnata_os/classificacao/", "^magnata_os/documental/modulo01/" nem
+  # "^test_" de forma ampla.
+  "^magnata_os/classificacao/identificacao_documental\.py$"
+  "^magnata_os/classificacao/perfil_aplicabilidade_documental\.py$"
+  "^magnata_os/classificacao/resolucao_documento_prestacao\.py$"
+  "^magnata_os/classificacao/inventario_prestacao_memoria\.py$"
+  "^test_magnata_os_classificacao_identificacao_documental\.py$"
+  "^test_magnata_os_classificacao_perfil_aplicabilidade_documental\.py$"
+  "^test_magnata_os_classificacao_resolucao_documento_prestacao\.py$"
+  "^test_magnata_os_classificacao_corpus_corredor_autonomo_pos_classificacao\.py$"
+  "^docs/decisoes/corredor-autonomo-pos-classificacao-v1\.md$"
 )
 
 # ============================================================================
