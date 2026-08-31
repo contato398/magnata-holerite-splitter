@@ -897,6 +897,27 @@ ALLOWED_PATHS=(
   "^test_magnata_os_classificacao_politica_consequencia_relacao_documental\.py$"
   "^test_magnata_os_classificacao_corredor_relacao_documental\.py$"
   "^docs/decisoes/costura-relacao-documental-corredor-v1\.md$"
+  # Excecao exata e restrita (missao "MESCLAR PR #107 + CONSTRUIR OS DOIS
+  # ADAPTERS REAIS QUE BLOQUEIAM A PRIMEIRA VALIDACAO LIVE —
+  # FonteUnidadePostoPrestacao + FonteCandidatosRelacaoDocumental", branch
+  # fix/adapters-reais-unidade-posto-candidatos-relacao-v1) — utilitarios
+  # de link Airtable promovidos (sem duplicacao) de airtable_vinculos_
+  # prestacao.py; adapter real read-only de UNIDADE_POSTO; fonte real de
+  # candidatos de relacao por composicao de 2 Protocols ja auditados
+  # (FonteClientesPrestacao + FonteInventarioPrestacao); testes nominais.
+  # Arquivo ja existente tocado (airtable_vinculos_prestacao.py -- so
+  # delegacao para os utilitarios promovidos, zero mudanca de
+  # comportamento -- e test_magnata_os_classificacao_arquitetura_sem_
+  # dependencia_airtable.py) ja estava no escopo permitido de missoes
+  # anteriores, nao precisa de nova entrada. Nao libera
+  # "^magnata_os/classificacao/", "^magnata_os/documental/importacao_
+  # lote/adapters/" nem "^test_" de forma ampla.
+  "^magnata_os/documental/importacao_lote/adapters/airtable_link_utils\.py$"
+  "^magnata_os/documental/importacao_lote/adapters/airtable_unidade_posto_prestacao\.py$"
+  "^magnata_os/classificacao/fonte_candidatos_relacao_documental_do_inventario\.py$"
+  "^test_airtable_unidade_posto_prestacao\.py$"
+  "^test_magnata_os_classificacao_fonte_candidatos_relacao_documental_do_inventario\.py$"
+  "^docs/decisoes/adapters-reais-unidade-posto-candidatos-relacao-v1\.md$"
 )
 
 # ============================================================================

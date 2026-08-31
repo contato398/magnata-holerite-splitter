@@ -1,0 +1,376 @@
+"""Testes de `fonte_candidatos_relacao_documental_do_inventario.py`
+(missão "MESCLAR PR #107 + CONSTRUIR OS DOIS ADAPTERS REAIS..."；
+corrigido pelo "ADENDO PRÉ-MERGE — PR #108 — ESCOPO HISTÓRICO DE
+CANDIDATOS + AUSÊNCIA EXPLÍCITA DE DADOS DE CORRELAÇÃO"). Casos F-J
+mapeados 1:1 ao §18 do adendo."""
+from magnata_os.classificacao.competencia_esperada_prestacao import ContextoCicloPrestacao
+from magnata_os.classificacao.contratos import ReferenciaCanonica
+from magnata_os.classificacao.fonte_candidatos_relacao_documental_do_inventario import (
+    EscopoClientesAtivosDoCiclo,
+    EscopoClientesFixo,
+    FonteCandidatosRelacaoDocumentalDoInventario,
+    FonteDadosCorrelacaoEmMemoria,
+)
+from magnata_os.classificacao.prestacao_readiness import ItemInventarioPrestacao
+from magnata_os.classificacao.relacao_documental import DadosCorrelacaoDocumental, TipoRelacaoDocumental
+
+_COMPETENCIA = (2026, 6)
+_COMPETENCIA_REF = ReferenciaCanonica('COMPETENCIA', '2026-06')
+_COMPETENCIA_HISTORICA = (2025, 1)
+_COMPETENCIA_HISTORICA_REF = ReferenciaCanonica('COMPETENCIA', '2025-01')
+_CLI_A = ReferenciaCanonica('CLIENTE', 'cli-a')
+_CLI_B = ReferenciaCanonica('CLIENTE', 'cli-b')
+_CLI_INATIVO_HOJE = ReferenciaCanonica('CLIENTE', 'cli-inativo-hoje')
+
+
+class _FonteClientesFake:
+    def __init__(self, clientes):
+        self._clientes = clientes
+
+    def listar_ativos(self, contexto):
+        return self._clientes
+
+
+class _FonteInventarioFake:
+    def __init__(self, itens_por_cliente):
+        self._itens_por_cliente = itens_por_cliente
+
+    def listar(self, cliente, competencia):
+        return tuple(item for item in self._itens_por_cliente.get(cliente, ()) if item.competencia == competencia)
+
+
+def _fonte_com_escopo_fixo(clientes, itens_por_cliente, dados_correlacao=None, competencia_comprovada=_COMPETENCIA_REF):
+    return FonteCandidatosRelacaoDocumentalDoInventario(
+        fonte_escopo_clientes=EscopoClientesFixo(competencia_comprovada, clientes),
+        fonte_inventario=_FonteInventarioFake(itens_por_cliente),
+        fonte_dados_correlacao=dados_correlacao,
+    )
+
+
+# --- Caso F: corrente ativo -> encontra ---
+
+def test_caso_f_cliente_ativo_no_ciclo_corrente_encontra_candidato():
+    item = ItemInventarioPrestacao(
+        documento_id='rel-1', tipo_documental='Relatório de Benefícios', cliente=_CLI_A, competencia=_COMPETENCIA_REF,
+    )
+    fonte_clientes = _FonteClientesFake((_CLI_A,))
+    contexto_ciclo = ContextoCicloPrestacao(_COMPETENCIA)
+    escopo = EscopoClientesAtivosDoCiclo(
+        fonte_clientes, contexto_ciclo, competencia_snapshot_ativos_comprovada=_COMPETENCIA_REF,
+    )
+    fonte = FonteCandidatosRelacaoDocumentalDoInventario(
+        fonte_escopo_clientes=escopo, fonte_inventario=_FonteInventarioFake({_CLI_A: (item,)}),
+    )
+    candidatos = fonte.candidatos_para_relacao(
+        'comp-1', 'Comprovante de Pagamento - VR/VA', 'Relatório de Benefícios', _COMPETENCIA, TipoRelacaoDocumental.COMPROVA,
+    )
+    assert len(candidatos) == 1
+    assert candidatos[0].documento_id == 'rel-1'
+
+
+def test_escopo_ativos_do_ciclo_nunca_usa_ativos_hoje_para_competencia_diferente_da_comprovada():
+    """`EscopoClientesAtivosDoCiclo` só devolve o escopo quando a
+    competência pedida é EXATAMENTE a `competencia_snapshot_ativos_
+    comprovada` -- pedir por outra competência devolve escopo vazio,
+    nunca a lista de ativos hoje disfarçada de histórico."""
+    fonte_clientes = _FonteClientesFake((_CLI_A,))
+    contexto_ciclo = ContextoCicloPrestacao(_COMPETENCIA)
+    escopo = EscopoClientesAtivosDoCiclo(
+        fonte_clientes, contexto_ciclo, competencia_snapshot_ativos_comprovada=_COMPETENCIA_REF,
+    )
+    assert escopo.escopo_para_competencia(_COMPETENCIA_HISTORICA_REF) == ()
+    assert escopo.escopo_para_competencia(_COMPETENCIA_REF) == (_CLI_A,)
+
+
+# --- Segunda correção final pré-merge ao PR #108: EscopoClientesAtivosDoCiclo
+# vinculado a prova temporal explícita, nunca a ContextoCicloPrestacao sozinho ---
+
+def test_segunda_correcao_a_ciclo_processando_junho_sem_prova_nao_devolve_ativos():
+    fonte_clientes = _FonteClientesFake((_CLI_A,))
+    contexto_ciclo = ContextoCicloPrestacao((2026, 6))
+    escopo = EscopoClientesAtivosDoCiclo(fonte_clientes, contexto_ciclo)  # sem prova (default None)
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == ()
+
+
+def test_segunda_correcao_b_ciclo_junho_mais_snapshot_comprovado_junho_devolve_ativos():
+    fonte_clientes = _FonteClientesFake((_CLI_A,))
+    contexto_ciclo = ContextoCicloPrestacao((2026, 6))
+    escopo = EscopoClientesAtivosDoCiclo(
+        fonte_clientes, contexto_ciclo, competencia_snapshot_ativos_comprovada=_COMPETENCIA_JUNHO,
+    )
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == (_CLI_A,)
+
+
+def test_segunda_correcao_c_ciclo_junho_mais_snapshot_comprovado_julho_vazio():
+    fonte_clientes = _FonteClientesFake((_CLI_A,))
+    contexto_ciclo = ContextoCicloPrestacao((2026, 6))
+    escopo = EscopoClientesAtivosDoCiclo(
+        fonte_clientes, contexto_ciclo, competencia_snapshot_ativos_comprovada=_COMPETENCIA_JULHO,
+    )
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == ()
+
+
+def test_segunda_correcao_d_sky_base_julho_documental_junho_snapshot_julho_vazio():
+    """Caso obrigatório SKY: ciclo-base Julho/2026, competência
+    documental Junho/2026 (regra -1, `competencia_esperada_prestacao`).
+    Snapshot de clientes ativos comprovado só para Julho -- consultar
+    Junho (a competência documental real) nunca usa o snapshot de
+    Julho como universo histórico de Junho."""
+    fonte_clientes = _FonteClientesFake((_CLI_A,))
+    contexto_ciclo = ContextoCicloPrestacao((2026, 7))  # ciclo-base SKY
+    escopo = EscopoClientesAtivosDoCiclo(
+        fonte_clientes, contexto_ciclo, competencia_snapshot_ativos_comprovada=_COMPETENCIA_JULHO,
+    )
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == ()
+
+
+def test_segunda_correcao_e_escopo_clientes_fixo_continua_junho_somente():
+    escopo = EscopoClientesFixo(_COMPETENCIA_JUNHO, (_CLI_A,))
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == (_CLI_A,)
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JULHO) == ()
+
+
+def test_segunda_correcao_f_cliente_historico_comprovado_em_junho_continua_encontrado():
+    escopo = EscopoClientesFixo(_COMPETENCIA_JUNHO, (_CLI_INATIVO_HOJE,))
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == (_CLI_INATIVO_HOJE,)
+
+
+def test_segunda_correcao_g_igualdade_com_contexto_ciclo_nunca_autoriza_sozinha():
+    """Mesmo quando a competência pedida é IGUAL à competência do
+    ciclo (`contexto_ciclo.competencia_base`), a ausência de prova
+    temporal explícita (`competencia_snapshot_ativos_comprovada`)
+    nunca é compensada pela coincidência -- `escopo_para_competencia`
+    continua vazio."""
+    fonte_clientes = _FonteClientesFake((_CLI_A,))
+    contexto_ciclo = ContextoCicloPrestacao((2026, 6))
+    escopo = EscopoClientesAtivosDoCiclo(fonte_clientes, contexto_ciclo)  # sem prova
+    assert contexto_ciclo.competencia_base == (2026, 6)  # coincide com a competência pedida abaixo
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == ()
+
+
+def test_segunda_correcao_rejeita_competencia_snapshot_ativos_comprovada_com_tipo_errado():
+    import pytest
+
+    with pytest.raises(ValueError):
+        EscopoClientesAtivosDoCiclo(
+            _FonteClientesFake((_CLI_A,)), ContextoCicloPrestacao((2026, 6)),
+            competencia_snapshot_ativos_comprovada=ReferenciaCanonica('CLIENTE', 'x'),
+        )
+
+
+# --- Adendo final pré-merge ao PR #108: EscopoClientesFixo vinculado à competência comprovada ---
+
+_COMPETENCIA_JUNHO = ReferenciaCanonica('COMPETENCIA', '2026-06')
+_COMPETENCIA_MAIO = ReferenciaCanonica('COMPETENCIA', '2026-05')
+_COMPETENCIA_JULHO = ReferenciaCanonica('COMPETENCIA', '2026-07')
+
+
+def test_adendo_a_escopo_comprovado_para_junho_consulta_junho_devolve_clientes():
+    escopo = EscopoClientesFixo(_COMPETENCIA_JUNHO, (_CLI_A,))
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == (_CLI_A,)
+
+
+def test_adendo_b_escopo_comprovado_para_junho_consulta_maio_vazio():
+    escopo = EscopoClientesFixo(_COMPETENCIA_JUNHO, (_CLI_A,))
+    assert escopo.escopo_para_competencia(_COMPETENCIA_MAIO) == ()
+
+
+def test_adendo_c_escopo_comprovado_para_junho_consulta_julho_vazio():
+    escopo = EscopoClientesFixo(_COMPETENCIA_JUNHO, (_CLI_A,))
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JULHO) == ()
+
+
+def test_adendo_d_cliente_hoje_inativo_mas_comprovado_em_junho_encontrado_em_junho():
+    escopo = EscopoClientesFixo(_COMPETENCIA_JUNHO, (_CLI_INATIVO_HOJE,))
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == (_CLI_INATIVO_HOJE,)
+
+
+def test_adendo_e_mesmo_cliente_nao_reaparece_em_outra_competencia_sem_prova():
+    escopo = EscopoClientesFixo(_COMPETENCIA_JUNHO, (_CLI_INATIVO_HOJE,))
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JULHO) == ()
+    assert escopo.escopo_para_competencia(_COMPETENCIA_MAIO) == ()
+
+
+def test_adendo_f_integracao_candidato_historico_encontrado_somente_na_competencia_comprovada():
+    """Prova de integração: `FonteCandidatosRelacaoDocumentalDoInventario`
+    com um `EscopoClientesFixo` comprovado só para Junho encontra o
+    candidato histórico ao consultar Junho, mas NUNCA ao consultar
+    outra competência -- mesmo que o item exista fisicamente lá, o
+    escopo vazio nunca deixa o inventário sequer ser varrido para
+    aquele cliente."""
+    item_junho = ItemInventarioPrestacao(
+        documento_id='rel-historico', tipo_documental='Relatório de Benefícios',
+        cliente=_CLI_INATIVO_HOJE, competencia=_COMPETENCIA_JUNHO,
+    )
+    fonte = FonteCandidatosRelacaoDocumentalDoInventario(
+        fonte_escopo_clientes=EscopoClientesFixo(_COMPETENCIA_JUNHO, (_CLI_INATIVO_HOJE,)),
+        fonte_inventario=_FonteInventarioFake({_CLI_INATIVO_HOJE: (item_junho,)}),
+    )
+    candidatos_junho = fonte.candidatos_para_relacao(
+        'comp-1', 'Comprovante de Pagamento - VR/VA', 'Relatório de Benefícios', (2026, 6), TipoRelacaoDocumental.COMPROVA,
+    )
+    assert len(candidatos_junho) == 1
+    assert candidatos_junho[0].documento_id == 'rel-historico'
+
+    candidatos_julho = fonte.candidatos_para_relacao(
+        'comp-1', 'Comprovante de Pagamento - VR/VA', 'Relatório de Benefícios', (2026, 7), TipoRelacaoDocumental.COMPROVA,
+    )
+    assert candidatos_julho == ()
+
+
+def test_escopo_clientes_fixo_rejeita_competencia_comprovada_com_tipo_errado():
+    import pytest
+
+    with pytest.raises(ValueError):
+        EscopoClientesFixo(ReferenciaCanonica('CLIENTE', 'x'), (_CLI_A,))
+
+
+# --- Caso G: histórico de cliente hoje inativo -- não pode ser perdido ---
+
+def test_caso_g_cliente_inativo_hoje_mas_presente_no_escopo_historico_nao_e_perdido():
+    """Prova central da correção: o adapter NUNCA decide sozinho quem
+    é "ativo" -- ele só usa o escopo que recebe. Um escopo com
+    proveniência histórica real (`EscopoClientesFixo`) inclui um
+    cliente hoje inativo, e o candidato é encontrado normalmente."""
+    item = ItemInventarioPrestacao(
+        documento_id='rel-historico', tipo_documental='Relatório de Benefícios',
+        cliente=_CLI_INATIVO_HOJE, competencia=_COMPETENCIA_HISTORICA_REF,
+    )
+    fonte = _fonte_com_escopo_fixo(
+        (_CLI_INATIVO_HOJE,), {_CLI_INATIVO_HOJE: (item,)}, competencia_comprovada=_COMPETENCIA_HISTORICA_REF,
+    )
+    candidatos = fonte.candidatos_para_relacao(
+        'comp-1', 'Comprovante de Pagamento - VR/VA', 'Relatório de Benefícios',
+        _COMPETENCIA_HISTORICA, TipoRelacaoDocumental.COMPROVA,
+    )
+    assert len(candidatos) == 1
+    assert candidatos[0].documento_id == 'rel-historico'
+    assert candidatos[0].referencias_logicas == (_CLI_INATIVO_HOJE,)
+
+
+# --- Caso H: sem correlação -- candidato real, relação NAO_ENCONTRADA (via módulo genérico) ---
+
+def test_caso_h_sem_fonte_de_correlacao_candidato_e_real_mas_dados_ficam_vazios():
+    """`fonte_dados_correlacao` nem precisa ser informada -- default
+    `None`, nunca exige um fake in-memory só para representar
+    ausência."""
+    item = ItemInventarioPrestacao(
+        documento_id='rel-1', tipo_documental='Relatório de Benefícios', cliente=_CLI_A, competencia=_COMPETENCIA_REF,
+    )
+    fonte = _fonte_com_escopo_fixo((_CLI_A,), {_CLI_A: (item,)})  # fonte_dados_correlacao nao informada
+    candidatos = fonte.candidatos_para_relacao(
+        'comp-1', 'Comprovante de Pagamento - VR/VA', 'Relatório de Benefícios', _COMPETENCIA, TipoRelacaoDocumental.COMPROVA,
+    )
+    assert len(candidatos) == 1  # identidade real
+    assert candidatos[0].dados_correlacao == DadosCorrelacaoDocumental()  # honestamente vazio, nunca inventado
+
+
+# --- Caso I: com correlação -- relação RESOLVIDA ---
+
+def test_caso_i_com_fonte_de_correlacao_dados_disponiveis():
+    item = ItemInventarioPrestacao(
+        documento_id='rel-1', tipo_documental='Relatório de Benefícios', cliente=_CLI_A, competencia=_COMPETENCIA_REF,
+    )
+    dados_correlacao = FonteDadosCorrelacaoEmMemoria()
+    dados_correlacao.registrar('rel-1', DadosCorrelacaoDocumental(identificador_pedido='PED-1', valor_total='900,00'))
+    fonte = _fonte_com_escopo_fixo((_CLI_A,), {_CLI_A: (item,)}, dados_correlacao=dados_correlacao)
+    candidatos = fonte.candidatos_para_relacao(
+        'comp-1', 'Comprovante de Pagamento - VR/VA', 'Relatório de Benefícios', _COMPETENCIA, TipoRelacaoDocumental.COMPROVA,
+    )
+    assert candidatos[0].dados_correlacao.identificador_pedido == 'PED-1'
+
+
+# --- Caso J: documento multi-cliente -- dedupe correto ---
+
+def test_caso_j_mesmo_documento_em_2_clientes_une_referencias_nunca_duplica_candidato():
+    item_a = ItemInventarioPrestacao(
+        documento_id='rel-multi', tipo_documental='Relatório de Benefícios', cliente=_CLI_A, competencia=_COMPETENCIA_REF,
+    )
+    item_b = ItemInventarioPrestacao(
+        documento_id='rel-multi', tipo_documental='Relatório de Benefícios', cliente=_CLI_B, competencia=_COMPETENCIA_REF,
+    )
+    fonte = _fonte_com_escopo_fixo((_CLI_A, _CLI_B), {_CLI_A: (item_a,), _CLI_B: (item_b,)})
+    candidatos = fonte.candidatos_para_relacao(
+        'comp-1', 'Comprovante de Pagamento - VR/VA', 'Relatório de Benefícios', _COMPETENCIA, TipoRelacaoDocumental.COMPROVA,
+    )
+    assert len(candidatos) == 1
+    assert set(candidatos[0].referencias_logicas) == {_CLI_A, _CLI_B}
+
+
+# --- Casos adicionais preservados ---
+
+def test_descobre_candidato_do_tipo_pedido_ignora_outros_tipos():
+    item_relatorio = ItemInventarioPrestacao(
+        documento_id='rel-1', tipo_documental='Relatório de Benefícios', cliente=_CLI_A, competencia=_COMPETENCIA_REF,
+    )
+    item_holerite = ItemInventarioPrestacao(
+        documento_id='hol-1', tipo_documental='Holerite', cliente=_CLI_A, competencia=_COMPETENCIA_REF,
+    )
+    fonte = _fonte_com_escopo_fixo((_CLI_A,), {_CLI_A: (item_relatorio, item_holerite)})
+    candidatos = fonte.candidatos_para_relacao(
+        'comp-1', 'Comprovante de Pagamento - VR/VA', 'Relatório de Benefícios', _COMPETENCIA, TipoRelacaoDocumental.COMPROVA,
+    )
+    assert len(candidatos) == 1
+    assert candidatos[0].documento_id == 'rel-1'
+    assert candidatos[0].referencias_logicas == (_CLI_A,)
+
+
+def test_nunca_devolve_o_proprio_documento_atual_como_candidato():
+    item = ItemInventarioPrestacao(
+        documento_id='comp-1', tipo_documental='Comprovante de Pagamento - VR/VA', cliente=_CLI_A, competencia=_COMPETENCIA_REF,
+    )
+    fonte = _fonte_com_escopo_fixo((_CLI_A,), {_CLI_A: (item,)})
+    candidatos = fonte.candidatos_para_relacao(
+        'comp-1', 'Comprovante de Pagamento - VR/VA', 'Comprovante de Pagamento - VR/VA', _COMPETENCIA, TipoRelacaoDocumental.COMPROVA,
+    )
+    assert candidatos == ()
+
+
+def test_nenhum_cliente_no_escopo_devolve_vazio():
+    fonte = _fonte_com_escopo_fixo((), {})
+    candidatos = fonte.candidatos_para_relacao(
+        'comp-1', 'Comprovante de Pagamento - VR/VA', 'Relatório de Benefícios', _COMPETENCIA, TipoRelacaoDocumental.COMPROVA,
+    )
+    assert candidatos == ()
+
+
+def test_ordem_deterministica_por_documento_id():
+    item_z = ItemInventarioPrestacao(
+        documento_id='rel-z', tipo_documental='Relatório de Benefícios', cliente=_CLI_A, competencia=_COMPETENCIA_REF,
+    )
+    item_a = ItemInventarioPrestacao(
+        documento_id='rel-a', tipo_documental='Relatório de Benefícios', cliente=_CLI_A, competencia=_COMPETENCIA_REF,
+    )
+    fonte = _fonte_com_escopo_fixo((_CLI_A,), {_CLI_A: (item_z, item_a)})
+    candidatos = fonte.candidatos_para_relacao(
+        'comp-1', 'Comprovante de Pagamento - VR/VA', 'Relatório de Benefícios', _COMPETENCIA, TipoRelacaoDocumental.COMPROVA,
+    )
+    assert [c.documento_id for c in candidatos] == ['rel-a', 'rel-z']
+
+
+def test_integra_com_o_corredor_de_relacao_sem_nenhuma_alteracao():
+    """Prova de integração real: o adapter conecta direto em
+    `corredor_relacao_documental.resolver_relacao_e_avancar` (o mesmo
+    orquestrador já usado com fakes de teste) sem nenhum ajuste --
+    fecha a pendência "adapters reais" registrada no PR #107."""
+    from magnata_os.classificacao.corredor_relacao_documental import (
+        ContextoRelacaoDocumentoPrestacao,
+        resolver_relacao_e_avancar,
+    )
+    from magnata_os.classificacao.inventario_prestacao_memoria import InventarioPrestacaoEmMemoria
+
+    item = ItemInventarioPrestacao(
+        documento_id='rel-real-1', tipo_documental='Relatório de Benefícios', cliente=_CLI_A, competencia=_COMPETENCIA_REF,
+    )
+    dados_correlacao = FonteDadosCorrelacaoEmMemoria()
+    dados_correlacao.registrar('rel-real-1', DadosCorrelacaoDocumental(identificador_pedido='PED-77', valor_total='900,00', competencia=_COMPETENCIA))
+    fonte_candidatos = _fonte_com_escopo_fixo((_CLI_A,), {_CLI_A: (item,)}, dados_correlacao=dados_correlacao)
+
+    contexto = ContextoRelacaoDocumentoPrestacao(
+        documento_id='comp-real-1', tipo_documental='Comprovante de Pagamento - VR/VA', competencia=_COMPETENCIA,
+        dados_correlacao=DadosCorrelacaoDocumental(identificador_pedido='PED-77', valor_total='900,00', competencia=_COMPETENCIA),
+        fonte_candidatos=fonte_candidatos,
+    )
+    resultado = resolver_relacao_e_avancar(contexto, InventarioPrestacaoEmMemoria())
+    assert resultado.resolucao_relacao.estado.value == 'RESOLVIDA'
+    assert resultado.resolucao_relacao.documento_a_id == 'rel-real-1'

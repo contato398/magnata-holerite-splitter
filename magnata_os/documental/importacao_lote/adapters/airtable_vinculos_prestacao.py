@@ -13,36 +13,17 @@ from magnata_os.classificacao.contratos import (
 )
 
 from .airtable_leitura import LeitorAirtableSomenteLeitura, TABLE_FUNC
+from .airtable_link_utils import filtro_ids as _filtro_ids, ids_vinculados as _ids_vinculados
 
+# _ids_vinculados/_filtro_ids: PROMOVIDAS para airtable_link_utils.py
+# (missão "...ADAPTERS REAIS...") quando um segundo adapter
+# (airtable_unidade_posto_prestacao.py) precisou da MESMA lógica --
+# reimportadas com os MESMOS nomes locais, zero mudança de
+# comportamento, zero duplicação.
 
 TABLE_LOCAIS = "tblZy1WfzmGIeR8ZP"
 F_FUNC_LOCAIS = "fldqpwuLJsZsavaEJ"
 F_LOCAL_CLIENTE = "fldu9xd2vvoMQ2Iqb"
-
-
-def _ids_vinculados(valor: object) -> tuple[str, ...]:
-    if not isinstance(valor, list):
-        return ()
-    ids = {
-        item if isinstance(item, str) else item.get("id")
-        for item in valor
-        if isinstance(item, str)
-        or (isinstance(item, dict) and isinstance(item.get("id"), str))
-    }
-    return tuple(sorted(item for item in ids if item))
-
-
-def _escapar_formula(valor: str) -> str:
-    return valor.replace("\\", "\\\\").replace('"', '\\"')
-
-
-def _filtro_ids(ids: tuple[str, ...]) -> str:
-    expressoes = tuple(
-        f'RECORD_ID()="{_escapar_formula(record_id)}"' for record_id in ids
-    )
-    if len(expressoes) == 1:
-        return expressoes[0]
-    return f"OR({','.join(expressoes)})"
 
 
 class FonteVinculosPrestacaoAirtableShadow:
