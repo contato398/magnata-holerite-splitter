@@ -48,10 +48,27 @@ origem temporal comprovada"): o universo de clientes passa a ser um
 Protocol PRÓPRIO e explícito, `FonteEscopoClientesPrestacao`, resolvido
 POR COMPETÊNCIA (nunca fixo, nunca amarrado a "hoje"). `EscopoClientes
 AtivosDoCiclo` (abaixo) é uma implementação de referência que usa
-`FonteClientesPrestacao.listar_ativos` -- documentada como válida
-SOMENTE quando a competência pedida é a corrente do próprio ciclo
-(§10: "para ciclo corrente, clientes ativos podem ser um pré-filtro
-operacional válido"); nunca use para competência histórica.
+`FonteClientesPrestacao.listar_ativos`.
+
+CORREÇÃO (segunda correção final pré-merge ao PR #108, achado real): a
+versão anterior de `EscopoClientesAtivosDoCiclo` tratava
+`contexto_ciclo.competencia_base` -- "qual competência este runner
+está processando agora" -- como se fosse prova de que o SNAPSHOT
+corrente de `listar_ativos()` é válido para aquela competência. São
+conceitos DIFERENTES (mesma confusão já corrigida em `FonteUnidadePosto
+PrestacaoAirtableShadow` e em `EscopoClientesFixo`, desta vez achada
+numa terceira classe do mesmo módulo): a execução real pode ocorrer em
+qualquer mês -- "ciclo processando Junho" nunca prova que os clientes
+ativos HOJE são os clientes ativos EM Junho. Corrigido:
+`competencia_snapshot_ativos_comprovada` é um parâmetro PRÓPRIO do
+construtor (`ReferenciaCanonica('COMPETENCIA', ...)`), DESACOPLADO de
+`contexto_ciclo` (que continua existindo só para satisfazer a
+assinatura de `FonteClientesPrestacao.listar_ativos`, nunca como prova
+temporal) -- sem esse parâmetro (`None`, o default), ou para qualquer
+competência diferente da comprovada, `escopo_para_competencia` devolve
+`()`, nunca promove o snapshot corrente a verdade histórica por
+coincidência com o ciclo em processamento.
+
 `EscopoClientesFixo` é a alternativa para quando quem chama já tem um
 conjunto de clientes com proveniência temporal real (ex.: um registro
 histórico específico) -- estruturalmente vinculado a UMA competência
@@ -104,22 +121,45 @@ class FonteEscopoClientesPrestacao(Protocol):
 
 class EscopoClientesAtivosDoCiclo:
     """Implementação de referência sobre `FonteClientesPrestacao.
-    listar_ativos` (já real, já com adapter de produção) -- válida
-    SOMENTE quando a competência pedida é a competência CORRENTE do
-    próprio `contexto_ciclo` (pré-filtro operacional aceitável para o
-    ciclo em processamento agora, §10 do adendo). NUNCA usar para
-    competência histórica -- `escopo_para_competencia` devolve `()`
-    (vazio, nunca uma lista potencialmente errada) quando a competência
-    pedida diverge da competência corrente do ciclo."""
+    listar_ativos` (já real, já com adapter de produção).
 
-    def __init__(self, fonte_clientes: FonteClientesPrestacao, contexto_ciclo: ContextoCicloPrestacao):
+    CORREÇÃO (segunda correção final pré-merge ao PR #108, ver
+    docstring do módulo): `contexto_ciclo` NUNCA basta sozinho como
+    prova de vigência do snapshot -- ele só representa "qual
+    competência este runner está processando agora", nunca "para qual
+    competência o snapshot atual de clientes ativos foi comprovado".
+    `competencia_snapshot_ativos_comprovada` é a ÚNICA coisa que
+    autoriza `escopo_para_competencia` a devolver algo: parâmetro
+    explícito do construtor, `ReferenciaCanonica('COMPETENCIA', ...)`,
+    DESACOPLADO de `contexto_ciclo.competencia_base` -- nenhuma
+    coincidência entre a competência pedida e a competência do ciclo,
+    sozinha, autoriza uso temporal. Sem prova (`None`, o default), ou
+    para qualquer competência diferente da comprovada,
+    `escopo_para_competencia` devolve `()` -- nunca a lista de ativos
+    hoje disfarçada de histórico."""
+
+    def __init__(
+        self,
+        fonte_clientes: FonteClientesPrestacao,
+        contexto_ciclo: ContextoCicloPrestacao,
+        competencia_snapshot_ativos_comprovada: Optional[ReferenciaCanonica] = None,
+    ):
+        if (
+            competencia_snapshot_ativos_comprovada is not None
+            and competencia_snapshot_ativos_comprovada.tipo_entidade != 'COMPETENCIA'
+        ):
+            raise ValueError(
+                'competencia_snapshot_ativos_comprovada deve ser referencia canonica de COMPETENCIA',
+            )
         self._fonte_clientes = fonte_clientes
         self._contexto_ciclo = contexto_ciclo
-        ano, mes = contexto_ciclo.competencia_base
-        self._competencia_corrente_id = f'{ano:04d}-{mes:02d}'
+        self._competencia_snapshot_ativos_comprovada = competencia_snapshot_ativos_comprovada
 
     def escopo_para_competencia(self, competencia: ReferenciaCanonica) -> Tuple[ReferenciaCanonica, ...]:
-        if competencia.entidade_id != self._competencia_corrente_id:
+        if (
+            self._competencia_snapshot_ativos_comprovada is None
+            or competencia != self._competencia_snapshot_ativos_comprovada
+        ):
             return ()
         return self._fonte_clientes.listar_ativos(self._contexto_ciclo)
 

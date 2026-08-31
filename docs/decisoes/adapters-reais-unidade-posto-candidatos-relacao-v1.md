@@ -32,9 +32,10 @@ o estado CORRIGIDO (o texto anterior não representa mais o código):
    `FonteEscopoClientesPrestacao.escopo_para_competencia(competencia)`
    — o universo de clientes passa a ser resolvido POR competência,
    nunca fixo em "hoje". `EscopoClientesAtivosDoCiclo` (implementação
-   de referência) só devolve os ativos quando a competência pedida é
-   exatamente a corrente do ciclo — para qualquer outra, devolve vazio
-   (nunca a lista de hoje disfarçada de histórico).
+   de referência, ver item 5 — corrigida uma segunda vez) só devolve os
+   ativos com prova temporal explícita — para qualquer outra
+   competência, devolve vazio (nunca a lista de hoje disfarçada de
+   histórico).
 3. **`fonte_dados_correlacao` exigia um fake in-memory só para
    representar ausência.** Corrigido: parâmetro agora `Optional[...]
    = None` — nenhuma implementação precisa ser injetada só para dizer
@@ -51,8 +52,34 @@ o estado CORRIGIDO (o texto anterior não representa mais o código):
    quando a competência pedida é EXATAMENTE a comprovada — qualquer
    outra devolve `()`, nunca reaproveita silenciosamente o mesmo
    escopo histórico em outro mês.
+5. **`EscopoClientesAtivosDoCiclo` tratava `ContextoCicloPrestacao.
+   competencia_base` como prova de vigência do snapshot de clientes
+   ativos** (segunda correção final pré-merge, achado real) — mesmo
+   erro dos itens 1 e 4, achado agora numa TERCEIRA classe do mesmo
+   módulo: "qual competência este runner está processando agora"
+   (`ContextoCicloPrestacao`) nunca prova "para qual competência o
+   snapshot atual de `listar_ativos()` é válido" — a execução real pode
+   ocorrer em qualquer mês, e um runner processando o ciclo-base SKY
+   (Julho) não prova nada sobre a competência documental real (Junho).
+   Corrigido: `competencia_snapshot_ativos_comprovada`, parâmetro NOVO
+   e DESACOPLADO de `contexto_ciclo` (que passa a servir só para
+   satisfazer a assinatura de `FonteClientesPrestacao.listar_ativos`,
+   nunca como prova temporal) — sem essa prova (`None`, default), ou
+   para qualquer competência diferente da comprovada,
+   `escopo_para_competencia` devolve `()`. Nenhuma coincidência entre a
+   competência pedida e `contexto_ciclo.competencia_base`, sozinha,
+   autoriza uso temporal.
 
-Nenhuma das 4 correções muda o que já estava correto: PR #107,
+**Auditoria de chamadores (item 5)**: `grep` completo do repositório
+por `EscopoClientesAtivosDoCiclo` e `FonteEscopoClientesPrestacao`
+confirma que os únicos 3 arquivos que os referenciam são o próprio
+módulo (`fonte_candidatos_relacao_documental_do_inventario.py`), seu
+teste, e este documento — nenhum wiring de produção real constrói
+`EscopoClientesAtivosDoCiclo` hoje. A correção fecha a lacuna antes de
+qualquer wiring futuro poder construir o escopo sem a prova temporal
+exigida, nunca depois de um caso real já ter existido.
+
+Nenhuma das 5 correções muda o que já estava correto: PR #107,
 orientação A/B, relação genérica, benefícios, FGTS cliente-level, DCTF
 broadcast, VINCULO `NAO_APLICAVEL`, zero Airtable no core e os
 utilitários promovidos (`airtable_link_utils.py`) permanecem intocados.
@@ -130,11 +157,15 @@ Airtable nova, nenhuma suposição de schema não confirmada:
 - `FonteEscopoClientesPrestacao.escopo_para_competencia` — Protocol
   NOVO (corrigido, ver seção 0.2), resolvido POR competência, nunca
   fixo em "hoje". `EscopoClientesAtivosDoCiclo` (implementação de
-  referência) usa `FonteClientesPrestacao.listar_ativos` (já tem
-  adapter real de produção, `airtable_clientes_prestacao.py`) —
-  documentada como válida SOMENTE quando a competência pedida é a
-  corrente do próprio ciclo; para qualquer outra, devolve escopo
-  vazio (nunca a lista de hoje disfarçada de histórico).
+  referência, corrigida uma segunda vez — ver seção 0.5) usa
+  `FonteClientesPrestacao.listar_ativos` (já tem adapter real de
+  produção, `airtable_clientes_prestacao.py`) — mas só devolve os
+  ativos com `competencia_snapshot_ativos_comprovada` explícita e
+  EXATAMENTE igual à competência pedida; `ContextoCicloPrestacao`
+  (para qual competência o runner está processando agora) nunca basta
+  sozinho, mesmo quando coincide com a competência pedida. Para
+  qualquer competência sem essa prova, devolve escopo vazio (nunca a
+  lista de hoje disfarçada de histórico).
   `EscopoClientesFixo` (corrigido, ver seção 0.4) é a alternativa para
   quando quem chama já tem um conjunto de clientes com proveniência
   temporal real — ESTRUTURALMENTE vinculado a UMA `competencia_
@@ -187,28 +218,40 @@ gate de escopo/arquitetura para uma futura missão, não mais um adapter
 inteiro faltando.
 
 **Testado** (`test_magnata_os_classificacao_fonte_candidatos_relacao_
-documental_do_inventario.py`, 18 casos, só fakes locais) — inclui os
-casos A-F da correção final (§4 do adendo, sobre `EscopoClientesFixo`):
-comprovado para Junho resolve Junho; Junho→Maio vazio; Junho→Julho
-vazio; cliente hoje inativo mas comprovado em Junho é encontrado em
-Junho; o mesmo cliente nunca reaparece em outra competência sem prova;
-integração fim-a-fim confirma que o candidato histórico só aparece na
-competência comprovada, nunca em outra, mesmo com o item fisicamente
-presente no inventário — mais os casos F-J
-mapeados ao §18 do adendo anterior: (F) cliente ativo no ciclo corrente
-encontra candidato, e `EscopoClientesAtivosDoCiclo` devolve vazio para
-qualquer outra competência (nunca ativos-hoje disfarçado de
-histórico); (G) cliente HOJE INATIVO mas presente no escopo histórico
-(`EscopoClientesFixo`) não é perdido — prova central da correção; (H)
-sem `fonte_dados_correlacao` (nem informada), candidato é real mas
-dados ficam honestamente vazios; (I) com correlação disponível, dados
-chegam ao candidato; (J) documento em 2 clientes une referências, não
-duplica. Mais: descoberta por tipo ignora outros tipos; nunca devolve
-o próprio documento atual como candidato; escopo vazio devolve vazio;
-ordem determinística; **integra direto em `corredor_relacao_
-documental.resolver_relacao_e_avancar` sem NENHUM ajuste** — prova de
-que a costura automática do PR #107 já funciona com um adapter real de
-descoberta, hoje.
+documental_do_inventario.py`, 26 casos, só fakes locais) — inclui os
+casos A-F da primeira correção final (§4 do adendo, sobre
+`EscopoClientesFixo`): comprovado para Junho resolve Junho; Junho→Maio
+vazio; Junho→Julho vazio; cliente hoje inativo mas comprovado em Junho
+é encontrado em Junho; o mesmo cliente nunca reaparece em outra
+competência sem prova; integração fim-a-fim confirma que o candidato
+histórico só aparece na competência comprovada, nunca em outra, mesmo
+com o item fisicamente presente no inventário — mais os casos A-G da
+SEGUNDA correção final (§8 do segundo adendo, sobre
+`EscopoClientesAtivosDoCiclo`): (A) ciclo processando Junho SEM prova
+temporal do snapshot nunca devolve ativos; (B) ciclo Junho + snapshot
+comprovado para Junho devolve ativos; (C) ciclo Junho + snapshot
+comprovado para Julho, vazio; (D) caso SKY obrigatório — ciclo-base
+Julho, snapshot comprovado só para Julho, consultar a competência
+documental Junho devolve vazio (nunca usa o snapshot de Julho como
+universo histórico de Junho); (E) `EscopoClientesFixo` continua Junho
+somente; (F) cliente historicamente comprovado em Junho continua
+encontrado; (G) mesmo quando a competência pedida COINCIDE com
+`contexto_ciclo.competencia_base`, a ausência de prova explícita nunca
+é compensada pela coincidência — mais os casos F-J mapeados ao §18 do
+adendo anterior: (F) cliente ativo no ciclo corrente encontra
+candidato quando há prova explícita, e `EscopoClientesAtivosDoCiclo`
+devolve vazio para qualquer outra competência (nunca ativos-hoje
+disfarçado de histórico); (G) cliente HOJE INATIVO mas presente no
+escopo histórico (`EscopoClientesFixo`) não é perdido — prova central
+da correção original; (H) sem `fonte_dados_correlacao` (nem
+informada), candidato é real mas dados ficam honestamente vazios; (I)
+com correlação disponível, dados chegam ao candidato; (J) documento em
+2 clientes une referências, não duplica. Mais: descoberta por tipo
+ignora outros tipos; nunca devolve o próprio documento atual como
+candidato; escopo vazio devolve vazio; ordem determinística; **integra
+direto em `corredor_relacao_documental.resolver_relacao_e_avancar` sem
+NENHUM ajuste** — prova de que a costura automática do PR #107 já
+funciona com um adapter real de descoberta, hoje.
 
 ## 4. Preservado (confirmado, nenhum arquivo tocado além do listado)
 
@@ -220,12 +263,12 @@ documental.py`; `app.py` intocado.
 
 ## 5. Regressão
 
-1307 passed (era 1282 antes desta missão; 1296 e 1300 em correções
-intermediárias do adendo), 34 falhas/17 erros pré-existentes
-idênticos ao baseline (pdfplumber/cryptography do sandbox — nada
-relacionado). `test_airtable_vinculos_prestacao.py` (7/7, zero mudança
-de comportamento após a promoção de utilitários). Teste arquitetural
-(zero Airtable) estendido ao módulo de composição
+1315 passed (era 1282 antes desta missão; 1296, 1300 e 1307 em
+correções intermediárias dos dois adendos), 34 falhas/17 erros
+pré-existentes idênticos ao baseline (pdfplumber/cryptography do
+sandbox — nada relacionado). `test_airtable_vinculos_prestacao.py`
+(7/7, zero mudança de comportamento após a promoção de utilitários).
+Teste arquitetural (zero Airtable) estendido ao módulo de composição
 (`fonte_candidatos_relacao_documental_do_inventario`, que nunca importa
 Airtable — só compõe Protocols).
 
@@ -233,18 +276,21 @@ Airtable — só compõe Protocols).
 
 Não chamar de "completo em produção" algo que só está completo na
 interface (§15 do adendo) — por isso a reavaliação abaixo é por
-família, nunca um veredito único. A correção final de `EscopoClientes
-Fixo` (seção 0.4) não muda nenhum estado abaixo — Relação documental
-já era `BLOCKED` pela ausência de fonte de correlação; a correção só
-fecha uma lacuna de honestidade estrutural no caminho que já estava
-bloqueado, nunca uma regressão nem uma promoção de estado:
+família, nunca um veredito único. Nem a correção final de
+`EscopoClientesFixo` (seção 0.4) nem a segunda correção final de
+`EscopoClientesAtivosDoCiclo` (seção 0.5) mudam nenhum estado abaixo —
+Relação documental já era `BLOCKED` pela ausência de fonte de
+correlação E pela ausência de um `FonteEscopoClientesPrestacao` real
+de produção com prova temporal; as duas correções só fecham lacunas de
+honestidade estrutural num caminho que já estava bloqueado, nunca uma
+regressão nem uma promoção de estado:
 
 | Família | Estado | Motivo |
 |---|---|---|
 | **Holerite** | **PARTIAL** | CLIENTE via `FonteVinculosPrestacaoAirtableShadow` (real). UNIDADE_POSTO via `FonteUnidadePostoPrestacaoAirtableShadow` (real) — mas só resolve quando quem compõe o corredor fornecer `competencia_snapshot_comprovada` com prova real de vigência para a competência exata sendo processada; sem essa prova (caso comum para qualquer cliente com deslocamento tipo SKY), UNIDADE_POSTO fica `NAO_ENCONTRADA` e o Holerite não avança automaticamente. |
 | **Extrato** | **BLOCKED** | Depende de `cliente_direto` (granularidade cliente) — auditoria (§17 do adendo) confirmou que NENHUM adapter real ou wiring de produção preenche esse campo hoje; toda ocorrência no repositório é em teste. Lacuna registrada, não fazia parte do escopo desta missão (só os 2 adapters nomeados). |
 | **FGTS Guia** | **BLOCKED** | Mesma dependência de `cliente_direto` (ou separação por CNPJ) que o Extrato — mesma lacuna, mesmo motivo. |
-| **Relação documental** (benefícios/FGTS comprovante/DCTF) | **BLOCKED** | Descoberta de candidato é real (`FonteCandidatosRelacaoDocumentalDoInventario`), mas: (a) depende de um `FonteEscopoClientesPrestacao` com proveniência temporal comprovada para a competência pedida — `EscopoClientesAtivosDoCiclo` só serve ao ciclo corrente; (b) `dados_correlacao` não tem fonte de produção (`FonteDadosCorrelacaoDocumental` sem implementação real) — sem os 2, a relação nunca resolve de verdade em produção, mesmo com identidade de candidato correta. |
+| **Relação documental** (benefícios/FGTS comprovante/DCTF) | **BLOCKED** | Descoberta de candidato é real (`FonteCandidatosRelacaoDocumentalDoInventario`), mas: (a) depende de um `FonteEscopoClientesPrestacao` com proveniência temporal comprovada para a competência pedida — `EscopoClientesAtivosDoCiclo` só devolve algo quando `competencia_snapshot_ativos_comprovada` é fornecida explicitamente e nenhum wiring real de produção fornece essa prova hoje (§9 do segundo adendo — auditado, nenhum chamador de produção existe); (b) `dados_correlacao` não tem fonte de produção (`FonteDadosCorrelacaoDocumental` sem implementação real) — sem os 2, a relação nunca resolve de verdade em produção, mesmo com identidade de candidato correta. |
 
 **Auditoria `cliente_direto` (§17 do adendo)**: `grep` completo do
 repositório por `cliente_direto=` confirma que o único preenchimento

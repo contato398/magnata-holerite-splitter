@@ -55,7 +55,9 @@ def test_caso_f_cliente_ativo_no_ciclo_corrente_encontra_candidato():
     )
     fonte_clientes = _FonteClientesFake((_CLI_A,))
     contexto_ciclo = ContextoCicloPrestacao(_COMPETENCIA)
-    escopo = EscopoClientesAtivosDoCiclo(fonte_clientes, contexto_ciclo)
+    escopo = EscopoClientesAtivosDoCiclo(
+        fonte_clientes, contexto_ciclo, competencia_snapshot_ativos_comprovada=_COMPETENCIA_REF,
+    )
     fonte = FonteCandidatosRelacaoDocumentalDoInventario(
         fonte_escopo_clientes=escopo, fonte_inventario=_FonteInventarioFake({_CLI_A: (item,)}),
     )
@@ -66,16 +68,94 @@ def test_caso_f_cliente_ativo_no_ciclo_corrente_encontra_candidato():
     assert candidatos[0].documento_id == 'rel-1'
 
 
-def test_escopo_ativos_do_ciclo_nunca_usa_ativos_hoje_para_competencia_diferente_da_corrente():
-    """`EscopoClientesAtivosDoCiclo` é documentado como válido só para
-    a competência CORRENTE do ciclo -- pedir por outra competência
-    devolve escopo vazio, nunca a lista de ativos hoje disfarçada de
-    histórico."""
+def test_escopo_ativos_do_ciclo_nunca_usa_ativos_hoje_para_competencia_diferente_da_comprovada():
+    """`EscopoClientesAtivosDoCiclo` só devolve o escopo quando a
+    competência pedida é EXATAMENTE a `competencia_snapshot_ativos_
+    comprovada` -- pedir por outra competência devolve escopo vazio,
+    nunca a lista de ativos hoje disfarçada de histórico."""
     fonte_clientes = _FonteClientesFake((_CLI_A,))
-    contexto_ciclo = ContextoCicloPrestacao(_COMPETENCIA)  # corrente = 2026-06
-    escopo = EscopoClientesAtivosDoCiclo(fonte_clientes, contexto_ciclo)
+    contexto_ciclo = ContextoCicloPrestacao(_COMPETENCIA)
+    escopo = EscopoClientesAtivosDoCiclo(
+        fonte_clientes, contexto_ciclo, competencia_snapshot_ativos_comprovada=_COMPETENCIA_REF,
+    )
     assert escopo.escopo_para_competencia(_COMPETENCIA_HISTORICA_REF) == ()
     assert escopo.escopo_para_competencia(_COMPETENCIA_REF) == (_CLI_A,)
+
+
+# --- Segunda correção final pré-merge ao PR #108: EscopoClientesAtivosDoCiclo
+# vinculado a prova temporal explícita, nunca a ContextoCicloPrestacao sozinho ---
+
+def test_segunda_correcao_a_ciclo_processando_junho_sem_prova_nao_devolve_ativos():
+    fonte_clientes = _FonteClientesFake((_CLI_A,))
+    contexto_ciclo = ContextoCicloPrestacao((2026, 6))
+    escopo = EscopoClientesAtivosDoCiclo(fonte_clientes, contexto_ciclo)  # sem prova (default None)
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == ()
+
+
+def test_segunda_correcao_b_ciclo_junho_mais_snapshot_comprovado_junho_devolve_ativos():
+    fonte_clientes = _FonteClientesFake((_CLI_A,))
+    contexto_ciclo = ContextoCicloPrestacao((2026, 6))
+    escopo = EscopoClientesAtivosDoCiclo(
+        fonte_clientes, contexto_ciclo, competencia_snapshot_ativos_comprovada=_COMPETENCIA_JUNHO,
+    )
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == (_CLI_A,)
+
+
+def test_segunda_correcao_c_ciclo_junho_mais_snapshot_comprovado_julho_vazio():
+    fonte_clientes = _FonteClientesFake((_CLI_A,))
+    contexto_ciclo = ContextoCicloPrestacao((2026, 6))
+    escopo = EscopoClientesAtivosDoCiclo(
+        fonte_clientes, contexto_ciclo, competencia_snapshot_ativos_comprovada=_COMPETENCIA_JULHO,
+    )
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == ()
+
+
+def test_segunda_correcao_d_sky_base_julho_documental_junho_snapshot_julho_vazio():
+    """Caso obrigatório SKY: ciclo-base Julho/2026, competência
+    documental Junho/2026 (regra -1, `competencia_esperada_prestacao`).
+    Snapshot de clientes ativos comprovado só para Julho -- consultar
+    Junho (a competência documental real) nunca usa o snapshot de
+    Julho como universo histórico de Junho."""
+    fonte_clientes = _FonteClientesFake((_CLI_A,))
+    contexto_ciclo = ContextoCicloPrestacao((2026, 7))  # ciclo-base SKY
+    escopo = EscopoClientesAtivosDoCiclo(
+        fonte_clientes, contexto_ciclo, competencia_snapshot_ativos_comprovada=_COMPETENCIA_JULHO,
+    )
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == ()
+
+
+def test_segunda_correcao_e_escopo_clientes_fixo_continua_junho_somente():
+    escopo = EscopoClientesFixo(_COMPETENCIA_JUNHO, (_CLI_A,))
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == (_CLI_A,)
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JULHO) == ()
+
+
+def test_segunda_correcao_f_cliente_historico_comprovado_em_junho_continua_encontrado():
+    escopo = EscopoClientesFixo(_COMPETENCIA_JUNHO, (_CLI_INATIVO_HOJE,))
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == (_CLI_INATIVO_HOJE,)
+
+
+def test_segunda_correcao_g_igualdade_com_contexto_ciclo_nunca_autoriza_sozinha():
+    """Mesmo quando a competência pedida é IGUAL à competência do
+    ciclo (`contexto_ciclo.competencia_base`), a ausência de prova
+    temporal explícita (`competencia_snapshot_ativos_comprovada`)
+    nunca é compensada pela coincidência -- `escopo_para_competencia`
+    continua vazio."""
+    fonte_clientes = _FonteClientesFake((_CLI_A,))
+    contexto_ciclo = ContextoCicloPrestacao((2026, 6))
+    escopo = EscopoClientesAtivosDoCiclo(fonte_clientes, contexto_ciclo)  # sem prova
+    assert contexto_ciclo.competencia_base == (2026, 6)  # coincide com a competência pedida abaixo
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == ()
+
+
+def test_segunda_correcao_rejeita_competencia_snapshot_ativos_comprovada_com_tipo_errado():
+    import pytest
+
+    with pytest.raises(ValueError):
+        EscopoClientesAtivosDoCiclo(
+            _FonteClientesFake((_CLI_A,)), ContextoCicloPrestacao((2026, 6)),
+            competencia_snapshot_ativos_comprovada=ReferenciaCanonica('CLIENTE', 'x'),
+        )
 
 
 # --- Adendo final pré-merge ao PR #108: EscopoClientesFixo vinculado à competência comprovada ---
