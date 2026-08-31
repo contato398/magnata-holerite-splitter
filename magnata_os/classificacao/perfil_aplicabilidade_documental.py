@@ -61,18 +61,20 @@ finalidade suficiente para nenhuma granularidade — permanece
 DCTF/DARF, ou outra). Nunca um pacote automático global para um tipo
 ainda inconclusivo.
 
-VINCULO (Adendo substitutivo ao PR #105, §14; PROMOVIDO pela missão
-"EVIDÊNCIA RELACIONAL DOCUMENTO↔DOCUMENTO + VÍNCULO/UNIDADE_POSTO
-REAIS"): agora **OBRIGATORIA** (cardinalidade múltipla) em todo perfil
-de granularidade colaborador — deixou de ser limitação técnica: o
-produtor real (`vinculo_unidade_prestacao.resolucao_vinculo_a_partir_
-de_cliente`) espelha a MESMA resolução de CLIENTE (já derivada de
-vínculo por `vinculos_prestacao.resolver_clientes_validado`, nunca
-reavaliada) como sua própria dimensão — nenhum produtor novo de I/O
-necessário, nenhum bloqueio novo introduzido (sempre que CLIENTE
-resolve, VINCULO resolve junto, mesmo estado). Continua `NAO_APLICAVEL`
-nas famílias `granularidade_cliente`/`broadcast`, onde não há vínculo
-de colaborador envolvido.
+VINCULO (Adendo substitutivo ao PR #105, §14; a missão "EVIDÊNCIA
+RELACIONAL DOCUMENTO↔DOCUMENTO + VÍNCULO/UNIDADE_POSTO REAIS" tentou
+promover esta dimensão a OBRIGATORIA, mas o "ADENDO PRÉ-MERGE AO PR
+#106 — CORREÇÃO DA SEMÂNTICA DE VÍNCULO HISTÓRICO" reverteu isso: a
+resolução usada para a promoção fabricava a identidade do vínculo por
+espelhamento de CLIENTE — nunca uma evidência real. VINCULO permanece
+`NAO_APLICAVEL` em TODO perfil até existir uma fonte REAL
+(`vinculo_unidade_prestacao.FonteVinculoPrestacao`) — o Protocol e o
+resolvedor já existem e estão testados isoladamente, prontos para
+quando essa fonte real existir; §4 do adendo: "melhor manter fora do
+gate operacional do que inventar uma resolução falsa"). CLIENTE
+continua resolvido normalmente pelo mecanismo já existente
+(`vinculos_prestacao.FonteVinculosPrestacao`) — esta reversão não afeta
+CLIENTE nem o corredor.
 
 UNIDADE_POSTO: PROMOVIDA a **OBRIGATORIA** (cardinalidade múltipla,
 nunca escolhida arbitrariamente quando o colaborador tem mais de um
@@ -114,10 +116,10 @@ def _tipo_obrigatorio():
     return _regra(DimensaoResolucao.TIPO_DOCUMENTAL, AplicabilidadeDimensao.OBRIGATORIA, _OBRIGATORIA_UNICA)
 
 
-# VINCULO: NAO_APLICAVEL só nas famílias sem vínculo de colaborador
-# (granularidade_cliente/broadcast) -- ver docstring do módulo.
+# VINCULO: NAO_APLICAVEL em todo perfil -- revertido pelo adendo
+# pré-merge ao PR #106 (ver docstring do módulo). Nenhuma fonte real
+# existe ainda; nunca fabricar resolução só para preencher o gate.
 _VINCULO_NAO_APLICAVEL = _regra(DimensaoResolucao.VINCULO, AplicabilidadeDimensao.NAO_APLICAVEL, _NAO_APLICAVEL)
-_VINCULO_OBRIGATORIO = _regra(DimensaoResolucao.VINCULO, AplicabilidadeDimensao.OBRIGATORIA, _OBRIGATORIA_MULTIPLA)
 
 
 def _perfil_granularidade_colaborador(
@@ -132,8 +134,9 @@ def _perfil_granularidade_colaborador(
     vinculado a mais de um cliente na competência gera 1 item por
     cliente (`itens_para_multiplos_clientes_do_vinculo`, já existente).
 
-    VINCULO: OBRIGATORIA (cardinalidade múltipla) -- ver docstring do
-    módulo, "VINCULO ... PROMOVIDO".
+    VINCULO: NAO_APLICAVEL -- ver docstring do módulo, "VINCULO"
+    (revertido pelo adendo pré-merge ao PR #106: nenhuma fonte real
+    existe ainda).
 
     `unidade_posto_obrigatoria`: só `True` para Holerite nesta missão
     (ver docstring do módulo) -- as demais famílias continuam
@@ -151,7 +154,7 @@ def _perfil_granularidade_colaborador(
             _regra(DimensaoResolucao.COLABORADOR, AplicabilidadeDimensao.OBRIGATORIA, _OBRIGATORIA_UNICA),
             _regra(DimensaoResolucao.CLIENTE, AplicabilidadeDimensao.OBRIGATORIA, _OBRIGATORIA_MULTIPLA),
             regra_unidade_posto,
-            _VINCULO_OBRIGATORIO,
+            _VINCULO_NAO_APLICAVEL,
         ),
     )
 

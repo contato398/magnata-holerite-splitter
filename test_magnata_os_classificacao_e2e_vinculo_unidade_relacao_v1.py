@@ -1,17 +1,27 @@
 """Suíte E2E obrigatória (§20 da missão "MERGE PR #105 + EVIDÊNCIA
 RELACIONAL DOCUMENTO↔DOCUMENTO + VÍNCULO/UNIDADE_POSTO REAIS +
-FECHAMENTO DO UNIVERSO DOCUMENTAL V1") -- casos A a J, cada um mapeado
-1:1 ao texto da missão. Casos A-C exercitam o corredor REAL
-(`processar_documento_prestacao`) com os produtores de VÍNCULO/
-UNIDADE_POSTO desta missão; casos D-I exercitam a capacidade relacional
-genérica (`relacao_documental.py`) diretamente -- honesto sobre o
-escopo: a costura completa dessa capacidade DENTRO do corredor
-(auto-atribuição de clientes lógicos ao comprovante global via
-`avancar_para_inventario`) ainda não foi feita nesta missão (ver
-documento de decisão, seção "PENDÊNCIA REGISTRADA") -- os testes aqui
-provam a CAPACIDADE em si, não uma costura de orquestração que ainda
-não existe. Caso J prova idempotência da camada pura (resolvedores sem
-I/O nem estado mutável -- mesma entrada, mesma saída sempre)."""
+FECHAMENTO DO UNIVERSO DOCUMENTAL V1", corrigida pelo "ADENDO PRÉ-MERGE
+AO PR #106 — CORREÇÃO DA SEMÂNTICA DE VÍNCULO HISTÓRICO") -- casos A a
+J, cada um mapeado 1:1 ao texto da missão original; casos extras no
+final mapeados à seção 10 do adendo (relação entre múltiplos
+candidatos). Casos A-C exercitam o corredor REAL
+(`processar_documento_prestacao`)/os produtores isolados de VÍNCULO/
+UNIDADE_POSTO; casos D-I exercitam a capacidade relacional genérica
+(`relacao_documental.py`) diretamente -- honesto sobre o escopo: a
+costura completa dessa capacidade DENTRO do corredor (auto-atribuição
+de clientes lógicos ao comprovante global via `avancar_para_
+inventario`) ainda não foi feita nesta missão (ver documento de
+decisão, seção "PENDÊNCIA REGISTRADA") -- os testes aqui provam a
+CAPACIDADE em si, não uma costura de orquestração que ainda não existe.
+Caso J prova idempotência da camada pura (resolvedores sem I/O nem
+estado mutável -- mesma entrada, mesma saída sempre).
+
+CORREÇÃO (adendo): VINCULO voltou a `NAO_APLICAVEL` em todo perfil
+(nenhuma fonte real de produção existe ainda -- ver
+`perfil_aplicabilidade_documental.py`), então o Caso A não afirma mais
+VINCULO RESOLVIDA dentro do corredor; o Caso C não usa mais o mirror
+fabricado (removido) -- testa a fonte real isolada, mesmo padrão de
+`test_magnata_os_classificacao_vinculo_unidade_prestacao.py`."""
 from magnata_os.classificacao.contratos import (
     DimensaoResolucao,
     EstadoResolucaoDimensao,
@@ -25,8 +35,10 @@ from magnata_os.classificacao.produtores_evidencia_beneficios import (
 )
 from magnata_os.classificacao.relacao_documental import (
     DadosCorrelacaoDocumental,
+    EvidenciaRelacaoDocumental,
     TipoRelacaoDocumental,
     produzir_evidencias_correlacao,
+    resolver_relacao_documental_dentre_candidatos,
     resolver_relacao_documental_par,
 )
 from magnata_os.classificacao.resolucao_documento_prestacao import (
@@ -35,8 +47,8 @@ from magnata_os.classificacao.resolucao_documento_prestacao import (
     processar_documento_prestacao,
 )
 from magnata_os.classificacao.vinculo_unidade_prestacao import (
-    MOTIVO_VINCULO_ATUAL_COMO_PROXY,
-    resolucao_vinculo_a_partir_de_cliente,
+    MOTIVO_VINCULO_HISTORICO_SEM_VIGENCIA,
+    resolver_vinculo_validado,
 )
 from magnata_os.documental.importacao_lote.contratos import CandidatoFuncionario
 
@@ -63,21 +75,46 @@ class _FonteUnidadePostoFake:
         )
 
 
+class _FonteVinculoRealFake:
+    """Fonte real fake (nunca fabricação por espelhamento de CLIENTE) --
+    mesmo padrão de `test_magnata_os_classificacao_vinculo_unidade_
+    prestacao.py`."""
+
+    def __init__(self, competencia_corrente, resolve=True):
+        self._competencia_corrente = competencia_corrente
+        self._resolve = resolve
+
+    def resolver_vinculo(self, colaborador, competencia):
+        if self._resolve and competencia == self._competencia_corrente:
+            return ResolucaoDimensao(
+                dimensao=DimensaoResolucao.VINCULO, estado=EstadoResolucaoDimensao.RESOLVIDA,
+                valores_confirmados=(ReferenciaCanonica('VINCULO', 'local-real-1'),),
+            )
+        return ResolucaoDimensao(
+            dimensao=DimensaoResolucao.VINCULO, estado=EstadoResolucaoDimensao.NAO_ENCONTRADA,
+            motivos=(MOTIVO_VINCULO_HISTORICO_SEM_VIGENCIA,),
+        )
+
+
 def _candidatos():
     return [CandidatoFuncionario(func_id='f1', cpf='11122233344', nome_normalizado='X')]
 
 
-def _contexto(documento_id, fonte_unidade_posto, competencia_e_corrente=True):
+def _contexto(documento_id, fonte_unidade_posto):
     return ContextoResolucaoDocumentoPrestacao(
         documento_id=documento_id, hash_sha256='a' * 64, competencia_esperada=(2026, 7),
         candidatos_colaborador=_candidatos(), fonte_vinculos=_FonteVinculosFake(),
-        fonte_unidade_posto=fonte_unidade_posto, competencia_e_corrente=competencia_e_corrente,
+        fonte_unidade_posto=fonte_unidade_posto,
     )
 
 
-# --- Caso A: Holerite completo -- colaborador->vínculo->posto->cliente->pacote ---
+# --- Caso A: Holerite completo -- colaborador->posto->cliente->pacote ---
 
-def test_caso_a_holerite_colaborador_vinculo_posto_cliente_pacote():
+def test_caso_a_holerite_colaborador_posto_cliente_pacote():
+    """VINCULO fica `NAO_APLICAVEL` (revertido pelo adendo -- nenhuma
+    fonte real de produção existe ainda); isso NÃO bloqueia o corredor
+    (`NAO_APLICAVEL` é um dos 2 estados limpos do compositor). CLIENTE
+    continua resolvido normalmente pelo mecanismo já existente."""
     resultado = processar_documento_prestacao(
         'Recibo de Pagamento -- Total de Vencimentos\nCompetência: 07/2026\nCPF: 111.222.333-44',
         _contexto('e2e-a', _FonteUnidadePostoFake()),
@@ -85,7 +122,7 @@ def test_caso_a_holerite_colaborador_vinculo_posto_cliente_pacote():
     assert resultado.estado == EstadoCorredorDocumentoPrestacao.RESOLVIDO_E_AVANCOU
     resolucoes = {r.dimensao: r for r in resultado.resolucao_semantica.resolucoes}
     assert resolucoes[DimensaoResolucao.COLABORADOR].estado == EstadoResolucaoDimensao.RESOLVIDA
-    assert resolucoes[DimensaoResolucao.VINCULO].estado == EstadoResolucaoDimensao.RESOLVIDA
+    assert resolucoes[DimensaoResolucao.VINCULO].estado == EstadoResolucaoDimensao.NAO_APLICAVEL
     assert resolucoes[DimensaoResolucao.UNIDADE_POSTO].estado == EstadoResolucaoDimensao.RESOLVIDA
     assert resolucoes[DimensaoResolucao.CLIENTE].estado == EstadoResolucaoDimensao.RESOLVIDA
 
@@ -108,20 +145,22 @@ def test_caso_b_colaborador_com_2_postos_legitimos_cardinalidade_preservada():
 
 # --- Caso C: vínculo corrente sem prova histórica -- nunca vira verdade histórica ---
 
-def test_caso_c_vinculo_corrente_como_proxy_nunca_verdade_historica():
+def test_caso_c_vinculo_corrente_sem_prova_historica_nunca_resolve():
+    """Corrigido pelo adendo: nenhum mirror fabricado. A fonte REAL
+    (fake aqui, produção depois) que só conhece o vínculo corrente
+    devolve NAO_ENCONTRADA para uma competência histórica -- nunca
+    RESOLVIDA "com ressalva"."""
     colaborador = ReferenciaCanonica('COLABORADOR', 'colab-1')
-    resolucao_cliente = ResolucaoDimensao(
-        dimensao=DimensaoResolucao.CLIENTE, estado=EstadoResolucaoDimensao.RESOLVIDA,
-        valores_confirmados=(ReferenciaCanonica('CLIENTE', 'cli-x'),),
-    )
-    resolucao_vinculo = resolucao_vinculo_a_partir_de_cliente(colaborador, resolucao_cliente, competencia_e_corrente=False)
-    assert resolucao_vinculo.estado == EstadoResolucaoDimensao.RESOLVIDA
-    assert MOTIVO_VINCULO_ATUAL_COMO_PROXY in resolucao_vinculo.motivos
+    competencia_corrente = ReferenciaCanonica('COMPETENCIA', '2026-07')
+    competencia_historica = ReferenciaCanonica('COMPETENCIA', '2025-01')
+    fonte = _FonteVinculoRealFake(competencia_corrente=competencia_corrente)
 
-    resolucao_vinculo_corrente = resolucao_vinculo_a_partir_de_cliente(
-        colaborador, resolucao_cliente, competencia_e_corrente=True,
-    )
-    assert MOTIVO_VINCULO_ATUAL_COMO_PROXY not in resolucao_vinculo_corrente.motivos
+    resolucao_corrente = resolver_vinculo_validado(fonte, colaborador, competencia_corrente)
+    assert resolucao_corrente.estado == EstadoResolucaoDimensao.RESOLVIDA
+
+    resolucao_historica = resolver_vinculo_validado(fonte, colaborador, competencia_historica)
+    assert resolucao_historica.estado != EstadoResolucaoDimensao.RESOLVIDA
+    assert MOTIVO_VINCULO_HISTORICO_SEM_VIGENCIA in resolucao_historica.motivos
 
 
 # --- Caso D: comprovante global entra só nos clientes corretos ---
@@ -224,10 +263,51 @@ def test_caso_j_execucao_repetida_idempotente_camada_pura():
     assert r1 == r2
 
     colaborador = ReferenciaCanonica('COLABORADOR', 'colab-1')
-    resolucao_cliente = ResolucaoDimensao(
-        dimensao=DimensaoResolucao.CLIENTE, estado=EstadoResolucaoDimensao.RESOLVIDA,
-        valores_confirmados=(ReferenciaCanonica('CLIENTE', 'cli-x'),),
-    )
-    v1 = resolucao_vinculo_a_partir_de_cliente(colaborador, resolucao_cliente, competencia_e_corrente=False)
-    v2 = resolucao_vinculo_a_partir_de_cliente(colaborador, resolucao_cliente, competencia_e_corrente=False)
+    competencia_corrente = ReferenciaCanonica('COMPETENCIA', '2026-07')
+    fonte = _FonteVinculoRealFake(competencia_corrente=competencia_corrente)
+    v1 = resolver_vinculo_validado(fonte, colaborador, competencia_corrente)
+    v2 = resolver_vinculo_validado(fonte, colaborador, competencia_corrente)
     assert v1 == v2
+
+
+# --- Casos extras (Adendo pré-merge ao PR #106, §10): relação entre múltiplos candidatos ---
+
+def _ev(forca, contraditoria=False):
+    return EvidenciaRelacaoDocumental(tipo_evidencia='T', forca=forca, contraditoria=contraditoria)
+
+
+def test_caso_adendo_candidato_contraditorio_nao_impede_candidato_forte_coerente():
+    """§7 do adendo: candidato A contraditório + candidato B forte e
+    coerente -> B RESOLVIDO (nunca CONFLITO global por causa de A)."""
+    from magnata_os.classificacao.contratos import NivelConfianca
+
+    candidatos = (
+        ('doc-b-A', (_ev(NivelConfianca.FORTE, contraditoria=True),)),
+        ('doc-b-B', (_ev(NivelConfianca.MODERADA), _ev(NivelConfianca.MODERADA))),
+    )
+    resultado = resolver_relacao_documental_dentre_candidatos('doc-a', TipoRelacaoDocumental.COMPROVA, candidatos)
+    assert resultado.estado == EstadoResolucaoDimensao.RESOLVIDA
+    assert resultado.documento_b_id == 'doc-b-B'
+
+
+def test_caso_adendo_dois_candidatos_fortes_coerentes_vira_ambigua():
+    from magnata_os.classificacao.contratos import NivelConfianca
+
+    candidatos = (
+        ('doc-b-A', (_ev(NivelConfianca.MODERADA), _ev(NivelConfianca.MODERADA))),
+        ('doc-b-B', (_ev(NivelConfianca.MODERADA), _ev(NivelConfianca.MODERADA))),
+    )
+    resultado = resolver_relacao_documental_dentre_candidatos('doc-a', TipoRelacaoDocumental.COMPROVA, candidatos)
+    assert resultado.estado == EstadoResolucaoDimensao.AMBIGUA
+    assert set(resultado.candidatos_documento_b_id) == {'doc-b-A', 'doc-b-B'}
+
+
+def test_caso_adendo_todos_contraditorios_vira_conflito():
+    from magnata_os.classificacao.contratos import NivelConfianca
+
+    candidatos = (
+        ('doc-b-A', (_ev(NivelConfianca.FORTE, contraditoria=True),)),
+        ('doc-b-B', (_ev(NivelConfianca.FORTE, contraditoria=True),)),
+    )
+    resultado = resolver_relacao_documental_dentre_candidatos('doc-a', TipoRelacaoDocumental.COMPROVA, candidatos)
+    assert resultado.estado == EstadoResolucaoDimensao.CONFLITO

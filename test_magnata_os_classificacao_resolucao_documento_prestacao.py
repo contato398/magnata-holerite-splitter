@@ -104,9 +104,10 @@ def test_tipo_sem_perfil_cadastrado_vira_gate():
 # ============================================================================
 
 def test_holerite_completo_avanca_automaticamente():
-    """Cadeia completa colaborador→vínculo→posto→cliente→pacote (missão
-    "EVIDÊNCIA RELACIONAL DOCUMENTO↔DOCUMENTO + VÍNCULO/UNIDADE_POSTO
-    REAIS")."""
+    """Cadeia completa colaborador→posto→cliente→pacote. VINCULO fica
+    NAO_APLICAVEL (revertido pelo "ADENDO PRÉ-MERGE AO PR #106" --
+    nenhuma fonte real de vínculo existe ainda; nunca fabricar
+    resolução para preencher a dimensão)."""
     texto = 'Recibo de Pagamento -- Total de Vencimentos\nCompetência: 07/2026\nCPF: 111.222.333-44'
     candidatos = [_candidato('func-1', '11122233344', 'JOAO')]
     resultado = processar_documento_prestacao(texto, _contexto(
@@ -122,7 +123,7 @@ def test_holerite_completo_avanca_automaticamente():
     resolucao_unidade_posto = next(
         r for r in resultado.resolucao_semantica.resolucoes if r.dimensao == DimensaoResolucao.UNIDADE_POSTO
     )
-    assert resolucao_vinculo.estado == EstadoResolucaoDimensao.RESOLVIDA
+    assert resolucao_vinculo.estado == EstadoResolucaoDimensao.NAO_APLICAVEL
     assert resolucao_unidade_posto.estado == EstadoResolucaoDimensao.RESOLVIDA
 
 

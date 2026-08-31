@@ -9,6 +9,47 @@ documental — conforme `/CLAUDE.md` §2 ("nenhuma decisão arquitetural é
 tomada em silêncio... registrada por escrito em algum artefato do
 repositório").
 
+## 0. Correção pré-merge — "ADENDO PRÉ-MERGE AO PR #106" (achado real,
+não escondido)
+
+Antes do merge do PR #106, uma revisão identificou 2 problemas reais na
+primeira versão desta missão, corrigidos na mesma branch:
+
+1. **VINCULO fabricado.** `vinculo_unidade_prestacao.resolucao_vinculo_
+   a_partir_de_cliente` (removida) criava `ReferenciaCanonica('VINCULO',
+   f'{colaborador}:{cliente}')` por espelhamento da resolução de
+   CLIENTE — uma identidade DERIVADA, nunca uma evidência real de
+   vínculo. Pior: para competência histórica sem prova, a função ainda
+   retornava `RESOLVIDA` (só com um motivo sanitizado anexado) — o
+   motivo não muda o SIGNIFICADO do estado, então isso violava
+   diretamente "vínculo corrente não prova vínculo histórico".
+   **Corrigido**: VINCULO agora segue o MESMO padrão de UNIDADE_POSTO —
+   só resolvido por uma fonte REAL (`FonteVinculoPrestacao`, Protocol),
+   nunca fabricado. Como nenhuma fonte real de produção existe ainda,
+   `perfil_aplicabilidade_documental.py` reverteu VINCULO para
+   `NAO_APLICAVEL` em todo perfil (a promoção da seção 2 abaixo foi
+   revertida) — "melhor manter fora do gate operacional do que inventar
+   uma resolução falsa" (texto do adendo). A capacidade (Protocol +
+   resolvedor validado) fica pronta e testada isoladamente
+   (`test_magnata_os_classificacao_vinculo_unidade_prestacao.py`,
+   casos A-H) para quando uma fonte real existir — nenhum trabalho
+   perdido, só não gateado ainda.
+2. **CONFLITO global por 1 candidato descartável.** `resolver_relacao_
+   documental_dentre_candidatos` tratava QUALQUER evidência
+   contraditória, de QUALQUER candidato, como CONFLITO da resolução
+   INTEIRA — um candidato mal formado impedia outro, forte e coerente,
+   de ser resolvido. **Corrigido**: avaliação por candidato — um
+   candidato contraditório fica incompatível (nunca elegível), mas
+   nunca contamina os demais; CONFLITO global só quando TODOS os
+   candidatos são contraditórios (a própria identidade de
+   `documento_a_id` fica em disputa, não um candidato isolado).
+
+A seção 2 (VINCULO/UNIDADE_POSTO) e a seção 3 (relação documental)
+abaixo foram atualizadas para refletir o estado CORRIGIDO — o texto
+anterior a este adendo não é apagado silenciosamente onde ainda é
+relevante como contexto, mas as afirmações de estado (o que está
+`OBRIGATORIA` hoje, o que resolve e quando) refletem a correção.
+
 ## 1. Auditoria prévia (§1 da missão)
 
 Antes de criar qualquer contrato novo, o repositório foi auditado para
@@ -47,32 +88,39 @@ os conceitos que a missão pediu para provar ausência/presença:
 Ver `magnata_os/classificacao/vinculo_unidade_prestacao.py` (módulo
 novo, docstring completa no próprio arquivo). Resumo das decisões:
 
-- **VÍNCULO** passou a ser resolvido por ESPELHAMENTO da resolução já
-  feita para CLIENTE (que já é derivada de vínculo via
-  `vinculos_prestacao.resolver_clientes_validado`) — nenhum produtor de
-  I/O novo. Promovido a `OBRIGATORIA` em todo perfil de granularidade
-  colaborador (`perfil_aplicabilidade_documental.py`) — nunca em
-  granularidade cliente/broadcast, onde não há vínculo de colaborador
-  envolvido.
+- **VÍNCULO** (CORRIGIDO pelo adendo pré-merge, ver seção 0): nunca mais
+  espelha CLIENTE. Resolvido exclusivamente por uma fonte REAL
+  (`FonteVinculoPrestacao`, Protocol, mesmo padrão de
+  `FonteUnidadePostoPrestacao`) via `resolver_vinculo_validado` — nunca
+  fabrica `ReferenciaCanonica('VINCULO', ...)`. Como nenhuma fonte real
+  de produção existe ainda, permanece `NAO_APLICAVEL` em TODO perfil
+  (`perfil_aplicabilidade_documental.py`) — a capacidade está pronta e
+  testada isoladamente (casos A-E,
+  `test_magnata_os_classificacao_vinculo_unidade_prestacao.py`), sem
+  gatear o corredor até haver prova de uma fonte real.
 - **UNIDADE_POSTO** ganhou um produtor real
   (`FonteUnidadePostoPrestacao`, Protocol, nunca Airtable direto no
   core) com cardinalidade múltipla genuína — um colaborador com 2
   postos legítimos na mesma competência nunca é colapsado a 1 (provado
-  pelo Caso E2E-B). Promovido a `OBRIGATORIA` **somente para Holerite**
-  — a única família com regra semântica comprovada e demanda E2E
-  explícita nesta missão. As demais famílias de granularidade
+  pelo Caso E2E-B/Caso H). Promovido a `OBRIGATORIA` **somente para
+  Holerite** — a única família com regra semântica comprovada e demanda
+  E2E explícita nesta missão. As demais famílias de granularidade
   colaborador (Ponto, os 5 tipos de Comprovante, Relatório de
   Benefícios) permanecem com UNIDADE_POSTO `NAO_APLICAVEL` —
-  deliberado, não esquecido: nenhuma regra comprovada hoje exige posto
-  para essas famílias, e "não obrigar unidade/posto para família onde
-  ela realmente não importa" (§15 da missão) é uma cláusula tão
-  pétrea quanto a promoção em si.
-- **Temporalidade (§4)**: como o cadastro só expõe vínculo CORRENTE,
-  uma resolução de VÍNCULO para uma competência que NÃO é a corrente
-  carrega o motivo sanitizado `MOTIVO_VINCULO_ATUAL_COMO_PROXY`
-  (reaproveitando `ResolucaoDimensao.motivos`, campo já existente —
-  nenhum enum novo criado). Provado pelo Caso E2E-C: o vínculo corrente
-  nunca vira verdade histórica silenciosa.
+  deliberado, não esquecido.
+- **Temporalidade (§4, corrigida pelo adendo)**: a responsabilidade de
+  decidir se uma competência histórica está comprovada é inteiramente
+  da FONTE (nunca deste módulo) — quando a fonte só conhece o vínculo/
+  posto CORRENTE e a competência pedida é histórica sem vigência
+  provada, ela devolve `NAO_ENCONTRADA` (nunca `RESOLVIDA` com um
+  motivo anexado só para registrar a ressalva — o motivo NUNCA muda o
+  SIGNIFICADO do estado). Vocabulário sanitizado disponível para
+  qualquer fonte real:
+  `vinculo_unidade_prestacao.MOTIVO_VINCULO_HISTORICO_SEM_VIGENCIA`.
+  Provado pelos Casos C/G (`test_magnata_os_classificacao_vinculo_
+  unidade_prestacao.py`): vínculo/posto corrente nunca vira verdade
+  histórica silenciosa; Caso D prova que, quando a fonte REALMENTE
+  comprova a competência histórica, `RESOLVIDA` é correto.
 
 ## 3. Relação Documento↔Documento — capacidade genérica (§5-§9)
 
@@ -106,6 +154,17 @@ documental). Um identificador DIVERGENTE entre os dois documentos é a
 única evidência que sozinha decide — mas decide `CONFLITO`, nunca uma
 relação — proteção deliberadamente assimétrica (fácil recusar, difícil
 afirmar).
+
+**CORRIGIDO pelo adendo pré-merge (ver seção 0)**:
+`resolver_relacao_documental_dentre_candidatos` agora avalia cada
+candidato ISOLADAMENTE. Um candidato com evidência contraditória fica
+incompatível (nunca elegível a vencedor), mas nunca mais contamina os
+demais candidatos com um `CONFLITO` global — só quando TODOS os
+candidatos são contraditórios a resolução inteira vira `CONFLITO`
+(nenhuma decisão válida é sequer possível). Provado pelos casos
+adendo-I/J/K/L/M
+(`test_magnata_os_classificacao_relacao_documental.py`,
+`test_magnata_os_classificacao_e2e_vinculo_unidade_relacao_v1.py`).
 
 ### Benefícios — relatório↔comprovante (§6-§8)
 
@@ -176,14 +235,14 @@ motivo documentado aqui, nunca silenciado.
 
 | Família | Estado |
 |---|---|
-| Holerite | AUTOMATIZADO (tipo, competência, colaborador, cliente, vínculo, unidade/posto — todos resolvidos automaticamente) |
-| Folha de Ponto | PARCIAL (perfil cadastrado, granularidade colaborador; vínculo obrigatório resolvido; unidade/posto NAO_APLICAVEL por decisão registrada) |
+| Holerite | AUTOMATIZADO (tipo, competência, colaborador, cliente, unidade/posto — todos resolvidos automaticamente; VINCULO fica NAO_APLICAVEL até existir fonte real, ver seção 0) |
+| Folha de Ponto | PARCIAL (perfil cadastrado, granularidade colaborador; VINCULO/UNIDADE_POSTO NAO_APLICAVEL por decisão registrada) |
 | Extrato da Folha de Pagamento | AUTOMATIZADO (broadcast cliente, perfil já cadastrado desde missões anteriores) |
 | FGTS (Guia) | AUTOMATIZADO (cliente-level, perfil preservado do PR #105) |
 | FGTS (Comprovante de Pagamento) | AUTOMATIZADO para classificação/cliente; SEM_EVIDENCIA_RELACIONAL para o vínculo Guia↔Comprovante em produção real — capacidade construída e testada (Caso E2E-G), não plugada no corredor ainda (ver seção 4) |
 | DCTFWeb — Declaração / Recibo / Guia/DARF | AUTOMATIZADO (broadcast, perfis preservados do PR #105) |
-| Comprovante de Pagamento - Salário | PARCIAL (perfil cadastrado, granularidade colaborador; vínculo obrigatório; unidade/posto NAO_APLICAVEL por decisão) |
-| Relatório de Benefícios | PARCIAL (tipo/competência/colaborador/cliente/vínculo resolvidos; relação com o comprovante correspondente é SEM_EVIDENCIA_RELACIONAL até a costura da seção 4) |
+| Comprovante de Pagamento - Salário | PARCIAL (perfil cadastrado, granularidade colaborador; VINCULO/UNIDADE_POSTO NAO_APLICAVEL por decisão) |
+| Relatório de Benefícios | PARCIAL (tipo/competência/colaborador/cliente resolvidos, VINCULO NAO_APLICAVEL; relação com o comprovante correspondente é SEM_EVIDENCIA_RELACIONAL até a costura da seção 4) |
 | Comprovante de Pagamento - VR/VA | PARCIAL (mesmo estado do Relatório de Benefícios — a relação lógica com o relatório é a peça pendente) |
 | Comprovante de Pagamento - Assiduidade / Diárias / Horas Extras | PARCIAL (mesmo padrão dos demais Comprovante-* — perfil cadastrado, unidade/posto NAO_APLICAVEL por decisão) |
 | Certidões | SEM_PERFIL (§13 — regra de competência/granularidade não comprovada) |

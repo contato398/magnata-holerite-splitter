@@ -69,8 +69,9 @@ from .reconciliacao_origem_conteudo import (
 from .resolucao_semantica import compor_resolucao_semantica, resolucao_competencia_de_validacao
 from .vinculo_unidade_prestacao import (
     FonteUnidadePostoPrestacao,
-    resolucao_vinculo_a_partir_de_cliente,
+    FonteVinculoPrestacao,
     resolver_unidade_posto_validado,
+    resolver_vinculo_validado,
 )
 from .vinculos_prestacao import FonteVinculosPrestacao, resolver_clientes_validado
 
@@ -114,15 +115,15 @@ class ContextoResolucaoDocumentoPrestacao:
     "EVIDÊNCIA RELACIONAL DOCUMENTO↔DOCUMENTO + VÍNCULO/UNIDADE_POSTO
     REAIS") -- só consultada quando o perfil do tipo resolvido marca
     UNIDADE_POSTO como aplicável (hoje: só Holerite)."""
-    competencia_e_corrente: bool = True
-    """Se a `competencia_esperada` deste documento é a competência
-    CORRENTE do ciclo (nunca lido do relógio aqui -- decidido por quem
-    orquestra). Usado só pela dimensão VINCULO (§4 da missão): quando
-    `False`, o vínculo corrente resolvido carrega o motivo sanitizado
-    de que está sendo usado como proxy para uma competência histórica
-    -- nunca promovido a verdade histórica silenciosa. Default `True`
-    preserva o comportamento anterior (sem ressalva) para quem já usa
-    este contexto sem se preocupar com competência histórica."""
+    fonte_vinculo_real: Optional[FonteVinculoPrestacao] = None
+    """Fonte substituível para a dimensão VINCULO EM SI (corrigido pelo
+    adendo pré-merge ao PR #106 -- nunca mais fabricada por espelhamento
+    de CLIENTE). Só consultada quando o perfil do tipo resolvido marca
+    VINCULO como aplicável -- hoje NENHUM perfil marca (revertido para
+    NAO_APLICAVEL até existir uma fonte real de produção; ver
+    `perfil_aplicabilidade_documental.py`), então este campo hoje não
+    tem efeito em nenhum corredor real -- mantido pronto para quando um
+    perfil futuro precisar dele, com prova de necessidade."""
     contexto_fontes_fingerprint: str = 'sem-fontes-externas'
 
 
@@ -251,20 +252,32 @@ def _resolver_unidade_posto(
 def _resolver_vinculo(
     regra_aplicavel: bool,
     colaborador_resolvido: Optional[ReferenciaCanonica],
-    resolucao_cliente: ResolucaoDimensao,
-    competencia_e_corrente: bool,
+    fonte_vinculo_real: Optional[FonteVinculoPrestacao],
+    competencia_confirmada: Optional[ReferenciaCanonica],
 ) -> ResolucaoDimensao:
+    """Mesmo padrão de `_resolver_unidade_posto` -- corrigido pelo
+    adendo pré-merge ao PR #106: nunca mais fabrica a identidade do
+    vínculo por espelhamento de CLIENTE. Só resolve de verdade quando
+    uma fonte REAL está disponível; caso contrário fica `NAO_AVALIADA`
+    (nunca `RESOLVIDA` por decreto)."""
     if not regra_aplicavel:
         return ResolucaoDimensao(dimensao=DimensaoResolucao.VINCULO, estado=EstadoResolucaoDimensao.NAO_APLICAVEL)
     if colaborador_resolvido is None:
-        # CLIENTE não foi derivado de um colaborador único resolvido
-        # (ex.: colaborador ainda NAO_AVALIADA/AMBIGUA) -- espelhar sem
-        # inventar uma identidade de colaborador para o vínculo.
         return ResolucaoDimensao(
             dimensao=DimensaoResolucao.VINCULO, estado=EstadoResolucaoDimensao.NAO_AVALIADA,
             metodo='resolucao_documento_prestacao', motivos=('colaborador_nao_resolvido_para_derivar_vinculo',),
         )
-    return resolucao_vinculo_a_partir_de_cliente(colaborador_resolvido, resolucao_cliente, competencia_e_corrente)
+    if competencia_confirmada is None:
+        return ResolucaoDimensao(
+            dimensao=DimensaoResolucao.VINCULO, estado=EstadoResolucaoDimensao.NAO_AVALIADA,
+            metodo='resolucao_documento_prestacao', motivos=('competencia_nao_resolvida_para_derivar_vinculo',),
+        )
+    if fonte_vinculo_real is None:
+        return ResolucaoDimensao(
+            dimensao=DimensaoResolucao.VINCULO, estado=EstadoResolucaoDimensao.NAO_AVALIADA,
+            metodo='resolucao_documento_prestacao', motivos=('fonte_vinculo_real_nao_informada',),
+        )
+    return resolver_vinculo_validado(fonte_vinculo_real, colaborador_resolvido, competencia_confirmada)
 
 
 def processar_documento_prestacao(
@@ -367,7 +380,7 @@ def processar_documento_prestacao(
     )
     resolucao_vinculo = _resolver_vinculo(
         regra_vinculo.aplicabilidade != AplicabilidadeDimensao.NAO_APLICAVEL,
-        colaborador_confirmado, resolucao_cliente, contexto.competencia_e_corrente,
+        colaborador_confirmado, contexto.fonte_vinculo_real, competencia_confirmada,
     )
 
     entrada = EntradaResolucaoDocumento(

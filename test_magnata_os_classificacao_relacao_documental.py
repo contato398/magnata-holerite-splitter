@@ -1,6 +1,9 @@
 """Testes de `relacao_documental.py` (missão "MERGE PR #105 + EVIDÊNCIA
 RELACIONAL DOCUMENTO↔DOCUMENTO + VÍNCULO/UNIDADE_POSTO REAIS +
-FECHAMENTO DO UNIVERSO DOCUMENTAL V1", §5-§9)."""
+FECHAMENTO DO UNIVERSO DOCUMENTAL V1", §5-§9; correção de
+`resolver_relacao_documental_dentre_candidatos` pelo "ADENDO PRÉ-MERGE
+AO PR #106", §6-§10 -- avaliação por candidato, nunca CONFLITO global
+por causa de 1 candidato descartável)."""
 import re
 
 from magnata_os.classificacao.contratos import EstadoResolucaoDimensao, NivelConfianca
@@ -166,3 +169,61 @@ def test_resolvida_exige_documento_b_id_invariante_estrutural():
             documento_a_id='a', tipo_relacao=TipoRelacaoDocumental.COMPROVA,
             estado=EstadoResolucaoDimensao.RESOLVIDA,
         )
+
+
+# --- Adendo pré-merge ao PR #106, §6-§10: candidato contraditório nunca contamina os demais ---
+
+def test_adendo_i_candidato_contraditorio_isolado_nao_impede_candidato_forte():
+    candidatos = (
+        ('doc-b1', (_ev(NivelConfianca.FORTE, contraditoria=True),)),
+        ('doc-b2', (_ev(NivelConfianca.MODERADA), _ev(NivelConfianca.MODERADA))),
+    )
+    r = resolver_relacao_documental_dentre_candidatos('doc-a', TipoRelacaoDocumental.COMPROVA, candidatos)
+    assert r.estado == EstadoResolucaoDimensao.RESOLVIDA
+    assert r.documento_b_id == 'doc-b2'
+
+
+def test_adendo_j_dois_candidatos_fortes_coerentes_ambigua():
+    candidatos = (
+        ('doc-b1', (_ev(NivelConfianca.MODERADA), _ev(NivelConfianca.MODERADA))),
+        ('doc-b2', (_ev(NivelConfianca.MODERADA), _ev(NivelConfianca.MODERADA))),
+    )
+    r = resolver_relacao_documental_dentre_candidatos('doc-a', TipoRelacaoDocumental.COMPROVA, candidatos)
+    assert r.estado == EstadoResolucaoDimensao.AMBIGUA
+
+
+def test_adendo_k_todos_candidatos_contraditorios_vira_conflito():
+    candidatos = (
+        ('doc-b1', (_ev(NivelConfianca.FORTE, contraditoria=True),)),
+        ('doc-b2', (_ev(NivelConfianca.MODERADA, contraditoria=True),)),
+    )
+    r = resolver_relacao_documental_dentre_candidatos('doc-a', TipoRelacaoDocumental.COMPROVA, candidatos)
+    assert r.estado == EstadoResolucaoDimensao.CONFLITO
+
+
+def test_adendo_l_candidato_apenas_com_valor_igual_nao_resolve():
+    candidatos = (
+        ('doc-b1', (_ev(NivelConfianca.MODERADA),)),
+    )
+    r = resolver_relacao_documental_dentre_candidatos('doc-a', TipoRelacaoDocumental.COMPROVA, candidatos)
+    assert r.estado == EstadoResolucaoDimensao.NAO_ENCONTRADA
+
+
+def test_adendo_m_mesmo_id_e_competencia_resolve_pela_combinacao_ja_estabelecida():
+    candidatos = (
+        ('doc-b1', (_ev(NivelConfianca.MODERADA), _ev(NivelConfianca.MODERADA))),
+    )
+    r = resolver_relacao_documental_dentre_candidatos('doc-a', TipoRelacaoDocumental.COMPROVA, candidatos)
+    assert r.estado == EstadoResolucaoDimensao.RESOLVIDA
+    assert r.documento_b_id == 'doc-b1'
+
+
+def test_adendo_candidato_incompativel_isolado_nao_e_elegivel_mesmo_sem_outro_candidato():
+    """Um único candidato, contraditório -- nunca resolve, nunca vira
+    'o único então serve'."""
+    candidatos = (
+        ('doc-b1', (_ev(NivelConfianca.FORTE, contraditoria=True),)),
+    )
+    r = resolver_relacao_documental_dentre_candidatos('doc-a', TipoRelacaoDocumental.COMPROVA, candidatos)
+    assert r.estado == EstadoResolucaoDimensao.CONFLITO
+    assert r.documento_b_id is None

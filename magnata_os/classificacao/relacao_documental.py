@@ -216,10 +216,26 @@ def resolver_relacao_documental_dentre_candidatos(
 ) -> ResolucaoRelacaoDocumental:
     """Resolve a relação de `documento_a_id` dentre N candidatos a
     `documento_b_id` (ex.: um relatório de benefícios com vários
-    comprovantes possíveis). Nunca escolhe por decreto: só `RESOLVIDA`
-    quando exatamente 1 candidato atinge força combinada FORTE; 2+
-    empatados em FORTE -> `AMBIGUA` (nunca um escolhido arbitrariamente,
-    mesmo princípio de cardinalidade de `vinculo_unidade_prestacao`)."""
+    comprovantes possíveis).
+
+    CORREÇÃO (adendo pré-merge ao PR #106, Problema 2): a versão
+    anterior tratava QUALQUER evidência contraditória, de QUALQUER
+    candidato, como um CONFLITO GLOBAL -- um único candidato mal
+    formado (ex.: identificador de pedido errado) impedia outro
+    candidato, coerente e forte, de ser resolvido. Corrigido: cada
+    candidato é avaliado ISOLADAMENTE. Um candidato com evidência
+    contraditória fica INCOMPATÍVEL (nunca elegível a vencedor, mas
+    também nunca contamina os demais). Só então:
+      - 0 candidatos elegíveis (força combinada FORTE, sem
+        contradição): `NAO_ENCONTRADA` se havia ao menos um candidato
+        não-contraditório sem força suficiente; `CONFLITO` só quando
+        TODOS os candidatos são contraditórios (nenhuma decisão válida
+        é sequer possível -- a própria identidade de `documento_a_id`
+        está em disputa, não um candidato descartável isolado);
+      - exatamente 1 elegível -> `RESOLVIDA`;
+      - 2+ elegíveis -> `AMBIGUA` (nunca escolhido arbitrariamente,
+        mesmo princípio de cardinalidade de `vinculo_unidade_prestacao`).
+    """
     if not documento_a_id or not documento_a_id.strip():
         raise ValueError('documento_a_id deve ser texto nao vazio')
     if not candidatos:
@@ -232,30 +248,38 @@ def resolver_relacao_documental_dentre_candidatos(
     todas_evidencias: Tuple[EvidenciaRelacaoDocumental, ...] = tuple(
         evidencia for _, evidencias_candidato in candidatos for evidencia in evidencias_candidato
     )
-    if any(evidencia.contraditoria for evidencia in todas_evidencias):
+
+    incompativeis = tuple(
+        documento_b_id for documento_b_id, evidencias_candidato in candidatos
+        if any(evidencia.contraditoria for evidencia in evidencias_candidato)
+    )
+    if len(incompativeis) == len(candidatos):
+        # Todos os candidatos são contraditórios -- nenhuma decisão
+        # válida é possível; a própria identidade de documento_a_id
+        # está em disputa (nunca "um candidato descartável isolado").
         return ResolucaoRelacaoDocumental(
             documento_a_id=documento_a_id, tipo_relacao=tipo_relacao,
             estado=EstadoResolucaoDimensao.CONFLITO, evidencias=todas_evidencias,
             candidatos_documento_b_id=tuple(documento_b_id for documento_b_id, _ in candidatos),
             confianca=ConfiancaResolucao(NivelConfianca.FORTE),
-            motivos=('evidencia_contraditoria_de_relacao_documental',),
+            motivos=('todos_os_candidatos_de_relacao_documental_sao_contraditorios',),
         )
 
-    fortes = tuple(
+    elegiveis = tuple(
         documento_b_id for documento_b_id, evidencias_candidato in candidatos
-        if _forca_combinada(evidencias_candidato) == NivelConfianca.FORTE
+        if documento_b_id not in incompativeis and _forca_combinada(evidencias_candidato) == NivelConfianca.FORTE
     )
-    if len(fortes) == 1:
-        evidencias_vencedoras = next(ev for doc_id, ev in candidatos if doc_id == fortes[0])
+    if len(elegiveis) == 1:
+        evidencias_vencedoras = next(ev for doc_id, ev in candidatos if doc_id == elegiveis[0])
         return ResolucaoRelacaoDocumental(
             documento_a_id=documento_a_id, tipo_relacao=tipo_relacao,
-            estado=EstadoResolucaoDimensao.RESOLVIDA, documento_b_id=fortes[0], evidencias=evidencias_vencedoras,
-            confianca=ConfiancaResolucao(NivelConfianca.FORTE),
+            estado=EstadoResolucaoDimensao.RESOLVIDA, documento_b_id=elegiveis[0],
+            evidencias=evidencias_vencedoras, confianca=ConfiancaResolucao(NivelConfianca.FORTE),
         )
-    if len(fortes) >= 2:
+    if len(elegiveis) >= 2:
         return ResolucaoRelacaoDocumental(
             documento_a_id=documento_a_id, tipo_relacao=tipo_relacao,
-            estado=EstadoResolucaoDimensao.AMBIGUA, candidatos_documento_b_id=fortes, evidencias=todas_evidencias,
+            estado=EstadoResolucaoDimensao.AMBIGUA, candidatos_documento_b_id=elegiveis, evidencias=todas_evidencias,
             confianca=ConfiancaResolucao(NivelConfianca.FORTE),
             motivos=('multiplos_candidatos_empatados_em_relacao_documental',),
         )
