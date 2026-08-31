@@ -401,6 +401,13 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # compartilhada) e E2E de wiring dos bloqueios fechados.
   "test_airtable_cliente_direto_documento.py"
   "test_magnata_os_classificacao_e2e_bloqueios_corredor_live_v2.py"
+  # Exceção exata (decisão registrada, missão "CONSTRUIR ORQUESTRADOR
+  # REAL READ-ONLY DO CORREDOR V2 + PREPARAR PRIMEIRO LIVE CONTROLADO
+  # SEM EXECUTÁ-LO", branch fix/orquestrador-readonly-corredor-v2).
+  # Mantém test_* bloqueado por padrão e libera somente estes testes
+  # nominais novos: orquestrador canônico e composição de borda.
+  "test_magnata_os_classificacao_orquestrador_corredor_readonly.py"
+  "test_importacao_lote_composicao_corredor_readonly.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

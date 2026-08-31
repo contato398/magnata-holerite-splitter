@@ -19,8 +19,10 @@ from magnata_os.classificacao import (
     corredor_relacao_documental,
     fonte_candidatos_relacao_documental,
     fonte_candidatos_relacao_documental_do_inventario,
+    fonte_cliente_direto_documento,
     identificacao_documental,
     inventario_prestacao_memoria,
+    orquestrador_corredor_readonly,
     perfil_aplicabilidade_documental,
     politica_consequencia_relacao_documental,
     ponte_conteudo_motor_semantico,
@@ -46,6 +48,13 @@ _MODULOS_DO_CORREDOR_SEMANTICO = (
     politica_consequencia_relacao_documental,
     corredor_relacao_documental,
     fonte_candidatos_relacao_documental_do_inventario,
+    # Missão "CONSTRUIR ORQUESTRADOR REAL READ-ONLY DO CORREDOR V2":
+    # orquestrador canônico/puro -- recebe só Protocols, nunca Airtable
+    # (a composição de borda com adapters reais vive em
+    # `importacao_lote/composicao_corredor_readonly.py`, DELIBERADAMENTE
+    # fora desta lista -- ver teste de "positive control" abaixo).
+    fonte_cliente_direto_documento,
+    orquestrador_corredor_readonly,
 )
 
 
@@ -65,6 +74,33 @@ def test_nenhum_modulo_do_corredor_semantico_importa_airtable():
         nomes = _nomes_de_modulos_importados(modulo)
         achados = {nome for nome in nomes if 'airtable' in nome.lower()}
         assert not achados, f'{modulo.__name__} importa airtable diretamente: {achados!r}'
+
+
+def test_nenhum_modulo_do_corredor_semantico_importa_requests():
+    """Mesmo princípio, para `requests` (transporte HTTP do adapter
+    real) -- o core nunca faz I/O de rede, só compõe Protocols."""
+    for modulo in _MODULOS_DO_CORREDOR_SEMANTICO:
+        nomes = _nomes_de_modulos_importados(modulo)
+        assert 'requests' not in nomes, f'{modulo.__name__} importa requests diretamente'
+
+
+def test_composicao_de_borda_e_deliberadamente_a_unica_que_importa_adapters_reais():
+    """"Positive control" (missão "CONSTRUIR ORQUESTRADOR REAL READ-ONLY
+    DO CORREDOR V2", §34): prova que a fronteira Protocol/adapter não
+    está escondida por acidente -- `composicao_corredor_readonly.py`
+    (borda) IMPORTA os adapters reais (nunca reimplementados lá) e NÃO
+    está na lista `_MODULOS_DO_CORREDOR_SEMANTICO` acima; o orquestrador
+    canônico (`orquestrador_corredor_readonly.py`, na lista acima) só
+    conhece os Protocols correspondentes."""
+    from magnata_os.documental.importacao_lote import composicao_corredor_readonly
+
+    nomes_borda = _nomes_de_modulos_importados(composicao_corredor_readonly)
+    achados_airtable = {nome for nome in nomes_borda if 'airtable' in nome.lower()}
+    assert achados_airtable, 'composicao_corredor_readonly.py deveria importar os adapters reais'
+
+    nomes_core = _nomes_de_modulos_importados(orquestrador_corredor_readonly)
+    assert not any('airtable' in nome.lower() for nome in nomes_core)
+    assert 'requests' not in nomes_core
 
 
 def test_ponte_conteudo_motor_semantico_so_conhece_texto_nunca_fonte_de_dados():
