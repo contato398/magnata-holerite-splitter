@@ -61,25 +61,34 @@ finalidade suficiente para nenhuma granularidade — permanece
 DCTF/DARF, ou outra). Nunca um pacote automático global para um tipo
 ainda inconclusivo.
 
-VINCULO/UNIDADE_POSTO (Adendo substitutivo ao PR #105, §14): nenhuma
-entrada abaixo marca VINCULO ou UNIDADE_POSTO como aplicável. Isto é
-uma **LIMITAÇÃO TÉCNICA TEMPORÁRIA**, não uma afirmação de que essas
-dimensões "não se aplicam" ao domínio — VINCULO é exatamente o que
-relaciona COLABORADOR a CLIENTE/CONDOMÍNIO, semanticamente central para
-toda família de granularidade colaborador. A razão técnica: nenhum
-produtor de evidência resolve VINCULO como dimensão PRÓPRIA isolada
-hoje (o que existe, `vinculos_prestacao.FonteVinculosPrestacao`,
-resolve diretamente CLIENTE a partir de COLABORADOR — o vínculo já
-MATERIALIZADO em CLIENTE, nunca exposto como uma `ResolucaoDimensao`
-independente); marcar VINCULO como OBRIGATORIA/OPCIONAL sem esse
-produtor geraria `NAO_AVALIADA` permanente, o que `compor_resolucao_
-semantica` (já existente, nunca alterado aqui) trata como impedimento a
-`RESOLVIDA` consolidado — bloquearia PERMANENTEMENTE o auto-avanço de
-toda família. `NAO_APLICAVEL` aqui é o valor tecnicamente necessário
-para não travar o corredor HOJE — o objetivo real e declarado é
-transformar VINCULO numa dimensão de fato resolvida assim que existir
-um produtor real, nunca ignorá-la de propósito. Mesma cautela para
-UNIDADE_POSTO."""
+VINCULO (Adendo substitutivo ao PR #105, §14; PROMOVIDO pela missão
+"EVIDÊNCIA RELACIONAL DOCUMENTO↔DOCUMENTO + VÍNCULO/UNIDADE_POSTO
+REAIS"): agora **OBRIGATORIA** (cardinalidade múltipla) em todo perfil
+de granularidade colaborador — deixou de ser limitação técnica: o
+produtor real (`vinculo_unidade_prestacao.resolucao_vinculo_a_partir_
+de_cliente`) espelha a MESMA resolução de CLIENTE (já derivada de
+vínculo por `vinculos_prestacao.resolver_clientes_validado`, nunca
+reavaliada) como sua própria dimensão — nenhum produtor novo de I/O
+necessário, nenhum bloqueio novo introduzido (sempre que CLIENTE
+resolve, VINCULO resolve junto, mesmo estado). Continua `NAO_APLICAVEL`
+nas famílias `granularidade_cliente`/`broadcast`, onde não há vínculo
+de colaborador envolvido.
+
+UNIDADE_POSTO: PROMOVIDA a **OBRIGATORIA** (cardinalidade múltipla,
+nunca escolhida arbitrariamente quando o colaborador tem mais de um
+posto na competência) **somente para Holerite** — o único caso com
+regra semântica comprovada nesta missão (Fase 5 original: "Holerite:
+unidade_posto quando fonte/vínculo permitir"; teste E2E A desta missão
+exige a cadeia completa colaborador→vínculo→posto→cliente→pacote para
+Holerite). Para as DEMAIS famílias de granularidade colaborador
+(Ponto, Comprovantes, Relatório de Benefícios), permanece
+`NAO_APLICAVEL` — decisão registrada, não escondida: nenhuma regra de
+negócio comprovada exige posto para essas famílias nesta missão (§15:
+"não obrigar unidade/posto para família onde ela realmente não
+importa"); promover globalmente exigiria `fonte_unidade_posto`
+configurada em TODO chamador dessas famílias sem nenhuma prova de que
+isso é semanticamente necessário — mais seguro promover só onde há
+prova, e estender depois com prova nova."""
 from __future__ import annotations
 
 from typing import Dict, Optional
@@ -105,14 +114,15 @@ def _tipo_obrigatorio():
     return _regra(DimensaoResolucao.TIPO_DOCUMENTAL, AplicabilidadeDimensao.OBRIGATORIA, _OBRIGATORIA_UNICA)
 
 
-# VINCULO: NAO_APLICAVEL em todo perfil -- LIMITAÇÃO TÉCNICA TEMPORÁRIA
-# (nenhum produtor de evidência resolve esta dimensão isoladamente
-# ainda), não uma afirmação de que vínculo não importa -- ver docstring
-# do módulo.
+# VINCULO: NAO_APLICAVEL só nas famílias sem vínculo de colaborador
+# (granularidade_cliente/broadcast) -- ver docstring do módulo.
 _VINCULO_NAO_APLICAVEL = _regra(DimensaoResolucao.VINCULO, AplicabilidadeDimensao.NAO_APLICAVEL, _NAO_APLICAVEL)
+_VINCULO_OBRIGATORIO = _regra(DimensaoResolucao.VINCULO, AplicabilidadeDimensao.OBRIGATORIA, _OBRIGATORIA_MULTIPLA)
 
 
-def _perfil_granularidade_colaborador(perfil_id: str) -> PerfilAplicabilidadeResolucao:
+def _perfil_granularidade_colaborador(
+    perfil_id: str, unidade_posto_obrigatoria: bool = False,
+) -> PerfilAplicabilidadeResolucao:
     """Família cujo documento pertence a UM colaborador, cujo cliente é
     DERIVADO do vínculo do colaborador (Fase 5: "Holerite: conteúdo->
     colaborador->vínculo->cliente(s)", "Ponto: colaborador... cliente
@@ -122,18 +132,17 @@ def _perfil_granularidade_colaborador(perfil_id: str) -> PerfilAplicabilidadeRes
     vinculado a mais de um cliente na competência gera 1 item por
     cliente (`itens_para_multiplos_clientes_do_vinculo`, já existente).
 
-    UNIDADE_POSTO: NAO_APLICAVEL aqui, mesmo para Holerite (Fase 5 cita
-    "quando fonte/vínculo permitir") -- LIMITAÇÃO TÉCNICA TEMPORÁRIA
-    (ver docstring do módulo), não uma afirmação de que a dimensão não
-    importa: nenhum produtor resolve esta dimensão isoladamente ainda,
-    e `compor_resolucao_semantica` (já existente, nunca alterado aqui)
-    trata QUALQUER dimensão NAO_AVALIADA -- inclusive uma marcada
-    OPCIONAL sem produtor -- como impedimento a `RESOLVIDA` consolidado/
-    `pronto_para_routing_logico`. Marcar OPCIONAL sem um produtor real
-    bloquearia permanentemente o auto-avanço de toda a família -- mais
-    seguro declarar NAO_APLICAVEL agora e promover para OPCIONAL/
-    OBRIGATORIA quando um produtor real de UNIDADE_POSTO existir
-    (próxima macro-missão candidata)."""
+    VINCULO: OBRIGATORIA (cardinalidade múltipla) -- ver docstring do
+    módulo, "VINCULO ... PROMOVIDO".
+
+    `unidade_posto_obrigatoria`: só `True` para Holerite nesta missão
+    (ver docstring do módulo) -- as demais famílias continuam
+    NAO_APLICAVEL até haver regra semântica comprovada exigindo posto."""
+    regra_unidade_posto = (
+        _regra(DimensaoResolucao.UNIDADE_POSTO, AplicabilidadeDimensao.OBRIGATORIA, _OBRIGATORIA_MULTIPLA)
+        if unidade_posto_obrigatoria
+        else _regra(DimensaoResolucao.UNIDADE_POSTO, AplicabilidadeDimensao.NAO_APLICAVEL, _NAO_APLICAVEL)
+    )
     return PerfilAplicabilidadeResolucao(
         perfil_id=perfil_id, version='1', escopo_documental='granularidade_colaborador',
         regras=(
@@ -141,8 +150,8 @@ def _perfil_granularidade_colaborador(perfil_id: str) -> PerfilAplicabilidadeRes
             _regra(DimensaoResolucao.COMPETENCIA, AplicabilidadeDimensao.OBRIGATORIA, _OBRIGATORIA_UNICA),
             _regra(DimensaoResolucao.COLABORADOR, AplicabilidadeDimensao.OBRIGATORIA, _OBRIGATORIA_UNICA),
             _regra(DimensaoResolucao.CLIENTE, AplicabilidadeDimensao.OBRIGATORIA, _OBRIGATORIA_MULTIPLA),
-            _regra(DimensaoResolucao.UNIDADE_POSTO, AplicabilidadeDimensao.NAO_APLICAVEL, _NAO_APLICAVEL),
-            _VINCULO_NAO_APLICAVEL,
+            regra_unidade_posto,
+            _VINCULO_OBRIGATORIO,
         ),
     )
 
@@ -192,7 +201,7 @@ def _perfil_broadcast(perfil_id: str) -> PerfilAplicabilidadeResolucao:
 # a matriz completa (inclusive os tipos SEM perfil ainda, honestamente
 # marcados como tal, nunca escondidos).
 _PERFIS_POR_TIPO: Dict[str, PerfilAplicabilidadeResolucao] = {
-    'Holerite': _perfil_granularidade_colaborador('perfil-holerite'),
+    'Holerite': _perfil_granularidade_colaborador('perfil-holerite', unidade_posto_obrigatoria=True),
     'Folha de Ponto': _perfil_granularidade_colaborador('perfil-folha-de-ponto'),
     'Comprovante de Pagamento - Salário': _perfil_granularidade_colaborador('perfil-comprovante-salario'),
     'Comprovante de Pagamento - VR/VA': _perfil_granularidade_colaborador('perfil-comprovante-vr-va'),

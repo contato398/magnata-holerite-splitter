@@ -102,10 +102,21 @@ def test_resolver_documento_prestacao_so_recebe_fontes_via_protocol_injetado():
                 valores_confirmados=(ReferenciaCanonica('CLIENTE', 'cli-qualquer'),),
             )
 
+    class _FonteUnidadePostoPuroPython:
+        """Mesmo princípio para a dimensão UNIDADE_POSTO (missão
+        "EVIDÊNCIA RELACIONAL DOCUMENTO↔DOCUMENTO + VÍNCULO/UNIDADE_POSTO
+        REAIS") -- nunca Airtable, só o Protocol via duck typing."""
+
+        def resolver_unidade_posto(self, colaborador, competencia):
+            return ResolucaoDimensao(
+                dimensao=DimensaoResolucao.UNIDADE_POSTO, estado=EstadoResolucaoDimensao.RESOLVIDA,
+                valores_confirmados=(ReferenciaCanonica('UNIDADE_POSTO', 'posto-qualquer'),),
+            )
+
     contexto = ContextoResolucaoDocumentoPrestacao(
         documento_id='doc-arquitetura', hash_sha256='a' * 64, competencia_esperada=(2026, 7),
         candidatos_colaborador=[CandidatoFuncionario(func_id='f1', cpf='11122233344', nome_normalizado='X')],
-        fonte_vinculos=_FonteVinculosPuroPython(),
+        fonte_vinculos=_FonteVinculosPuroPython(), fonte_unidade_posto=_FonteUnidadePostoPuroPython(),
     )
     resultado = processar_documento_prestacao(
         'Recibo de Pagamento -- Total de Vencimentos\nCompetência: 07/2026\nCPF: 111.222.333-44', contexto,

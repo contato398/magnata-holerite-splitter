@@ -2,9 +2,11 @@
 ao PR #105 -- regra canônica de benefícios VR/VA/iFood; corrigido na
 2ª revisão pré-merge para nunca resolver por frase/rótulo isolado --
 sempre por COMBINAÇÃO de evidências estruturais)."""
-from magnata_os.classificacao.contratos import EstadoResolucaoDimensao
+from magnata_os.classificacao.contratos import EstadoResolucaoDimensao, ReferenciaCanonica
 from magnata_os.classificacao.produtores_evidencia_beneficios import (
     TIPO_RELATORIO_BENEFICIOS,
+    dados_correlacao_beneficios,
+    derivar_clientes_logicos_do_comprovante_global,
     hipoteses_de_relatorio_beneficios,
 )
 from magnata_os.classificacao.resolucao_tipo_documental import resolver_tipo_documental
@@ -164,3 +166,24 @@ def test_fornecedor_nao_e_import_nem_dependencia_do_core():
     import magnata_os.classificacao.produtores_evidencia_beneficios as modulo
     nomes_publicos = [nome for nome in dir(modulo) if not nome.startswith('_')]
     assert not any('ifood' in nome.lower() for nome in nomes_publicos)
+
+
+def test_dados_correlacao_beneficios_extrai_campos_comparaveis():
+    """§6 da missão "MERGE PR #105 + EVIDÊNCIA RELACIONAL...": os
+    campos usados para relacionar Relatório de Benefícios ↔
+    Comprovante -- mesma extração genérica de `relacao_documental`,
+    fornecedor injetado da lista já cadastrada aqui."""
+    texto = 'Relatório de Benefícios\nPedido no: P-42\nTotal do Pedido: R$ 900,00\niFood Benefícios'
+    dados = dados_correlacao_beneficios(texto)
+    assert dados.identificador_pedido == 'P-42'
+    assert dados.valor_total == '900,00'
+    assert dados.fornecedor == 'ifood benefícios'
+
+
+def test_derivar_clientes_logicos_do_comprovante_global_so_com_relacao_resolvida():
+    """§7/§8: comprovante GLOBAL só herda os clientes do relatório
+    relacionado quando a relação já está RESOLVIDA -- nunca por
+    suposição."""
+    clientes = (ReferenciaCanonica('CLIENTE', 'cli-a'), ReferenciaCanonica('CLIENTE', 'cli-b'))
+    assert derivar_clientes_logicos_do_comprovante_global(True, clientes) == clientes
+    assert derivar_clientes_logicos_do_comprovante_global(False, clientes) == ()

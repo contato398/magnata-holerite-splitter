@@ -855,6 +855,28 @@ ALLOWED_PATHS=(
   "^magnata_os/classificacao/produtores_evidencia_beneficios\.py$"
   "^test_magnata_os_classificacao_produtores_evidencia_beneficios\.py$"
   "^test_magnata_os_classificacao_adendo_beneficios_fgts_dedupe\.py$"
+  # Excecao exata e restrita (missao "MERGE PR #105 + EVIDENCIA RELACIONAL
+  # DOCUMENTO<->DOCUMENTO + VINCULO/UNIDADE_POSTO REAIS + FECHAMENTO DO
+  # UNIVERSO DOCUMENTAL V1", branch fix/evidencia-relacional-vinculo-
+  # unidade-v1) — produtor real de VINCULO (espelha CLIENTE ja derivado de
+  # vinculo, nenhum I/O novo) e UNIDADE_POSTO (fonte via Protocol,
+  # cardinalidade multipla genuina) com seus testes nominais; capacidade
+  # GENERICA de relacao semantica Documento<->Documento (nunca uma classe
+  # por familia/fornecedor) e seu teste nominal; suite E2E obrigatoria
+  # (casos A-J) desta missao; documento de decisao. Arquivos ja existentes
+  # tocados nesta missao (perfil_aplicabilidade_documental.py,
+  # resolucao_documento_prestacao.py, produtores_evidencia_beneficios.py e
+  # seus testes nominais, alem de test_magnata_os_classificacao_corpus_
+  # corredor_autonomo_pos_classificacao.py e test_magnata_os_
+  # classificacao_arquitetura_sem_dependencia_airtable.py) ja estavam no
+  # escopo permitido de missoes anteriores, nao precisam de nova entrada.
+  # Nao libera "^magnata_os/classificacao/" nem "^test_" de forma ampla.
+  "^magnata_os/classificacao/vinculo_unidade_prestacao\.py$"
+  "^test_magnata_os_classificacao_vinculo_unidade_prestacao\.py$"
+  "^magnata_os/classificacao/relacao_documental\.py$"
+  "^test_magnata_os_classificacao_relacao_documental\.py$"
+  "^test_magnata_os_classificacao_e2e_vinculo_unidade_relacao_v1\.py$"
+  "^docs/decisoes/evidencia-relacional-vinculo-unidade-v1\.md$"
 )
 
 # ============================================================================

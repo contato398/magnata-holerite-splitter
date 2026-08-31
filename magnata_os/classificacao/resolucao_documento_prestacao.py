@@ -67,6 +67,11 @@ from .reconciliacao_origem_conteudo import (
     tipo_resolvido_da_dimensao,
 )
 from .resolucao_semantica import compor_resolucao_semantica, resolucao_competencia_de_validacao
+from .vinculo_unidade_prestacao import (
+    FonteUnidadePostoPrestacao,
+    resolucao_vinculo_a_partir_de_cliente,
+    resolver_unidade_posto_validado,
+)
 from .vinculos_prestacao import FonteVinculosPrestacao, resolver_clientes_validado
 
 
@@ -104,6 +109,20 @@ class ContextoResolucaoDocumentoPrestacao:
     cliente já é conhecido pela ORIGEM do documento (ex.: um registro
     Airtable já vinculado a 1 cliente) -- nunca inferido aqui, sempre
     informado por quem orquestra a partir de um contexto real."""
+    fonte_unidade_posto: Optional[FonteUnidadePostoPrestacao] = None
+    """Fonte substituível para a dimensão UNIDADE_POSTO (missão
+    "EVIDÊNCIA RELACIONAL DOCUMENTO↔DOCUMENTO + VÍNCULO/UNIDADE_POSTO
+    REAIS") -- só consultada quando o perfil do tipo resolvido marca
+    UNIDADE_POSTO como aplicável (hoje: só Holerite)."""
+    competencia_e_corrente: bool = True
+    """Se a `competencia_esperada` deste documento é a competência
+    CORRENTE do ciclo (nunca lido do relógio aqui -- decidido por quem
+    orquestra). Usado só pela dimensão VINCULO (§4 da missão): quando
+    `False`, o vínculo corrente resolvido carrega o motivo sanitizado
+    de que está sendo usado como proxy para uma competência histórica
+    -- nunca promovido a verdade histórica silenciosa. Default `True`
+    preserva o comportamento anterior (sem ressalva) para quem já usa
+    este contexto sem se preocupar com competência histórica."""
     contexto_fontes_fingerprint: str = 'sem-fontes-externas'
 
 
@@ -198,6 +217,56 @@ def _resolver_cliente(
     )
 
 
+def _resolver_unidade_posto(
+    regra_aplicavel: bool,
+    resolucao_colaborador: ResolucaoDimensao,
+    fonte_unidade_posto: Optional[FonteUnidadePostoPrestacao],
+    competencia_confirmada: Optional[ReferenciaCanonica],
+) -> ResolucaoDimensao:
+    if not regra_aplicavel:
+        return ResolucaoDimensao(dimensao=DimensaoResolucao.UNIDADE_POSTO, estado=EstadoResolucaoDimensao.NAO_APLICAVEL)
+    if (
+        resolucao_colaborador.estado != EstadoResolucaoDimensao.RESOLVIDA
+        or len(resolucao_colaborador.valores_confirmados) != 1
+    ):
+        return ResolucaoDimensao(
+            dimensao=DimensaoResolucao.UNIDADE_POSTO, estado=EstadoResolucaoDimensao.NAO_AVALIADA,
+            metodo='resolucao_documento_prestacao', motivos=('colaborador_nao_resolvido_para_derivar_unidade_posto',),
+        )
+    if competencia_confirmada is None:
+        return ResolucaoDimensao(
+            dimensao=DimensaoResolucao.UNIDADE_POSTO, estado=EstadoResolucaoDimensao.NAO_AVALIADA,
+            metodo='resolucao_documento_prestacao', motivos=('competencia_nao_resolvida_para_derivar_unidade_posto',),
+        )
+    if fonte_unidade_posto is None:
+        return ResolucaoDimensao(
+            dimensao=DimensaoResolucao.UNIDADE_POSTO, estado=EstadoResolucaoDimensao.NAO_AVALIADA,
+            metodo='resolucao_documento_prestacao', motivos=('fonte_unidade_posto_nao_informada',),
+        )
+    return resolver_unidade_posto_validado(
+        fonte_unidade_posto, resolucao_colaborador.valores_confirmados[0], competencia_confirmada,
+    )
+
+
+def _resolver_vinculo(
+    regra_aplicavel: bool,
+    colaborador_resolvido: Optional[ReferenciaCanonica],
+    resolucao_cliente: ResolucaoDimensao,
+    competencia_e_corrente: bool,
+) -> ResolucaoDimensao:
+    if not regra_aplicavel:
+        return ResolucaoDimensao(dimensao=DimensaoResolucao.VINCULO, estado=EstadoResolucaoDimensao.NAO_APLICAVEL)
+    if colaborador_resolvido is None:
+        # CLIENTE não foi derivado de um colaborador único resolvido
+        # (ex.: colaborador ainda NAO_AVALIADA/AMBIGUA) -- espelhar sem
+        # inventar uma identidade de colaborador para o vínculo.
+        return ResolucaoDimensao(
+            dimensao=DimensaoResolucao.VINCULO, estado=EstadoResolucaoDimensao.NAO_AVALIADA,
+            metodo='resolucao_documento_prestacao', motivos=('colaborador_nao_resolvido_para_derivar_vinculo',),
+        )
+    return resolucao_vinculo_a_partir_de_cliente(colaborador_resolvido, resolucao_cliente, competencia_e_corrente)
+
+
 def processar_documento_prestacao(
     texto: Optional[str],
     contexto: ContextoResolucaoDocumentoPrestacao,
@@ -280,19 +349,25 @@ def processar_documento_prestacao(
         regra_cliente.aplicabilidade != AplicabilidadeDimensao.NAO_APLICAVEL,
         resolucao_colaborador, resolucao_competencia, contexto.fonte_vinculos, contexto.cliente_direto,
     )
-    # UNIDADE_POSTO/VINCULO: nenhum perfil cadastrado nesta missão marca
-    # nenhuma delas OBRIGATORIA/OPCIONAL (ver perfil_aplicabilidade_
-    # documental.py) -- sempre NAO_APLICAVEL, nunca um valor inventado.
-    resolucao_unidade_posto = ResolucaoDimensao(
-        dimensao=DimensaoResolucao.UNIDADE_POSTO, estado=EstadoResolucaoDimensao.NAO_APLICAVEL,
-    ) if regra_unidade_posto.aplicabilidade == AplicabilidadeDimensao.NAO_APLICAVEL else ResolucaoDimensao(
-        dimensao=DimensaoResolucao.UNIDADE_POSTO, estado=EstadoResolucaoDimensao.NAO_AVALIADA,
-        metodo='resolucao_documento_prestacao', motivos=('nenhum_produtor_de_unidade_posto_ainda',),
+    competencia_confirmada = (
+        resolucao_competencia.valores_confirmados[0]
+        if resolucao_competencia.estado == EstadoResolucaoDimensao.RESOLVIDA
+        and len(resolucao_competencia.valores_confirmados) == 1
+        else None
     )
-    resolucao_vinculo = ResolucaoDimensao(dimensao=DimensaoResolucao.VINCULO, estado=EstadoResolucaoDimensao.NAO_APLICAVEL) \
-        if regra_vinculo.aplicabilidade == AplicabilidadeDimensao.NAO_APLICAVEL else ResolucaoDimensao(
-        dimensao=DimensaoResolucao.VINCULO, estado=EstadoResolucaoDimensao.NAO_AVALIADA,
-        metodo='resolucao_documento_prestacao', motivos=('nenhum_produtor_de_vinculo_ainda',),
+    colaborador_confirmado = (
+        resolucao_colaborador.valores_confirmados[0]
+        if resolucao_colaborador.estado == EstadoResolucaoDimensao.RESOLVIDA
+        and len(resolucao_colaborador.valores_confirmados) == 1
+        else None
+    )
+    resolucao_unidade_posto = _resolver_unidade_posto(
+        regra_unidade_posto.aplicabilidade != AplicabilidadeDimensao.NAO_APLICAVEL,
+        resolucao_colaborador, contexto.fonte_unidade_posto, competencia_confirmada,
+    )
+    resolucao_vinculo = _resolver_vinculo(
+        regra_vinculo.aplicabilidade != AplicabilidadeDimensao.NAO_APLICAVEL,
+        colaborador_confirmado, resolucao_cliente, contexto.competencia_e_corrente,
     )
 
     entrada = EntradaResolucaoDocumento(

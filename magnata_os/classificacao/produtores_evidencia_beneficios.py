@@ -35,7 +35,8 @@ from __future__ import annotations
 import re
 from typing import Tuple
 
-from .contratos import EvidenciaSanitizada, NivelConfianca
+from .contratos import EvidenciaSanitizada, NivelConfianca, ReferenciaCanonica
+from .relacao_documental import DadosCorrelacaoDocumental, extrair_dados_correlacao_de_texto
 from .resolucao_tipo_documental import HipoteseTipoDocumental
 
 TIPO_RELATORIO_BENEFICIOS = 'Relatório de Benefícios'
@@ -150,3 +151,47 @@ def hipoteses_de_relatorio_beneficios(texto: str) -> Tuple[HipoteseTipoDocumenta
             forca=NivelConfianca.FRACA,
         ))
     return (HipoteseTipoDocumental(tipo_documental=TIPO_RELATORIO_BENEFICIOS, evidencias=tuple(evidencias)),)
+
+
+def dados_correlacao_beneficios(texto: str) -> DadosCorrelacaoDocumental:
+    """Extração dos campos comparáveis de RELAÇÃO (§6 da missão "MERGE
+    PR #105 + EVIDÊNCIA RELACIONAL...") para Relatório de Benefícios OU
+    seu Comprovante -- mesma função para os dois lados do par, já que o
+    extrator (`relacao_documental.extrair_dados_correlacao_de_texto`) é
+    genérico. O único detalhe específico de benefícios injetado aqui é
+    a lista de fornecedores JÁ cadastrada (`_FORNECEDORES_CONHECIDOS`,
+    reaproveitada -- nunca uma segunda lista paralela); o extrator em si
+    nunca conhece o nome de nenhum fornecedor (§5/§9: zero dependência
+    de fornecedor no core)."""
+    return extrair_dados_correlacao_de_texto(texto, padrao_fornecedor=_FORNECEDORES_CONHECIDOS)
+
+
+def derivar_clientes_logicos_do_comprovante_global(
+    relacao_resolvida: bool, clientes_do_relatorio: Tuple[ReferenciaCanonica, ...],
+) -> Tuple[ReferenciaCanonica, ...]:
+    """§7/§8 da missão: um COMPROVANTE GLOBAL de benefícios (1 documento
+    físico, 1 `documento_id`, nunca duplicado) só herda os clientes A/B/C
+    do RELATÓRIO relacionado quando a relação COMPROVA já está
+    `RESOLVIDA` (`relacao_resolvida=True`, decidido por
+    `relacao_documental.resolver_relacao_documental_par/_dentre_
+    candidatos` -- nunca reavaliado aqui) -- e SEMPRE o mesmo conjunto
+    de clientes já resolvido para o relatório (nunca um subconjunto
+    escolhido por este módulo, nunca um valor recalculado a partir do
+    comprovante isoladamente: "o comprovante nunca decompõe
+    individualmente, os valores sempre vêm do relatório").
+
+    Sem relação resolvida: `()` -- NUNCA um cliente é atribuído por
+    suposição (§6: "não inventar relação sem evidência"); o comprovante
+    fica sem clientes lógicos até haver evidência suficiente (revisão
+    humana a partir daí, via o mesmo roteamento de
+    `automacao_por_confianca` para NAO_ENCONTRADA).
+
+    Identidade física preservada: esta função NUNCA cria um novo
+    `documento_id` nem duplica o arquivo -- só devolve o CONJUNTO de
+    clientes que, em conjunto com o `documento_id` já existente do
+    comprovante, formam N relações lógicas via o MESMO mecanismo já
+    existente (`ItemInventarioPrestacao.identidade_logica`, §17 --
+    nunca alterado por esta função)."""
+    if not relacao_resolvida:
+        return ()
+    return clientes_do_relatorio
