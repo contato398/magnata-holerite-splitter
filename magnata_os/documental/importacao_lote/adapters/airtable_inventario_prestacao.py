@@ -62,6 +62,62 @@ def _ids_vinculados(valor: object) -> set[str]:
     }
 
 
+class FonteEscopoClientesPorInventarioAirtableShadow:
+    """Implementa `FonteEscopoClientesPrestacao.escopo_para_competencia`
+    (missão "MERGE PR #108 + FECHAR BLOQUEIOS REAIS DO CORREDOR LIVE
+    V2") -- fecha honestamente a lacuna registrada em `docs/decisoes/
+    adapters-reais-unidade-posto-candidatos-relacao-v1.md` §9/§13:
+    "nenhuma fonte real enumera clientes presentes no inventário de uma
+    competência, independente de atividade atual".
+
+    Evidência REAL: os MESMOS 2 vínculos de cliente já lidos em
+    produção por `FonteInventarioPrestacaoAirtableShadow.listar`
+    (Extrato/`F_EXT_CLIENTE`, FGTS/`F_FGTS_CLIENTE`) -- nenhuma tabela
+    nova, nenhum campo novo, nenhuma suposição de schema não
+    confirmada. A diferença: `listar()` busca TODOS os registros da
+    folha e filtra por 1 cliente DEPOIS, em Python -- aqui a mesma
+    busca (idêntica, por folha) é usada para AGREGAR o conjunto de
+    clientes que aparecem em QUALQUER registro daquela folha, nunca
+    "ativos hoje" (`FonteClientesPrestacaoAirtable.listar_ativos`, que
+    lê `Status`, um snapshot sem relação com competência nenhuma).
+
+    Guias/DCTFWeb ficam DE FORA -- essa tabela nunca carrega vínculo de
+    cliente no Airtable (broadcast por desenho, `perfil_aplicabilidade_
+    documental.py`); incluir um cliente aqui só por causa de um
+    documento broadcast seria inventar evidência que a tabela não tem.
+
+    Histórico REAL, nunca "hoje disfarçado de histórico": a mesma
+    competência pedida SEMPRE é a que decide a folha consultada -- não
+    há noção de "ciclo corrente" aqui, nenhum `ContextoCicloPrestacao`
+    envolvido. Um cliente com item em Junho/2026 aparece no escopo de
+    Junho mesmo que hoje esteja com `Status=Inativo`."""
+
+    def __init__(self, leitor: LeitorAirtableSomenteLeitura):
+        self._leitor = leitor
+
+    def escopo_para_competencia(self, competencia: ReferenciaCanonica) -> tuple[ReferenciaCanonica, ...]:
+        if competencia.tipo_entidade != "COMPETENCIA":
+            raise ValueError("competencia deve ser referencia canonica de COMPETENCIA")
+
+        folha = _folha_mensal(competencia.entidade_id)
+        clientes_ids: set[str] = set()
+        for table_id, campo_cliente in (
+            (TABLE_EXTRATO, F_EXT_CLIENTE),
+            (TABLE_FGTS, F_FGTS_CLIENTE),
+        ):
+            registros = self._leitor.listar_registros(
+                table_id=table_id,
+                fields=[campo_cliente],
+                filter_by_formula=f'{{Folha Mensal}}="{folha}"',
+            )
+            for registro in registros:
+                clientes_ids |= _ids_vinculados(registro.get("fields", {}).get(campo_cliente))
+
+        return tuple(
+            ReferenciaCanonica("CLIENTE", cliente_id) for cliente_id in sorted(clientes_ids)
+        )
+
+
 class FonteInventarioPrestacaoAirtableShadow:
     """Adapter read-only para extratos e FGTS por cliente."""
 

@@ -7,6 +7,7 @@ from magnata_os.documental.importacao_lote.adapters.airtable_inventario_prestaca
     F_GUIA_TIPO,
     TABLE_FGTS,
     TABLE_GUIAS,
+    FonteEscopoClientesPorInventarioAirtableShadow,
     FonteInventarioPrestacaoAirtableShadow,
 )
 from magnata_os.documental.importacao_lote.adapters.airtable_leitura import (
@@ -131,3 +132,86 @@ def test_adapter_lista_somente_extrato_do_cliente_e_competencia():
         for item in itens
         for atributo in ("url", "anexo", "conteudo_bruto", "pii")
     )
+
+
+# --- FonteEscopoClientesPorInventarioAirtableShadow (missão "MERGE PR #108 +
+# FECHAR BLOQUEIOS REAIS DO CORREDOR LIVE V2" -- escopo histórico real) ---
+
+def test_escopo_agrega_clientes_reais_de_extrato_e_fgts_da_folha():
+    leitor = Mock()
+    leitor.listar_registros.side_effect = [
+        [
+            {"id": "recEXTRATO1", "fields": {F_EXT_CLIENTE: ["recCLIENTE_A"]}},
+            {"id": "recEXTRATO2", "fields": {F_EXT_CLIENTE: ["recCLIENTE_B"]}},
+        ],
+        [
+            {"id": "recFGTS1", "fields": {F_FGTS_CLIENTE: ["recCLIENTE_A"]}},
+            {"id": "recFGTS2", "fields": {F_FGTS_CLIENTE: ["recCLIENTE_C"]}},
+        ],
+    ]
+    fonte = FonteEscopoClientesPorInventarioAirtableShadow(leitor)
+    escopo = fonte.escopo_para_competencia(ReferenciaCanonica("COMPETENCIA", "2026-07"))
+
+    assert leitor.listar_registros.call_args_list == [
+        (( ), {
+            "table_id": TABLE_EXTRATO, "fields": [F_EXT_CLIENTE],
+            "filter_by_formula": '{Folha Mensal}="Julho 2026"',
+        }),
+        (( ), {
+            "table_id": TABLE_FGTS, "fields": [F_FGTS_CLIENTE],
+            "filter_by_formula": '{Folha Mensal}="Julho 2026"',
+        }),
+    ]
+    # NUNCA consulta TABLE_GUIAS -- Guias/DCTFWeb não carrega vínculo de
+    # cliente no Airtable (broadcast por desenho), nunca usado para
+    # inventar escopo de cliente.
+    assert leitor.listar_registros.call_count == 2
+    assert escopo == (
+        ReferenciaCanonica("CLIENTE", "recCLIENTE_A"),
+        ReferenciaCanonica("CLIENTE", "recCLIENTE_B"),
+        ReferenciaCanonica("CLIENTE", "recCLIENTE_C"),
+    )
+
+
+def test_escopo_deduplica_cliente_com_registro_em_extrato_e_fgts():
+    leitor = Mock()
+    leitor.listar_registros.side_effect = [
+        [{"id": "recEXTRATO1", "fields": {F_EXT_CLIENTE: ["recCLIENTE_A"]}}],
+        [{"id": "recFGTS1", "fields": {F_FGTS_CLIENTE: ["recCLIENTE_A"]}}],
+    ]
+    fonte = FonteEscopoClientesPorInventarioAirtableShadow(leitor)
+    escopo = fonte.escopo_para_competencia(ReferenciaCanonica("COMPETENCIA", "2026-06"))
+    assert escopo == (ReferenciaCanonica("CLIENTE", "recCLIENTE_A"),)
+
+
+def test_escopo_competencia_sem_nenhum_registro_devolve_vazio():
+    leitor = Mock()
+    leitor.listar_registros.side_effect = [[], []]
+    fonte = FonteEscopoClientesPorInventarioAirtableShadow(leitor)
+    escopo = fonte.escopo_para_competencia(ReferenciaCanonica("COMPETENCIA", "2026-01"))
+    assert escopo == ()
+
+
+def test_escopo_rejeita_referencia_que_nao_e_competencia():
+    import pytest
+
+    fonte = FonteEscopoClientesPorInventarioAirtableShadow(Mock())
+    with pytest.raises(ValueError):
+        fonte.escopo_para_competencia(ReferenciaCanonica("CLIENTE", "x"))
+
+
+def test_escopo_cliente_hoje_inativo_mas_com_registro_historico_e_encontrado():
+    """Prova central: o escopo NUNCA consulta `Status` (ativo hoje) --
+    um cliente com registro de Extrato numa competência histórica
+    aparece no escopo daquela competência independente de qualquer
+    coisa sobre o cadastro dele hoje (a fonte nem lê o campo Status)."""
+    leitor = Mock()
+    leitor.listar_registros.side_effect = [
+        [{"id": "recEXTRATO_HIST", "fields": {F_EXT_CLIENTE: ["recCLIENTE_INATIVO_HOJE"]}}],
+        [],
+    ]
+    fonte = FonteEscopoClientesPorInventarioAirtableShadow(leitor)
+    escopo = fonte.escopo_para_competencia(ReferenciaCanonica("COMPETENCIA", "2025-01"))
+    assert escopo == (ReferenciaCanonica("CLIENTE", "recCLIENTE_INATIVO_HOJE"),)
+    for chamada in leitor.listar_registros.call_args_list:
+        assert "Status" not in str(chamada)
