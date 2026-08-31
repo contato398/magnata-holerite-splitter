@@ -58,13 +58,17 @@ def test_caso_a_relatorio_beneficios_3_colaboradores_2_condominios_3_itens_pacot
     """3 colaboradores / 2 condomínios -- 3 itens individuais, cada um
     no pacote do condomínio correto (nunca um documento global
     despejado em todos)."""
+    # Cada página traz 2 evidências estruturais independentes (linha de
+    # valor por rubrica + total do pedido, MODERADA cada) -- combinação
+    # real, nunca depende do título/rótulo sozinho (correção pré-merge:
+    # nenhuma frase isolada resolve sozinha).
     paginas = [
-        'CPF: 111.222.333-44\nRelatório de Benefícios\nVale-Refeição   Vale-Alimentação   R$ 500,00\n'
-        'Competência: 07/2026',
-        'CPF: 555.666.777-88\nRelatório de Benefícios\nVale-Refeição   Vale-Alimentação   R$ 500,00\n'
-        'Competência: 07/2026',
-        'CPF: 999.888.777-66\nRelatório de Benefícios\nVale-Refeição   Vale-Alimentação   R$ 500,00\n'
-        'Competência: 07/2026',
+        'CPF: 111.222.333-44\nRelatório de Benefícios\nVale-Refeição   R$ 250,00\nVale-Alimentação   R$ 250,00\n'
+        'Total do Pedido: R$ 500,00\nCompetência: 07/2026',
+        'CPF: 555.666.777-88\nRelatório de Benefícios\nVale-Refeição   R$ 250,00\nVale-Alimentação   R$ 250,00\n'
+        'Total do Pedido: R$ 500,00\nCompetência: 07/2026',
+        'CPF: 999.888.777-66\nRelatório de Benefícios\nVale-Refeição   R$ 250,00\nVale-Alimentação   R$ 250,00\n'
+        'Total do Pedido: R$ 500,00\nCompetência: 07/2026',
     ]
     indice_cpf = {
         '11122233344': ('func-1', 'COLAB 1'),
@@ -110,7 +114,10 @@ def test_caso_a_relatorio_beneficios_3_colaboradores_2_condominios_3_itens_pacot
 
 
 def test_caso_b_relatorio_apenas_vr_reconhecido():
-    texto = 'Relatório de Benefícios\nVale-Refeição\nCPF: 111.222.333-44\nCompetência: 07/2026'
+    texto = (
+        'Relatório de Benefícios\nVale-Refeição   R$ 300,00\nTotal do Pedido: R$ 300,00\n'
+        'CPF: 111.222.333-44\nCompetência: 07/2026'
+    )
     candidatos = [_candidato('func-1', '11122233344', 'COLAB 1')]
     fonte_vinculos = _FonteVinculosPorColaborador({'func-1': _CLIENTE_X})
     resultado = processar_documento_prestacao(texto, _contexto(
@@ -121,7 +128,10 @@ def test_caso_b_relatorio_apenas_vr_reconhecido():
 
 
 def test_caso_c_relatorio_apenas_va_reconhecido():
-    texto = 'Relatório de Benefícios\nVale-Alimentação\nCPF: 111.222.333-44\nCompetência: 07/2026'
+    texto = (
+        'Relatório de Benefícios\nVale-Alimentação   R$ 300,00\nTotal do Pedido: R$ 300,00\n'
+        'CPF: 111.222.333-44\nCompetência: 07/2026'
+    )
     candidatos = [_candidato('func-1', '11122233344', 'COLAB 1')]
     fonte_vinculos = _FonteVinculosPorColaborador({'func-1': _CLIENTE_X})
     resultado = processar_documento_prestacao(texto, _contexto(
@@ -133,8 +143,8 @@ def test_caso_c_relatorio_apenas_va_reconhecido():
 
 def test_caso_d_relatorio_vr_e_va_nao_forca_escolha_exclusiva():
     texto = (
-        'Relatório de Benefícios\nVale-Refeição   Vale-Alimentação\n'
-        'CPF: 111.222.333-44\nCompetência: 07/2026'
+        'Relatório de Benefícios\nVale-Refeição   R$ 150,00\nVale-Alimentação   R$ 150,00\n'
+        'Total do Pedido: R$ 300,00\nCPF: 111.222.333-44\nCompetência: 07/2026'
     )
     candidatos = [_candidato('func-1', '11122233344', 'COLAB 1')]
     fonte_vinculos = _FonteVinculosPorColaborador({'func-1': _CLIENTE_X})
@@ -179,7 +189,10 @@ def test_caso_f_comprovante_sem_relacao_suficiente_nunca_inventa():
 
 
 def test_caso_g_documento_ifood_beneficios_entra_no_mesmo_motor():
-    texto = 'Relatório de Benefícios -- iFood Benefícios\nVale-Refeição\nCPF: 111.222.333-44\nCompetência: 07/2026'
+    texto = (
+        'Relatório de Benefícios -- iFood Benefícios\nVale-Refeição   R$ 300,00\n'
+        'Total do Pedido: R$ 300,00\nCPF: 111.222.333-44\nCompetência: 07/2026'
+    )
     candidatos = [_candidato('func-1', '11122233344', 'COLAB 1')]
     fonte_vinculos = _FonteVinculosPorColaborador({'func-1': _CLIENTE_X})
     resultado = processar_documento_prestacao(texto, _contexto(
@@ -190,7 +203,10 @@ def test_caso_g_documento_ifood_beneficios_entra_no_mesmo_motor():
 
 
 def test_caso_h_documento_vr_beneficios_fornecedor_antigo_continua_no_mesmo_motor():
-    texto = 'Relatório de Benefícios -- VR Benefícios\nVale-Refeição\nCPF: 111.222.333-44\nCompetência: 07/2026'
+    texto = (
+        'Relatório de Benefícios -- VR Benefícios\nVale-Refeição   R$ 300,00\n'
+        'Total do Pedido: R$ 300,00\nCPF: 111.222.333-44\nCompetência: 07/2026'
+    )
     candidatos = [_candidato('func-1', '11122233344', 'COLAB 1')]
     fonte_vinculos = _FonteVinculosPorColaborador({'func-1': _CLIENTE_X})
     resultado = processar_documento_prestacao(texto, _contexto(

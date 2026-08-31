@@ -1,44 +1,135 @@
 """Testes de `produtores_evidencia_beneficios.py` (Adendo substitutivo
-ao PR #105 -- regra canônica de benefícios VR/VA/iFood)."""
+ao PR #105 -- regra canônica de benefícios VR/VA/iFood; corrigido na
+2ª revisão pré-merge para nunca resolver por frase/rótulo isolado --
+sempre por COMBINAÇÃO de evidências estruturais)."""
 from magnata_os.classificacao.contratos import EstadoResolucaoDimensao
 from magnata_os.classificacao.produtores_evidencia_beneficios import (
     TIPO_RELATORIO_BENEFICIOS,
     hipoteses_de_relatorio_beneficios,
 )
 from magnata_os.classificacao.resolucao_tipo_documental import resolver_tipo_documental
+from magnata_os.classificacao.ponte_conteudo_motor_semantico import resolver_tipo_documental_de_texto
+
+_TEXTO_ESTRUTURAL_VR_VA_2_BENEFICIARIOS = (
+    'CPF: 111.222.333-44   Vale-Refeição   R$ 300,00\n'
+    'CPF: 555.666.777-88   Vale-Alimentação   R$ 300,00\n'
+    'Competência: 07/2026'
+)
 
 
-def test_relatorio_com_vr_e_va_juntos_nao_forca_escolha_exclusiva():
-    """§2: um documento com VR + VA no mesmo relatório NUNCA é forçado
-    a escolher exclusivamente entre os dois -- só existe 1 candidato
-    ('Relatório de Benefícios'), nunca 'VR'/'VA' concorrentes."""
+def _resolver_isolado(texto):
+    return resolver_tipo_documental(hipoteses_de_relatorio_beneficios(texto))
+
+
+# ============================================================================
+# §7.A -- frase isolada, sem tabela/valores/beneficiários, nunca resolve
+# ============================================================================
+
+def test_a_apenas_titulo_sem_qualquer_outra_evidencia_nao_resolve_automaticamente():
+    resolucao = _resolver_isolado('Relatório de Benefícios')
+    assert resolucao.estado != EstadoResolucaoDimensao.RESOLVIDA
+
+
+def test_a_variantes_de_titulo_tambem_nunca_resolvem_sozinhas():
+    for titulo in ('Pedido de Benefícios', 'Crédito de Benefícios', 'Solicitação de Benefícios'):
+        resolucao = _resolver_isolado(titulo)
+        assert resolucao.estado != EstadoResolucaoDimensao.RESOLVIDA, titulo
+
+
+# ============================================================================
+# §7.B/C/D -- estrutura sem título padrão, reconhecida por combinação
+# ============================================================================
+
+def test_b_relatorio_estrutural_vr_sem_titulo_reconhecido():
     texto = (
-        'Relatório de Benefícios -- Julho/2026\n'
-        'CPF: 111.222.333-44   Vale-Refeição   Vale-Alimentação   R$ 500,00\n'
-        'Total do Pedido: R$ 500,00'
+        'CPF: 111.222.333-44   Vale-Refeição   R$ 300,00\n'
+        'CPF: 555.666.777-88   Vale-Refeição   R$ 300,00\n'
+        'Competência: 07/2026'
     )
-    hipoteses = hipoteses_de_relatorio_beneficios(texto)
-    assert len(hipoteses) == 1
-    assert hipoteses[0].tipo_documental == TIPO_RELATORIO_BENEFICIOS
-    resolucao = resolver_tipo_documental(hipoteses)
-    assert resolucao.estado == EstadoResolucaoDimensao.RESOLVIDA
-
-
-def test_relatorio_apenas_vr_reconhecido():
-    hipoteses = hipoteses_de_relatorio_beneficios('Pedido de Benefícios\nVale-Refeição\nCPF: 111.222.333-44')
-    resolucao = resolver_tipo_documental(hipoteses)
+    resolucao = _resolver_isolado(texto)
     assert resolucao.estado == EstadoResolucaoDimensao.RESOLVIDA
     assert resolucao.valores_confirmados[0].entidade_id == TIPO_RELATORIO_BENEFICIOS
 
 
-def test_relatorio_apenas_va_reconhecido():
-    hipoteses = hipoteses_de_relatorio_beneficios('Pedido de Benefícios\nVale-Alimentação\nCPF: 111.222.333-44')
-    resolucao = resolver_tipo_documental(hipoteses)
+def test_c_relatorio_estrutural_va_sem_titulo_reconhecido():
+    texto = (
+        'CPF: 111.222.333-44   Vale-Alimentação   R$ 300,00\n'
+        'CPF: 555.666.777-88   Vale-Alimentação   R$ 300,00\n'
+        'Competência: 07/2026'
+    )
+    resolucao = _resolver_isolado(texto)
     assert resolucao.estado == EstadoResolucaoDimensao.RESOLVIDA
     assert resolucao.valores_confirmados[0].entidade_id == TIPO_RELATORIO_BENEFICIOS
 
 
-def test_texto_sem_frase_de_relatorio_nunca_gera_hipotese():
+def test_d_relatorio_estrutural_vr_e_va_sem_titulo_nao_forca_escolha_exclusiva():
+    resolucao = _resolver_isolado(_TEXTO_ESTRUTURAL_VR_VA_2_BENEFICIARIOS)
+    assert resolucao.estado == EstadoResolucaoDimensao.RESOLVIDA
+    assert resolucao.valores_confirmados[0].entidade_id == TIPO_RELATORIO_BENEFICIOS
+
+
+def test_uma_unica_linha_de_valor_sozinha_fica_ambigua_via_ponte_nunca_resolve_por_1_evidencia():
+    """Sem uma SEGUNDA evidência independente (total do pedido ou 2ª
+    linha de beneficiário), 1 única linha de valor (MODERADA) empata
+    com a hipótese concorrente 'Comprovante de Pagamento - VR/VA' (já
+    existente, MODERADA) -- o motor honestamente fica AMBIGUA, nunca
+    decide por 1 evidência isolada. Prova que a correção NÃO reintroduz
+    identidade por frase única disfarçada de estrutura."""
+    texto = 'CPF: 111.222.333-44   Vale-Refeição   R$ 300,00\nCompetência: 07/2026'
+    resolucao = resolver_tipo_documental_de_texto(texto)
+    assert resolucao.estado == EstadoResolucaoDimensao.AMBIGUA
+
+
+# ============================================================================
+# §7.E -- fornecedor desconhecido não impede a classificação
+# ============================================================================
+
+def test_e_fornecedor_desconhecido_nao_impede_classificacao():
+    texto = (
+        'CPF: 111.222.333-44   Vale-Refeição   R$ 300,00\n'
+        'CPF: 555.666.777-88   Vale-Alimentação   R$ 300,00\n'
+        'Fornecedor Benefícios XYZ'
+    )
+    resolucao = _resolver_isolado(texto)
+    assert resolucao.estado == EstadoResolucaoDimensao.RESOLVIDA
+
+
+def test_mesmo_relatorio_trocando_fornecedor_conhecido_por_desconhecido_mesma_resolucao():
+    texto_fornecedor_conhecido = _TEXTO_ESTRUTURAL_VR_VA_2_BENEFICIARIOS + '\niFood Benefícios'
+    texto_fornecedor_desconhecido = _TEXTO_ESTRUTURAL_VR_VA_2_BENEFICIARIOS + '\nFornecedor Benefícios XYZ'
+    resolucao_conhecido = _resolver_isolado(texto_fornecedor_conhecido)
+    resolucao_desconhecido = _resolver_isolado(texto_fornecedor_desconhecido)
+    assert resolucao_conhecido.estado == resolucao_desconhecido.estado == EstadoResolucaoDimensao.RESOLVIDA
+    assert (
+        resolucao_conhecido.valores_confirmados[0].entidade_id
+        == resolucao_desconhecido.valores_confirmados[0].entidade_id
+        == TIPO_RELATORIO_BENEFICIOS
+    )
+
+
+# ============================================================================
+# §7.F -- fornecedor sozinho, sem nenhuma outra evidência
+# ============================================================================
+
+def test_f_texto_com_ifood_beneficios_isoladamente_nunca_classifica_automaticamente():
+    resolucao = _resolver_isolado('iFood Benefícios -- Julho 2026\nCPF: 111.222.333-44')
+    assert resolucao.estado != EstadoResolucaoDimensao.RESOLVIDA
+
+
+# ============================================================================
+# §7.G -- frase de título dentro de texto não documental
+# ============================================================================
+
+def test_g_frase_pedido_de_beneficios_em_texto_nao_documental_nunca_resolve():
+    resolucao = _resolver_isolado('Este e-mail contém o Pedido de Benefícios em anexo, favor considerar.')
+    assert resolucao.estado != EstadoResolucaoDimensao.RESOLVIDA
+
+
+# ============================================================================
+# Comportamento geral preservado
+# ============================================================================
+
+def test_texto_sem_nenhum_sinal_nunca_gera_hipotese():
     assert hipoteses_de_relatorio_beneficios('documento qualquer sem nenhum sinal') == ()
 
 
@@ -46,32 +137,23 @@ def test_texto_vazio_nunca_gera_hipotese():
     assert hipoteses_de_relatorio_beneficios('') == ()
 
 
-def test_nome_de_fornecedor_sozinho_nunca_basta():
-    """§9: "iFood" (ou qualquer fornecedor) sozinho NÃO prova que é
-    relatório de prestação -- sem a frase de relatório/pedido, nenhuma
-    hipótese é gerada por este produtor."""
-    assert hipoteses_de_relatorio_beneficios('iFood Benefícios -- Julho 2026\nCPF: 111.222.333-44') == ()
-
-
-def test_documento_ifood_beneficios_reconhecido_pelo_mesmo_motor():
-    """§7: iFood é provedor/origem, nunca uma classe/pipeline separada
-    -- o MESMO produtor reconhece o relatório independentemente do
-    fornecedor citado."""
-    texto = 'Relatório de Benefícios -- iFood Benefícios\nVale-Refeição\nCPF: 111.222.333-44'
-    resolucao = resolver_tipo_documental(hipoteses_de_relatorio_beneficios(texto))
+def test_documento_ifood_beneficios_reconhecido_pelo_mesmo_motor_quando_estrutura_suficiente():
+    """§7 (iFood): entra no MESMO motor -- reconhecido quando a
+    estrutura (nunca o nome do fornecedor sozinho) for suficiente."""
+    texto = _TEXTO_ESTRUTURAL_VR_VA_2_BENEFICIARIOS + '\niFood Benefícios'
+    resolucao = _resolver_isolado(texto)
     assert resolucao.estado == EstadoResolucaoDimensao.RESOLVIDA
     assert resolucao.valores_confirmados[0].entidade_id == TIPO_RELATORIO_BENEFICIOS
 
 
 def test_documento_vr_beneficios_fornecedor_antigo_mesmo_motor_mesmo_tipo():
     """§8: fornecedor antigo (VR Benefícios) produz o MESMO tipo
-    documental que o fornecedor novo (iFood) -- nunca uma dependência
-    de fornecedor no core."""
-    texto_novo = 'Relatório de Benefícios -- iFood Benefícios\nVale-Refeição\nCPF: 111.222.333-44'
-    texto_antigo = 'Relatório de Benefícios -- VR Benefícios\nVale-Refeição\nCPF: 111.222.333-44'
-    tipo_novo = resolver_tipo_documental(hipoteses_de_relatorio_beneficios(texto_novo)).valores_confirmados[0].entidade_id
-    tipo_antigo = resolver_tipo_documental(
-        hipoteses_de_relatorio_beneficios(texto_antigo)).valores_confirmados[0].entidade_id
+    documental que o fornecedor novo (iFood) quando a estrutura for
+    suficiente -- nunca uma dependência de fornecedor no core."""
+    texto_novo = _TEXTO_ESTRUTURAL_VR_VA_2_BENEFICIARIOS + '\niFood Benefícios'
+    texto_antigo = _TEXTO_ESTRUTURAL_VR_VA_2_BENEFICIARIOS + '\nVR Benefícios'
+    tipo_novo = _resolver_isolado(texto_novo).valores_confirmados[0].entidade_id
+    tipo_antigo = _resolver_isolado(texto_antigo).valores_confirmados[0].entidade_id
     assert tipo_novo == tipo_antigo == TIPO_RELATORIO_BENEFICIOS
 
 

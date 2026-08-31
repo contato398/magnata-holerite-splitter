@@ -246,3 +246,69 @@ colaborador→vínculo→cliente já existente, sem inventar nada. O caso "compr
 583 → 616+ testes locais (classificação/documental), todos verdes; nenhuma quebra nos 94 testes
 específicos de identificação de Holerite nem nos testes de inventário/readiness/pacote já
 existentes.
+
+---
+
+## Correção final pré-merge (2ª revisão) — motor de benefícios nunca resolve por frase única
+
+**Data:** 2026-08-30 (mesmo dia, ainda antes do merge do PR #105).
+**Motivo:** review humano identificou que `produtores_evidencia_beneficios.py` (adendo acima)
+declarava a frase "Relatório/Pedido/Crédito de Benefícios" NECESSÁRIA E SUFICIENTE, com força
+FORTE — violação direta da cláusula pétrea geral do motor ("palavra/regex/rótulo é evidência,
+nunca identidade suficiente sozinha"). A força FORTE tinha sido usada deliberadamente na 1ª
+versão para vencer sem ambiguidade a hipótese concorrente já existente `'Comprovante de
+Pagamento - VR/VA'` (que qualquer menção solta de "vale-refeição"/"vale-alimentação" já
+alimenta, MODERADA) — mas resolver por decreto de força, em vez de por combinação real de
+evidências, era exatamente o padrão que a cláusula pétrea proíbe.
+
+### Correção aplicada
+
+- **Título/rótulo**: rebaixado de FORTE para **FRACA** — nunca resolve sozinho (confirmado:
+  `'Relatório de Benefícios'` isolado → `NAO_ENCONTRADA`).
+- **Linha de benefício com valor** (rubrica VR/VA + valor monetário na MESMA linha — padrão
+  estrutural mais específico que a rubrica solta, pouco provável num comprovante bancário
+  genérico): nova evidência, **MODERADA**.
+- **Múltiplos beneficiários** (2+ linhas de valor distintas): evidência adicional, **MODERADA**
+  — reforça pluralidade real, não apenas presença.
+- **Total do pedido**: elevado de FRACA para **MODERADA** — marcador deliberado de um
+  documento de LOTE, distinto de um comprovante individual.
+- **Rubrica isolada (sem valor) e fornecedor**: permanecem **FRACA**, puramente aditivos.
+
+A resolução final continua 100% do `resolver_tipo_documental` já existente — nenhuma regra de
+combinação nova. Um documento resolve `RESOLVIDA` quando FORTE (1 evidência FORTE, que este
+produtor nunca mais emite sozinho) ou quando 2+ MODERADA combinam para FORTE (ex.: linha de
+valor + total do pedido, ou linha de valor + múltiplos beneficiários) — nunca por 1 única
+evidência MODERADA isolada, que honestamente empata com a hipótese concorrente e fica
+`AMBIGUA` (comportamento novo, testado explicitamente: `test_uma_unica_linha_de_valor_sozinha_
+fica_ambigua_via_ponte_nunca_resolve_por_1_evidencia`).
+
+### Requisitos do review, todos verificados
+
+| # | Cenário | Resultado |
+|---|---|---|
+| A | Só o título, sem tabela/valores/beneficiários | `NAO_ENCONTRADA` (nunca resolve) |
+| B | VR estrutural sem título, 2 beneficiários com valor | `RESOLVIDA` |
+| C | VA estrutural sem título, 2 beneficiários com valor | `RESOLVIDA` |
+| D | VR+VA estrutural sem título | `RESOLVIDA` (nunca escolhe exclusivamente) |
+| E | Fornecedor desconhecido ("Fornecedor Benefícios XYZ") | não impede — `RESOLVIDA` |
+| F | "iFood Benefícios" isolado | `NAO_ENCONTRADA` (nunca resolve por nome de fornecedor) |
+| G | "Pedido de Benefícios" em texto não documental | `NAO_ENCONTRADA` |
+
+Teste adicional obrigatório do review (mesmo relatório, fornecedor conhecido trocado por
+"Fornecedor Benefícios XYZ") confirma: mesma resolução (`RESOLVIDA`, mesmo `tipo_documental`)
+independente do fornecedor estar ou não na lista conhecida — a lista nunca é uma condição, só
+mais uma evidência FRACA opcional.
+
+### Fixtures do corpus E2E ajustadas
+
+Os testes de `§16` (casos A-D, G, H) foram ajustados para incluir 2 evidências MODERADA reais
+por documento/página (linha de valor por rubrica + "Total do Pedido") em vez de depender do
+título — nenhum teste depende mais de uma frase isolada para resolver. Nenhum outro
+comportamento do adendo (FGTS cliente-level, Guia sem perfil, DCTF broadcast, dedupe por
+identidade lógica) foi alterado nesta correção.
+
+### Regressão
+
+616 → 622 testes locais, todos verdes (repo inteiro: 1190 passed, mesma baseline pré-existente
+de 34 failed/17 errors por `pdfplumber`/`cryptography` indisponíveis no sandbox, nenhum arquivo
+tocado por esta correção entre eles).
