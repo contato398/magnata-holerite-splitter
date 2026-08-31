@@ -54,8 +54,10 @@ SOMENTE quando a competência pedida é a corrente do próprio ciclo
 operacional válido"); nunca use para competência histórica.
 `EscopoClientesFixo` é a alternativa para quando quem chama já tem um
 conjunto de clientes com proveniência temporal real (ex.: um registro
-histórico específico) -- decisão de quem compõe o corredor, nunca
-inferida aqui.
+histórico específico) -- estruturalmente vinculado a UMA competência
+comprovada (`competencia_comprovada` no construtor, nunca "fixo" como
+sinônimo de "válido para qualquer competência"); decisão de quem
+compõe o corredor, nunca inferida aqui.
 
 PENDÊNCIA HONESTA, NUNCA ESCONDIDA -- `dados_correlacao`: o inventário
 NUNCA carrega identificador de pedido/valor total/etc. (nem deveria:
@@ -126,14 +128,32 @@ class EscopoClientesFixo:
     """Implementação de referência para quando quem chama já tem um
     conjunto de clientes com proveniência temporal REAL (ex.: um
     registro histórico específico, já resolvido fora deste módulo) --
-    nunca "ativos hoje" travestido de histórico. O MESMO escopo é
-    devolvido para qualquer competência perguntada -- a responsabilidade
-    de a competência ser a correta é de quem construiu este objeto."""
+    nunca "ativos hoje" travestido de histórico.
 
-    def __init__(self, clientes: Tuple[ReferenciaCanonica, ...]):
+    CORREÇÃO (adendo pré-merge final ao PR #108, achado real): a versão
+    anterior devolvia o MESMO escopo para QUALQUER competência
+    perguntada, deixando IMPLÍCITA (só em docstring, nunca no contrato)
+    a afirmação "este conjunto é válido para qualquer competência" --
+    exatamente o mesmo erro já corrigido em `FonteUnidadePostoPrestacao
+    AirtableShadow` (competência consultada != vigência comprovada da
+    fonte), agora corrigido aqui também: `competencia_comprovada` é
+    parte do CONSTRUTOR (`ReferenciaCanonica('COMPETENCIA', ...)`,
+    mesmo tipo já usado em toda parte do repositório para competência --
+    nunca uma tupla solta) -- a vigência fica estrutural, nunca
+    dependente de comentário. `escopo_para_competencia` só devolve os
+    clientes quando a competência pedida é EXATAMENTE a comprovada;
+    para qualquer outra, devolve `()` -- nunca reutiliza silenciosamente
+    o mesmo escopo histórico em outro mês."""
+
+    def __init__(self, competencia_comprovada: ReferenciaCanonica, clientes: Tuple[ReferenciaCanonica, ...]):
+        if competencia_comprovada.tipo_entidade != 'COMPETENCIA':
+            raise ValueError('competencia_comprovada deve ser referencia canonica de COMPETENCIA')
+        self._competencia_comprovada = competencia_comprovada
         self._clientes = clientes
 
     def escopo_para_competencia(self, competencia: ReferenciaCanonica) -> Tuple[ReferenciaCanonica, ...]:
+        if competencia != self._competencia_comprovada:
+            return ()
         return self._clientes
 
 

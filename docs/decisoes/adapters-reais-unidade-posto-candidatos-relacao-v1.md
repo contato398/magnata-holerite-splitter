@@ -39,8 +39,20 @@ o estado CORRIGIDO (o texto anterior não representa mais o código):
    representar ausência.** Corrigido: parâmetro agora `Optional[...]
    = None` — nenhuma implementação precisa ser injetada só para dizer
    "não existe dado".
+4. **`EscopoClientesFixo` devolvia o MESMO escopo para QUALQUER
+   competência pedida** (correção final pré-merge, achado real) —
+   deixando implícita, só em docstring, a afirmação "este conjunto é
+   válido para qualquer competência" — exatamente o mesmo erro já
+   corrigido no item 1, agora reaberto neste segundo lugar. Corrigido:
+   `EscopoClientesFixo(competencia_comprovada, clientes)` — a vigência
+   fica ESTRUTURAL, no construtor (`ReferenciaCanonica('COMPETENCIA',
+   ...)`, mesmo tipo já usado em todo o repositório), nunca dependente
+   de comentário. `escopo_para_competencia` só devolve os clientes
+   quando a competência pedida é EXATAMENTE a comprovada — qualquer
+   outra devolve `()`, nunca reaproveita silenciosamente o mesmo
+   escopo histórico em outro mês.
 
-Nenhuma das 3 correções muda o que já estava correto: PR #107,
+Nenhuma das 4 correções muda o que já estava correto: PR #107,
 orientação A/B, relação genérica, benefícios, FGTS cliente-level, DCTF
 broadcast, VINCULO `NAO_APLICAVEL`, zero Airtable no core e os
 utilitários promovidos (`airtable_link_utils.py`) permanecem intocados.
@@ -123,8 +135,12 @@ Airtable nova, nenhuma suposição de schema não confirmada:
   documentada como válida SOMENTE quando a competência pedida é a
   corrente do próprio ciclo; para qualquer outra, devolve escopo
   vazio (nunca a lista de hoje disfarçada de histórico).
-  `EscopoClientesFixo` é a alternativa para quando quem chama já tem
-  um conjunto de clientes com proveniência temporal real.
+  `EscopoClientesFixo` (corrigido, ver seção 0.4) é a alternativa para
+  quando quem chama já tem um conjunto de clientes com proveniência
+  temporal real — ESTRUTURALMENTE vinculado a UMA `competencia_
+  comprovada` no construtor: só devolve o escopo quando a competência
+  pedida é exatamente essa; para qualquer outra, `()`. "Fixo" nunca
+  significa "válido para qualquer competência".
 - `FonteInventarioPrestacao.listar` — já tem adapters reais de
   produção (`airtable_inventario_prestacao.py`/`airtable_holerites_
   prestacao.py`, compostos por `FonteInventarioPrestacaoComposta`).
@@ -171,8 +187,15 @@ gate de escopo/arquitetura para uma futura missão, não mais um adapter
 inteiro faltando.
 
 **Testado** (`test_magnata_os_classificacao_fonte_candidatos_relacao_
-documental_do_inventario.py`, 11 casos, só fakes locais) — casos F-J
-mapeados ao §18 do adendo: (F) cliente ativo no ciclo corrente
+documental_do_inventario.py`, 18 casos, só fakes locais) — inclui os
+casos A-F da correção final (§4 do adendo, sobre `EscopoClientesFixo`):
+comprovado para Junho resolve Junho; Junho→Maio vazio; Junho→Julho
+vazio; cliente hoje inativo mas comprovado em Junho é encontrado em
+Junho; o mesmo cliente nunca reaparece em outra competência sem prova;
+integração fim-a-fim confirma que o candidato histórico só aparece na
+competência comprovada, nunca em outra, mesmo com o item fisicamente
+presente no inventário — mais os casos F-J
+mapeados ao §18 do adendo anterior: (F) cliente ativo no ciclo corrente
 encontra candidato, e `EscopoClientesAtivosDoCiclo` devolve vazio para
 qualquer outra competência (nunca ativos-hoje disfarçado de
 histórico); (G) cliente HOJE INATIVO mas presente no escopo histórico
@@ -197,8 +220,8 @@ documental.py`; `app.py` intocado.
 
 ## 5. Regressão
 
-1300 passed (era 1282 antes desta missão; 1296 no meio do caminho,
-antes da correção do adendo), 34 falhas/17 erros pré-existentes
+1307 passed (era 1282 antes desta missão; 1296 e 1300 em correções
+intermediárias do adendo), 34 falhas/17 erros pré-existentes
 idênticos ao baseline (pdfplumber/cryptography do sandbox — nada
 relacionado). `test_airtable_vinculos_prestacao.py` (7/7, zero mudança
 de comportamento após a promoção de utilitários). Teste arquitetural
@@ -210,7 +233,11 @@ Airtable — só compõe Protocols).
 
 Não chamar de "completo em produção" algo que só está completo na
 interface (§15 do adendo) — por isso a reavaliação abaixo é por
-família, nunca um veredito único:
+família, nunca um veredito único. A correção final de `EscopoClientes
+Fixo` (seção 0.4) não muda nenhum estado abaixo — Relação documental
+já era `BLOCKED` pela ausência de fonte de correlação; a correção só
+fecha uma lacuna de honestidade estrutural no caminho que já estava
+bloqueado, nunca uma regressão nem uma promoção de estado:
 
 | Família | Estado | Motivo |
 |---|---|---|

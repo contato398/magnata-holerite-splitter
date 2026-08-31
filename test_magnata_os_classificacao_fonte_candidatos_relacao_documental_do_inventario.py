@@ -39,9 +39,9 @@ class _FonteInventarioFake:
         return tuple(item for item in self._itens_por_cliente.get(cliente, ()) if item.competencia == competencia)
 
 
-def _fonte_com_escopo_fixo(clientes, itens_por_cliente, dados_correlacao=None):
+def _fonte_com_escopo_fixo(clientes, itens_por_cliente, dados_correlacao=None, competencia_comprovada=_COMPETENCIA_REF):
     return FonteCandidatosRelacaoDocumentalDoInventario(
-        fonte_escopo_clientes=EscopoClientesFixo(clientes),
+        fonte_escopo_clientes=EscopoClientesFixo(competencia_comprovada, clientes),
         fonte_inventario=_FonteInventarioFake(itens_por_cliente),
         fonte_dados_correlacao=dados_correlacao,
     )
@@ -78,6 +78,73 @@ def test_escopo_ativos_do_ciclo_nunca_usa_ativos_hoje_para_competencia_diferente
     assert escopo.escopo_para_competencia(_COMPETENCIA_REF) == (_CLI_A,)
 
 
+# --- Adendo final pré-merge ao PR #108: EscopoClientesFixo vinculado à competência comprovada ---
+
+_COMPETENCIA_JUNHO = ReferenciaCanonica('COMPETENCIA', '2026-06')
+_COMPETENCIA_MAIO = ReferenciaCanonica('COMPETENCIA', '2026-05')
+_COMPETENCIA_JULHO = ReferenciaCanonica('COMPETENCIA', '2026-07')
+
+
+def test_adendo_a_escopo_comprovado_para_junho_consulta_junho_devolve_clientes():
+    escopo = EscopoClientesFixo(_COMPETENCIA_JUNHO, (_CLI_A,))
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == (_CLI_A,)
+
+
+def test_adendo_b_escopo_comprovado_para_junho_consulta_maio_vazio():
+    escopo = EscopoClientesFixo(_COMPETENCIA_JUNHO, (_CLI_A,))
+    assert escopo.escopo_para_competencia(_COMPETENCIA_MAIO) == ()
+
+
+def test_adendo_c_escopo_comprovado_para_junho_consulta_julho_vazio():
+    escopo = EscopoClientesFixo(_COMPETENCIA_JUNHO, (_CLI_A,))
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JULHO) == ()
+
+
+def test_adendo_d_cliente_hoje_inativo_mas_comprovado_em_junho_encontrado_em_junho():
+    escopo = EscopoClientesFixo(_COMPETENCIA_JUNHO, (_CLI_INATIVO_HOJE,))
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JUNHO) == (_CLI_INATIVO_HOJE,)
+
+
+def test_adendo_e_mesmo_cliente_nao_reaparece_em_outra_competencia_sem_prova():
+    escopo = EscopoClientesFixo(_COMPETENCIA_JUNHO, (_CLI_INATIVO_HOJE,))
+    assert escopo.escopo_para_competencia(_COMPETENCIA_JULHO) == ()
+    assert escopo.escopo_para_competencia(_COMPETENCIA_MAIO) == ()
+
+
+def test_adendo_f_integracao_candidato_historico_encontrado_somente_na_competencia_comprovada():
+    """Prova de integração: `FonteCandidatosRelacaoDocumentalDoInventario`
+    com um `EscopoClientesFixo` comprovado só para Junho encontra o
+    candidato histórico ao consultar Junho, mas NUNCA ao consultar
+    outra competência -- mesmo que o item exista fisicamente lá, o
+    escopo vazio nunca deixa o inventário sequer ser varrido para
+    aquele cliente."""
+    item_junho = ItemInventarioPrestacao(
+        documento_id='rel-historico', tipo_documental='Relatório de Benefícios',
+        cliente=_CLI_INATIVO_HOJE, competencia=_COMPETENCIA_JUNHO,
+    )
+    fonte = FonteCandidatosRelacaoDocumentalDoInventario(
+        fonte_escopo_clientes=EscopoClientesFixo(_COMPETENCIA_JUNHO, (_CLI_INATIVO_HOJE,)),
+        fonte_inventario=_FonteInventarioFake({_CLI_INATIVO_HOJE: (item_junho,)}),
+    )
+    candidatos_junho = fonte.candidatos_para_relacao(
+        'comp-1', 'Comprovante de Pagamento - VR/VA', 'Relatório de Benefícios', (2026, 6), TipoRelacaoDocumental.COMPROVA,
+    )
+    assert len(candidatos_junho) == 1
+    assert candidatos_junho[0].documento_id == 'rel-historico'
+
+    candidatos_julho = fonte.candidatos_para_relacao(
+        'comp-1', 'Comprovante de Pagamento - VR/VA', 'Relatório de Benefícios', (2026, 7), TipoRelacaoDocumental.COMPROVA,
+    )
+    assert candidatos_julho == ()
+
+
+def test_escopo_clientes_fixo_rejeita_competencia_comprovada_com_tipo_errado():
+    import pytest
+
+    with pytest.raises(ValueError):
+        EscopoClientesFixo(ReferenciaCanonica('CLIENTE', 'x'), (_CLI_A,))
+
+
 # --- Caso G: histórico de cliente hoje inativo -- não pode ser perdido ---
 
 def test_caso_g_cliente_inativo_hoje_mas_presente_no_escopo_historico_nao_e_perdido():
@@ -89,7 +156,9 @@ def test_caso_g_cliente_inativo_hoje_mas_presente_no_escopo_historico_nao_e_perd
         documento_id='rel-historico', tipo_documental='Relatório de Benefícios',
         cliente=_CLI_INATIVO_HOJE, competencia=_COMPETENCIA_HISTORICA_REF,
     )
-    fonte = _fonte_com_escopo_fixo((_CLI_INATIVO_HOJE,), {_CLI_INATIVO_HOJE: (item,)})
+    fonte = _fonte_com_escopo_fixo(
+        (_CLI_INATIVO_HOJE,), {_CLI_INATIVO_HOJE: (item,)}, competencia_comprovada=_COMPETENCIA_HISTORICA_REF,
+    )
     candidatos = fonte.candidatos_para_relacao(
         'comp-1', 'Comprovante de Pagamento - VR/VA', 'Relatório de Benefícios',
         _COMPETENCIA_HISTORICA, TipoRelacaoDocumental.COMPROVA,
