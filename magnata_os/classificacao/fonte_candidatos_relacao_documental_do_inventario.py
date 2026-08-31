@@ -1,14 +1,17 @@
 """Fonte REAL (composição, nunca um motor novo) de candidatos para
 relação Documento↔Documento (missão "MESCLAR PR #107 + CONSTRUIR OS
 DOIS ADAPTERS REAIS QUE BLOQUEIAM A PRIMEIRA VALIDAÇÃO LIVE —
-FonteUnidadePostoPrestacao + FonteCandidatosRelacaoDocumental").
+FonteUnidadePostoPrestacao + FonteCandidatosRelacaoDocumental";
+corrigido pelo "ADENDO PRÉ-MERGE — PR #108 — ESCOPO HISTÓRICO DE
+CANDIDATOS + AUSÊNCIA EXPLÍCITA DE DADOS DE CORRELAÇÃO").
 
-Construída sobre 2 Protocols JÁ REAIS e já auditados (nunca uma tabela
+Construída sobre Protocols JÁ REAIS e já auditados (nunca uma tabela
 Airtable nova, nunca um acesso direto, nunca uma suposição de schema
 não confirmada):
 
-  - `FonteClientesPrestacao.listar_ativos` (clientes ativos do ciclo --
-    já tem adapter real de produção, `airtable_clientes_prestacao.py`);
+  - `FonteEscopoClientesPrestacao.escopo_para_competencia` (o conjunto
+    de clientes a considerar para UMA competência específica --
+    Protocol novo, ver seção "CORREÇÃO" abaixo);
   - `FonteInventarioPrestacao.listar` (itens já resolvidos por
     cliente+competência -- já tem adapters reais de produção,
     `airtable_inventario_prestacao.py`/`airtable_holerites_
@@ -16,13 +19,43 @@ não confirmada):
     FonteInventarioPrestacaoComposta`).
 
 Descoberta de candidato (`documento_id`/`tipo_documental`/
-`referencias_logicas`) é 100% REAL a partir destes dois Protocols já
-existentes -- este módulo só varre "todo cliente ativo × inventário
+`referencias_logicas`) é 100% REAL a partir destes Protocols já
+existentes -- este módulo só varre "todo cliente do escopo × inventário
 daquele cliente na competência pedida", filtra por tipo_documental e
 deduplica por `documento_id` (um mesmo documento pode aparecer em
 múltiplos clientes -- vínculo múltiplo genuíno -- nesse caso as
 referências lógicas são UNIDAS, nunca tratadas como candidatos
 distintos).
+
+CORREÇÃO (adendo pré-merge ao PR #108, achado real): a primeira versão
+deste módulo usava `FonteClientesPrestacao.listar_ativos` (clientes
+ATIVOS HOJE) como o universo de busca para QUALQUER competência --
+isso perde, silenciosamente, um documento legítimo de um cliente que
+era ativo NA COMPETÊNCIA pedida mas está inativo hoje. "Ativo hoje" e
+"aplicável historicamente" são conceitos DIFERENTES (§10 do adendo).
+
+Auditoria (§8/§9 do adendo): nenhuma fonte real já existente no
+repositório enumera "clientes presentes no inventário de uma
+competência" independente de atividade atual -- confirmado por
+inspeção de `fonte_inventario_composta.py`/adapters de inventário
+(todos exigem um `cliente` já conhecido como parâmetro de entrada).
+Criar essa enumeração de verdade contra o Airtable real exigiria
+conhecimento de schema não auditado nesta missão -- não fabricado.
+
+Solução adotada (Opção C do adendo, §9: "receber o conjunto de
+clientes candidatos do contexto de execução, se esse conjunto tiver
+origem temporal comprovada"): o universo de clientes passa a ser um
+Protocol PRÓPRIO e explícito, `FonteEscopoClientesPrestacao`, resolvido
+POR COMPETÊNCIA (nunca fixo, nunca amarrado a "hoje"). `EscopoClientes
+AtivosDoCiclo` (abaixo) é uma implementação de referência que usa
+`FonteClientesPrestacao.listar_ativos` -- documentada como válida
+SOMENTE quando a competência pedida é a corrente do próprio ciclo
+(§10: "para ciclo corrente, clientes ativos podem ser um pré-filtro
+operacional válido"); nunca use para competência histórica.
+`EscopoClientesFixo` é a alternativa para quando quem chama já tem um
+conjunto de clientes com proveniência temporal real (ex.: um registro
+histórico específico) -- decisão de quem compõe o corredor, nunca
+inferida aqui.
 
 PENDÊNCIA HONESTA, NUNCA ESCONDIDA -- `dados_correlacao`: o inventário
 NUNCA carrega identificador de pedido/valor total/etc. (nem deveria:
@@ -33,17 +66,16 @@ Esses dados só existem no momento em que o documento é processado
 são persistidos em lugar nenhum para consulta posterior; não existe
 "banco de correlação" de produção. Este módulo expõe essa dependência
 como um Protocol PRÓPRIO e nomeado (`FonteDadosCorrelacaoDocumental`),
-nunca fabrica o dado que falta: sem uma implementação real desse
-Protocol (que exigiria um armazenamento durável -- fora do escopo
-desta missão, "não criar banco paralelo sem necessidade comprovada"
-combinado com "mudança arquitetural grande fora do escopo" -- gate
-humano, não decisão técnica local), um candidato descoberto aqui
-simplesmente não carrega `dados_correlacao` (fica com os defaults
-vazios do dataclass) -- a resolução de relação correspondente cai
-honestamente em `NAO_ENCONTRADA`, nunca finge ter evidência que não
-tem. `FonteDadosCorrelacaoEmMemoria` (abaixo) é uma referência local/
-piloto -- mesmo padrão de `InventarioPrestacaoEmMemoria` -- nunca a
-fonte de registro de produção."""
+`Optional` no construtor (adendo §12: "não exigir que produção injete
+um fake/in-memory apenas para representar 'não existe dado'") -- sem
+fonte injetada (`None`, o default), ou sem dado registrado para um
+`documento_id`, o candidato existe (identidade é real) mas
+`dados_correlacao` fica com os defaults vazios do dataclass -- a
+resolução de relação correspondente cai honestamente em
+`NAO_ENCONTRADA`, nunca finge ter evidência que não tem.
+`FonteDadosCorrelacaoEmMemoria` (abaixo) é uma referência local/piloto
+-- mesmo padrão de `InventarioPrestacaoEmMemoria` -- nunca a fonte de
+registro de produção."""
 from __future__ import annotations
 
 import dataclasses
@@ -55,6 +87,54 @@ from .fonte_candidatos_relacao_documental import CandidatoRelacaoDocumental
 from .fonte_clientes_prestacao import FonteClientesPrestacao
 from .inventario_prestacao import FonteInventarioPrestacao
 from .relacao_documental import DadosCorrelacaoDocumental, TipoRelacaoDocumental
+
+
+class FonteEscopoClientesPrestacao(Protocol):
+    """Porta para o CONJUNTO de clientes a considerar como escopo de
+    busca PARA UMA COMPETÊNCIA -- nunca "clientes ativos hoje" como
+    universo implícito para qualquer competência (§7/§10 do adendo:
+    "ativo hoje" não equivale a "aplicável historicamente"). Quem
+    implementa decide a origem e a responsabilidade de prová-la
+    temporalmente correta -- este módulo nunca infere isso sozinho."""
+
+    def escopo_para_competencia(self, competencia: ReferenciaCanonica) -> Tuple[ReferenciaCanonica, ...]: ...
+
+
+class EscopoClientesAtivosDoCiclo:
+    """Implementação de referência sobre `FonteClientesPrestacao.
+    listar_ativos` (já real, já com adapter de produção) -- válida
+    SOMENTE quando a competência pedida é a competência CORRENTE do
+    próprio `contexto_ciclo` (pré-filtro operacional aceitável para o
+    ciclo em processamento agora, §10 do adendo). NUNCA usar para
+    competência histórica -- `escopo_para_competencia` devolve `()`
+    (vazio, nunca uma lista potencialmente errada) quando a competência
+    pedida diverge da competência corrente do ciclo."""
+
+    def __init__(self, fonte_clientes: FonteClientesPrestacao, contexto_ciclo: ContextoCicloPrestacao):
+        self._fonte_clientes = fonte_clientes
+        self._contexto_ciclo = contexto_ciclo
+        ano, mes = contexto_ciclo.competencia_base
+        self._competencia_corrente_id = f'{ano:04d}-{mes:02d}'
+
+    def escopo_para_competencia(self, competencia: ReferenciaCanonica) -> Tuple[ReferenciaCanonica, ...]:
+        if competencia.entidade_id != self._competencia_corrente_id:
+            return ()
+        return self._fonte_clientes.listar_ativos(self._contexto_ciclo)
+
+
+class EscopoClientesFixo:
+    """Implementação de referência para quando quem chama já tem um
+    conjunto de clientes com proveniência temporal REAL (ex.: um
+    registro histórico específico, já resolvido fora deste módulo) --
+    nunca "ativos hoje" travestido de histórico. O MESMO escopo é
+    devolvido para qualquer competência perguntada -- a responsabilidade
+    de a competência ser a correta é de quem construiu este objeto."""
+
+    def __init__(self, clientes: Tuple[ReferenciaCanonica, ...]):
+        self._clientes = clientes
+
+    def escopo_para_competencia(self, competencia: ReferenciaCanonica) -> Tuple[ReferenciaCanonica, ...]:
+        return self._clientes
 
 
 class FonteDadosCorrelacaoDocumental(Protocol):
@@ -89,22 +169,21 @@ class FonteDadosCorrelacaoEmMemoria:
 class FonteCandidatosRelacaoDocumentalDoInventario:
     """Implementa `FonteCandidatosRelacaoDocumental`
     (`fonte_candidatos_relacao_documental.py`) -- REAL para descoberta
-    de identidade (composição de 2 Protocols já auditados, cada um já
-    com adapter de produção); depende de uma `FonteDadosCorrelacao
-    Documental` injetada para os dados de correlação (ver docstring do
-    módulo -- pendência nomeada, nunca escondida)."""
+    de identidade (composição de Protocols já auditados, cada um já com
+    adapter de produção ou implementação de referência documentada);
+    `fonte_dados_correlacao` é OPCIONAL (ver docstring do módulo --
+    pendência nomeada, nunca escondida, nunca exigida como fake
+    obrigatório)."""
 
     def __init__(
         self,
-        fonte_clientes: FonteClientesPrestacao,
+        fonte_escopo_clientes: FonteEscopoClientesPrestacao,
         fonte_inventario: FonteInventarioPrestacao,
-        fonte_dados_correlacao: FonteDadosCorrelacaoDocumental,
-        contexto_ciclo: ContextoCicloPrestacao,
+        fonte_dados_correlacao: Optional[FonteDadosCorrelacaoDocumental] = None,
     ):
-        self._fonte_clientes = fonte_clientes
+        self._fonte_escopo_clientes = fonte_escopo_clientes
         self._fonte_inventario = fonte_inventario
         self._fonte_dados_correlacao = fonte_dados_correlacao
-        self._contexto_ciclo = contexto_ciclo
 
     def candidatos_para_relacao(
         self,
@@ -116,7 +195,7 @@ class FonteCandidatosRelacaoDocumentalDoInventario:
     ) -> Tuple[CandidatoRelacaoDocumental, ...]:
         ano, mes = competencia
         competencia_ref = ReferenciaCanonica('COMPETENCIA', f'{ano:04d}-{mes:02d}')
-        clientes = self._fonte_clientes.listar_ativos(self._contexto_ciclo)
+        clientes = self._fonte_escopo_clientes.escopo_para_competencia(competencia_ref)
 
         candidatos_por_documento: Dict[str, CandidatoRelacaoDocumental] = {}
         for cliente in clientes:
@@ -137,7 +216,10 @@ class FonteCandidatosRelacaoDocumentalDoInventario:
                         existente, referencias_logicas=novas_referencias,
                     )
                     continue
-                dados = self._fonte_dados_correlacao.obter_dados_correlacao(item.documento_id)
+                dados = (
+                    self._fonte_dados_correlacao.obter_dados_correlacao(item.documento_id)
+                    if self._fonte_dados_correlacao is not None else None
+                )
                 candidatos_por_documento[item.documento_id] = CandidatoRelacaoDocumental(
                     documento_id=item.documento_id, tipo_documental=item.tipo_documental,
                     dados_correlacao=dados if dados is not None else DadosCorrelacaoDocumental(),

@@ -1,7 +1,8 @@
 """Adapter REAL read-only de UNIDADE_POSTO da prestação (missão
 "MESCLAR PR #107 + CONSTRUIR OS DOIS ADAPTERS REAIS QUE BLOQUEIAM A
 PRIMEIRA VALIDAÇÃO LIVE — FonteUnidadePostoPrestacao +
-FonteCandidatosRelacaoDocumental").
+FonteCandidatosRelacaoDocumental"; corrigido pelo "ADENDO PRÉ-MERGE —
+PR #108 — CORRIGIR TEMPORALIDADE DO SNAPSHOT").
 
 Fecha a pendência mais antiga registrada (PR #106/#107, seção "adapters
 reais"): implementa `FonteUnidadePostoPrestacao` (Protocol,
@@ -14,20 +15,37 @@ adapter resolve o PRÓPRIO Local como UNIDADE_POSTO (identidade do
 posto), nunca segue até o Cliente (isso continua exclusivamente em
 `FonteVinculosPrestacaoAirtableShadow`).
 
-TEMPORALIDADE (regra pétrea desde o adendo pré-merge ao PR #106 —
-"vínculo/posto corrente nunca prova histórico sem evidência de
-vigência"): o schema Airtable de Funcionário/Local NÃO tem nenhum campo
-de vigência/período (confirmado por auditoria anterior, sessão
-anterior desta mesma missão macro) — este adapter só pode responder
-pela competência CORRENTE do ciclo, injetada uma única vez via
-`ContextoCicloPrestacao` (nunca lida do relógio aqui, cláusula pétrea
-"competência entra uma vez, na borda"). Para qualquer competência
-diferente da corrente, devolve `NAO_ENCONTRADA` com o motivo sanitizado
-já cadastrado (`MOTIVO_VINCULO_HISTORICO_SEM_VIGENCIA`,
-`vinculo_unidade_prestacao.py`) — nunca `RESOLVIDA` "com ressalva"."""
+CORREÇÃO (adendo pré-merge ao PR #108, achado real): a primeira versão
+deste adapter usava `ContextoCicloPrestacao.competencia_base` (que
+significa "qual competência este runner está processando agora") como
+se fosse prova de que o SNAPSHOT do Airtable é válido para aquela
+competência. São conceitos DIFERENTES e NUNCA podem ser confundidos
+(nem no código, nem no nome, nem no ADR): o runner pode estar
+processando a competência DOCUMENTAL de um cliente com deslocamento
+(ex.: SKY Tatuí, ciclo-base Julho/2026 → competência documental
+Junho/2026, `competencia_esperada_prestacao.py`) — o snapshot CORRENTE
+de Funcionário→Local, lido HOJE, não prova nada sobre Junho.
+
+Auditoria (§3 do adendo): nenhum contrato de "vigência de fonte"/
+"as_of"/"snapshot_version" existe em nenhum lugar do repositório —
+confirmado por busca. Menor contrato explícito criado NA BORDA (aqui,
+no adapter -- nunca no motor semântico): `competencia_snapshot_
+comprovada`, um parâmetro do construtor, DESACOPLADO de qualquer
+`ContextoCicloPrestacao`. É responsabilidade de QUEM CONSTRÓI este
+adapter fornecer esse valor só quando tiver prova real de que o
+snapshot Airtable é válido para aquela competência EXATA (tipicamente:
+a competência documental do cliente sem nenhum deslocamento, e a
+leitura acontecendo dentro do próprio período) -- nunca inferido, nunca
+copiado de `ContextoCicloPrestacao.competencia_base` sem essa prova.
+Sem esse parâmetro (`None`, o default -- "sem evidência de vigência
+nenhuma"), toda resolução cai em `NAO_ENCONTRADA` com o motivo
+sanitizado já cadastrado (`MOTIVO_VINCULO_HISTORICO_SEM_VIGENCIA`,
+`vinculo_unidade_prestacao.py`) — nunca `RESOLVIDA` "com ressalva",
+nunca um falso positivo por coincidência de valores."""
 from __future__ import annotations
 
-from magnata_os.classificacao.competencia_esperada_prestacao import ContextoCicloPrestacao
+from typing import Optional, Tuple
+
 from magnata_os.classificacao.contratos import (
     ConfiancaResolucao,
     DimensaoResolucao,
@@ -44,7 +62,7 @@ from .airtable_link_utils import filtro_ids, ids_vinculados
 from .airtable_vinculos_prestacao import F_FUNC_LOCAIS
 
 
-def _formatar_competencia(ano_mes: tuple[int, int]) -> str:
+def _formatar_competencia(ano_mes: Tuple[int, int]) -> str:
     """Mesmo formato canônico já usado em todo o repositório
     (`resolucao_semantica.py`/`ciclo_prestacao.py`/`inventario_
     prestacao_resultados.py`) -- nunca um segundo formato paralelo."""
@@ -53,23 +71,38 @@ def _formatar_competencia(ano_mes: tuple[int, int]) -> str:
 
 
 class FonteUnidadePostoPrestacaoAirtableShadow:
-    """Lê o link Funcionário→Local sem qualquer escrita. `contexto_
-    ciclo` é a competência CORRENTE do ciclo em execução, injetada uma
-    única vez por quem compõe o corredor -- nunca redescoberta por
-    documento, nunca lida do relógio dentro deste adapter."""
+    """Lê o link Funcionário→Local sem qualquer escrita.
 
-    def __init__(self, leitor: LeitorAirtableSomenteLeitura, contexto_ciclo: ContextoCicloPrestacao):
+    `competencia_snapshot_comprovada`: a ÚNICA competência para a qual
+    quem construiu este adapter tem prova real de que o snapshot atual
+    do Airtable é válido -- NUNCA a competência que o runner está
+    processando (`ContextoCicloPrestacao`, conceito DIFERENTE, nunca
+    aceito aqui nem por engano de nome). `None` (default) significa
+    "nenhuma vigência comprovada" -- toda resolução cai em
+    `NAO_ENCONTRADA`, nunca `RESOLVIDA` por suposição."""
+
+    def __init__(
+        self, leitor: LeitorAirtableSomenteLeitura,
+        competencia_snapshot_comprovada: Optional[Tuple[int, int]] = None,
+    ):
         self._leitor = leitor
-        self._competencia_corrente = _formatar_competencia(contexto_ciclo.competencia_base)
+        self._competencia_snapshot_comprovada = (
+            _formatar_competencia(competencia_snapshot_comprovada)
+            if competencia_snapshot_comprovada is not None else None
+        )
 
     def resolver_unidade_posto(
         self, colaborador: ReferenciaCanonica, competencia: ReferenciaCanonica,
     ) -> ResolucaoDimensao:
         if competencia.tipo_entidade != 'COMPETENCIA':
             raise ValueError('competencia deve ser referencia canonica de COMPETENCIA')
-        if competencia.entidade_id != self._competencia_corrente:
-            # Sem evidência de vigência para competência histórica --
-            # nunca promove o posto corrente a verdade histórica.
+        if (
+            self._competencia_snapshot_comprovada is None
+            or competencia.entidade_id != self._competencia_snapshot_comprovada
+        ):
+            # Sem vigência comprovada para esta competência exata --
+            # nunca promove o snapshot corrente a verdade para uma
+            # competência que ele não prova (histórica ou não).
             return ResolucaoDimensao(
                 dimensao=DimensaoResolucao.UNIDADE_POSTO, estado=EstadoResolucaoDimensao.NAO_ENCONTRADA,
                 metodo='funcionario_local_airtable_readonly', motivos=(MOTIVO_VINCULO_HISTORICO_SEM_VIGENCIA,),
