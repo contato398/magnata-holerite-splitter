@@ -190,6 +190,14 @@ dos dois perfis foi alterado por esta missão.
 
 ## 4. PENDÊNCIA REGISTRADA — costura de orquestração ainda não feita
 
+> **ATUALIZAÇÃO**: esta pendência foi FECHADA pela missão "CORRIGIR
+> METADADOS + MERGE PR #106 + COSTURA AUTOMÁTICA DE RELAÇÃO
+> DOCUMENTO↔DOCUMENTO NO CORREDOR V1" — ver
+> `docs/decisoes/costura-relacao-documental-corredor-v1.md`. Uma nova
+> pendência distinta (adapters reais de produção) permanece registrada
+> lá — nunca a mesma pendência reaberta, uma nova, nomeada
+> explicitamente.
+
 A capacidade relacional (`relacao_documental.py` + as 2 funções de
 benefícios) está construída, testada e provadamente reutilizável — mas
 **não está** ainda plugada dentro de `avancar_para_inventario`/

@@ -877,6 +877,26 @@ ALLOWED_PATHS=(
   "^test_magnata_os_classificacao_relacao_documental\.py$"
   "^test_magnata_os_classificacao_e2e_vinculo_unidade_relacao_v1\.py$"
   "^docs/decisoes/evidencia-relacional-vinculo-unidade-v1\.md$"
+  # Excecao exata e restrita (missao "CORRIGIR METADADOS + MERGE PR #106 +
+  # COSTURA AUTOMATICA DE RELACAO DOCUMENTO<->DOCUMENTO NO CORREDOR V1",
+  # branch fix/costura-relacao-documental-corredor-v1) — fonte GENERICA de
+  # candidatos de relacao (Protocol source-neutral, nunca por familia/
+  # fornecedor) e sua composta local; politica declarativa de consequencia
+  # (deriva referencias OU preserva broadcast, nunca as duas); orquestrador
+  # que liga fonte+relacao+politica+inventario ja existentes (nenhum motor
+  # novo) com metricas relacionais permanentes; testes nominais. Arquivos
+  # ja existentes tocados (produtores_evidencia_beneficios.py -- delegacao
+  # da derivacao para a politica generica -- e test_magnata_os_
+  # classificacao_arquitetura_sem_dependencia_airtable.py) ja estavam no
+  # escopo permitido de missoes anteriores, nao precisam de nova entrada.
+  # Nao libera "^magnata_os/classificacao/" nem "^test_" de forma ampla.
+  "^magnata_os/classificacao/fonte_candidatos_relacao_documental\.py$"
+  "^magnata_os/classificacao/politica_consequencia_relacao_documental\.py$"
+  "^magnata_os/classificacao/corredor_relacao_documental\.py$"
+  "^test_magnata_os_classificacao_fonte_candidatos_relacao_documental\.py$"
+  "^test_magnata_os_classificacao_politica_consequencia_relacao_documental\.py$"
+  "^test_magnata_os_classificacao_corredor_relacao_documental\.py$"
+  "^docs/decisoes/costura-relacao-documental-corredor-v1\.md$"
 )
 
 # ============================================================================

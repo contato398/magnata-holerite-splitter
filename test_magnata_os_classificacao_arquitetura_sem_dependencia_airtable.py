@@ -16,12 +16,17 @@ import inspect
 
 from magnata_os.classificacao import (
     automacao_por_confianca,
+    corredor_relacao_documental,
+    fonte_candidatos_relacao_documental,
     identificacao_documental,
     inventario_prestacao_memoria,
     perfil_aplicabilidade_documental,
+    politica_consequencia_relacao_documental,
     ponte_conteudo_motor_semantico,
     reconciliacao_origem_conteudo,
+    relacao_documental,
     resolucao_documento_prestacao,
+    vinculo_unidade_prestacao,
 )
 from magnata_os.documental.modulo01 import politica_classificacao_semantica
 
@@ -34,6 +39,11 @@ _MODULOS_DO_CORREDOR_SEMANTICO = (
     perfil_aplicabilidade_documental,
     resolucao_documento_prestacao,
     inventario_prestacao_memoria,
+    vinculo_unidade_prestacao,
+    relacao_documental,
+    fonte_candidatos_relacao_documental,
+    politica_consequencia_relacao_documental,
+    corredor_relacao_documental,
 )
 
 
@@ -122,3 +132,38 @@ def test_resolver_documento_prestacao_so_recebe_fontes_via_protocol_injetado():
         'Recibo de Pagamento -- Total de Vencimentos\nCompetência: 07/2026\nCPF: 111.222.333-44', contexto,
     )
     assert resultado.estado == EstadoCorredorDocumentoPrestacao.RESOLVIDO_E_AVANCOU
+
+
+def test_corredor_relacao_documental_so_recebe_fonte_de_candidatos_via_protocol_injetado():
+    """Mesmo princípio para a costura de relação (missão "...COSTURA
+    AUTOMÁTICA DE RELAÇÃO DOCUMENTO↔DOCUMENTO NO CORREDOR V1") -- a
+    fonte de candidatos é um Protocol duck-typed, nunca Airtable."""
+    from magnata_os.classificacao.contratos import EstadoResolucaoDimensao, ReferenciaCanonica
+    from magnata_os.classificacao.corredor_relacao_documental import (
+        ContextoRelacaoDocumentoPrestacao,
+        resolver_relacao_e_avancar,
+    )
+    from magnata_os.classificacao.fonte_candidatos_relacao_documental import CandidatoRelacaoDocumental
+    from magnata_os.classificacao.inventario_prestacao_memoria import InventarioPrestacaoEmMemoria
+    from magnata_os.classificacao.relacao_documental import DadosCorrelacaoDocumental
+
+    class _FonteCandidatosPuroPython:
+        """Nunca importa Airtable, boto3, psycopg2 nem qualquer driver
+        -- só implementa o Protocol via duck typing."""
+
+        def candidatos_para_relacao(self, documento_id_atual, tipo_atual, tipo_candidato, competencia, tipo_relacao):
+            return (
+                CandidatoRelacaoDocumental(
+                    documento_id='rel-qualquer', tipo_documental=tipo_candidato,
+                    dados_correlacao=DadosCorrelacaoDocumental(identificador_pedido='P1', valor_total='1,00'),
+                    referencias_logicas=(ReferenciaCanonica('CLIENTE', 'cli-qualquer'),),
+                ),
+            )
+
+    contexto = ContextoRelacaoDocumentoPrestacao(
+        documento_id='comp-arquitetura', tipo_documental='Comprovante de Pagamento - VR/VA', competencia=(2026, 7),
+        dados_correlacao=DadosCorrelacaoDocumental(identificador_pedido='P1', valor_total='1,00'),
+        fonte_candidatos=_FonteCandidatosPuroPython(),
+    )
+    resultado = resolver_relacao_e_avancar(contexto, InventarioPrestacaoEmMemoria())
+    assert resultado.resolucao_relacao.estado == EstadoResolucaoDimensao.RESOLVIDA
