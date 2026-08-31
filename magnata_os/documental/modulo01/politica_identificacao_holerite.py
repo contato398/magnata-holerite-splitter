@@ -49,22 +49,15 @@ from __future__ import annotations
 import dataclasses
 from typing import Optional, Sequence, Union
 
-from magnata_os.classificacao.contratos import (
-    ConfiancaResolucao,
-    DimensaoResolucao,
-    EstadoResolucaoDimensao,
-    EvidenciaSanitizada,
-    NivelConfianca,
-    ReferenciaCanonica,
-    ResolucaoDimensao,
+from magnata_os.classificacao.contratos import DimensaoResolucao, EstadoResolucaoDimensao, ResolucaoDimensao
+from magnata_os.classificacao.identificacao_documental import (
+    DocumentoComMultiplasIdentidades,
+    correspondencia_para_resolucao_dimensao,
+    multiplas_identidades_para_resolucao_dimensao,
+    resolver_colaborador_de_texto,
 )
 
-from ..importacao_lote.contratos import CandidatoFuncionario, ClassificacaoCorrespondencia, ResultadoCorrespondencia
-from ..importacao_lote.dominio import (
-    extrair_cpfs_distintos_de_texto,
-    extrair_nome_funcionario_de_texto,
-    resolver_funcionario,
-)
+from ..importacao_lote.contratos import CandidatoFuncionario
 from .dominio_esteira import MotivoBloqueio, SituacaoEsteira
 
 # Códigos de MotivoBloqueio centralizados aqui — nunca espalhados como
@@ -85,166 +78,18 @@ MOTIVO_TRANSICAO_IDENTIFICACAO_COLABORADOR_NAO_ENCONTRADO = 'IDENTIFICACAO_COLAB
 MOTIVO_TRANSICAO_IDENTIFICACAO_PDF_MESTRE_SUSPEITO = CODIGO_BLOQUEIO_PDF_MESTRE_SUSPEITO
 
 
-@dataclasses.dataclass(frozen=True)
-class MestreSuspeitoIdentificacaoHolerite:
-    """Sinal específico e sanitizado de "PDF mestre suspeito" — 2+ CPFs
-    distintos encontrados no texto de um Holerite avulso. Condição
-    documental DIFERENTE de AMBIGUA (que é sobre colisão de CANDIDATOS
-    de colaborador, não sobre o conteúdo do PDF ter mais de uma
-    identidade) — nunca reaproveita `EstadoResolucaoDimensao.AMBIGUA`
-    nem qualquer código de bloqueio de colaborador ambíguo.
-
-    Só carrega a CONTAGEM de CPFs distintos (nunca os CPFs em si, que
-    são estritamente transitórios) — a contagem não é PII, só um
-    inteiro auxiliar de observabilidade/depuração."""
-
-    quantidade_cpfs_distintos: int
-
-    def __post_init__(self) -> None:
-        if self.quantidade_cpfs_distintos < 2:
-            raise ValueError(
-                'MestreSuspeitoIdentificacaoHolerite exige quantidade_cpfs_distintos >= 2')
-
+# Alias, não cópia (missão "CORREDOR AUTÔNOMO PÓS-CLASSIFICAÇÃO V1",
+# Fase 8: "generalizar sem destruir a política específica de Holerite").
+# O núcleo desta lógica NUNCA foi específico de Holerite -- foi extraído
+# para `classificacao/identificacao_documental.py` para reuso por
+# qualquer família com granularidade colaborador; este módulo continua
+# expondo o MESMO nome público, MESMA classe (não uma cópia -- por isso
+# `isinstance(resultado, MestreSuspeitoIdentificacaoHolerite)` abaixo
+# continua funcionando sem alteração), MESMO comportamento.
+MestreSuspeitoIdentificacaoHolerite = DocumentoComMultiplasIdentidades
+mestre_suspeito_para_resolucao_dimensao = multiplas_identidades_para_resolucao_dimensao
 
 ResultadoIdentificacaoHolerite = Union[ResolucaoDimensao, MestreSuspeitoIdentificacaoHolerite]
-
-
-def mestre_suspeito_para_resolucao_dimensao(
-    resultado: MestreSuspeitoIdentificacaoHolerite,
-) -> ResolucaoDimensao:
-    """Traduz `MestreSuspeitoIdentificacaoHolerite` para `ResolucaoDimensao`
-    (dimensão COLABORADOR, estado CONFLITO) -- necessário só para quem
-    compõe uma resolução semântica consolidada (missão "RECONCILIAÇÃO E
-    ATIVAÇÃO DA FASE 2E", `classificacao/resolucao_semantica.py`); o
-    gate de identificação em si (`decidir_transicao_identificacao`)
-    continua tratando este caso separadamente de AMBIGUA, como sempre
-    tratou -- esta função só existe para dar a ele uma forma consumível
-    pelo compositor genérico, sem fazer o compositor conhecer
-    "MestreSuspeito" (um conceito específico de Holerite avulso).
-
-    CONFLITO, nunca AMBIGUA: é uma condição documental (2+ identidades
-    no mesmo PDF), não uma colisão de candidatos de cadastro -- os dois
-    estados já existem no contrato exatamente para não serem confundidos
-    (ver `classificacao/contratos.py::EstadoResolucaoDimensao`). Nunca
-    carrega a contagem de CPFs (poderia se aproximar de PII em conjunto
-    com outros campos) além do que já está sanitizado em `motivos`."""
-    return ResolucaoDimensao(
-        dimensao=DimensaoResolucao.COLABORADOR,
-        estado=EstadoResolucaoDimensao.CONFLITO,
-        metodo='deteccao_pdf_mestre_suspeito',
-        motivos=('mestre_suspeito_multiplos_cpfs',),
-    )
-
-
-# Força de evidência por critério de correspondência -- preserva
-# explicitamente o princípio já existente em `resolver_funcionario`
-# (CPF exato tentado antes de nome, nunca o inverso): CPF é sinal mais
-# forte que nome, mesmo quando os dois produzem, sozinhos, um match
-# único e determinístico. Nunca promove nome a FORTE artificialmente.
-_FORCA_POR_CRITERIO = {
-    'cpf_exato': NivelConfianca.FORTE,
-    'nome_normalizado_exato': NivelConfianca.MODERADA,
-}
-
-
-def _evidencia_de_criterio(
-    criterio_usado: Optional[str], entidade_candidata: Optional[ReferenciaCanonica],
-) -> tuple:
-    """Constrói a evidência sanitizada correspondente ao critério que
-    `resolver_funcionario` já usou -- nunca CPF/nome bruto, só o código
-    de critério (já sanitizado, ex.: "cpf_exato") e a força que esse
-    critério sempre teve. `criterio_usado is None` (caso NOT_FOUND, em
-    que nenhum critério chegou a produzir sequer um candidato) não gera
-    evidência nenhuma -- nunca inventa uma evidência para uma tentativa
-    que não aconteceu."""
-    if criterio_usado is None:
-        return ()
-    forca = _FORCA_POR_CRITERIO.get(criterio_usado)
-    if forca is None:
-        # Critério fora do vocabulário conhecido -- fail-safe explícito,
-        # nunca inventa uma força arbitrária para um código novo.
-        raise ValueError(f'criterio_usado sem força de evidência definida: {criterio_usado!r}')
-    return (
-        EvidenciaSanitizada(
-            tipo_evidencia='CORRESPONDENCIA_FUNCIONARIO',
-            fonte='resolver_funcionario',
-            referencia_fonte=criterio_usado,
-            metodo=criterio_usado,
-            forca=forca,
-            entidade_candidata=entidade_candidata,
-        ),
-    )
-
-
-def correspondencia_para_resolucao_dimensao(
-    correspondencia: ResultadoCorrespondencia,
-) -> ResolucaoDimensao:
-    """Traduz um `ResultadoCorrespondencia` (importacao_lote/contratos.py
-    — já produzido por `resolver_funcionario`, nunca refeito aqui) para
-    o contrato neutro `ResolucaoDimensao` (classificacao/contratos.py),
-    dimensão COLABORADOR. Auditoria read-only prévia confirmou que este
-    contrato já existe e já é usado pelo readiness shadow de Prestação
-    de Contas para CLIENTE/COMPETENCIA — reaproveitado aqui, nenhum DTO
-    paralelo criado.
-
-    Nunca carrega CPF ou nome — só `entidade_id` (record id do
-    Airtable, já resolvido, não é PII) em `valores_confirmados`, o
-    código sanitizado de `MotivoSanitizado` em `motivos`, e (missão
-    "RECONCILIAÇÃO E ATIVAÇÃO DA FASE 2E") o critério de correspondência
-    (ex.: "cpf_exato") como `EvidenciaSanitizada` -- nunca o CPF/nome em
-    si, só o código do critério já usado por `resolver_funcionario`."""
-    motivos = (correspondencia.motivo.value,)
-    metodo = correspondencia.criterio_usado
-
-    if correspondencia.classificacao == ClassificacaoCorrespondencia.EXACT:
-        entidade = ReferenciaCanonica('COLABORADOR', correspondencia.entidade_id)
-        return ResolucaoDimensao(
-            dimensao=DimensaoResolucao.COLABORADOR,
-            estado=EstadoResolucaoDimensao.RESOLVIDA,
-            valores_confirmados=(entidade,),
-            evidencias=_evidencia_de_criterio(metodo, entidade),
-            metodo=metodo,
-            confianca=ConfiancaResolucao(_FORCA_POR_CRITERIO.get(metodo, NivelConfianca.INDETERMINADA)),
-            motivos=motivos,
-        )
-    if correspondencia.classificacao == ClassificacaoCorrespondencia.AMBIGUOUS:
-        return ResolucaoDimensao(
-            dimensao=DimensaoResolucao.COLABORADOR,
-            estado=EstadoResolucaoDimensao.AMBIGUA,
-            evidencias=_evidencia_de_criterio(metodo, None),
-            metodo=metodo,
-            motivos=motivos,
-        )
-    if correspondencia.classificacao == ClassificacaoCorrespondencia.NOT_FOUND:
-        return ResolucaoDimensao(
-            dimensao=DimensaoResolucao.COLABORADOR,
-            estado=EstadoResolucaoDimensao.NAO_ENCONTRADA,
-            metodo=metodo,
-            motivos=motivos,
-        )
-    if correspondencia.classificacao == ClassificacaoCorrespondencia.CONFLICT:
-        return ResolucaoDimensao(
-            dimensao=DimensaoResolucao.COLABORADOR,
-            estado=EstadoResolucaoDimensao.CONFLITO,
-            metodo=metodo,
-            motivos=motivos,
-        )
-    if correspondencia.classificacao == ClassificacaoCorrespondencia.INVALID:
-        return ResolucaoDimensao(
-            dimensao=DimensaoResolucao.COLABORADOR,
-            estado=EstadoResolucaoDimensao.INVALIDA,
-            metodo=metodo,
-            motivos=motivos,
-        )
-
-    # ClassificacaoCorrespondencia é um enum fechado; `resolver_funcionario`
-    # só produz EXACT/AMBIGUOUS/NOT_FOUND, mas as 5 branches acima já
-    # cobrem todos os valores restantes exceto DUPLICATE (que pertence à
-    # camada de escrita, nunca a esta correspondência) -- fail-safe
-    # explícito, nunca traduz por omissão.
-    raise ValueError(
-        f'ClassificacaoCorrespondencia sem tradução para ResolucaoDimensao: '
-        f'{correspondencia.classificacao!r}')
 
 
 def resolver_identificacao_holerite_de_texto(
@@ -257,20 +102,12 @@ def resolver_identificacao_holerite_de_texto(
     extrair_texto_seguro` e `servico_lote.py`). Nunca extrai o PDF de
     novo, nunca recebe bytes.
 
-    Ordem: 1) detecta CPFs distintos (`extrair_cpfs_distintos_de_texto`)
-    — 2+ vira `MestreSuspeitoIdentificacaoHolerite` sem chamar
-    `resolver_funcionario` (nunca escolhe o primeiro CPF); 2) senão,
-    extrai nome (`extrair_nome_funcionario_de_texto`, fallback) e chama
-    `resolver_funcionario` com o único CPF encontrado (ou None) + nome
-    (ou string vazia) + candidatos."""
-    cpfs_distintos = extrair_cpfs_distintos_de_texto(texto)
-    if len(cpfs_distintos) >= 2:
-        return MestreSuspeitoIdentificacaoHolerite(quantidade_cpfs_distintos=len(cpfs_distintos))
-
-    cpf_extraido = cpfs_distintos[0] if cpfs_distintos else None
-    nome_extraido = extrair_nome_funcionario_de_texto(texto) or ''
-    correspondencia = resolver_funcionario(cpf_extraido, nome_extraido, list(candidatos))
-    return correspondencia_para_resolucao_dimensao(correspondencia)
+    Delega 100% a `identificacao_documental.resolver_colaborador_de_
+    texto` (missão "CORREDOR AUTÔNOMO PÓS-CLASSIFICAÇÃO V1", Fase 8) --
+    esta função existe só para preservar o nome/assinatura específicos
+    de Holerite já usados pelos chamadores existentes (`servico_lote.py`
+    e outros), nunca duplica a lógica."""
+    return resolver_colaborador_de_texto(texto, candidatos)
 
 
 @dataclasses.dataclass(frozen=True)

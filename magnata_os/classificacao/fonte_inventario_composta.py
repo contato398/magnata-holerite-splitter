@@ -12,12 +12,17 @@ une e deduplica (cláusula pétrea #2 da missão: "não criar inventário
 específico de Holerite, depois outro de Extrato, depois outro de FGTS
 como pipelines separados").
 
-Deduplicação por `documento_id` -- identidade documental determinística,
-NUNCA filename (cláusula pétrea #9 do corredor). Se 2 fontes devolverem
-o MESMO `documento_id` (não deveria acontecer entre tabelas Airtable
-distintas, cujos record ids já são globalmente únicos, mas defendido
-mesmo assim), o primeiro item encontrado prevalece -- nunca inventa
-merge de campos entre os dois.
+Deduplicação por `ItemInventarioPrestacao.identidade_logica`
+(`documento_id`+`cliente`+`colaborador`, Adendo substitutivo ao PR #105,
+§15) -- NUNCA só `documento_id` sozinho: um documento broadcast (DCTF)
+ou fatiado por colaborador (Holerite com vínculo múltiplo, relatório de
+benefícios) gera legitimamente N itens do MESMO `documento_id` -- cada
+um uma parcela lógica distinta, nunca colapsada. Nunca filename
+(cláusula pétrea #9 do corredor). Se 2 fontes devolverem a MESMA
+identidade lógica completa (não deveria acontecer entre tabelas
+Airtable distintas, cujos record ids já são globalmente únicos, mas
+defendido mesmo assim), o primeiro item encontrado prevalece -- nunca
+inventa merge de campos entre os dois.
 
 Traduz vocabulário Família B -> motor geral quando aplicável, reusando
 `TRADUCAO_FAMILIA_B_PARA_MOTOR_GERAL` (já existente,
@@ -49,11 +54,17 @@ class FonteInventarioPrestacaoComposta:
         vistos: dict = {}
         for fonte in self._fontes:
             for item in fonte.listar(cliente, competencia):
-                if item.documento_id in vistos:
-                    continue
                 tipo_traduzido = TRADUCAO_FAMILIA_B_PARA_MOTOR_GERAL.get(
                     item.tipo_documental, item.tipo_documental)
                 if tipo_traduzido != item.tipo_documental:
                     item = dataclasses.replace(item, tipo_documental=tipo_traduzido)
-                vistos[item.documento_id] = item
-        return tuple(vistos[chave] for chave in sorted(vistos))
+                chave = item.identidade_logica
+                if chave in vistos:
+                    continue
+                vistos[chave] = item
+
+        def _chave_ordenacao(chave: tuple) -> str:
+            documento_id, cliente, colaborador = chave
+            return f'{documento_id}|{cliente.entidade_id}|{colaborador.entidade_id if colaborador else ""}'
+
+        return tuple(vistos[chave] for chave in sorted(vistos, key=_chave_ordenacao))
