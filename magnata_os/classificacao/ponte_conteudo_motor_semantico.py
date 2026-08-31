@@ -25,7 +25,10 @@ Reaproveita, sem duplicar:
   - `hipoteses_de_finalidade_pagamento` (+ `sinais_textuais_de_
     finalidade_pagamento` + `reconciliar_evidencia_fiscal_com_
     finalidade`) — Salário/FGTS/DCTF-DARF/VR-VA/Assiduidade/Diárias/
-    Horas Extras."""
+    Horas Extras;
+  - `hipoteses_de_relatorio_beneficios` (Adendo substitutivo ao PR #105)
+    — relatório/pedido de benefícios (VR/VA/iFood/etc., fornecedor é
+    metadado, nunca identidade)."""
 from __future__ import annotations
 
 from typing import Optional, Tuple
@@ -36,6 +39,7 @@ from .finalidade_comprovante_pagamento import (
     hipoteses_de_finalidade_pagamento,
     sinais_textuais_de_finalidade_pagamento,
 )
+from .produtores_evidencia_beneficios import hipoteses_de_relatorio_beneficios
 from .produtores_evidencia_documental import hipoteses_textuais_de_classificacao
 from .produtores_evidencia_extrato import hipoteses_de_rotulo_alternativo_de_extrato
 from .produtores_evidencia_fiscal import (
@@ -66,6 +70,7 @@ def hipoteses_multi_evidencia_de_texto(texto: Optional[str]) -> Tuple[HipoteseTi
         + hipoteses_temporais_de_certidao(texto)
         + hipoteses_de_rotulo_alternativo_de_extrato(texto)
         + hipoteses_de_finalidade_pagamento(ocorrencias_finalidade)
+        + hipoteses_de_relatorio_beneficios(texto)
     )
 
 

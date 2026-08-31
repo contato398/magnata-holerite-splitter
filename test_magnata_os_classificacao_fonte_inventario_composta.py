@@ -60,3 +60,36 @@ def test_preserva_colaborador_sanitizado_ao_traduzir_tipo():
     composta = FonteInventarioPrestacaoComposta((_FonteFixa((item,)),))
     itens = composta.listar(_CLIENTE, _COMPETENCIA)
     assert itens[0].colaborador == colaborador
+
+
+# ============================================================================
+# Adendo substitutivo ao PR #105, §15 -- dedupe por identidade lógica
+# (documento_id + cliente + colaborador), nunca só documento_id.
+# ============================================================================
+
+def test_mesmo_documento_mesmo_cliente_colaboradores_distintos_nunca_colapsam():
+    """Fatiamento por colaborador (ex.: relatório de benefícios) do
+    MESMO documento físico, MESMO cliente -- 2 parcelas lógicas
+    distintas, ambas preservadas (nunca dedupadas como se fossem o
+    mesmo item)."""
+    colaborador_1 = ReferenciaCanonica('COLABORADOR', 'rec_colab_1')
+    colaborador_2 = ReferenciaCanonica('COLABORADOR', 'rec_colab_2')
+    item_1 = ItemInventarioPrestacao(
+        'doc-beneficios', 'Relatório de Benefícios', _CLIENTE, _COMPETENCIA, colaborador=colaborador_1,
+    )
+    item_2 = ItemInventarioPrestacao(
+        'doc-beneficios', 'Relatório de Benefícios', _CLIENTE, _COMPETENCIA, colaborador=colaborador_2,
+    )
+    composta = FonteInventarioPrestacaoComposta((_FonteFixa((item_1, item_2)),))
+    itens = composta.listar(_CLIENTE, _COMPETENCIA)
+    assert len(itens) == 2
+    assert {i.colaborador for i in itens} == {colaborador_1, colaborador_2}
+
+
+def test_mesmo_documento_clientes_distintos_broadcast_nunca_colapsam():
+    cliente_b = ReferenciaCanonica('CLIENTE', 'rec_cliente_b')
+    item_a = ItemInventarioPrestacao('doc-dctf', 'Guia DCTFWeb/DARF', _CLIENTE, _COMPETENCIA)
+    item_b = ItemInventarioPrestacao('doc-dctf', 'Guia DCTFWeb/DARF', cliente_b, _COMPETENCIA)
+    composta = FonteInventarioPrestacaoComposta((_FonteFixa((item_a, item_b)),))
+    assert len(composta.listar(_CLIENTE, _COMPETENCIA)) == 1
+    assert len(composta.listar(cliente_b, _COMPETENCIA)) == 1

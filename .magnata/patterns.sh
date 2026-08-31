@@ -840,6 +840,21 @@ ALLOWED_PATHS=(
   "^test_magnata_os_classificacao_resolucao_documento_prestacao\.py$"
   "^test_magnata_os_classificacao_corpus_corredor_autonomo_pos_classificacao\.py$"
   "^docs/decisoes/corredor-autonomo-pos-classificacao-v1\.md$"
+  # Excecao exata e restrita (Adendo substitutivo ao PR #105 -- correcao
+  # de granularidade FGTS/Guia/beneficios VR-VA-iFood + dedupe, mesma
+  # branch fix/corredor-autonomo-pos-classificacao-v1) — produtor de
+  # relatorio/pedido de beneficios (VR/VA/iFood, fornecedor e evidencia
+  # nunca identidade, nunca forca escolha exclusiva VR/VA) e seus testes
+  # nominais. Arquivos ja existentes tocados nesta correcao (perfil_
+  # aplicabilidade_documental.py, ponte_conteudo_motor_semantico.py,
+  # prestacao_readiness.py, fonte_inventario_composta.py, inventario_
+  # prestacao_memoria.py, test_magnata_os_classificacao_fonte_
+  # inventario_composta.py) ja estavam no escopo permitido de missoes
+  # anteriores, nao precisam de nova entrada. Nao libera
+  # "^magnata_os/classificacao/" nem "^test_" de forma ampla.
+  "^magnata_os/classificacao/produtores_evidencia_beneficios\.py$"
+  "^test_magnata_os_classificacao_produtores_evidencia_beneficios\.py$"
+  "^test_magnata_os_classificacao_adendo_beneficios_fgts_dedupe\.py$"
 )
 
 # ============================================================================

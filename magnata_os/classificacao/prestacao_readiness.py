@@ -61,6 +61,24 @@ class ItemInventarioPrestacao:
         if self.colaborador is not None and self.colaborador.tipo_entidade != "COLABORADOR":
             raise ValueError("colaborador deve ser referencia canonica de COLABORADOR")
 
+    @property
+    def identidade_logica(self) -> tuple:
+        """Identidade LÓGICA CANÔNICA de um item de inventário (Adendo
+        substitutivo ao PR #105, §15: "a regra deve acompanhar a
+        IDENTIDADE LÓGICA CANÔNICA existente, não uma tupla
+        improvisada"). Um `documento_id` físico pode gerar N itens
+        lógicos legítimos e distintos: broadcast (mesmo documento, 1
+        item por cliente aplicável) e vínculo múltiplo/fatiamento por
+        colaborador (mesmo documento, 1 item por colaborador/cliente
+        derivado -- ex.: relatório de benefícios fatiado). `cliente`
+        sozinho distingue broadcast; `colaborador` distingue itens
+        fatiados por colaborador dentro do MESMO cliente (nunca
+        colapsados). Reaproveitada por toda fonte de inventário que
+        precise decidir "isto já existe ou é um item novo" --
+        `FonteInventarioPrestacaoComposta` e `InventarioPrestacaoEm
+        Memoria`, nunca uma tupla ad-hoc duplicada em cada uma."""
+        return (self.documento_id, self.cliente, self.colaborador)
+
 
 @dataclasses.dataclass(frozen=True)
 class EntradaPrestacaoReadiness:

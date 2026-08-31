@@ -178,3 +178,71 @@ testado localmente (10/10 casos do corpus, idempotência confirmada, readiness/p
 alcançados para o caso feliz). A leitura live em si NÃO foi executada nesta missão (instrução
 explícita, Fase 28) — fica represada para confirmação humana distinta antes do primeiro acesso
 real, conforme CLAUDE.md §6(e).
+
+---
+
+## Adendo substitutivo (antes do merge do PR #105) — benefícios VR/VA/iFood + correção de
+## granularidade FGTS/Guia + dedupe por identidade lógica
+
+**Data:** 2026-08-30 (mesmo dia, antes do merge do PR original desta ADR).
+**Motivo:** revisão humana identificou 2 erros de modelagem no PR #105 original (FGTS tratado
+como broadcast estrutural; Guia genérica com perfil broadcast) e confirmou uma regra de
+negócio nova (benefícios VR/VA processados num relatório único por colaborador; transição de
+fornecedor VR Benefícios → iFood Benefícios a partir de set/2026).
+
+### Regra canônica de benefícios (confirmada)
+
+VR e VA são normalmente processados num MESMO relatório/pedido, por colaborador. O comprovante
+de pagamento correspondente é um documento separado. Ambos entram na prestação de contas.
+
+### O que foi construído
+
+- **`produtores_evidencia_beneficios.py`** (novo): reconhece "Relatório/Pedido/Crédito de
+  Benefícios" com força FORTE (frase deliberada e específica — precisa vencer, sem ambiguidade,
+  a hipótese MODERADA já existente 'Comprovante de Pagamento - VR/VA' que qualquer menção solta
+  de "vale-refeição"/"vale-alimentação" já produzia). Rubrica VR, rubrica VA, total do pedido,
+  linhas de beneficiário e fornecedor conhecido (iFood Benefícios, VR Benefícios, Alelo, Sodexo,
+  Ticket — lista aberta) são evidências ADICIONAIS na MESMA hipótese — nunca candidatos
+  concorrentes 'VR'/'VA'/'iFood'. Um relatório com VR+VA nunca é forçado a escolher um dos dois.
+  Fornecedor sozinho (sem a frase de relatório/pedido) nunca basta.
+- **Perfil 'Relatório de Benefícios'**: granularidade colaborador (mesma forma de
+  Holerite/Ponto) — fatiamento por colaborador via `estrategia_por_cpf_colaborador` (engine já
+  existente, reentra cada filho no mesmo motor), cliente derivado do vínculo real do
+  colaborador. Nunca uma dimensão nova de "categoria de benefício": VR/VA convivem como
+  evidência dentro do MESMO tipo documental.
+- **Correção FGTS** ('FGTS' e 'Comprovante de Pagamento - FGTS'): granularidade mudou de
+  broadcast para **cliente** — exige `cliente_direto` (origem já resolvida) ou separação por
+  CNPJ (`estrategia_por_cnpj_cliente`, já existente); sem cliente resolvido, fica
+  `NAO_AVALIADA`/revisão, nunca se espalha.
+- **Remoção de 'Guia' genérica do cadastro**: fallback GPS/DARF sem finalidade determinada
+  nunca teve perfil suficiente — agora fica honestamente `PERFIL_NAO_CADASTRADO` em vez de
+  broadcast automático.
+- **DCTF** (Declaração/Recibo/Guia DCTFWeb-DARF/Comprovante DCTF-DARF): preservado broadcast —
+  competência-level estruturalmente comprovado, regra NÃO generalizada para FGTS/benefícios.
+- **Identidade lógica canônica**: `ItemInventarioPrestacao.identidade_logica` (propriedade nova,
+  `documento_id`+`cliente`+`colaborador`) — reaproveitada por `FonteInventarioPrestacaoComposta`
+  (corrigida: dedupava só por `documento_id`, perdendo itens legítimos de vínculo múltiplo ou
+  fatiamento por colaborador) e por `InventarioPrestacaoEmMemoria` (já usava uma tupla ad-hoc
+  `(documento_id, cliente)`, agora usa a mesma identidade canônica do contrato).
+- **VINCULO/UNIDADE_POSTO**: docstrings corrigidas para deixar explícito que `NAO_APLICAVEL` é
+  uma **limitação técnica temporária** (nenhum produtor resolve essas dimensões isoladamente
+  ainda), nunca uma afirmação de que a dimensão não importa ao domínio.
+
+### Limitação registrada, não escondida: comprovante de benefícios "global" sem decomposição
+
+O adendo (§5) pede: um comprovante bancário que paga um LOTE inteiro (múltiplos colaboradores/
+clientes) sem trazer, ele mesmo, nenhuma identificação de colaborador — relacionado ao pedido
+correspondente — deveria gerar "relações lógicas somente para os clientes do pedido". Isso
+exigiria uma capacidade de LIGAR o comprovante ao documento de pedido correspondente (por
+competência, valor total, ou outro critério) que não existe hoje e que este adendo não
+implementa: inventar esse vínculo sem evidência real violaria a proibição explícita do próprio
+adendo (§20, "não inventar vínculos"). O que FOI implementado e testado (§16.E) é o caso real e
+comum: um comprovante que TRAZ identificação de colaborador (CPF) segue a mesma granularidade
+colaborador→vínculo→cliente já existente, sem inventar nada. O caso "comprovante zero-evidência
++ ligação externa ao pedido" fica como capacidade futura, candidata a próxima macro-missão.
+
+### Regressão
+
+583 → 616+ testes locais (classificação/documental), todos verdes; nenhuma quebra nos 94 testes
+específicos de identificação de Holerite nem nos testes de inventário/readiness/pacote já
+existentes.
