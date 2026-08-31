@@ -263,6 +263,12 @@ fora do escopo autorizado (nenhum acesso live, §26).
 
 ## 10. Pendência restante — adapters reais (honesto, não escondido)
 
+> **ATUALIZAÇÃO**: os 2 adapters abaixo foram CONSTRUÍDOS pela missão
+> "MESCLAR PR #107 + CONSTRUIR OS DOIS ADAPTERS REAIS..." — ver
+> `docs/decisoes/adapters-reais-unidade-posto-candidatos-relacao-v1.md`.
+> Uma pendência nova, menor e mais precisa (armazenamento durável de
+> `dados_correlacao`) ficou registrada lá — nunca a mesma reaberta.
+
 Dois adapters de PRODUÇÃO ainda não existem, e nenhum dos dois foi
 construído nesta missão (fora de escopo — exigiria decidir contra qual
 fonte real consultar, uma decisão de infraestrutura não pedida aqui):

@@ -18,6 +18,7 @@ from magnata_os.classificacao import (
     automacao_por_confianca,
     corredor_relacao_documental,
     fonte_candidatos_relacao_documental,
+    fonte_candidatos_relacao_documental_do_inventario,
     identificacao_documental,
     inventario_prestacao_memoria,
     perfil_aplicabilidade_documental,
@@ -44,6 +45,7 @@ _MODULOS_DO_CORREDOR_SEMANTICO = (
     fonte_candidatos_relacao_documental,
     politica_consequencia_relacao_documental,
     corredor_relacao_documental,
+    fonte_candidatos_relacao_documental_do_inventario,
 )
 
 
