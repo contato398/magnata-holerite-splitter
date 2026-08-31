@@ -33,8 +33,17 @@ from .relacao_documental import DadosCorrelacaoDocumental, TipoRelacaoDocumental
 
 @dataclasses.dataclass(frozen=True)
 class CandidatoRelacaoDocumental:
-    """Um candidato SANITIZADO a `documento_b_id` de uma relação --
-    nunca a relação em si (§3: "candidato não é relação")."""
+    """Um candidato SANITIZADO ao lado VARIÁVEL de uma relação -- nunca
+    a relação em si (§3: "candidato não é relação"). Formulação
+    neutra de propósito (corrigida na revisão final pré-merge ao PR
+    #107): dependendo de qual documento já está fixo em mãos de quem
+    resolve, o candidato pode disputar `documento_a_id` (relatante,
+    caso mais comum no corredor -- um comprovante fixo procurando o
+    relatório/guia que ele comprova) OU `documento_b_id` (comprovante,
+    uso de `resolver_relacao_documental_dentre_candidatos`). Este
+    dataclass nunca sabe qual dos dois -- só quem chama
+    `resolver_relacao_documental_dentre_candidatos`/`resolver_relacao_
+    documental_para_comprovante_dentre_candidatos` decide isso."""
 
     documento_id: str
     tipo_documental: str

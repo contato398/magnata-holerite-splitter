@@ -55,6 +55,26 @@ relacao_documental.py` (8 testes novos de orientação isolada) e
 documento_a_id` adicionadas aos casos A, D, F, G, H + caso novo de
 "todos contraditórios").
 
+**CORREÇÃO FINAL PRÉ-MERGE (retrocompatibilidade real, não só de
+fato)**: tornar `documento_a_id` opcional exigiu reordenar os campos
+do dataclass (Python exige campo-com-default depois de campo-sem-
+default) — isso alteraria a ordem POSICIONAL histórica do construtor.
+Auditoria completa do repositório (todo `ResolucaoRelacaoDocumental(
+...)`, 12 ocorrências, todas dentro de `relacao_documental.py` e seu
+teste nominal) confirmou: **100% dos chamadores já usam argumentos
+nomeados, nenhum posicional** — mas "nenhum chamador atual quebra" não
+é o mesmo que "a mudança nunca pode quebrar alguém". Corrigido com
+`@dataclasses.dataclass(frozen=True, kw_only=True)`: construção
+posicional deste dataclass passa a ser estruturalmente impossível
+(rejeitada com `TypeError`, provado por teste) — a ordem de declaração
+dos campos deixa de fazer parte do contrato público, então nenhuma
+reordenação futura pode ser breaking change por posição. Mesma
+convenção que o repositório inteiro já seguia de fato. `CandidatoRelacaoDocumental`
+(`fonte_candidatos_relacao_documental.py`) teve a docstring corrigida
+de "candidato a `documento_b_id`" (deixou de ser genericamente
+verdadeiro) para formulação neutra ("candidato ao lado VARIÁVEL da
+relação") — nenhuma mudança de comportamento.
+
 Fecha o gap explicitamente registrado no PR #106
 (`docs/decisoes/evidencia-relacional-vinculo-unidade-v1.md`, seção 4
 "PENDÊNCIA REGISTRADA"): a capacidade de RESOLVER uma relação já

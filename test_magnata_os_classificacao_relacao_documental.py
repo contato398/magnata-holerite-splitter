@@ -326,3 +326,42 @@ def test_ambiguidade_nunca_tem_candidatos_nos_2_lados_ao_mesmo_tempo():
             tipo_relacao=TipoRelacaoDocumental.COMPROVA, estado=EstadoResolucaoDimensao.AMBIGUA,
             candidatos_documento_a_id=('a1', 'a2'), candidatos_documento_b_id=('b1', 'b2'),
         )
+
+
+# --- Compatibilidade do contrato (correção final pré-merge ao PR #107) ---
+
+def test_resolucao_relacao_documental_e_kw_only_construcao_posicional_e_rejeitada():
+    """Auditoria do repositório (relacao_documental.py + seu teste
+    nominal, únicos lugares que constroem `ResolucaoRelacaoDocumental`)
+    confirmou: nenhum chamador, em lugar nenhum, usa posição -- todos
+    usam nome. `kw_only=True` torna essa garantia ESTRUTURAL: nenhuma
+    reordenação de campo, aqui ou futura, pode virar breaking change
+    por posição, porque construção posicional nunca foi (nem é agora)
+    parte do contrato público."""
+    import pytest
+    from magnata_os.classificacao.relacao_documental import ResolucaoRelacaoDocumental
+
+    with pytest.raises(TypeError):
+        ResolucaoRelacaoDocumental(TipoRelacaoDocumental.COMPROVA, EstadoResolucaoDimensao.RESOLVIDA)
+
+
+def test_resolucao_relacao_documental_construcao_por_nome_continua_funcionando_nos_2_sentidos():
+    """Caso A da correção final: A-fixo/B-candidato (uso original,
+    `resolver_relacao_documental_dentre_candidatos`)."""
+    from magnata_os.classificacao.relacao_documental import ResolucaoRelacaoDocumental
+
+    resolucao_a_fixo = ResolucaoRelacaoDocumental(
+        tipo_relacao=TipoRelacaoDocumental.COMPROVA, estado=EstadoResolucaoDimensao.RESOLVIDA,
+        documento_a_id='rel-1', documento_b_id='comp-1',
+    )
+    assert resolucao_a_fixo.documento_a_id == 'rel-1'
+    assert resolucao_a_fixo.documento_b_id == 'comp-1'
+
+    # Caso B da correção final: B-fixo/A-candidato (uso do corredor,
+    # `resolver_relacao_documental_para_comprovante_dentre_candidatos`).
+    resolucao_b_fixo = ResolucaoRelacaoDocumental(
+        tipo_relacao=TipoRelacaoDocumental.COMPROVA, estado=EstadoResolucaoDimensao.RESOLVIDA,
+        documento_a_id='rel-2', documento_b_id='comp-2',
+    )
+    assert resolucao_b_fixo.documento_a_id == 'rel-2'
+    assert resolucao_b_fixo.documento_b_id == 'comp-2'

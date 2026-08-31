@@ -119,7 +119,7 @@ class EvidenciaRelacaoDocumental:
             raise ValueError('tipo_evidencia deve ser texto nao vazio')
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class ResolucaoRelacaoDocumental:
     """Resultado da resolução de relação entre `documento_a_id`
     (RELATANTE -- a coisa comprovada: relatório, guia, pedido) e
@@ -139,7 +139,24 @@ class ResolucaoRelacaoDocumental:
     só reconhece que o lado desconhecido/candidato pode ser qualquer
     um dos dois. Exatamente 1 dos 2 lados tem candidatos/fica
     desconhecido por resolução -- nunca os dois ao mesmo tempo (uma
-    resolução sempre parte de 1 lado FIXO)."""
+    resolução sempre parte de 1 lado FIXO).
+
+    CORREÇÃO PRÉ-MERGE FINAL (retrocompatibilidade real, não só de
+    fato): tornar `documento_a_id` opcional obrigou reordenar os campos
+    (Python exige que todo campo COM default venha depois de todo campo
+    SEM default) -- isso alteraria a ordem POSICIONAL histórica do
+    construtor. Auditoria completa do repositório (todo `Resolucao
+    RelacaoDocumental(...)`, dentro e fora deste módulo) confirmou: TODO
+    chamador já usa argumentos nomeados, nenhum posicional -- mas
+    "nenhum chamador atual usa posição" não é o mesmo que "a mudança
+    nunca pode quebrar alguém". `kw_only=True` torna a segunda garantia
+    verdadeira estruturalmente: nenhuma instância deste dataclass pode
+    ser construída por posição, de propósito -- a ordem de declaração
+    dos campos deixa de ser parte do contrato público, então NENHUMA
+    reordenação futura (aqui ou em qualquer refatoração adiante) pode
+    ser breaking change por posição -- mesma convenção que o repositório
+    inteiro já segue de fato (100% dos construtores deste dataclass,
+    antes e depois desta correção, sempre foram por nome)."""
 
     tipo_relacao: TipoRelacaoDocumental
     estado: EstadoResolucaoDimensao
