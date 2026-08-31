@@ -2,7 +2,60 @@
 
 Documento de decisão da missão macro "CORRIGIR METADADOS + MERGE PR
 #106 + COSTURA AUTOMÁTICA DE RELAÇÃO DOCUMENTO↔DOCUMENTO NO CORREDOR
-V1". Fecha o gap explicitamente registrado no PR #106
+V1".
+
+## 0. Correção pré-merge — "ADENDO PRÉ-MERGE AO PR #107" (achado real,
+não escondido)
+
+O contrato canônico `TipoRelacaoDocumental.COMPROVA` (PR #106) sempre
+definiu A=relatante/guia/pedido (a coisa comprovada) e B=comprovante
+(quem comprova) — nunca alterado. Mas o orquestrador
+(`corredor_relacao_documental.py`) chamava `resolver_relacao_
+documental_dentre_candidatos(contexto.documento_id, ...)` com o
+documento ATUAL (sempre o comprovante, no corredor real) como
+`documento_a_id`, e os candidatos encontrados (relatórios/guias) como
+`documento_b_id` — **invertendo o contrato** silenciosamente. Os
+testes originais cristalizavam essa inversão (`documento_b_id ==
+'rel-a'`).
+
+**Corrigido, sem alterar o SIGNIFICADO do contrato** (nunca uma
+reescrita de docstring para "fazer o código parecer certo"):
+
+- `relacao_documental.py` ganhou um núcleo de seleção único e neutro
+  (`_selecionar_dentre_candidatos`, privado) que não sabe qual lado
+  varia — só decide RESOLVIDA/AMBIGUA/CONFLITO/NAO_ENCONTRADA entre N
+  candidatos concorrentes. Dois wrappers públicos, mesma engine:
+  `resolver_relacao_documental_dentre_candidatos` (A fixo, candidatos
+  em B — uso original, preservado) e a nova `resolver_relacao_
+  documental_para_comprovante_dentre_candidatos` (B fixo, candidatos
+  em A — o caso real do corredor: um comprovante já em mãos,
+  procurando o relatório/guia que ele comprova).
+- `ResolucaoRelacaoDocumental.documento_a_id` passou a ser opcional
+  (mudança aditiva, retrocompatível) e ganhou `candidatos_documento_
+  a_id` ao lado do já existente `candidatos_documento_b_id` — nunca um
+  rename, nunca breaking change (adendo §12: "não fazer breaking
+  change desnecessária se houver caminho compatível"). Invariantes
+  novas: `RESOLVIDA` agora exige os dois lados presentes;
+  `AMBIGUA` nunca tem candidatos nos 2 lados ao mesmo tempo.
+- `corredor_relacao_documental.py` corrigido para chamar a função
+  orientada corretamente: documento atual = `documento_b_id` (fixo),
+  candidatos encontrados = candidatos a `documento_a_id`. O vencedor,
+  quando `RESOLVIDA`, é lido de `resolucao_relacao.documento_a_id`
+  (antes, incorretamente, de `documento_b_id`).
+- Consequência (§6 do adendo, "orientação da relação ≠ direção da
+  herança de contexto") **inalterada**: o lado COMPROVANTE continua
+  sendo quem recebe as referências derivadas
+  (`politica_consequencia_relacao_documental.py` não mudou uma linha).
+
+Testes atualizados/adicionados provam a orientação explicitamente
+(nunca só `estado == RESOLVIDA`): `test_magnata_os_classificacao_
+relacao_documental.py` (8 testes novos de orientação isolada) e
+`test_magnata_os_classificacao_corredor_relacao_documental.py`
+(assserções de `documento_a_id`/`documento_b_id`/`candidatos_
+documento_a_id` adicionadas aos casos A, D, F, G, H + caso novo de
+"todos contraditórios").
+
+Fecha o gap explicitamente registrado no PR #106
 (`docs/decisoes/evidencia-relacional-vinculo-unidade-v1.md`, seção 4
 "PENDÊNCIA REGISTRADA"): a capacidade de RESOLVER uma relação já
 existia; agora o corredor sabe, sozinho, "quais documentos considerar
@@ -97,13 +150,16 @@ de verdade, nunca uma segunda engine por família).
 `resolver_relacao_e_avancar(contexto, sink)` — ponto de entrada único:
 
 ```
-documento atual (tipo já resolvido)
+documento atual = sempre o COMPROVANTE, B fixo (tipo já resolvido)
   -> política (tipo é lado COMPROVANTE de alguma regra?)
-  -> fonte de candidatos (união de fontes locais autorizadas)
+  -> fonte de candidatos (candidatos ao lado RELATANTE, A -- união de
+     fontes locais autorizadas)
   -> evidências de correlação (produzir_evidencias_correlacao)
-  -> resolver_relacao_documental_dentre_candidatos
-  -> se RESOLVIDA e regra permite: deriva referências, gera
-     ItemInventarioPrestacao, alimenta o MESMO sink
+  -> resolver_relacao_documental_para_comprovante_dentre_candidatos
+     (B fixo, A varia -- orientação corrigida pelo adendo, seção 0)
+  -> se RESOLVIDA e regra permite: deriva referências do vencedor
+     (documento_a_id), gera ItemInventarioPrestacao, alimenta o MESMO
+     sink
   -> devolve resultado
 ```
 

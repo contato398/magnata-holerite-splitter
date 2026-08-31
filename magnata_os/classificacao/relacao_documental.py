@@ -121,15 +121,31 @@ class EvidenciaRelacaoDocumental:
 
 @dataclasses.dataclass(frozen=True)
 class ResolucaoRelacaoDocumental:
-    """Resultado da resolução de relação entre `documento_a_id` e
-    (quando resolvida/ambígua) um ou mais `documento_b_id` candidatos.
+    """Resultado da resolução de relação entre `documento_a_id`
+    (RELATANTE -- a coisa comprovada: relatório, guia, pedido) e
+    `documento_b_id` (COMPROVANTE -- o documento que comprova), por
+    `tipo_relacao` (`COMPROVA`: B comprova o que A solicita/relata --
+    nunca o inverso, ver docstring de `TipoRelacaoDocumental.COMPROVA`).
     Nunca carrega texto bruto, CPF ou qualquer PII -- só IDs de
-    documento já sanitizados (§25 da missão)."""
+    documento já sanitizados (§25 da missão original).
 
-    documento_a_id: str
+    CORREÇÃO (adendo pré-merge ao PR #107): o lado que VARIA entre N
+    candidatos pode ser A OU B, dependendo de qual documento já está
+    fixo em mãos de quem resolve (ex.: um comprovante já classificado,
+    procurando candidatos ao relatório que ele comprova -- aí A varia,
+    B é fixo). Por isso `documento_a_id` também é opcional e existe
+    `candidatos_documento_a_id` -- nunca inverte o SIGNIFICADO de A/B
+    (A continua sempre o relatante, B continua sempre o comprovante),
+    só reconhece que o lado desconhecido/candidato pode ser qualquer
+    um dos dois. Exatamente 1 dos 2 lados tem candidatos/fica
+    desconhecido por resolução -- nunca os dois ao mesmo tempo (uma
+    resolução sempre parte de 1 lado FIXO)."""
+
     tipo_relacao: TipoRelacaoDocumental
     estado: EstadoResolucaoDimensao
+    documento_a_id: Optional[str] = None
     documento_b_id: Optional[str] = None
+    candidatos_documento_a_id: Tuple[str, ...] = ()
     candidatos_documento_b_id: Tuple[str, ...] = ()
     evidencias: Tuple[EvidenciaRelacaoDocumental, ...] = ()
     confianca: ConfiancaResolucao = dataclasses.field(
@@ -140,10 +156,13 @@ class ResolucaoRelacaoDocumental:
     def __post_init__(self) -> None:
         if self.estado not in _ESTADOS_PRODUZIDOS:
             raise ValueError(f'estado {self.estado!r} nao e produzido por relacao_documental')
-        if self.estado == EstadoResolucaoDimensao.RESOLVIDA and not self.documento_b_id:
-            raise ValueError('RESOLVIDA exige documento_b_id')
-        if self.estado == EstadoResolucaoDimensao.AMBIGUA and len(self.candidatos_documento_b_id) < 2:
-            raise ValueError('AMBIGUA exige 2+ candidatos_documento_b_id')
+        if self.estado == EstadoResolucaoDimensao.RESOLVIDA and not (self.documento_a_id and self.documento_b_id):
+            raise ValueError('RESOLVIDA exige documento_a_id e documento_b_id')
+        if self.estado == EstadoResolucaoDimensao.AMBIGUA:
+            if len(self.candidatos_documento_a_id) < 2 and len(self.candidatos_documento_b_id) < 2:
+                raise ValueError('AMBIGUA exige 2+ candidatos em documento_a_id ou em documento_b_id')
+            if self.candidatos_documento_a_id and self.candidatos_documento_b_id:
+                raise ValueError('AMBIGUA nunca tem candidatos nos 2 lados ao mesmo tempo')
 
 
 def _forca_combinada(evidencias: Tuple[EvidenciaRelacaoDocumental, ...]) -> NivelConfianca:
@@ -209,38 +228,46 @@ def resolver_relacao_documental_par(
     )
 
 
-def resolver_relacao_documental_dentre_candidatos(
-    documento_a_id: str,
-    tipo_relacao: TipoRelacaoDocumental,
-    candidatos: Tuple[Tuple[str, Tuple[EvidenciaRelacaoDocumental, ...]], ...],
-) -> ResolucaoRelacaoDocumental:
-    """Resolve a relação de `documento_a_id` dentre N candidatos a
-    `documento_b_id` (ex.: um relatório de benefícios com vários
-    comprovantes possíveis).
+@dataclasses.dataclass(frozen=True)
+class _SelecaoCandidatos:
+    """Resultado NEUTRO da seleção -- nunca sabe se o lado que variou é
+    A (relatante) ou B (comprovante); os 2 wrappers públicos abaixo
+    decidem isso, montando o `ResolucaoRelacaoDocumental` orientado
+    corretamente. Núcleo ÚNICO de algoritmo (adendo pré-merge ao PR
+    #107, §4: "generalizar o resolvedor atual... mantendo um único
+    algoritmo de seleção")."""
 
-    CORREÇÃO (adendo pré-merge ao PR #106, Problema 2): a versão
-    anterior tratava QUALQUER evidência contraditória, de QUALQUER
-    candidato, como um CONFLITO GLOBAL -- um único candidato mal
-    formado (ex.: identificador de pedido errado) impedia outro
-    candidato, coerente e forte, de ser resolvido. Corrigido: cada
-    candidato é avaliado ISOLADAMENTE. Um candidato com evidência
-    contraditória fica INCOMPATÍVEL (nunca elegível a vencedor, mas
-    também nunca contamina os demais). Só então:
-      - 0 candidatos elegíveis (força combinada FORTE, sem
-        contradição): `NAO_ENCONTRADA` se havia ao menos um candidato
-        não-contraditório sem força suficiente; `CONFLITO` só quando
-        TODOS os candidatos são contraditórios (nenhuma decisão válida
-        é sequer possível -- a própria identidade de `documento_a_id`
-        está em disputa, não um candidato descartável isolado);
+    estado: EstadoResolucaoDimensao
+    vencedor_id: Optional[str] = None
+    evidencias_vencedoras: Tuple[EvidenciaRelacaoDocumental, ...] = ()
+    ids_relevantes: Tuple[str, ...] = ()
+    """Todos os ids candidatos, quando `estado` é `CONFLITO`/`NAO_
+    ENCONTRADA`; só os elegíveis empatados, quando `AMBIGUA`; vazio
+    quando `RESOLVIDA` (o vencedor já está em `vencedor_id`)."""
+    todas_evidencias: Tuple[EvidenciaRelacaoDocumental, ...] = ()
+    motivos: Tuple[str, ...] = ()
+
+
+def _selecionar_dentre_candidatos(
+    candidatos: Tuple[Tuple[str, Tuple[EvidenciaRelacaoDocumental, ...]], ...],
+) -> _SelecaoCandidatos:
+    """Núcleo de seleção entre candidatos concorrentes de UM lado da
+    relação (o outro lado é sempre fixo, informado por quem chama).
+
+    CORREÇÃO (adendo pré-merge ao PR #106, Problema 2, preservada):
+    cada candidato é avaliado ISOLADAMENTE -- um candidato com
+    evidência contraditória fica INCOMPATÍVEL (nunca elegível a
+    vencedor, nunca contamina os demais). Só então:
+      - 0 elegíveis, mas nem todos incompatíveis -> `NAO_ENCONTRADA`;
+      - 0 elegíveis, TODOS incompatíveis -> `CONFLITO` (a própria
+        identidade do lado fixo está em disputa, não um candidato
+        descartável isolado);
       - exatamente 1 elegível -> `RESOLVIDA`;
       - 2+ elegíveis -> `AMBIGUA` (nunca escolhido arbitrariamente,
         mesmo princípio de cardinalidade de `vinculo_unidade_prestacao`).
     """
-    if not documento_a_id or not documento_a_id.strip():
-        raise ValueError('documento_a_id deve ser texto nao vazio')
     if not candidatos:
-        return ResolucaoRelacaoDocumental(
-            documento_a_id=documento_a_id, tipo_relacao=tipo_relacao,
+        return _SelecaoCandidatos(
             estado=EstadoResolucaoDimensao.NAO_ENCONTRADA,
             motivos=('nenhum_candidato_de_relacao_documental_informado',),
         )
@@ -248,46 +275,110 @@ def resolver_relacao_documental_dentre_candidatos(
     todas_evidencias: Tuple[EvidenciaRelacaoDocumental, ...] = tuple(
         evidencia for _, evidencias_candidato in candidatos for evidencia in evidencias_candidato
     )
+    todos_ids = tuple(doc_id for doc_id, _ in candidatos)
 
     incompativeis = tuple(
-        documento_b_id for documento_b_id, evidencias_candidato in candidatos
+        doc_id for doc_id, evidencias_candidato in candidatos
         if any(evidencia.contraditoria for evidencia in evidencias_candidato)
     )
     if len(incompativeis) == len(candidatos):
-        # Todos os candidatos são contraditórios -- nenhuma decisão
-        # válida é possível; a própria identidade de documento_a_id
-        # está em disputa (nunca "um candidato descartável isolado").
-        return ResolucaoRelacaoDocumental(
-            documento_a_id=documento_a_id, tipo_relacao=tipo_relacao,
-            estado=EstadoResolucaoDimensao.CONFLITO, evidencias=todas_evidencias,
-            candidatos_documento_b_id=tuple(documento_b_id for documento_b_id, _ in candidatos),
-            confianca=ConfiancaResolucao(NivelConfianca.FORTE),
+        return _SelecaoCandidatos(
+            estado=EstadoResolucaoDimensao.CONFLITO, ids_relevantes=todos_ids, todas_evidencias=todas_evidencias,
             motivos=('todos_os_candidatos_de_relacao_documental_sao_contraditorios',),
         )
 
     elegiveis = tuple(
-        documento_b_id for documento_b_id, evidencias_candidato in candidatos
-        if documento_b_id not in incompativeis and _forca_combinada(evidencias_candidato) == NivelConfianca.FORTE
+        doc_id for doc_id, evidencias_candidato in candidatos
+        if doc_id not in incompativeis and _forca_combinada(evidencias_candidato) == NivelConfianca.FORTE
     )
     if len(elegiveis) == 1:
         evidencias_vencedoras = next(ev for doc_id, ev in candidatos if doc_id == elegiveis[0])
-        return ResolucaoRelacaoDocumental(
-            documento_a_id=documento_a_id, tipo_relacao=tipo_relacao,
-            estado=EstadoResolucaoDimensao.RESOLVIDA, documento_b_id=elegiveis[0],
-            evidencias=evidencias_vencedoras, confianca=ConfiancaResolucao(NivelConfianca.FORTE),
+        return _SelecaoCandidatos(
+            estado=EstadoResolucaoDimensao.RESOLVIDA, vencedor_id=elegiveis[0],
+            evidencias_vencedoras=evidencias_vencedoras,
         )
     if len(elegiveis) >= 2:
-        return ResolucaoRelacaoDocumental(
-            documento_a_id=documento_a_id, tipo_relacao=tipo_relacao,
-            estado=EstadoResolucaoDimensao.AMBIGUA, candidatos_documento_b_id=elegiveis, evidencias=todas_evidencias,
-            confianca=ConfiancaResolucao(NivelConfianca.FORTE),
+        return _SelecaoCandidatos(
+            estado=EstadoResolucaoDimensao.AMBIGUA, ids_relevantes=elegiveis, todas_evidencias=todas_evidencias,
             motivos=('multiplos_candidatos_empatados_em_relacao_documental',),
         )
-    return ResolucaoRelacaoDocumental(
-        documento_a_id=documento_a_id, tipo_relacao=tipo_relacao,
-        estado=EstadoResolucaoDimensao.NAO_ENCONTRADA, evidencias=todas_evidencias,
-        candidatos_documento_b_id=tuple(documento_b_id for documento_b_id, _ in candidatos),
+    return _SelecaoCandidatos(
+        estado=EstadoResolucaoDimensao.NAO_ENCONTRADA, ids_relevantes=todos_ids, todas_evidencias=todas_evidencias,
         motivos=('nenhum_candidato_atinge_evidencia_suficiente_para_relacao_documental',),
+    )
+
+
+def _confianca_para_estado_nao_resolvido(estado: EstadoResolucaoDimensao) -> ConfiancaResolucao:
+    """Mesmo mapeamento já usado antes desta refatoração: `CONFLITO`/
+    `AMBIGUA` carregam confiança `FORTE` (o sinal de que HÁ evidência
+    forte, só não decide sozinho quem vence); `NAO_ENCONTRADA` usa o
+    default `INDETERMINADA` (nem sempre há evidência alguma)."""
+    if estado in (EstadoResolucaoDimensao.CONFLITO, EstadoResolucaoDimensao.AMBIGUA):
+        return ConfiancaResolucao(NivelConfianca.FORTE)
+    return ConfiancaResolucao(NivelConfianca.INDETERMINADA)
+
+
+def resolver_relacao_documental_dentre_candidatos(
+    documento_a_id: str,
+    tipo_relacao: TipoRelacaoDocumental,
+    candidatos: Tuple[Tuple[str, Tuple[EvidenciaRelacaoDocumental, ...]], ...],
+) -> ResolucaoRelacaoDocumental:
+    """Resolve a relação de `documento_a_id` (RELATANTE, FIXO -- ex.:
+    um relatório de benefícios já em mãos) dentre N candidatos a
+    `documento_b_id` (COMPROVANTE -- ex.: vários comprovantes
+    possíveis para aquele relatório). Use esta função quando o lado
+    JÁ CONHECIDO é o relatante; use `resolver_relacao_documental_para_
+    comprovante_dentre_candidatos` quando o lado já conhecido é o
+    comprovante (caso mais comum no corredor real: um comprovante
+    global, sem colaborador individualizável, procurando o relatório
+    que ele comprova)."""
+    if not documento_a_id or not documento_a_id.strip():
+        raise ValueError('documento_a_id deve ser texto nao vazio')
+    selecao = _selecionar_dentre_candidatos(candidatos)
+    if selecao.estado == EstadoResolucaoDimensao.RESOLVIDA:
+        return ResolucaoRelacaoDocumental(
+            documento_a_id=documento_a_id, tipo_relacao=tipo_relacao, estado=EstadoResolucaoDimensao.RESOLVIDA,
+            documento_b_id=selecao.vencedor_id, evidencias=selecao.evidencias_vencedoras,
+            confianca=ConfiancaResolucao(NivelConfianca.FORTE),
+        )
+    confianca = _confianca_para_estado_nao_resolvido(selecao.estado)
+    return ResolucaoRelacaoDocumental(
+        documento_a_id=documento_a_id, tipo_relacao=tipo_relacao, estado=selecao.estado,
+        candidatos_documento_b_id=selecao.ids_relevantes, evidencias=selecao.todas_evidencias,
+        confianca=confianca, motivos=selecao.motivos,
+    )
+
+
+def resolver_relacao_documental_para_comprovante_dentre_candidatos(
+    documento_b_id: str,
+    tipo_relacao: TipoRelacaoDocumental,
+    candidatos_documento_a: Tuple[Tuple[str, Tuple[EvidenciaRelacaoDocumental, ...]], ...],
+) -> ResolucaoRelacaoDocumental:
+    """Resolve a relação de `documento_b_id` (COMPROVANTE, FIXO -- ex.:
+    um comprovante global já classificado, sem colaborador
+    individualizável) dentre N candidatos a `documento_a_id`
+    (RELATANTE -- ex.: vários relatórios/guias que ele poderia estar
+    comprovando). MESMO núcleo de seleção de `resolver_relacao_
+    documental_dentre_candidatos` (`_selecionar_dentre_candidatos`,
+    nunca uma segunda engine) -- só o lado que varia é diferente. O
+    SIGNIFICADO de A/B nunca inverte: o vencedor, quando `RESOLVIDA`,
+    sempre vira `documento_a_id` (o relatante) -- nunca `documento_b_id`
+    (adendo pré-merge ao PR #107: "nunca simplesmente reescrever a
+    docstring de COMPROVA para fazer o código parecer correto")."""
+    if not documento_b_id or not documento_b_id.strip():
+        raise ValueError('documento_b_id deve ser texto nao vazio')
+    selecao = _selecionar_dentre_candidatos(candidatos_documento_a)
+    if selecao.estado == EstadoResolucaoDimensao.RESOLVIDA:
+        return ResolucaoRelacaoDocumental(
+            documento_a_id=selecao.vencedor_id, tipo_relacao=tipo_relacao, estado=EstadoResolucaoDimensao.RESOLVIDA,
+            documento_b_id=documento_b_id, evidencias=selecao.evidencias_vencedoras,
+            confianca=ConfiancaResolucao(NivelConfianca.FORTE),
+        )
+    confianca = _confianca_para_estado_nao_resolvido(selecao.estado)
+    return ResolucaoRelacaoDocumental(
+        documento_b_id=documento_b_id, tipo_relacao=tipo_relacao, estado=selecao.estado,
+        candidatos_documento_a_id=selecao.ids_relevantes, evidencias=selecao.todas_evidencias,
+        confianca=confianca, motivos=selecao.motivos,
     )
 
 

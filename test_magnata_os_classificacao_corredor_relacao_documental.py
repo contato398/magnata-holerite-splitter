@@ -54,7 +54,8 @@ def test_caso_a_beneficios_candidato_correto_resolve_e_gera_inventario():
 
     assert resultado.regra_aplicavel is True
     assert resultado.resolucao_relacao.estado == EstadoResolucaoDimensao.RESOLVIDA
-    assert resultado.resolucao_relacao.documento_b_id == 'rel-a'
+    assert resultado.resolucao_relacao.documento_a_id == 'rel-a'
+    assert resultado.resolucao_relacao.documento_b_id == 'comp-beneficios-1'
     assert set(item.cliente for item in resultado.itens_gerados) == {cli_a, cli_b}
     assert sink.total_itens() == 2
     # readiness/pacote continuam automáticos a partir do inventário --
@@ -77,6 +78,10 @@ def test_caso_b_dois_relatorios_fortes_ambigua_nenhum_item_gerado():
     resultado = resolver_relacao_e_avancar(contexto, sink)
 
     assert resultado.resolucao_relacao.estado == EstadoResolucaoDimensao.AMBIGUA
+    # Orientação (§11-D do adendo): os candidatos empatados são do lado
+    # A (relatante) -- nunca do lado B (o comprovante fixo).
+    assert set(resultado.resolucao_relacao.candidatos_documento_a_id) == {'rel-1', 'rel-2'}
+    assert resultado.resolucao_relacao.candidatos_documento_b_id == ()
     assert resultado.itens_gerados == ()
     assert sink.total_itens() == 0
 
@@ -111,7 +116,8 @@ def test_caso_d_candidato_errado_nao_impede_candidato_correto():
     resultado = resolver_relacao_e_avancar(contexto, sink)
 
     assert resultado.resolucao_relacao.estado == EstadoResolucaoDimensao.RESOLVIDA
-    assert resultado.resolucao_relacao.documento_b_id == 'rel-certo'
+    assert resultado.resolucao_relacao.documento_a_id == 'rel-certo'
+    assert resultado.resolucao_relacao.documento_b_id == 'comp-beneficios-1'
     assert set(item.cliente for item in resultado.itens_gerados) == {cli_certo}
 
 
@@ -142,6 +148,9 @@ def test_caso_f_fgts_comprovante_herda_somente_cliente_da_guia():
     resultado = resolver_relacao_e_avancar(contexto, sink)
 
     assert resultado.resolucao_relacao.estado == EstadoResolucaoDimensao.RESOLVIDA
+    # Orientação (§11-B do adendo): A=guia (relatante), B=comprovante.
+    assert resultado.resolucao_relacao.documento_a_id == 'guia-fgts-1'
+    assert resultado.resolucao_relacao.documento_b_id == 'comp-fgts-1'
     assert len(resultado.itens_gerados) == 1
     assert resultado.itens_gerados[0].cliente == cli_a
     # Nunca vaza para outro cliente.
@@ -165,6 +174,9 @@ def test_caso_g_dctf_relacao_resolve_mas_nao_gera_item_broadcast_preservado():
     resultado = resolver_relacao_e_avancar(contexto, sink)
 
     assert resultado.resolucao_relacao.estado == EstadoResolucaoDimensao.RESOLVIDA
+    # Orientação (§11-C do adendo): A=guia (relatante), B=comprovante.
+    assert resultado.resolucao_relacao.documento_a_id == 'guia-dctf-1'
+    assert resultado.resolucao_relacao.documento_b_id == 'comp-dctf-1'
     # Broadcast é decidido pela política DCTF já canônica (fora deste
     # módulo), nunca pela relação -- nenhum item gerado aqui.
     assert resultado.itens_gerados == ()
@@ -183,7 +195,23 @@ def test_caso_h_execucao_dupla_nunca_duplica():
     resultado_2 = resolver_relacao_e_avancar(contexto, sink)
 
     assert resultado_1.resolucao_relacao == resultado_2.resolucao_relacao
+    assert resultado_1.resolucao_relacao.documento_a_id == 'rel-a'  # orientação preservada nas 2 execuções
+    assert resultado_1.resolucao_relacao.documento_b_id == 'comp-beneficios-1'
     assert sink.total_itens() == 1  # nunca duplicado
+
+
+# --- Adendo §11-F: todos contraditórios -- CONFLITO sem inverter papéis ---
+
+def test_todos_candidatos_contraditorios_conflito_sem_inverter_papeis():
+    candidato_1 = _relatorio_candidato('rel-1', (ReferenciaCanonica('CLIENTE', 'cli-1'),), identificador='PED-DIVERGENTE-1')
+    candidato_2 = _relatorio_candidato('rel-2', (ReferenciaCanonica('CLIENTE', 'cli-2'),), identificador='PED-DIVERGENTE-2')
+    contexto = _contexto_comprovante_beneficios((candidato_1, candidato_2), identificador='PED-1')
+    resultado = resolver_relacao_e_avancar(contexto, InventarioPrestacaoEmMemoria())
+
+    assert resultado.resolucao_relacao.estado == EstadoResolucaoDimensao.CONFLITO
+    assert resultado.resolucao_relacao.documento_a_id is None  # nenhum vencedor -- nunca inventado
+    assert resultado.resolucao_relacao.documento_b_id == 'comp-beneficios-1'  # lado fixo preservado
+    assert set(resultado.resolucao_relacao.candidatos_documento_a_id) == {'rel-1', 'rel-2'}
 
 
 # --- Caso I: relação não encontrada -- classificação (fora deste módulo) não é desfeita ---

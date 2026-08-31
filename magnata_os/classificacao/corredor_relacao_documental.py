@@ -1,6 +1,8 @@
 """Orquestrador da COSTURA AUTOMÁTICA de relação Documento↔Documento
 dentro do corredor (missão "CORRIGIR METADADOS + MERGE PR #106 +
-COSTURA AUTOMÁTICA DE RELAÇÃO DOCUMENTO↔DOCUMENTO NO CORREDOR V1").
+COSTURA AUTOMÁTICA DE RELAÇÃO DOCUMENTO↔DOCUMENTO NO CORREDOR V1";
+orientação corrigida pelo "ADENDO PRÉ-MERGE AO PR #107 — CORRIGIR
+ORIENTAÇÃO SEMÂNTICA DAS RELAÇÕES DOCUMENTO↔DOCUMENTO").
 
 Fecha o gap final registrado no PR #106: a capacidade de resolver uma
 relação já existia (`relacao_documental.py`); a fonte de candidatos já
@@ -8,11 +10,12 @@ existe (`fonte_candidatos_relacao_documental.py`); a política de
 consequência já existe (`politica_consequencia_relacao_documental.py`).
 Este módulo os liga:
 
-  documento atual (já com TIPO_DOCUMENTAL resolvido pelo motor
-  semântico -- nunca antes disso, §10 da missão: "relações não são
-  classificação")
-    -> política diz se este tipo é o lado COMPROVANTE de alguma regra
-       cadastrada; sem regra, este módulo nem tenta -- o documento
+  documento atual = sempre o lado COMPROVANTE (já com TIPO_DOCUMENTAL
+  resolvido pelo motor semântico -- nunca antes disso, §10 da missão:
+  "relações não são classificação"; só chega aqui quando `politica_
+  consequencia_relacao_documental.regra_para_tipo_comprovante`
+  reconhece o tipo como tal)
+    -> sem regra cadastrada, este módulo nem tenta -- o documento
        segue pelo caminho normal do corredor, sua classificação já
        resolvida NUNCA é desfeita (§10/Caso I)
     -> fonte de candidatos busca candidatos do lado RELATANTE
@@ -21,10 +24,17 @@ Este módulo os liga:
     -> evidências de correlação comparam documento atual x cada
        candidato (`relacao_documental.produzir_evidencias_correlacao`,
        nunca uma segunda extração)
-    -> `resolver_relacao_documental_dentre_candidatos` decide (nunca
-       reavaliado aqui, nunca primeiro-match -- §13)
+    -> `relacao_documental.resolver_relacao_documental_para_
+       comprovante_dentre_candidatos` decide (nunca reavaliado aqui,
+       nunca primeiro-match -- §13) -- documento atual (COMPROVANTE)
+       fica FIXO como `documento_b_id`; os candidatos (RELATANTE)
+       disputam `documento_a_id` -- CORREÇÃO do adendo: a orientação
+       do contrato `COMPROVA` (A=relatante/solicitado,
+       B=comprovante) NUNCA inverte, mesmo quando o documento que já
+       temos em mãos é o comprovante
     -> se RESOLVIDA e a regra permite: deriva as referências lógicas
-       (clientes) do candidato vencedor (§6: nunca inventa posto,
+       (clientes) do candidato vencedor -- agora identificado por
+       `resolucao_relacao.documento_a_id` (§6: nunca inventa posto,
        competência divergente, colaborador ou valor individual --
        só o conjunto já comprovado do relatante)
     -> gera itens de inventário (`ItemInventarioPrestacao`, o MESMO
@@ -35,6 +45,12 @@ Este módulo os liga:
     -> devolve o resultado para quem orquestra continuar readiness/
        pacote (já automático a partir do inventário -- nenhuma mudança
        nesse mecanismo, §19).
+
+Orientação da relação ≠ direção da herança de contexto (§6 do adendo):
+quem fica `documento_a_id`/`documento_b_id` é sempre relatante/
+comprovante; quem HERDA referências continua sendo decidido só pela
+política de consequência (`pode_derivar_referencias_do_relatante`),
+nunca pela orientação em si.
 
 Nenhum candidato -> `NAO_ENCONTRADA`, nunca inventado. Documento
 relacionado processado 2x -> mesmos itens, nunca duplicados (§16,
@@ -53,7 +69,7 @@ from .relacao_documental import (
     DadosCorrelacaoDocumental,
     ResolucaoRelacaoDocumental,
     produzir_evidencias_correlacao,
-    resolver_relacao_documental_dentre_candidatos,
+    resolver_relacao_documental_para_comprovante_dentre_candidatos,
 )
 
 
@@ -106,14 +122,19 @@ def resolver_relacao_e_avancar(
         (candidato.documento_id, produzir_evidencias_correlacao(contexto.dados_correlacao, candidato.dados_correlacao))
         for candidato in candidatos
     )
-    resolucao_relacao = resolver_relacao_documental_dentre_candidatos(
+    # O documento ATUAL é sempre o lado COMPROVANTE (§7 do adendo
+    # pré-merge ao PR #107: o tipo do documento atual só cai aqui
+    # quando `regra_para_tipo_comprovante` o reconhece como tal) --
+    # FIXO como `documento_b_id`; os candidatos encontrados são do lado
+    # RELATANTE (`documento_a_id`), nunca o inverso.
+    resolucao_relacao = resolver_relacao_documental_para_comprovante_dentre_candidatos(
         contexto.documento_id, regra.tipo_relacao, candidatos_com_evidencias,
     )
 
     itens: Tuple[ItemInventarioPrestacao, ...] = ()
     if resolucao_relacao.estado == EstadoResolucaoDimensao.RESOLVIDA and regra.pode_derivar_referencias_do_relatante:
         candidato_vencedor = next(
-            candidato for candidato in candidatos if candidato.documento_id == resolucao_relacao.documento_b_id
+            candidato for candidato in candidatos if candidato.documento_id == resolucao_relacao.documento_a_id
         )
         referencias = derivar_referencias_herdadas(True, candidato_vencedor.referencias_logicas)
         if referencias:
