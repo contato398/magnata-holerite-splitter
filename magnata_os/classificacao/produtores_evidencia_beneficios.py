@@ -36,6 +36,7 @@ import re
 from typing import Tuple
 
 from .contratos import EvidenciaSanitizada, NivelConfianca, ReferenciaCanonica
+from .politica_consequencia_relacao_documental import derivar_referencias_herdadas
 from .relacao_documental import DadosCorrelacaoDocumental, extrair_dados_correlacao_de_texto
 from .resolucao_tipo_documental import HipoteseTipoDocumental
 
@@ -191,7 +192,12 @@ def derivar_clientes_logicos_do_comprovante_global(
     clientes que, em conjunto com o `documento_id` já existente do
     comprovante, formam N relações lógicas via o MESMO mecanismo já
     existente (`ItemInventarioPrestacao.identidade_logica`, §17 --
-    nunca alterado por esta função)."""
-    if not relacao_resolvida:
-        return ()
-    return clientes_do_relatorio
+    nunca alterado por esta função).
+
+    Delega para `politica_consequencia_relacao_documental.derivar_
+    referencias_herdadas` (missão "...COSTURA AUTOMÁTICA...", §7) --
+    a mesma regra de herança generalizada para toda família (FGTS
+    inclusive) agora vive lá; esta função permanece como alias
+    nomeado-por-família só para não quebrar quem já a chama, nunca uma
+    segunda implementação."""
+    return derivar_referencias_herdadas(relacao_resolvida, clientes_do_relatorio)

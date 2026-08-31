@@ -3,7 +3,10 @@ RELACIONAL DOCUMENTO↔DOCUMENTO + VÍNCULO/UNIDADE_POSTO REAIS +
 FECHAMENTO DO UNIVERSO DOCUMENTAL V1", §5-§9; correção de
 `resolver_relacao_documental_dentre_candidatos` pelo "ADENDO PRÉ-MERGE
 AO PR #106", §6-§10 -- avaliação por candidato, nunca CONFLITO global
-por causa de 1 candidato descartável)."""
+por causa de 1 candidato descartável; orientação A/B corrigida pelo
+"ADENDO PRÉ-MERGE AO PR #107" -- COMPROVA nunca inverte quem é
+relatante (A) e quem é comprovante (B), mesmo quando o lado FIXO em
+mãos de quem resolve é o comprovante)."""
 import re
 
 from magnata_os.classificacao.contratos import EstadoResolucaoDimensao, NivelConfianca
@@ -14,6 +17,7 @@ from magnata_os.classificacao.relacao_documental import (
     extrair_dados_correlacao_de_texto,
     produzir_evidencias_correlacao,
     resolver_relacao_documental_dentre_candidatos,
+    resolver_relacao_documental_para_comprovante_dentre_candidatos,
     resolver_relacao_documental_par,
 )
 
@@ -227,3 +231,137 @@ def test_adendo_candidato_incompativel_isolado_nao_e_elegivel_mesmo_sem_outro_ca
     r = resolver_relacao_documental_dentre_candidatos('doc-a', TipoRelacaoDocumental.COMPROVA, candidatos)
     assert r.estado == EstadoResolucaoDimensao.CONFLITO
     assert r.documento_b_id is None
+
+
+# --- Adendo pré-merge ao PR #107: orientação da relação nunca inverte ---
+# quando o lado FIXO é o comprovante (B) e os candidatos disputam o
+# lado relatante (A) -- `resolver_relacao_documental_para_comprovante_
+# dentre_candidatos`, MESMO núcleo de seleção, nunca uma segunda engine.
+
+def test_orientacao_para_comprovante_resolvida_documento_a_e_o_vencedor_documento_b_e_o_fixo():
+    candidatos_a = (
+        ('rel-a', (_ev(NivelConfianca.MODERADA), _ev(NivelConfianca.MODERADA))),
+    )
+    r = resolver_relacao_documental_para_comprovante_dentre_candidatos(
+        'comp-b', TipoRelacaoDocumental.COMPROVA, candidatos_a,
+    )
+    assert r.estado == EstadoResolucaoDimensao.RESOLVIDA
+    assert r.documento_a_id == 'rel-a'  # o RELATANTE vencedor, nunca o fixo
+    assert r.documento_b_id == 'comp-b'  # o COMPROVANTE, sempre o fixo
+
+
+def test_orientacao_para_comprovante_dois_relatantes_fortes_ambigua_candidatos_no_lado_a():
+    candidatos_a = (
+        ('rel-1', (_ev(NivelConfianca.MODERADA), _ev(NivelConfianca.MODERADA))),
+        ('rel-2', (_ev(NivelConfianca.MODERADA), _ev(NivelConfianca.MODERADA))),
+    )
+    r = resolver_relacao_documental_para_comprovante_dentre_candidatos(
+        'comp-b', TipoRelacaoDocumental.COMPROVA, candidatos_a,
+    )
+    assert r.estado == EstadoResolucaoDimensao.AMBIGUA
+    assert set(r.candidatos_documento_a_id) == {'rel-1', 'rel-2'}
+    assert r.candidatos_documento_b_id == ()
+    assert r.documento_b_id == 'comp-b'
+
+
+def test_orientacao_para_comprovante_candidato_contraditorio_nao_impede_candidato_forte():
+    candidatos_a = (
+        ('rel-errado', (_ev(NivelConfianca.FORTE, contraditoria=True),)),
+        ('rel-certo', (_ev(NivelConfianca.MODERADA), _ev(NivelConfianca.MODERADA))),
+    )
+    r = resolver_relacao_documental_para_comprovante_dentre_candidatos(
+        'comp-b', TipoRelacaoDocumental.COMPROVA, candidatos_a,
+    )
+    assert r.estado == EstadoResolucaoDimensao.RESOLVIDA
+    assert r.documento_a_id == 'rel-certo'
+    assert r.documento_b_id == 'comp-b'
+
+
+def test_orientacao_para_comprovante_todos_contraditorios_conflito_documento_b_preservado():
+    candidatos_a = (
+        ('rel-1', (_ev(NivelConfianca.FORTE, contraditoria=True),)),
+        ('rel-2', (_ev(NivelConfianca.FORTE, contraditoria=True),)),
+    )
+    r = resolver_relacao_documental_para_comprovante_dentre_candidatos(
+        'comp-b', TipoRelacaoDocumental.COMPROVA, candidatos_a,
+    )
+    assert r.estado == EstadoResolucaoDimensao.CONFLITO
+    assert r.documento_a_id is None
+    assert r.documento_b_id == 'comp-b'
+
+
+def test_orientacao_para_comprovante_nenhum_candidato_nao_encontrada():
+    r = resolver_relacao_documental_para_comprovante_dentre_candidatos(
+        'comp-b', TipoRelacaoDocumental.COMPROVA, (),
+    )
+    assert r.estado == EstadoResolucaoDimensao.NAO_ENCONTRADA
+    assert r.documento_a_id is None
+    assert r.documento_b_id == 'comp-b'
+
+
+def test_orientacao_para_comprovante_exige_documento_b_id_nao_vazio():
+    import pytest
+
+    with pytest.raises(ValueError):
+        resolver_relacao_documental_para_comprovante_dentre_candidatos('', TipoRelacaoDocumental.COMPROVA, ())
+
+
+def test_resolvida_agora_tambem_exige_documento_a_id_invariante_estrutural():
+    import pytest
+    from magnata_os.classificacao.relacao_documental import ResolucaoRelacaoDocumental
+
+    with pytest.raises(ValueError):
+        ResolucaoRelacaoDocumental(
+            documento_b_id='b', tipo_relacao=TipoRelacaoDocumental.COMPROVA,
+            estado=EstadoResolucaoDimensao.RESOLVIDA,
+        )
+
+
+def test_ambiguidade_nunca_tem_candidatos_nos_2_lados_ao_mesmo_tempo():
+    import pytest
+    from magnata_os.classificacao.relacao_documental import ResolucaoRelacaoDocumental
+
+    with pytest.raises(ValueError):
+        ResolucaoRelacaoDocumental(
+            tipo_relacao=TipoRelacaoDocumental.COMPROVA, estado=EstadoResolucaoDimensao.AMBIGUA,
+            candidatos_documento_a_id=('a1', 'a2'), candidatos_documento_b_id=('b1', 'b2'),
+        )
+
+
+# --- Compatibilidade do contrato (correção final pré-merge ao PR #107) ---
+
+def test_resolucao_relacao_documental_e_kw_only_construcao_posicional_e_rejeitada():
+    """Auditoria do repositório (relacao_documental.py + seu teste
+    nominal, únicos lugares que constroem `ResolucaoRelacaoDocumental`)
+    confirmou: nenhum chamador, em lugar nenhum, usa posição -- todos
+    usam nome. `kw_only=True` torna essa garantia ESTRUTURAL: nenhuma
+    reordenação de campo, aqui ou futura, pode virar breaking change
+    por posição, porque construção posicional nunca foi (nem é agora)
+    parte do contrato público."""
+    import pytest
+    from magnata_os.classificacao.relacao_documental import ResolucaoRelacaoDocumental
+
+    with pytest.raises(TypeError):
+        ResolucaoRelacaoDocumental(TipoRelacaoDocumental.COMPROVA, EstadoResolucaoDimensao.RESOLVIDA)
+
+
+def test_resolucao_relacao_documental_construcao_por_nome_continua_funcionando_nos_2_sentidos():
+    """Caso A da correção final: A-fixo/B-candidato (uso original,
+    `resolver_relacao_documental_dentre_candidatos`)."""
+    from magnata_os.classificacao.relacao_documental import ResolucaoRelacaoDocumental
+
+    resolucao_a_fixo = ResolucaoRelacaoDocumental(
+        tipo_relacao=TipoRelacaoDocumental.COMPROVA, estado=EstadoResolucaoDimensao.RESOLVIDA,
+        documento_a_id='rel-1', documento_b_id='comp-1',
+    )
+    assert resolucao_a_fixo.documento_a_id == 'rel-1'
+    assert resolucao_a_fixo.documento_b_id == 'comp-1'
+
+    # Caso B da correção final: B-fixo/A-candidato (uso do corredor,
+    # `resolver_relacao_documental_para_comprovante_dentre_candidatos`).
+    resolucao_b_fixo = ResolucaoRelacaoDocumental(
+        tipo_relacao=TipoRelacaoDocumental.COMPROVA, estado=EstadoResolucaoDimensao.RESOLVIDA,
+        documento_a_id='rel-2', documento_b_id='comp-2',
+    )
+    assert resolucao_b_fixo.documento_a_id == 'rel-2'
+    assert resolucao_b_fixo.documento_b_id == 'comp-2'

@@ -380,6 +380,13 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_magnata_os_classificacao_vinculo_unidade_prestacao.py"
   "test_magnata_os_classificacao_relacao_documental.py"
   "test_magnata_os_classificacao_e2e_vinculo_unidade_relacao_v1.py"
+  # Excecao exata e restrita (missao "CORRIGIR METADADOS + MERGE PR #106 +
+  # COSTURA AUTOMATICA DE RELACAO DOCUMENTO<->DOCUMENTO NO CORREDOR V1",
+  # branch fix/costura-relacao-documental-corredor-v1). Mantem test_*
+  # bloqueado por padrao e libera somente estes testes nominais novos.
+  "test_magnata_os_classificacao_fonte_candidatos_relacao_documental.py"
+  "test_magnata_os_classificacao_politica_consequencia_relacao_documental.py"
+  "test_magnata_os_classificacao_corredor_relacao_documental.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
