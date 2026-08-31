@@ -372,6 +372,14 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # testes nominais novos.
   "test_magnata_os_classificacao_produtores_evidencia_beneficios.py"
   "test_magnata_os_classificacao_adendo_beneficios_fgts_dedupe.py"
+  # Excecao exata e restrita (missao "MERGE PR #105 + EVIDENCIA RELACIONAL
+  # DOCUMENTO<->DOCUMENTO + VINCULO/UNIDADE_POSTO REAIS + FECHAMENTO DO
+  # UNIVERSO DOCUMENTAL V1", branch fix/evidencia-relacional-vinculo-
+  # unidade-v1). Mantem test_* bloqueado por padrao e libera somente estes
+  # testes nominais novos.
+  "test_magnata_os_classificacao_vinculo_unidade_prestacao.py"
+  "test_magnata_os_classificacao_relacao_documental.py"
+  "test_magnata_os_classificacao_e2e_vinculo_unidade_relacao_v1.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

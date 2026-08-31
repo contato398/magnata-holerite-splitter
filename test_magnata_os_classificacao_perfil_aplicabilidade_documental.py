@@ -16,9 +16,17 @@ def test_holerite_granularidade_colaborador():
     assert perfil.regra_para(DimensaoResolucao.COLABORADOR).aplicabilidade == AplicabilidadeDimensao.OBRIGATORIA
     assert perfil.regra_para(DimensaoResolucao.CLIENTE).aplicabilidade == AplicabilidadeDimensao.OBRIGATORIA
     assert perfil.regra_para(DimensaoResolucao.CLIENTE).cardinalidade == Cardinalidade(1, None)
-    # UNIDADE_POSTO: NAO_APLICAVEL nesta missão -- nenhum produtor a
-    # resolve ainda (ver docstring de _perfil_granularidade_colaborador).
-    assert perfil.regra_para(DimensaoResolucao.UNIDADE_POSTO).aplicabilidade == AplicabilidadeDimensao.NAO_APLICAVEL
+    # UNIDADE_POSTO: PROMOVIDA a OBRIGATORIA só para Holerite (missão
+    # "EVIDÊNCIA RELACIONAL DOCUMENTO↔DOCUMENTO + VÍNCULO/UNIDADE_POSTO
+    # REAIS") -- único caso com regra semântica comprovada nesta missão.
+    assert perfil.regra_para(DimensaoResolucao.UNIDADE_POSTO).aplicabilidade == AplicabilidadeDimensao.OBRIGATORIA
+    assert perfil.regra_para(DimensaoResolucao.UNIDADE_POSTO).cardinalidade == Cardinalidade(1, None)
+    # VINCULO: tentativa de promoção a OBRIGATORIA revertida pelo
+    # "ADENDO PRÉ-MERGE AO PR #106" -- a resolução usada fabricava a
+    # identidade do vínculo por espelhamento de CLIENTE, nunca uma
+    # evidência real. Permanece NAO_APLICAVEL até existir uma fonte
+    # real (`vinculo_unidade_prestacao.FonteVinculoPrestacao`).
+    assert perfil.regra_para(DimensaoResolucao.VINCULO).aplicabilidade == AplicabilidadeDimensao.NAO_APLICAVEL
 
 
 def test_extrato_granularidade_cliente_sem_colaborador():
@@ -36,12 +44,13 @@ def test_dctf_broadcast_cliente_nao_aplicavel():
 
 
 def test_vinculo_nunca_aplicavel_em_nenhum_perfil():
-    """Decisão registrada (Fase 16): nenhum produtor resolve VINCULO
-    isoladamente ainda -- nunca marcado aplicável para preencher a
-    dimensão com um valor inventado."""
+    """VINCULO permanece NAO_APLICAVEL em TODO perfil cadastrado
+    (revertido pelo "ADENDO PRÉ-MERGE AO PR #106": nenhuma fonte real
+    de vínculo existe ainda -- nunca inventar uma resolução para
+    preencher a dimensão)."""
     for tipo in tipos_com_perfil_cadastrado():
         perfil = perfil_para_tipo(tipo)
-        assert perfil.regra_para(DimensaoResolucao.VINCULO).aplicabilidade == AplicabilidadeDimensao.NAO_APLICAVEL
+        assert perfil.regra_para(DimensaoResolucao.VINCULO).aplicabilidade == AplicabilidadeDimensao.NAO_APLICAVEL, tipo
 
 
 def test_todo_perfil_cadastrado_cobre_as_6_dimensoes_canonicas():

@@ -44,6 +44,17 @@ class _FonteVinculosFake:
         )
 
 
+class _FonteUnidadePostoFake:
+    def __init__(self, postos=(ReferenciaCanonica('UNIDADE_POSTO', 'posto-1'),)):
+        self._postos = postos
+
+    def resolver_unidade_posto(self, colaborador, competencia):
+        return ResolucaoDimensao(
+            dimensao=DimensaoResolucao.UNIDADE_POSTO, estado=EstadoResolucaoDimensao.RESOLVIDA,
+            valores_confirmados=self._postos,
+        )
+
+
 def _candidato(func_id, cpf, nome):
     return CandidatoFuncionario(func_id=func_id, cpf=cpf, nome_normalizado=nome)
 
@@ -63,7 +74,7 @@ def test_caso_a_holerite_completo_ate_pacote_pronto():
     candidatos = [_candidato('func-1', '11122233344', 'JOAO')]
     resultado = processar_documento_prestacao(texto, _contexto(
         'doc-a', competencia_esperada=(2026, 7), candidatos_colaborador=candidatos,
-        fonte_vinculos=_FonteVinculosFake(),
+        fonte_vinculos=_FonteVinculosFake(), fonte_unidade_posto=_FonteUnidadePostoFake(),
     ))
     assert resultado.estado == EstadoCorredorDocumentoPrestacao.RESOLVIDO_E_AVANCOU
 
@@ -227,7 +238,7 @@ def test_caso_j_execucao_dupla_nunca_duplica_inventario():
     candidatos = [_candidato('func-1', '11122233344', 'JOAO')]
     contexto = _contexto(
         'doc-j', competencia_esperada=(2026, 7), candidatos_colaborador=candidatos,
-        fonte_vinculos=_FonteVinculosFake(),
+        fonte_vinculos=_FonteVinculosFake(), fonte_unidade_posto=_FonteUnidadePostoFake(),
     )
     sink = InventarioPrestacaoEmMemoria()
     for _ in range(3):
@@ -299,7 +310,10 @@ def test_metricas_do_corredor_distinguem_classificacao_de_corredor_completo():
     resultados = [
         processar_documento_prestacao(
             'Recibo de Pagamento -- Total de Vencimentos\nCompetência: 07/2026\nCPF: 111.222.333-44',
-            _contexto('m-a', competencia_esperada=(2026, 7), candidatos_colaborador=candidatos, fonte_vinculos=fv),
+            _contexto(
+                'm-a', competencia_esperada=(2026, 7), candidatos_colaborador=candidatos, fonte_vinculos=fv,
+                fonte_unidade_posto=_FonteUnidadePostoFake(),
+            ),
         ),
         processar_documento_prestacao(
             'CPF: 111.222.333-44\n29/04/26 - Qua - C1 18:56 01:00 01:53 09:05\n'

@@ -36,6 +36,21 @@ class _FonteVinculosFake:
         )
 
 
+class _FonteUnidadePostoFake:
+    """Fonte fake de UNIDADE_POSTO (missão "EVIDÊNCIA RELACIONAL
+    DOCUMENTO↔DOCUMENTO + VÍNCULO/UNIDADE_POSTO REAIS") -- 1 posto por
+    padrão, injetável para múltiplos postos quando o teste precisar."""
+
+    def __init__(self, postos=(ReferenciaCanonica('UNIDADE_POSTO', 'posto-1'),)):
+        self._postos = postos
+
+    def resolver_unidade_posto(self, colaborador, competencia):
+        return ResolucaoDimensao(
+            dimensao=DimensaoResolucao.UNIDADE_POSTO, estado=EstadoResolucaoDimensao.RESOLVIDA,
+            valores_confirmados=self._postos,
+        )
+
+
 def _candidato(func_id, cpf, nome):
     return CandidatoFuncionario(func_id=func_id, cpf=cpf, nome_normalizado=nome)
 
@@ -89,15 +104,27 @@ def test_tipo_sem_perfil_cadastrado_vira_gate():
 # ============================================================================
 
 def test_holerite_completo_avanca_automaticamente():
+    """Cadeia completa colaborador→posto→cliente→pacote. VINCULO fica
+    NAO_APLICAVEL (revertido pelo "ADENDO PRÉ-MERGE AO PR #106" --
+    nenhuma fonte real de vínculo existe ainda; nunca fabricar
+    resolução para preencher a dimensão)."""
     texto = 'Recibo de Pagamento -- Total de Vencimentos\nCompetência: 07/2026\nCPF: 111.222.333-44'
     candidatos = [_candidato('func-1', '11122233344', 'JOAO')]
     resultado = processar_documento_prestacao(texto, _contexto(
         competencia_esperada=(2026, 7), candidatos_colaborador=candidatos,
-        fonte_vinculos=_FonteVinculosFake(),
+        fonte_vinculos=_FonteVinculosFake(), fonte_unidade_posto=_FonteUnidadePostoFake(),
     ))
     assert resultado.estado == EstadoCorredorDocumentoPrestacao.RESOLVIDO_E_AVANCOU
     assert resultado.resolucao_semantica.estado_consolidado == EstadoResultadoSemantico.RESOLVIDA
     assert resultado.resolucao_semantica.pronto_para_routing_logico is True
+    resolucao_vinculo = next(
+        r for r in resultado.resolucao_semantica.resolucoes if r.dimensao == DimensaoResolucao.VINCULO
+    )
+    resolucao_unidade_posto = next(
+        r for r in resultado.resolucao_semantica.resolucoes if r.dimensao == DimensaoResolucao.UNIDADE_POSTO
+    )
+    assert resolucao_vinculo.estado == EstadoResolucaoDimensao.NAO_APLICAVEL
+    assert resolucao_unidade_posto.estado == EstadoResolucaoDimensao.RESOLVIDA
 
 
 def test_competencia_esperada_ausente_vira_revisao_nunca_avanca_silenciosamente():
@@ -158,7 +185,7 @@ def _resultado_holerite_resolvido():
     candidatos = [_candidato('func-1', '11122233344', 'JOAO')]
     return processar_documento_prestacao(texto, _contexto(
         competencia_esperada=(2026, 7), candidatos_colaborador=candidatos,
-        fonte_vinculos=_FonteVinculosFake(),
+        fonte_vinculos=_FonteVinculosFake(), fonte_unidade_posto=_FonteUnidadePostoFake(),
     ))
 
 
