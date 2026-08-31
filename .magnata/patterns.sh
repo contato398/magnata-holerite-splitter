@@ -918,6 +918,22 @@ ALLOWED_PATHS=(
   "^test_airtable_unidade_posto_prestacao\.py$"
   "^test_magnata_os_classificacao_fonte_candidatos_relacao_documental_do_inventario\.py$"
   "^docs/decisoes/adapters-reais-unidade-posto-candidatos-relacao-v1\.md$"
+  # Excecao exata e restrita (missao "MERGE PR #108 + FECHAR BLOQUEIOS
+  # REAIS DO CORREDOR LIVE V2 + REVISAO ADVERSARIAL PRE-ENTREGA", branch
+  # fix/corredor-live-v2-bloqueios-reais) — Protocol + adapter real
+  # compartilhado de cliente_direto (Extrato/FGTS Guia), testes nominais
+  # e ADR da missao. airtable_inventario_prestacao.py e test_airtable_
+  # inventario_prestacao.py (nova classe de escopo historico real,
+  # FonteEscopoClientesPorInventarioAirtableShadow) ja estavam no escopo
+  # permitido de missao anterior, nao precisam de nova entrada. Nao
+  # libera "^magnata_os/classificacao/", "^magnata_os/documental/
+  # importacao_lote/adapters/" nem "^test_"/"^docs/decisoes/" de forma
+  # ampla.
+  "^magnata_os/classificacao/fonte_cliente_direto_documento\.py$"
+  "^magnata_os/documental/importacao_lote/adapters/airtable_cliente_direto_documento\.py$"
+  "^test_airtable_cliente_direto_documento\.py$"
+  "^test_magnata_os_classificacao_e2e_bloqueios_corredor_live_v2\.py$"
+  "^docs/decisoes/corredor-live-v2-bloqueios-reais-v1\.md$"
 )
 
 # ============================================================================

@@ -393,6 +393,14 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # somente estes testes nominais novos.
   "test_airtable_unidade_posto_prestacao.py"
   "test_magnata_os_classificacao_fonte_candidatos_relacao_documental_do_inventario.py"
+  # Exceção exata (decisão registrada, missão "MERGE PR #108 + FECHAR
+  # BLOQUEIOS REAIS DO CORREDOR LIVE V2 + REVISÃO ADVERSARIAL
+  # PRÉ-ENTREGA", branch fix/corredor-live-v2-bloqueios-reais). Mantém
+  # test_* bloqueado por padrão e libera somente estes testes nominais
+  # novos: cliente_direto real (Extrato/FGTS Guia, capacidade
+  # compartilhada) e E2E de wiring dos bloqueios fechados.
+  "test_airtable_cliente_direto_documento.py"
+  "test_magnata_os_classificacao_e2e_bloqueios_corredor_live_v2.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
