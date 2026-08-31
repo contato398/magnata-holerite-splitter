@@ -118,6 +118,48 @@ def test_reusa_leitor_listar_clientes_nenhuma_tabela_nova():
     leitor.listar_clientes.assert_called_once_with()
 
 
+# --- cnpj_excluido (achado da revisão adversarial, checkpoint pré-merge #109) ---
+
+def test_cnpj_excluido_evita_conflict_desnecessario_quando_cadastrado_por_engano():
+    """Se o CNPJ da própria Magnata (emissora, aparece em todo
+    documento) estivesse, por engano, cadastrado como Cliente, um
+    documento com CNPJ_MAGNATA + CNPJ_CLIENTE_A cairia em CONFLICT sem
+    a exclusão (2 clientes cadastrados no mesmo texto). Com
+    cnpj_excluido=CNPJ_MAGNATA, resolve normalmente para o cliente
+    real."""
+    cnpj_magnata = '17.987.187/0001-61'
+    candidatos_com_magnata_cadastrada = _CANDIDATOS + [
+        CandidatoCliente(cliente_id='recMAGNATA', cnpj=cnpj_magnata, nome_normalizado='MAGNATA PORTARIA E SERVICOS'),
+    ]
+    fonte, leitor = _fonte(candidatos_com_magnata_cadastrada)
+    leitor2 = Mock()
+    leitor2.listar_clientes.return_value = candidatos_com_magnata_cadastrada
+    fonte_com_exclusao = FonteClienteDiretoDocumentoAirtableShadow(leitor2, cnpj_excluido=cnpj_magnata)
+
+    texto = f'Extrato Mensal\nEmitido por CNPJ: {cnpj_magnata}\nCliente CNPJ: {_CLIENTE_A_CNPJ}\n'
+
+    # Sem exclusão: 2 clientes cadastrados no texto -> CONFLICT -> None
+    assert fonte.resolver_cliente_direto(texto) is None
+    # Com exclusão: só o cliente real permanece -> resolve
+    assert fonte_com_exclusao.resolver_cliente_direto(texto) == ReferenciaCanonica('CLIENTE', 'recCLIENTE_A')
+
+
+def test_cnpj_excluido_nao_afeta_texto_sem_ocorrencia_dele():
+    fonte, _ = _fonte()
+    fonte_com_exclusao = FonteClienteDiretoDocumentoAirtableShadow(
+        Mock(listar_clientes=Mock(return_value=_CANDIDATOS)), cnpj_excluido='17.987.187/0001-61',
+    )
+    texto = f'CNPJ: {_CLIENTE_A_CNPJ}'
+    assert fonte_com_exclusao.resolver_cliente_direto(texto) == ReferenciaCanonica('CLIENTE', 'recCLIENTE_A')
+
+
+def test_cnpj_excluido_none_preserva_comportamento_original():
+    leitor = Mock()
+    leitor.listar_clientes.return_value = _CANDIDATOS
+    fonte = FonteClienteDiretoDocumentoAirtableShadow(leitor)  # cnpj_excluido default None
+    assert fonte.resolver_cliente_direto(f'CNPJ: {_CLIENTE_A_CNPJ}') == ReferenciaCanonica('CLIENTE', 'recCLIENTE_A')
+
+
 def test_rejeita_match_por_nome_mesmo_que_ocorresse(monkeypatch):
     """Blindagem explícita contra a suposição implícita
     (`nome_manifesto=''`): mesmo se `resolver_cliente` algum dia

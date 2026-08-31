@@ -21,6 +21,74 @@ decisões de implementação (o que foi CONSTRUÍDO com evidência real vs.
 o que foi honestamente registrado como bloqueado por gate
 constitucional) estão nas seções 2-5.
 
+## 0.1 Checkpoint pré-merge PR #109 — CI falho + revisão adversarial (achados reais)
+
+Missão "CHECKPOINT PRÉ-MERGE AUTÔNOMO — PR #109 — INVESTIGAR CI FALHO
++ REVALIDAR O PR INTEIRO", sobre o HEAD `ab1373f`.
+
+**1. CI falho investigado, não presumido flake.** GitHub Actions
+reportou `pytest: FAILURE` neste HEAD —
+`test_magnata_os_orquestrador_concurrency.py::TestDuplaExecucaoForcada::
+test_dupla_execucao_evento_novo_com_barrier`. Investigação: (a) zero
+acoplamento de import entre o diff desta missão e `magnata_os/
+orquestrador/` (confirmado por busca — nenhum arquivo tocado importa
+esse pacote); (b) reprodução local isolada, ~70 execuções: falha
+intermitente (~5-7%), sinal idêntico ao do GitHub
+(`[RECEIVED, FAILED_FINAL]`, faltando `EXECUTING`); (c) histórico do
+arquivo mostra um commit dedicado anterior a esta missão inteira
+("test: estabilizar concorrência SQLite do orquestrador", 2026-08-27)
+já tentando estabilizar exatamente este mesmo teste; (d) causa-raiz
+identificada em `motor.py`: o "perdedor" da corrida lê o registro
+persistido pelo "vencedor" via uma consulta SEPARADA
+(`buscar_por_event_id`) que pode acontecer ANTES do vencedor completar
+sua própria sequência de transições (`RECEIVED -> VALIDATED ->
+CLASSIFIED -> EXECUTING`, cada uma uma escrita SQLite distinta) —
+janela de corrida real, estreita, mas comprovada. A invariante que o
+código de fato garante (Ação nunca executa mais de 1 vez) NUNCA
+quebrou em nenhuma reprodução; só o estado intermediário observado
+pelo perdedor variou, mais forte do que o teste assume.
+**`CI_FLAKE_PREEXISTENTE_PROVADO = SIM`** — não é regressão do PR
+#109. Re-run do job falho no GitHub Actions (run 33429051326)
+confirmou: `success` no mesmo HEAD, sem nenhuma mudança de código.
+Nenhuma alteração feita em `motor.py` nem no teste de concorrência —
+nem sleep maior, nem assert removido, nem skip/xfail (vedado
+explicitamente pela missão, e desnecessário: o rerun já prova).
+
+**2. Revisão adversarial — achado real (não fabricação, não falso
+positivo, mas cobertura desnecessariamente reduzida).** Pergunta:
+"CNPJ de outra entidade presente no PDF pode gerar falso cliente?"
+Análise: NÃO gera falso POSITIVO — `resolver_cliente` só casa CNPJs do
+texto contra `candidatos` REALMENTE cadastrados; um CNPJ não
+cadastrado (banco, órgão público, a própria Magnata) nunca produz
+resolução. Mas SE o CNPJ da própria Magnata (aparece em todo
+Extrato/Guia, como emissora) estivesse, por engano, também cadastrado
+como Cliente, o documento cairia em `CONFLICT` (2 clientes cadastrados
+no mesmo texto) e NUNCA resolveria — seguro, mas com cobertura
+reduzida sem necessidade. Corrigido com `cnpj_excluido` (parâmetro
+OPCIONAL, `None` por default — zero mudança de comportamento sem uso
+explícito), espelhando EXATAMENTE `separacao_documental.estrategia_
+por_cnpj_cliente(cnpj_excluido=...)`, já confiável no mesmo
+repositório. 3 testes novos provam: `CONFLICT` sem exclusão vs.
+resolução correta com exclusão; exclusão não afeta texto sem a
+ocorrência; `None` preserva comportamento original.
+
+**3. Revisão adversarial — achado de linguagem (não de código):**
+`LIVE_READONLY_VALIDATION = READY` (relatório original desta missão)
+confundia "capacidade componível em teste" com "execução ponta-a-ponta
+real" — corrigido na seção 6 (tabela reescrita, `EXECUCAO_LIVE_
+READONLY_PONTA_A_PONTA = BLOCKED` nas 4 famílias, mesma causa-raiz da
+seção 1.1: nenhum orquestrador de produção existe).
+
+**4. Demais perguntas adversariais do checkpoint** (múltiplos CNPJs
+nunca escolhem arbitrariamente; tabela/origem nunca vira identidade
+semântica; FGTS nunca vira broadcast; Extrato nunca herda cliente sem
+evidência; escopo histórico vem da competência real; cliente inativo
+histórico continua recuperável; nenhuma nova dependência Airtable no
+core; nenhum adapter decidindo classificação; ausência de
+orquestrador representada honestamente) — todas já respondidas
+corretamente pela implementação original (seção 7, preservada); nenhum
+achado adicional além dos itens 1-3 acima.
+
 ## 1. Auditoria
 
 ### 1.1 `cliente_direto` — mapa completo (§3 da missão)
@@ -263,12 +331,40 @@ sem qualquer alteração.
 
 ## 6. `READY_FOR_LIVE_CORRIDOR_V2` — reavaliado por família e por propósito
 
-| Família | LAB | LIVE_READONLY_VALIDATION | AUTOMATED_PRESTACAO |
-|---|---|---|---|
-| Holerite | READY | READY — corredor roda contra dados reais, UNIDADE_POSTO honestamente `NAO_ENCONTRADA` sem prova de vigência | PARTIAL — política de vigência para ciclo corrente ainda não decidida (quem fornece `competencia_snapshot_comprovada` real e quando) |
-| Extrato | READY | READY — `FonteClienteDiretoDocumentoAirtableShadow` real, nunca inventa | BLOCKED — sem orquestrador de produção (seção 4) |
-| FGTS Guia | READY | READY — mesmo adapter compartilhado | BLOCKED — mesma causa |
-| Relação documental | READY | READY — escopo histórico real (2.1); `dados_correlacao` ausente cai honestamente em `NAO_ENCONTRADA`, nunca crasha (§16 da missão: honesto é suficiente para validação) | BLOCKED — `dados_correlacao` sem persistência (seção 3) + sem orquestrador (seção 4) |
+**CORREÇÃO (checkpoint pré-merge do PR #109, §8, achado real):** a
+versão original desta seção usava `LIVE_READONLY_VALIDATION = READY`
+para as 4 famílias sem distinguir 2 coisas DIFERENTES — exatamente o
+tipo de confusão que esta missão inteira existe para eliminar em
+outros lugares, encontrada aqui na própria linguagem do relatório:
+
+- **`CAPACIDADE_COMPONIVEL_EM_TESTE`**: os adapters/Protocols
+  individuais são reais (leem Airtable de verdade quando injetados com
+  um leitor real, nunca fake), testados, e compõem entre si sem ajuste
+  (seção 2.3) — isto SIM está pronto.
+- **`EXECUCAO_LIVE_READONLY_PONTA_A_PONTA`**: rodar de fato uma
+  validação read-only contra dados reais hoje — pegar 1 PDF real,
+  extrair texto, montar `ContextoResolucaoDocumentoPrestacao` com os
+  adapters reais injetados, chamar `processar_documento_prestacao` —
+  exige código de integração que **não existe** (achado da seção 1.1:
+  nenhum orquestrador de produção chama isso hoje). "As peças
+  suportam um ensaio read-only" é verdade; "o corredor pode rodar live
+  agora" é FALSO — chamar isso de `READY` sem essa distinção maquiava
+  o status. Corrigido abaixo.
+
+| Família | LAB | CAPACIDADE_COMPONIVEL_EM_TESTE | EXECUCAO_LIVE_READONLY_PONTA_A_PONTA | AUTOMATED_PRESTACAO |
+|---|---|---|---|---|
+| Holerite | READY | READY — UNIDADE_POSTO honestamente `NAO_ENCONTRADA` sem prova de vigência, nunca crasha | BLOCKED — sem orquestrador que monte o contexto com dado real (seção 1.1/4) | PARTIAL — idem + política de vigência do ciclo corrente não decidida |
+| Extrato | READY | READY — `FonteClienteDiretoDocumentoAirtableShadow` real, nunca inventa | BLOCKED — mesma causa (seção 1.1/4) | BLOCKED — mesma causa |
+| FGTS Guia | READY | READY — mesmo adapter compartilhado | BLOCKED — mesma causa | BLOCKED — mesma causa |
+| Relação documental | READY | READY — escopo histórico real (2.1); `dados_correlacao` ausente cai honestamente em `NAO_ENCONTRADA` | BLOCKED — mesma causa | BLOCKED — mesma causa + `dados_correlacao` sem persistência (seção 3) |
+
+O bloqueio de `EXECUCAO_LIVE_READONLY_PONTA_A_PONTA` é o MESMO nas 4
+famílias — nenhum orquestrador de produção real existe hoje para o
+corredor `classificacao/` (seção 1.1/4). Isso não é um bloqueio NOVO
+desta correção — é o mesmo achado maior da auditoria original (seção
+1.1), só agora corretamente refletido na tabela de READY em vez de
+implicitamente escondido atrás de "READY" para um propósito que na
+prática não pode ser executado sem código novo.
 
 **`READY_FOR_LIVE_CORRIDOR_V2` permanece `FALSE`** — bloqueios reais e
 comprovados restantes, nenhum deles dispensável por autonomia (todos
@@ -277,7 +373,9 @@ cruzam gate de `/CLAUDE.md` §12-I ou §6):
 1. Nenhum orquestrador de produção real existe para o corredor
    `classificacao/` (achado maior desta auditoria, seção 1.1/4) —
    mudança arquitetural material, precisa de escopo próprio e decisão
-   humana de onde morar.
+   humana de onde morar. **Este é também o bloqueio que impede
+   `EXECUCAO_LIVE_READONLY_PONTA_A_PONTA` hoje, não só `AUTOMATED_
+   PRESTACAO`.**
 2. `dados_correlacao` sem persistência real — exige migration/schema
    novo, gate humano permanente (§12-I), nunca dispensado.
 3. Política de vigência do snapshot de UNIDADE_POSTO para o ciclo
@@ -287,10 +385,12 @@ Como consequência direta (§23 da missão: "se FALSE, nomear somente
 bloqueios restantes; se TRUE, produzir plano de autorização live"),
 **este documento não produz `PLANO_AUTORIZACAO_LIVE_SKY_V1`** — a
 condição para produzi-lo (`READY_FOR_LIVE_CORRIDOR_V2 = TRUE`) não foi
-alcançada. Dito isso, a tabela acima registra, honestamente, que
-`LIVE_READONLY_VALIDATION` está em `READY` para as 4 famílias — um
-patamar novo e real, que pode justificar uma missão futura com esse
-escopo explícito (ver relatório final, "PRÓXIMA MACRO-MISSÃO").
+alcançada, e nem seria mesmo sob a leitura mais generosa de
+`LIVE_READONLY_VALIDATION`, corrigida acima para `BLOCKED` nas 4
+famílias. O real ganho desta missão, honestamente delimitado: as
+CAPACIDADES que uma futura missão de wiring vai precisar já existem,
+reais e testadas — falta só o orquestrador que as monte (ver
+relatório final, "PRÓXIMA MACRO-MISSÃO").
 
 ## 7. Revisão adversarial (§2/§28 da missão)
 
@@ -356,7 +456,11 @@ Guia/relação documental continuam sem escrita real em nenhum lugar;
 
 ## 9. Regressão
 
-1336 passed (era 1315 no HEAD pós-merge do PR #108), 34 falhas/17 erros
-pré-existentes idênticos ao baseline (pdfplumber/cryptography do
-sandbox — nada relacionado), 6 skipped. `test_magnata_os_classificacao_
-arquitetura_sem_dependencia_airtable.py`: 5/5.
+1339 passed (era 1315 no HEAD pós-merge do PR #108; 1336 antes do
+checkpoint pré-merge do PR #109), 34 falhas/17 erros pré-existentes
+idênticos ao baseline (pdfplumber/cryptography do sandbox — nada
+relacionado), 6 skipped. `test_magnata_os_classificacao_arquitetura_
+sem_dependencia_airtable.py`: 5/5. `test_magnata_os_orquestrador_
+concurrency.py`: 7/7 (3 execuções consecutivas, mais o histórico de
+reprodução isolada da seção 0.1). `test_magnata_os_orquestrador_*.py`
+completo: 174 passed, 1 skipped.
