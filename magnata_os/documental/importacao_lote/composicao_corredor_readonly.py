@@ -93,6 +93,9 @@ from magnata_os.documental.extracao_texto import extrair_texto_pdf
 from magnata_os.documental.importacao_lote.contratos import CandidatoFuncionario
 
 from .adapters.airtable_cliente_direto_documento import FonteClienteDiretoDocumentoAirtableShadow
+from .adapters.airtable_colaboradores_esperados_prestacao import (
+    FonteColaboradoresEsperadosPrestacaoAirtableShadow,
+)
 from .adapters.airtable_inventario_prestacao import (
     FonteEscopoClientesPorInventarioAirtableShadow,
     FonteInventarioPrestacaoAirtableShadow,
@@ -181,6 +184,40 @@ class ExecucaoCorredorReadonly:
             fonte_escopo_clientes=fonte_escopo, fonte_inventario=self._fonte_inventario_composta,
             fonte_dados_correlacao=self._fonte_dados_correlacao,
         )
+
+        # Adendo "HOLERITE MULTICOLABORADOR NO CICLO REAL" -- mesmo
+        # adapter real já existente (`FonteColaboradoresEsperadosPrestacaoAirtableShadow`,
+        # nunca reimplementado), agora wired ao MESMO `leitor` desta
+        # execução. Nenhuma regra de negócio nova: só conecta, na borda
+        # real, uma fonte que já existia isolada (nunca chamada com
+        # Airtable live antes desta missão) ao restante da composição --
+        # fechando o gap real que causou a leitura equivocada de "8
+        # candidatos" no primeiro live (Holerite é granularidade
+        # colaborador, 1:N por cliente/competência -- nunca "escolher 1
+        # entre N"; ver docs/decisoes/holerite-multicolaborador-ciclo-real-v1.md).
+        self._fonte_colaboradores_esperados = FonteColaboradoresEsperadosPrestacaoAirtableShadow(leitor)
+
+    @property
+    def fonte_colaboradores_esperados(self) -> FonteColaboradoresEsperadosPrestacaoAirtableShadow:
+        """Fonte real (Cliente -> Locais -> Funcionários Ativos) de
+        colaboradores esperados por cliente/competência, wired ao MESMO
+        `leitor` desta execução -- reaproveitada, nunca reimplementada.
+
+        Uso pretendido: DEPOIS de processar os N documentos do ciclo via
+        `processar_documento` (esta fonte não participa de nenhuma
+        resolução por-documento), avaliar a obrigatoriedade do Holerite
+        por CARDINALIDADE colaborador --
+
+            colaboradores = execucao.fonte_colaboradores_esperados.colaboradores_esperados_para(cliente, ciclo)
+            resultado_holerite = avaliar_obrigatoriedade_holerite(
+                cliente, competencia, colaboradores, execucao.fonte_inventario_completa.listar(cliente, competencia))
+            pacote = combinar_pacote_com_holerite(pacote, resultado_holerite)
+
+        (`holerite_obrigatorio_prestacao.py`/`pacote_prestacao.py`, já
+        existentes, nunca alterados aqui) -- mesma composição que
+        `ciclo_prestacao.executar_ciclo_prestacao` já faz na camada pura,
+        agora disponível também na borda real, sem duplicar a lógica."""
+        return self._fonte_colaboradores_esperados
 
     @property
     def sink(self) -> InventarioPrestacaoEmMemoria:
