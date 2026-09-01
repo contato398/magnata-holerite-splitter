@@ -1,0 +1,176 @@
+# Alocação com Vigência Histórica — V1
+
+Documento de decisão da missão "IMPLEMENTAÇÃO ESTRUTURAL DA ENTIDADE
+`alocacao` COM VIGÊNCIA HISTÓRICA". Contexto: o segundo live real SKY
+Tatuí Junho/2026 provou 7/7 Holerites semanticamente resolvidos, mas
+todos bloqueados por `UNIDADE_POSTO=NAO_ENCONTRADA` -- gap de vigência
+já confirmado, antes desta missão, por auditoria de fontes atuais
+(`VIGENCIA_FONTE_REAL_ENCONTRADA=FALSE`) e por arqueologia do legado
+(nenhum dado histórico existe). Branch:
+`fix/alocacao-vigencia-historica-v1`.
+
+## Autorização
+
+Schema/migration autorizado explicitamente, em mensagem distinta, para
+a entidade `alocacao`. Durante a Fase 1 (auditoria de domínio), um
+conflito real entre o desenho aprovado
+(`BANCO_PROPRIO_MODELO.md` §5.1: FK `vinculo_trabalhista_id`) e o
+schema/código real (`vinculo_trabalhista` também não existe) foi
+encontrado e reportado -- a missão foi PARADA até decisão humana.
+Decisão registrada: **Opção A** -- criar `vinculo_trabalhista` como
+dependência estrutural MÍNIMA de `alocacao`, preservando a cadeia
+canônica `colaborador -> vinculo_trabalhista -> alocacao -> posto`,
+nunca um atalho por `colaborador_id` direto.
+
+## FASE 0 — Pré-flight
+
+```
+MODELO_DOCUMENTADO_ENCONTRADO=Sim (BANCO_PROPRIO_MODELO.md §5.1, MAGNATA_OS_ENTIDADES.md §5)
+MECANISMO_MIGRATION_EXISTENTE=Sim (magnata_os/{documental/modulo01,orquestrador}/migrations/,
+  .sql numerado, nunca aplicado automaticamente, rollback em arquivo separado,
+  IF NOT EXISTS, testado localmente via SQLite paralelo -- RepositorioExecucoesSQLite)
+TABELA_ALOCACAO_EXISTE=Não (0 migrations, confirmado antes e nesta missão)
+GAPS_ENTRE_DOC_E_SCHEMA=vinculo_trabalhista também ausente -- reportado, decisão A autorizada
+```
+
+## FASE 1 — Domínio e cardinalidade
+
+FK canônica: **`vinculo_trabalhista_id`** (cadeia completa preservada,
+nunca `colaborador_id` como atalho). `posto_id` e
+`vinculo_trabalhista.colaborador_id` permanecem identidades opacas
+(TEXT), sem FK própria -- `posto_trabalho`/`colaborador` como tabelas
+Postgres não existem e criá-las está fora do escopo autorizado (só
+`vinculo_trabalhista` foi autorizado como dependência mínima).
+
+**Reconciliação registrada** (conflito real entre 2 documentos
+canônicos, nunca escondido): `BANCO_PROPRIO_MODELO.md` §5.1 esboça
+`EXCLUDE` que impede QUALQUER sobreposição para o mesmo vínculo;
+`MAGNATA_OS_ENTIDADES.md` §5 documenta que "pode haver mais de uma
+Alocação no mesmo período para o mesmo Vínculo (rateio entre
+Clientes)". Resolvido: a constraint impede sobreposição só para o
+MESMO (vínculo, posto) -- resolvido por ser mais específica e mais
+alinhada com o já usado `FonteUnidadePostoPrestacaoAirtableShadow`,
+que já trata cardinalidade múltipla como genuína, nunca ambígua.
+
+## FASE 2 — Temporalidade canônica
+
+`vigente_de`/`vigente_ate` (NULL = vigente agora), consulta sempre por
+JANELA DO MÊS INTEIRO (nunca 1 dia-âncora) -- preserva transferência de
+posto no meio da competência, retornando os 2 postos legitimamente
+(cardinalidade múltipla, nunca uma escolha arbitrária de qual "vale
+mais"). Ausência = `NAO_ENCONTRADA` honesta. "Conflito" (2 alocações do
+mesmo vínculo+posto sobrepostas) é impedido ESTRUTURALMENTE pela
+constraint -- nunca precisa de tratamento em runtime.
+
+## FASE 3 — Schema/migration
+
+`magnata_os/documental/alocacao/migrations/0001_criar_vinculo_trabalhista_e_alocacao.sql`
+(+ rollback). `id TEXT PRIMARY KEY` (desvio deliberado do esboço `uuid`
+de `BANCO_PROPRIO_MODELO.md` -- segue a convenção JÁ estabelecida em
+TODAS as migrations reais do projeto, nunca uuid nativo). Campos
+deliberadamente ausentes de `vinculo_trabalhista` (autorização
+explícita): cargo, salário, regime, matrícula, empresa (constante),
+situação (redundante com `data_desligamento IS NULL`).
+
+## FASE 4 — Contrato de leitura temporal
+
+`magnata_os/documental/alocacao/resolucao.py::resolver_unidade_posto_via_alocacao`
+-- função pura, injetada com as 2 consultas (`vinculos_vigentes_em`,
+`postos_vigentes_em`), implementa o Protocol JÁ EXISTENTE
+`FonteUnidadePostoPrestacao` (`vinculo_unidade_prestacao.py`) -- **zero
+contrato novo**, zero duplicação. Core (`resolucao.py`) não importa
+driver de banco.
+
+## FASE 5 — Integração com UNIDADE_POSTO
+
+`ExecucaoCorredorReadonly` ganhou 1 parâmetro opcional,
+`fonte_unidade_posto_override` (default `None` = 100% comportamento
+anterior preservado). `FonteUnidadePostoPrestacaoComPrioridadeHistorica`
+(`magnata_os/classificacao/`) compõe histórica (prioridade) + corrente
+(Airtable, fallback só quando histórica devolve `NAO_ENCONTRADA`) --
+Airtable nunca mais é "verdade histórica" quando alocação existe,
+continua bridge para o resto.
+
+## FASE 6 — Backfill: nenhum realizado
+
+```
+BACKFILL_REALIZADO=Não
+BACKFILL_ESTRATEGIA=Nenhum dado histórico foi inventado ou inferido.
+  Schema pronto e testado; 0 linhas de dado real inseridas.
+  Classificação de evidência para uso futuro: COMPROVADA (nenhuma
+  encontrada nesta missão -- arqueologia do legado já confirmou isso
+  antes desta missão), PARCIAL (nenhuma), INEXISTENTE (100% do
+  histórico anterior a esta migration).
+```
+
+## FASE 7 — Captura futura automática (proposta, não implementada)
+
+Auditado: `app.py::criar_registro_holerite` e o vínculo Funcionário->
+Local do Airtable nunca escrevem em `alocacao`/`vinculo_trabalhista`
+hoje -- ponto de integração mínimo proposto (nunca implementado, fora
+do escopo desta missão): quando uma mudança de `Locais de trabalho` for
+detectada (manual ou via automação futura), a aplicação deveria (a)
+fechar `vigente_ate` da alocação aberta atual do vínculo/posto anterior,
+(b) abrir uma nova linha com `vigente_de` = data da mudança. O contrato
+já existe pronto para isso (`registrar_alocacao`/`registrar_vinculo`,
+ambos adapters) -- só nunca chamado com escrita real nesta missão.
+
+## FASE 8 — Testes (24 novos)
+
+`test_magnata_os_documental_alocacao_vigencia_historica.py`: aritmética
+pura (4), persistência real via SQLite -- casos 1-13 do checklist da
+missão (13), composição de prioridade histórica/corrente (2), e a prova
+central -- caso equivalente ao SKY Junho/2026 desbloqueado end-to-end
+via `ExecucaoCorredorReadonly` real (2), mais 1 teste de não-regressão
+do comportamento anterior sem override. Todos passam contra SQLite real
+(nunca Postgres real -- não provisionado nesta sessão, ver Fase 10/11).
+
+## FASE 9 — Duas revisões adversariais
+
+**Primeira (domínio, schema, constraints, temporalidade,
+cardinalidade, integridade, sobreposição, meio do mês, identidade,
+dependência do Airtable):** nenhum campo de RH inventado; `posto_id`/
+`colaborador_id` seguem a MESMA identidade opaca já usada em todo o
+código existente, nunca um novo esquema de ID; rateio e transferência
+no meio do mês comprovados por teste real (não hipotético); Airtable
+nunca é consultado pela lógica de resolução histórica em si (só pelo
+fallback, e só quando a histórica não tem dado).
+
+**Segunda (integração com corredor, UNIDADE_POSTO, readiness, Holerite,
+automação futura, fail-safe, backfill, migração segura, idempotência,
+rollback):** zero regressão -- suíte completa idêntica ao baseline (5
+failed/34 errors pré-existentes, iguais); `ExecucaoCorredorReadonly`
+com `fonte_unidade_posto_override=None` (default) produz exatamente o
+mesmo resultado do teste pré-existente
+(`test_sky_ciclo_base_julho_snapshot_comprovado...`), provado por teste
+novo dedicado; rollback existe e nunca toca tabela de outra fase;
+idempotência de escrita não testada contra Postgres real (ver riscos).
+
+## FASE 10 — Segurança da migration
+
+```
+MIGRATION_REVERSIVEL=Sim -- rollback simétrico, ordem inversa de dependência
+MIGRATION_DESTRUTIVA=Não -- só CREATE TABLE/INDEX/CONSTRAINT, nenhum DROP/ALTER de tabela existente
+TABELAS_NAO_RELACIONADAS_ALTERADAS=Nenhuma
+CREDENCIAL_NO_CODIGO=Nenhuma -- adapters recebem `conexao` já pronta, nunca constroem a própria conexão
+SEGREDO_INTRODUZIDO=Nenhum
+EXECUTADA_CONTRA_PRODUCAO=Não -- nem contra Postgres real nenhum (não provisionado nesta sessão)
+```
+
+**Limite honesto, não escondido:** a migration Postgres canônica
+(`.sql`) **nunca foi executada contra um Postgres real** nesta missão
+-- nenhum Postgres está disponível nesta sessão (mesma limitação já
+registrada em missões anteriores). A validação real aconteceu contra
+`RepositorioAlocacaoSQLite` (DDL hand-traduzida, mesma disciplina já
+estabelecida por `RepositorioExecucoesSQLite` do Orquestrador) -- prova
+a LÓGICA temporal e o contrato, mas não prova que a sintaxe exata do
+`.sql` (incl. `EXCLUDE USING gist`) roda sem erro num Postgres real.
+Isso é um risco remanescente explícito, não uma alegação de teste que
+não aconteceu.
+
+## Preservado
+
+`app.py` intocado; zero escrita Airtable; zero produção; zero Render;
+zero Gmail/WhatsApp; nenhum contrato pré-existente alterado (só uma
+property/parâmetro novo, aditivo, default preserva comportamento);
+`vinculo_unidade_prestacao.py` reaproveitado, nunca duplicado.
