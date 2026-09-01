@@ -89,6 +89,7 @@ from magnata_os.classificacao.orquestrador_corredor_readonly import (
 )
 from magnata_os.classificacao.politica_requisitos_prestacao import PoliticaRequisitosPrestacao
 from magnata_os.classificacao.separacao_documental import IdentificadorDePagina
+from magnata_os.classificacao.vinculo_unidade_prestacao import FonteUnidadePostoPrestacao
 from magnata_os.documental.extracao_texto import extrair_texto_pdf
 from magnata_os.documental.importacao_lote.contratos import CandidatoFuncionario
 
@@ -157,12 +158,24 @@ class ExecucaoCorredorReadonly:
         cnpj_excluido: Optional[str] = None,
         habilitar_correlacao_transitoria: bool = False,
         cliente_do_ciclo: Optional[ReferenciaCanonica] = None,
+        fonte_unidade_posto_override: Optional[FonteUnidadePostoPrestacao] = None,
     ) -> None:
         self._ciclo = ciclo
         self._cliente_do_ciclo = cliente_do_ciclo
         self._sink = InventarioPrestacaoEmMemoria()
         self._fonte_vinculos = FonteVinculosPrestacaoAirtableShadow(leitor)
-        self._fonte_unidade_posto = FonteUnidadePostoPrestacaoAirtableShadow(
+        # Adendo "IMPLEMENTAÇÃO ESTRUTURAL DA ENTIDADE alocacao" --
+        # ponto de composição único para trocar a fonte de UNIDADE_POSTO
+        # sem alterar nenhuma outra peça da execução. `None` (default)
+        # preserva 100% do comportamento anterior (Airtable-shadow,
+        # sempre honestamente NAO_ENCONTRADA sem `competencia_snapshot_
+        # comprovada` para a competência exata). Quando informado
+        # (tipicamente `FonteUnidadePostoPrestacaoComPrioridadeHistorica`,
+        # combinando `RepositorioAlocacaoPostgres`/`RepositorioAlocacaoSQLite`
+        # com fallback para o Airtable-shadow), o Airtable deixa de ser
+        # "verdade histórica" e vira só bridge para o que a fonte
+        # histórica não tiver -- nunca o inverso.
+        self._fonte_unidade_posto = fonte_unidade_posto_override or FonteUnidadePostoPrestacaoAirtableShadow(
             leitor, competencia_snapshot_comprovada,
         )
         self._fonte_cliente_direto = FonteClienteDiretoDocumentoAirtableShadow(leitor, cnpj_excluido)
