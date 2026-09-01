@@ -214,44 +214,200 @@ cadastrado, nunca uma "vigência" nova inventada. Nenhuma ocorrência do
 erro já corrigido em missões anteriores (ciclo/snapshot tratado como
 prova de outra coisa).
 
-## 9. `READY_FINAL`
+## 9. Checkpoint final pré-merge PR #110 — correção de inventário + reavaliação de READY
 
-- `MOTOR_LAB_READY = TRUE` — corredor + orquestrador funcionam
-  ponta-a-ponta com fakes/Protocols puros (29 testes novos).
-- `ORQUESTRADOR_REAL_EXISTE = TRUE` — os 2 módulos desta missão
-  fecham o achado maior do ADR anterior.
-- `ADAPTERS_REAIS_MONTAVEIS = TRUE` — `ExecucaoCorredorReadonly`
-  instancia e compõe TODOS os adapters reais já construídos, provado
-  com `Mock()` de leitor (nunca rede real).
-- `EXECUCAO_LIVE_READONLY_TECNICAMENTE_POSSIVEL = TRUE` — pela
-  primeira vez nesta sessão: um entrypoint real (`ExecucaoCorredorReadonly.
-  processar_documento`) existe, aceita PDF real ou texto, monta os
-  adapters reais, e devolve resultado composto -- sem precisar
-  escrever código novo para rodar contra dado real (só injetar um
-  `LeitorAirtableSomenteLeitura` real e chamar).
-- `LIVE_AUTORIZADO = FALSE` (fixo pela missão).
-- `LIVE_EXECUTADO = FALSE` (fixo pela missão).
-- `AUTOMATED_PRESTACAO_READY = PARTIAL` — falta: persistência real de
-  `dados_correlacao` (gate de schema, §12-I, inalterado); política de
-  vigência de UNIDADE_POSTO para ciclo corrente (quem prova, quando);
-  extração de PDF por página (para separação master automática real).
-- `READY_FOR_LIVE_CORRIDOR_V2 = FALSE` — a definição desta flag,
-  estabelecida em missões anteriores, é sobre AUTOMAÇÃO de produção
-  completa, não sobre a possibilidade técnica de um ensaio read-only
-  controlado (que agora é `TRUE`, item acima). Os 3 bloqueios que a
-  mantêm `FALSE` (persistência de correlação, vigência de UNIDADE_
-  POSTO, extração por página) são gates reais, nenhum dispensável por
-  autonomia.
+### 9.1 Achado funcional crítico, corrigido
 
-## 10. Plano live (§41 da missão) — não produzido
+`ExecucaoCorredorReadonly` injetava `FonteInventarioPrestacaoAirtableShadow`
+(só Airtable) direto em `FonteCandidatosRelacaoDocumentalDoInventario` --
+um documento processado NESTA execução (que entra em `self._sink`,
+nunca escrito no Airtable, por desenho read-only) nunca seria
+encontrado como candidato por um comprovante processado depois, no
+MESMO run. Mesmo problema no ESCOPO de clientes: `FonteEscopoClientesPor
+InventarioAirtableShadow` sozinha só enxerga clientes com registro NO
+AIRTABLE -- um cliente cujo único rastro é o documento processado neste
+run nunca apareceria no escopo, e a busca de candidatos nem chegaria a
+olhar o inventário local dele.
 
-`EXECUCAO_LIVE_READONLY_TECNICAMENTE_POSSIVEL = TRUE`, mas o gate
-literal da missão para produzir `PLANO_AUTORIZACAO_LIVE_SKY_V1` é
-`READY_FOR_LIVE_CORRIDOR_V2 = TRUE` (§41: "se READY_FOR_LIVE_CORRIDOR_
-V2 = TRUE: produzir plano"), que permanece `FALSE` (§9). Por isso este
-documento NÃO produz o plano de autorização live -- nomeia só os
-bloqueios reais restantes (§9), consistente com a mesma decisão já
-tomada no ADR anterior (`corredor-live-v2-bloqueios-reais-v1.md` §6).
+Corrigido com o contrato já existente, nunca reimplementado:
+
+- **Inventário**: `FonteInventarioPrestacaoComposta((FonteInventarioPrestacao
+  AirtableShadow(leitor), self._sink))` -- externo + local, dedupe por
+  `identidade_logica` já garantido pela classe composta.
+- **Escopo**: `_EscopoClientesComCicloConhecido` (novo, pequeno --
+  nunca reimplementa `FonteEscopoClientesPorInventarioAirtableShadow`,
+  só aumenta o resultado dela com `cliente_do_ciclo` quando conhecido).
+  `cliente_do_ciclo` migrou de parâmetro por-documento (`processar_
+  documento`) para parâmetro da EXECUÇÃO (`ExecucaoCorredorReadonly.
+  __init__`) -- reflete melhor o uso real (§15 do checkpoint: "1
+  pasta/manifesto de 1 cliente por vez") e permite montar o escopo
+  aumentado uma única vez, com o mesmo ciclo de vida do `sink`.
+- **Pacote/readiness**: nova propriedade `fonte_inventario_completa`
+  (a MESMA fonte composta usada para candidatos de relação) --
+  fechando a mesma classe de bug também para quem monta pacote/
+  readiness (§7 do checkpoint: "auditar também... alguma outra
+  capacidade consulta apenas inventário externo?").
+
+Teste anterior (`test_relacao_documental_correlacao_transitoria_
+comprova`, no orquestrador PURO) usava uma `_FonteInventarioFake` que
+JÁ continha o item do relatante -- provava o motor puro, nunca a
+composição de borda real. Corrigido com 5 novos testes E2E pela BORDA
+REAL (`ExecucaoCorredorReadonly`, `Mock()` de leitor, ZERO preload
+externo): (A) relatório processado entra no sink + correlação
+registrada; (B) comprovante processado depois, no MESMO run, encontra
+o relatante só pelo inventário local -- núcleo do achado, agora
+provado pela borda real; (C) nova execução não herda o cache da
+anterior; (D) relatante em externo E local dedupa para 1 candidato;
+(E) relatante só no externo continua encontrável.
+
+### 9.2 Proteção de master (fail-safe)
+
+`texto_filho = texto_completo` (linha já suspeita, nomeada no
+checkpoint) -- corrigido: quando `resultado.documento_id !=
+contexto.documento_id` (documento SEPARADO em filhos), `dados_
+correlacao` NUNCA é extraído do texto MASTER inteiro para um filho --
+fica no default vazio, nunca contamina. Documento unitário (o caso
+real hoje, dado que `extrair_texto_pdf` não fatia por página) preserva
+o comportamento integral. Testado
+(`test_master_multi_filho_nunca_extrai_correlacao_do_texto_inteiro`).
+
+### 9.3 `READY_FINAL` — reavaliado
+
+O checkpoint distingue explicitamente `READY_FOR_LIVE_CORRIDOR_V2`
+(ensaio read-only controlado) de `AUTOMATED_PRESTACAO_READY` (automação
+de produção completa) -- 2 perguntas DIFERENTES, nunca confundidas
+(§8 do checkpoint). Reavaliando os 3 "bloqueios" do ADR original (§9
+anterior) sob essa luz:
+
+- **Persistência durável de `dados_correlacao`**: NÃO é bloqueio para
+  o ENSAIO -- a correlação same-run transitória agora funciona de
+  verdade pela borda real (§9.1, provado). Continua bloqueio só para
+  AUTOMAÇÃO persistente (múltiplas execuções precisando enxergar a
+  correlação umas das outras).
+- **Extração de PDF por página**: NÃO é bloqueio para o ENSAIO se a
+  amostra usar só documentos UNITÁRIOS (sem master multi-cliente) --
+  ver §9.4, a amostra recomendada é toda unitária. Continua limitação
+  real para documentos master.
+- **Vigência de UNIDADE_POSTO para ciclo corrente**: o ensaio alvo é a
+  competência HISTÓRICA do SKY (Junho/2026, via regra -1 sobre o
+  ciclo-base Julho) -- sem vigência comprovada para Junho,
+  `NAO_ENCONTRADA` é o resultado CORRETO e esperado (prova que o robô
+  não inventa), nunca um bloqueio para declarar o ensaio
+  tecnicamente executável.
+
+`MOTOR_LAB_READY = TRUE`. `ORQUESTRADOR_REAL_EXISTE = TRUE`.
+`ADAPTERS_REAIS_MONTAVEIS = TRUE`. `EXECUCAO_LIVE_READONLY_TECNICAMENTE_
+POSSIVEL = TRUE`. `MIGRATION_NECESSARIA_PARA_ENSAIO = FALSE` (correlação
+same-run comprovada suficiente). `PDF_POR_PAGINA_NECESSARIO_PARA_AMOSTRA
+= FALSE` (amostra recomendada é 100% unitária, ver §9.4).
+`LIVE_AUTORIZADO = FALSE`. `LIVE_EXECUTADO = FALSE`.
+`AUTOMATED_PRESTACAO_READY = PARTIAL` (automação de produção contínua
+ainda depende de persistência durável real e de decisão de vigência
+para ciclo corrente -- nenhuma contradição com o ensaio: são perguntas
+diferentes, §8 do checkpoint).
+
+**`READY_FOR_LIVE_CORRIDOR_V2 = TRUE`** (correção desta reavaliação --
+o ADR original confundia os 2 níveis, exatamente o erro que o
+checkpoint pediu para não cometer).
+
+### 9.4 Achado adicional na preparação do plano — campos de anexo não comprovados
+
+Auditoria dos IDs de campo já confirmados no repositório (nunca
+inventados, §13/§24 do checkpoint): `F_HOL_PDF`
+(`fldGXsgmuADtZIgtx`) e `F_EXT_PDF` (`fldznv1E24rfbZt34`)
+(`airtable_escrita.py`) são campos de ANEXO real, já confirmados (o
+adapter de escrita não funcionaria sem esses IDs corretos). **Nenhum
+campo de anexo de FGTS Guia (`TABLE_FGTS`) nem de Guias/DCTFWeb
+(`TABLE_GUIAS`) nem de Relatório de Benefícios está comprovado em
+nenhum lugar do repositório** -- busca completa confirma. Por isso,
+seguindo §13/§24 do checkpoint ("se algum ID necessário não estiver
+comprovado: STOP e registrar precisamente"), a amostra seguRA do plano
+(§10) usa só Holerite + Extrato (2 documentos, campos de anexo
+comprovados) -- FGTS Guia e qualquer par de relação documental ficam
+DE FORA da amostra desta rodada, precisamente porque o campo de anexo
+não está comprovado, nunca por presunção.
+
+## 10. `PLANO_AUTORIZACAO_LIVE_SKY_V1`
+
+**NÃO EXECUTAR.** Produzido porque `READY_FOR_LIVE_CORRIDOR_V2 = TRUE`
+(§9.3). Produzir este plano NÃO autoriza live -- `LIVE_AUTORIZADO =
+FALSE`, `LIVE_EXECUTADO = FALSE`; execução futura exige nova
+autorização humana específica, numa mensagem distinta desta.
+
+- **SISTEMA**: Airtable.
+- **BASE**: `appaCpIVj7Q97VhFy` (já usada por todos os adapters reais
+  desta sessão).
+- **CLIENTE**: EDIFICIO SKY TATUI.
+- **CLIENTE RECORD ID**: `recrqv5NvbC37WfSl` (`REFERENCIA_CLIENTE_SKY_
+  TATUI`, `competencia_esperada_prestacao.py`, já confirmado em missão
+  anterior por leitura somente-GET).
+- **CICLO BASE**: Julho/2026.
+- **COMPETÊNCIA SKY**: Junho/2026 (regra -1, `POLITICA_COMPETENCIA_
+  PRESTACAO_V1`, já registrada).
+- **MODO**: READ-ONLY. Injetar `cliente_do_ciclo=REFERENCIA_CLIENTE_
+  SKY_TATUI` em `ExecucaoCorredorReadonly` -- conhecimento operacional
+  do run, nunca inferido do documento (§15 do checkpoint).
+
+### Amostra (reduzida por achado real, §9.4 -- nunca por presunção)
+
+**2 documentos, ambos UNITÁRIOS** (nunca um PDF master que dependa de
+extração por página):
+
+1. **1 Holerite** unitário do SKY Tatuí, competência Junho/2026.
+2. **1 Extrato** unitário do SKY Tatuí, competência Junho/2026.
+
+**FGTS Guia e qualquer documento relacional ficam FORA desta amostra**
+-- campo de anexo não comprovado para `TABLE_FGTS`/`TABLE_GUIAS` (§9.4).
+Incluí-los exigiria primeiro uma auditoria read-only de schema
+(GET, sem payload de registro) para confirmar o field id do anexo --
+fora do escopo desta missão, gate novo e separado.
+
+### Tabelas e campos (só IDs já comprovados no repositório)
+
+| Uso | Tabela | Campo | Confirmado em |
+|---|---|---|---|
+| Holerite -- registro | `TABLE_HOL` (`tblVaUgZeFfa5zRcH`) | -- | `airtable_escrita.py` |
+| Holerite -- vínculo funcionário | mesma | `F_HOL_FUNC` (`fldTXMjeHfgyDas9f`) | `airtable_escrita.py` |
+| Holerite -- **anexo (download)** | mesma | `F_HOL_PDF` (`fldGXsgmuADtZIgtx`) | `airtable_escrita.py` |
+| Extrato -- registro | `TABLE_EXTRATO` (`tblJCUcFBVTH5W2kP`) | -- | `airtable_leitura.py` |
+| Extrato -- vínculo cliente | mesma | `F_EXT_CLIENTE` (`fldKtdZpZ4fd7XpAX`) | `airtable_leitura.py` |
+| Extrato -- **anexo (download)** | mesma | `F_EXT_PDF` (`fldznv1E24rfbZt34`) | `airtable_escrita.py` |
+| Colaborador -- vínculo local | `TABLE_FUNC` (`tblNd8G66kjwos3eP`) | `F_FUNC_LOCAIS` (`fldqpwuLJsZsavaEJ`) | `airtable_vinculos_prestacao.py` |
+| Local -- vínculo cliente | `TABLE_LOCAIS` (`tblZy1WfzmGIeR8ZP`) | `F_LOCAL_CLIENTE` (`fldu9xd2vvoMQ2Iqb`) | `airtable_vinculos_prestacao.py` |
+| Clientes -- CNPJ/Nome (cliente_direto) | `TABLE_CLIENTES` (`tbl0znyuCEzoCHtCV`) | `'CNPJ'`/`'Nome'` (por nome de campo, não ID -- `listar_clientes()`) | `airtable_leitura.py` |
+
+**STOP registrado** (§13/§24 do checkpoint): nenhum campo de anexo
+comprovado para `TABLE_FGTS` (`tbl8ehgLa00cE1U3s`) nem `TABLE_GUIAS`
+(`tbl6FT1YzK1yqI77l`) -- excluídos da amostra por esse motivo exato.
+
+### Limites e execução
+
+- **DOWNLOAD**: mínimo necessário -- 1 download por documento (2 no
+  total), direto para memória, nunca persistido em disco fora do fluxo
+  de teste, nunca commitado.
+- **LEITURA**: `extrair_texto_pdf` (mesma extração já em produção) →
+  `ExecucaoCorredorReadonly.processar_documento(pdf_bytes=...)`.
+- **ESCRITA**: ZERO -- nenhuma escrita em nenhum sistema externo.
+- **PII**: processado internamente só o necessário para granularidade
+  (CPF do colaborador do Holerite, CNPJ do Extrato) -- nunca exibido/
+  logado; `documento_id`/`tipo`/`estado` sanitizados nos resultados.
+
+### STOP -- interromper e reportar, nunca prosseguir, se:
+
+- schema divergente do já documentado acima;
+- field id necessário não comprovado (FGTS/Guias/relação, já
+  identificado -- por isso fora da amostra);
+- attachment inesperado (mais de 1 por documento, formato não-PDF);
+- mais de 2 documentos processados;
+- qualquer tentativa de escrita;
+- qualquer segredo exposto;
+- qualquer conflito de schema não previsto;
+- necessidade de nova regra de negócio;
+- necessidade de migration;
+- qualquer tentativa de usar o snapshot atual (`Status`/vínculo de
+  hoje) como prova de vigência histórica -- UNIDADE_POSTO honestamente
+  `NAO_ENCONTRADA` para Junho é o resultado ESPERADO, nunca um erro a
+  corrigir com override.
 
 ## 11. Preservado
 
@@ -264,10 +420,13 @@ client-level preservado, nunca broadcast.
 
 ## 12. Regressão
 
-1363 passed (era 1339 no HEAD pós-merge do PR #109), 34 falhas/17 erros
-pré-existentes idênticos ao baseline (pdfplumber/cryptography do
-sandbox), 6 skipped. Testes novos: 16 (`test_magnata_os_classificacao_
-orquestrador_corredor_readonly.py`) + 6 (`test_importacao_lote_
-composicao_corredor_readonly.py`) + 2 (arquitetura, positive control) =
-24. `test_magnata_os_classificacao_arquitetura_sem_dependencia_
-airtable.py`: 7/7.
+1370 passed (era 1363 antes do checkpoint final pré-merge; 1339 no
+HEAD pós-merge do PR #109), 34 falhas/17 erros pré-existentes
+idênticos ao baseline (pdfplumber/cryptography do sandbox), 6 skipped.
+Testes novos totais desta missão: 16 (`test_magnata_os_classificacao_
+orquestrador_corredor_readonly.py`) + 13 (`test_importacao_lote_
+composicao_corredor_readonly.py`, incluindo os 5 casos E2E de
+correlação same-run pela borda real + proteção de master + pacote
+externo+local do checkpoint) + 2 (arquitetura, positive control) = 31.
+`test_magnata_os_classificacao_arquitetura_sem_dependencia_airtable.py`:
+7/7.

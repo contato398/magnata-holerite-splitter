@@ -224,18 +224,36 @@ def executar_documento_readonly(
     for resultado in resultados_corredor:
         itens = avancar_para_inventario(resultado, sink, contexto.clientes_broadcast)
 
+        # PROTEÇÃO DE MASTER (checkpoint final pré-merge ao PR #110,
+        # §6): quando houve separação, `resultado.documento_id` é
+        # `f'{contexto.documento_id}:{grupo.entidade_id}'` (identidade
+        # PRÓPRIA do filho, ver `processar_documento_com_separacao_se_
+        # necessaria`) -- só `texto_completo` (o MASTER inteiro) está
+        # disponível aqui, nunca a fatia real do filho (esse nível não
+        # expõe isso hoje). Extrair dados_correlacao do MASTER e
+        # associá-los a um filho seria contaminação silenciosa -- fail-
+        # safe: para um filho separado, `dados_correlacao_deste_
+        # documento` nunca é extraído, fica no default vazio (mesma
+        # disciplina de "sem dado -> NAO_ENCONTRADA honesto", nunca uma
+        # correlação fabricada). Documento unitário (sem separação,
+        # `resultado.documento_id == contexto.documento_id` -- o caso
+        # real hoje, dado que a extração disponível não fatia por
+        # página) preserva o comportamento integral.
+        eh_filho_separado = resultado.documento_id != contexto.documento_id
+
         dados_correlacao_extraidos = None
         resolucao_relacao = None
         if resultado.estado == EstadoCorredorDocumentoPrestacao.RESOLVIDO_E_AVANCOU and resultado.tipo_documental:
-            texto_filho = texto_completo  # separação master reusa o mesmo texto de origem por filho hoje (paginas nao fatiadas por filho neste nivel -- o corredor de separação já cuidou da fatia real internamente; aqui só extraímos correlação do texto completo, honesto para o caso unitário, que é o caso real hoje)
             # Extraída sempre que qualquer um dos 2 usos existir --
             # registro transitório (devolvida no resultado só quando
             # pedido, nunca decidido aqui) OU uso imediato deste MESMO
             # documento como comprovante (abaixo). Extrair 2x nunca
             # aconteceu -- 1 chamada, 2 destinos possíveis.
             dados_correlacao_deste_documento = None
-            if contexto.registrar_dados_correlacao or contexto.fonte_candidatos_relacao is not None:
-                dados_correlacao_deste_documento = extrair_dados_correlacao_de_texto(texto_filho)
+            if not eh_filho_separado and (
+                contexto.registrar_dados_correlacao or contexto.fonte_candidatos_relacao is not None
+            ):
+                dados_correlacao_deste_documento = extrair_dados_correlacao_de_texto(texto_completo)
             if contexto.registrar_dados_correlacao:
                 dados_correlacao_extraidos = dados_correlacao_deste_documento
 
