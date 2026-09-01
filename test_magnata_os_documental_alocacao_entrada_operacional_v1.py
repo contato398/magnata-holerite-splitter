@@ -124,7 +124,7 @@ def test_fabrica_postgres_indisponivel_propaga_falha_sem_fallback_para_airtable(
     with pytest.raises(FalhaConexaoBanco):
         construir_repositorio_alocacao(
             ConfiguracaoRepositorioAlocacao(BackendAlocacao.POSTGRES),
-            database_url='postgresql://sintetico', conectar=_conectar_que_falha,
+            database_url='fake', conectar=_conectar_que_falha,
         )
 
 
@@ -132,7 +132,7 @@ def test_fabrica_postgres_com_conexao_fake_constroi_repositorio():
     conexao_fake = Mock()
     r = construir_repositorio_alocacao(
         ConfiguracaoRepositorioAlocacao(BackendAlocacao.POSTGRES),
-        database_url='postgresql://sintetico', conectar=lambda url: conexao_fake,
+        database_url='fake', conectar=lambda url: conexao_fake,
     )
     from magnata_os.documental.alocacao.adapters.postgres_alocacao import RepositorioAlocacaoPostgres
     assert isinstance(r, RepositorioAlocacaoPostgres)
