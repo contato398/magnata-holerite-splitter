@@ -46,20 +46,32 @@
 -- Postgres real, ainda não provisionado -- ver migrations/CLAUDE.md do
 -- modulo01, "sem sintaxe que só funcione numa versão não confirmada").
 --
--- ─── Reconciliação de conflito real entre 2 documentos canônicos ─────────
+-- ─── Regra canônica V1 de sobreposição -- DECISÃO HUMANA EXPLÍCITA ───────
 --
 -- BANCO_PROPRIO_MODELO.md §5.1 esboça a constraint de não-sobreposição
 -- como `EXCLUDE USING gist (vinculo_trabalhista_id WITH =, daterange(...)
--- WITH &&)` -- impede QUALQUER sobreposição para o mesmo vínculo.
+-- WITH &&)` -- impediria QUALQUER sobreposição para o mesmo vínculo.
 -- MAGNATA_OS_ENTIDADES.md §5 (entidade Alocação) documenta
 -- explicitamente: "Pode haver mais de uma Alocação no mesmo período para
--- o mesmo Vínculo (rateio entre Clientes)". As 2 afirmações, lidas ao
--- pé da letra, se contradizem. Reconciliado aqui (registrado, nunca
--- silencioso, conforme /CLAUDE.md §2): a constraint impede sobreposição
--- só para o MESMO (vínculo, posto) -- um registro duplicado/conflitante
--- de verdade -- e permite sobreposição entre POSTOS DIFERENTES do mesmo
--- vínculo (rateio legítimo), preservando a cardinalidade múltipla
--- genuína que `FonteUnidadePostoPrestacaoAirtableShadow`/
+-- o mesmo Vínculo (rateio entre Clientes)". As 2 afirmações, lidas ao pé
+-- da letra, se contradizem -- conflito de regra de negócio/arquitetura,
+-- não uma diferença de detalhe técnico.
+--
+-- A primeira versão desta migration resolveu esse conflito sozinha
+-- ("reconciliação"), sem parar para decisão humana -- **correção
+-- registrada, não escondida**: isso violava a mesma regra que já havia
+-- pausado esta missão uma vez (Fase 1, conflito da FK). Corrigido na
+-- revisão independente do PR #112: a decisão abaixo foi tomada pelo
+-- humano, em mensagem distinta desta migration, não inferida pelo
+-- agente.
+--
+-- **DECISÃO HUMANA (revisão do PR #112, regra canônica V1):** um mesmo
+-- vínculo trabalhista PODE ter múltiplas alocações simultâneas em
+-- POSTOS DIFERENTES (rateio legítimo entre clientes); NÃO pode ter duas
+-- alocações temporalmente sobrepostas para o MESMO posto (registro
+-- duplicado/conflitante). A constraint abaixo implementa exatamente
+-- essa regra -- nunca menos, nunca mais -- e preserva a mesma
+-- cardinalidade múltipla que `FonteUnidadePostoPrestacaoAirtableShadow`/
 -- `vinculo_unidade_prestacao.py` já tratam como válida (nunca colapsada
 -- a 1, nunca AMBIGUA só por existir mais de um posto na mesma
 -- competência).
@@ -113,14 +125,40 @@ COMMENT ON COLUMN vinculo_trabalhista.colaborador_id IS
 -- Impede 2 vínculos sobrepostos para o MESMO colaborador -- uma
 -- readmissão só é válida depois que o vínculo anterior encerrou
 -- (data_desligamento preenchida e anterior à nova data_admissao).
+--
+-- Requisito de extensão (auditado na revisão do PR #112, nunca testado
+-- contra Postgres real -- risco remanescente explícito, ver ADR):
+-- `btree_gist` é EXTENSÃO "trusted" desde o PostgreSQL 13 -- instalável
+-- pelo DONO do banco/schema (`CREATE EXTENSION`), SEM exigir privilégio
+-- de superusuário, diferente de extensões não confiáveis. Comportamento
+-- se já existir: `IF NOT EXISTS` já a torna idempotente nativamente
+-- (não precisa do bloco DO -- diferente de ADD CONSTRAINT, que não
+-- aceita IF NOT EXISTS). Risco remanescente até validação real: se o
+-- provedor de Postgres (ex.: um plano gerenciado restrito) bloquear
+-- CREATE EXTENSION mesmo para o dono do banco, esta migration falha
+-- nesta linha -- nunca testado nesta sessão (nenhum Postgres real
+-- disponível).
 CREATE EXTENSION IF NOT EXISTS btree_gist;
 
-ALTER TABLE vinculo_trabalhista
-    ADD CONSTRAINT vinculo_trabalhista_sem_sobreposicao
-    EXCLUDE USING gist (
-        colaborador_id WITH =,
-        daterange(data_admissao, data_desligamento, '[]') WITH &&
-    );
+-- Idempotente via bloco DO + checagem em pg_constraint -- mesmo padrão
+-- já estabelecido em magnata_os/documental/modulo01/migrations/
+-- 0007_vinculo_documentos_lote.sql (ALTER TABLE ADD CONSTRAINT não
+-- aceita "IF NOT EXISTS" nativamente no Postgres -- corrigido na
+-- revisão do PR #112; a primeira versão desta migration não seguia
+-- esse padrão já documentado em migrations/CLAUDE.md do modulo01).
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'vinculo_trabalhista_sem_sobreposicao'
+    ) THEN
+        ALTER TABLE vinculo_trabalhista
+            ADD CONSTRAINT vinculo_trabalhista_sem_sobreposicao
+            EXCLUDE USING gist (
+                colaborador_id WITH =,
+                daterange(data_admissao, data_desligamento, '[]') WITH &&
+            );
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_vinculo_trabalhista_colaborador_id
     ON vinculo_trabalhista (colaborador_id);
@@ -171,15 +209,23 @@ COMMENT ON COLUMN alocacao.vigente_ate IS
 -- Impede 2 alocações sobrepostas para o MESMO vínculo NO MESMO posto
 -- (registro duplicado/conflitante) -- mas permite sobreposição entre
 -- POSTOS DIFERENTES do mesmo vínculo (rateio legítimo entre clientes,
--- MAGNATA_OS_ENTIDADES.md §5) -- ver nota de reconciliação no topo do
--- arquivo. Reaproveita a mesma extensão já habilitada acima.
-ALTER TABLE alocacao
-    ADD CONSTRAINT alocacao_sem_sobreposicao_mesmo_posto
-    EXCLUDE USING gist (
-        vinculo_trabalhista_id WITH =,
-        posto_id WITH =,
-        daterange(vigente_de, vigente_ate, '[]') WITH &&
-    );
+-- MAGNATA_OS_ENTIDADES.md §5, decisão humana explícita -- ver nota no
+-- topo do arquivo). Reaproveita a mesma extensão já habilitada acima.
+-- Idempotente pelo mesmo padrão (bloco DO + pg_constraint) usado acima.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'alocacao_sem_sobreposicao_mesmo_posto'
+    ) THEN
+        ALTER TABLE alocacao
+            ADD CONSTRAINT alocacao_sem_sobreposicao_mesmo_posto
+            EXCLUDE USING gist (
+                vinculo_trabalhista_id WITH =,
+                posto_id WITH =,
+                daterange(vigente_de, vigente_ate, '[]') WITH &&
+            );
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_alocacao_vinculo_trabalhista_id
     ON alocacao (vinculo_trabalhista_id);

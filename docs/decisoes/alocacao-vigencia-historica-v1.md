@@ -22,6 +22,79 @@ dependência estrutural MÍNIMA de `alocacao`, preservando a cadeia
 canônica `colaborador -> vinculo_trabalhista -> alocacao -> posto`,
 nunca um atalho por `colaborador_id` direto.
 
+## Correções da revisão independente (PR #112) — 2 blockers, ambos fechados
+
+A revisão humana independente do PR #112 (HEAD `57e54246`, antes desta
+correção) encontrou 2 blockers reais e bloqueou o merge até ambos
+serem corrigidos. Registrados aqui explicitamente, não escondidos:
+
+**Blocker 1 — conflito de regra de negócio resolvido sem parar para
+decisão humana.** A primeira versão desta migration encontrou o mesmo
+tipo de conflito que já havia pausado esta missão uma vez (FK de
+`alocacao`, ver "Autorização" abaixo) -- só que desta vez o agente
+**não parou**: "reconciliou" sozinho a contradição entre
+`BANCO_PROPRIO_MODELO.md` (impede QUALQUER sobreposição) e
+`MAGNATA_OS_ENTIDADES.md` (permite rateio simultâneo), tratando como
+uma leitura mais cuidadosa do que como o conflito arquitetural real que
+era. Isso violou a mesma regra que a própria missão já havia aplicado
+uma vez -- inconsistência real, corrigida, não minimizada.
+
+**Correção:** decisão humana explícita, na revisão do PR (mensagem
+distinta desta migration): **adotada como regra canônica V1** -- um
+mesmo vínculo trabalhista PODE ter múltiplas alocações simultâneas em
+POSTOS DIFERENTES (rateio legítimo), mas NÃO pode ter duas alocações
+temporalmente sobrepostas para o MESMO posto. O comportamento
+implementado (constraint, adapters, testes) **não mudou** -- já
+implementava exatamente essa regra; o que mudou foi a governança:
+a decisão agora está corretamente atribuída ao humano, registrada como
+tal na migration (§ "Regra canônica V1 de sobreposição") e neste ADR,
+nunca mais apresentada como autoescolha do agente.
+
+**Blocker 2 — migration não era realmente idempotente.**
+`CREATE TABLE IF NOT EXISTS` era seguido de `ALTER TABLE ... ADD
+CONSTRAINT` sem proteção -- reaplicar a migration depois das
+constraints já criadas falharia (`constraint already exists`). O
+projeto já tinha o padrão correto documentado e implementado
+(`magnata_os/documental/modulo01/migrations/CLAUDE.md`, "bloco `DO $$
+... $$` com checagem em `pg_constraint`", referência viva em
+`0007_vinculo_documentos_lote.sql`) -- não foi seguido na primeira
+versão desta migration.
+
+**Correção:** as 2 constraints `EXCLUDE USING gist` agora são criadas
+dentro de blocos `DO $$ ... IF NOT EXISTS (SELECT 1 FROM pg_constraint
+WHERE conname = '...') THEN ... END IF; END $$;`, exatamente o padrão
+já em uso em `0007`. A migration inteira agora é idempotente por
+instrução, ponta a ponta -- reaplicá-la contra um banco onde ela já
+rodou não falha em nenhuma linha. `CREATE EXTENSION IF NOT EXISTS
+btree_gist` já era idempotente nativamente; documentado agora,
+explicitamente, o requisito de privilégio (extensão "trusted" desde
+PostgreSQL 13, instalável pelo dono do banco, sem exigir superusuário)
+e o risco remanescente (nunca testado contra um provedor Postgres
+real -- pode haver restrição de plano gerenciado não descoberta ainda).
+
+Nenhuma mudança de comportamento de aplicação nos 2 adapters
+(Postgres/SQLite) nem nos 24 testes -- ambos os blockers eram sobre a
+migration `.sql` e sua governança/documentação, não sobre a lógica já
+testada.
+
+**Duas revisões adversariais da correção em si:**
+
+*Primeira (a correção resolve exatamente os 2 blockers, nada além):*
+a regra de sobreposição implementada não mudou -- só a atribuição da
+decisão, agora corretamente humana e registrada como tal, em 2 lugares
+(migration + este ADR); a idempotência foi corrigida só onde faltava
+(as 2 `ADD CONSTRAINT`), sem tocar nenhuma outra instrução já
+idempotente; nenhum campo, tabela ou regra nova foi introduzida na
+correção.
+
+*Segunda (nenhuma regressão introduzida pela correção):* suíte
+completa re-executada -- **1745 passed, mesmos 5 failed/34 errors
+pré-existentes, 2 skipped**, idêntico ao HEAD anterior à correção;
+52/52 testes do escopo direto (alocação + corredor + Holerite
+multicolaborador) re-confirmados verdes; nenhum código Python foi
+alterado nesta correção (só `.sql` + `.md`), então a suíte permanecer
+idêntica é o resultado esperado, não uma coincidência.
+
 ## FASE 0 — Pré-flight
 
 ```
@@ -42,15 +115,16 @@ nunca `colaborador_id` como atalho). `posto_id` e
 Postgres não existem e criá-las está fora do escopo autorizado (só
 `vinculo_trabalhista` foi autorizado como dependência mínima).
 
-**Reconciliação registrada** (conflito real entre 2 documentos
-canônicos, nunca escondido): `BANCO_PROPRIO_MODELO.md` §5.1 esboça
-`EXCLUDE` que impede QUALQUER sobreposição para o mesmo vínculo;
-`MAGNATA_OS_ENTIDADES.md` §5 documenta que "pode haver mais de uma
-Alocação no mesmo período para o mesmo Vínculo (rateio entre
-Clientes)". Resolvido: a constraint impede sobreposição só para o
-MESMO (vínculo, posto) -- resolvido por ser mais específica e mais
-alinhada com o já usado `FonteUnidadePostoPrestacaoAirtableShadow`,
-que já trata cardinalidade múltipla como genuína, nunca ambígua.
+**Conflito real entre 2 documentos canônicos, corrigido por decisão
+humana (ver seção "Correções da revisão independente" acima):**
+`BANCO_PROPRIO_MODELO.md` §5.1 esboça `EXCLUDE` que impede QUALQUER
+sobreposição para o mesmo vínculo; `MAGNATA_OS_ENTIDADES.md` §5
+documenta que "pode haver mais de uma Alocação no mesmo período para o
+mesmo Vínculo (rateio entre Clientes)". Este conflito foi originalmente
+resolvido pelo agente sozinho ("reconciliação") -- achado da revisão
+independente do PR #112, corrigido: agora é decisão humana explícita
+que a constraint impede sobreposição só para o MESMO (vínculo, posto),
+nunca para postos diferentes do mesmo vínculo.
 
 ## FASE 2 — Temporalidade canônica
 
@@ -71,6 +145,13 @@ TODAS as migrations reais do projeto, nunca uuid nativo). Campos
 deliberadamente ausentes de `vinculo_trabalhista` (autorização
 explícita): cargo, salário, regime, matrícula, empresa (constante),
 situação (redundante com `data_desligamento IS NULL`).
+
+**Idempotência (corrigida na revisão do PR #112, ver seção dedicada
+acima):** toda instrução da migration é segura para reexecução --
+`CREATE TABLE`/`CREATE INDEX`/`CREATE EXTENSION` via `IF NOT EXISTS`;
+as 2 constraints `EXCLUDE USING gist` via bloco `DO $$` + checagem em
+`pg_constraint`, mesmo padrão já em uso em
+`modulo01/migrations/0007_vinculo_documentos_lote.sql`.
 
 ## FASE 4 — Contrato de leitura temporal
 
