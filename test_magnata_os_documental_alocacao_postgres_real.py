@@ -304,8 +304,18 @@ def test_corredor_real_resolve_unidade_posto_historica_via_postgres_real(repo):
 
     fonte_corrente_fake = Mock()
 
+    # Ciclo BASE = Junho/2026, igual à competência declarada no texto --
+    # deliberado: sem `cliente_do_ciclo`, `competencia_esperada` cai para
+    # `ciclo.competencia_base` (nunca precisa de política de deslocamento
+    # tipo SKY para este teste, que prova só alocação->UNIDADE_POSTO, não
+    # a política de competência -- essa já provada à parte, com SKY real,
+    # em test_sky_ciclo_base_julho_snapshot_comprovado... e no live real).
+    # Achado real do primeiro run deste teste em CI: usar ciclo (2026, 7)
+    # sem cliente_do_ciclo fazia competencia_esperada cair em Julho,
+    # divergindo do texto (Junho) e travando CLIENTE/UNIDADE_POSTO a
+    # montante -- corrigido alinhando o ciclo à competência do documento.
     execucao = ExecucaoCorredorReadonly(
-        leitor, ContextoCicloPrestacao((2026, 7)),
+        leitor, ContextoCicloPrestacao((2026, 6)),
         fonte_unidade_posto_override=FonteUnidadePostoPrestacaoComPrioridadeHistorica(repo, fonte_corrente_fake),
     )
     texto = 'Recibo de Pagamento -- Total de Vencimentos\nCompetência: 06/2026\nCPF: 999.888.777-11'
