@@ -80,8 +80,12 @@ def _executar_script_sql(conn, sql_texto: str) -> None:
     múltiplos statements num só `execute()` -- diferença real em
     relação ao psycopg2, documentada pelo próprio driver. `ClientCursor`
     (bind client-side, protocolo simples) é o mecanismo do psycopg 3
-    para exatamente este caso -- migrations/scripts multi-statement."""
-    with conn.cursor(cursor_factory=psycopg.ClientCursor) as cur:
+    para exatamente este caso -- migrations/scripts multi-statement.
+    `cursor_factory` é atributo da CONEXÃO (setado em `psycopg.connect()`,
+    ver fixture `pg_conn`), nunca argumento de `.cursor()` -- achado real
+    de CI (`TypeError: Connection.cursor() got an unexpected keyword
+    argument 'cursor_factory'`), corrigido aqui."""
+    with conn.cursor() as cur:
         cur.execute(sql_texto)
     conn.commit()
 
@@ -96,9 +100,13 @@ def _aplicar_rollback(conn) -> None:
 
 @pytest.fixture
 def pg_conn():
-    # Sem argumento -- psycopg/libpq leem PGHOST/PGPORT/PGUSER/PGPASSWORD/
-    # PGDATABASE do ambiente automaticamente (ver docstring do módulo).
-    conn = psycopg.connect()
+    # Sem argumento de conexão -- psycopg/libpq leem PGHOST/PGPORT/PGUSER/
+    # PGPASSWORD/PGDATABASE do ambiente automaticamente (ver docstring do
+    # módulo). `cursor_factory=ClientCursor` para TODA a conexão (nunca
+    # por-cursor -- ver `_executar_script_sql`): permite tanto os scripts
+    # multi-statement da migration quanto as queries com `%s`/parâmetros
+    # do adapter usarem a MESMA conexão sem trocar de tipo de cursor.
+    conn = psycopg.connect(cursor_factory=psycopg.ClientCursor)
     _aplicar_rollback(conn)  # garante banco/schema vazio no INICIO (idempotente, IF EXISTS)
     yield conn
     conn.rollback()
