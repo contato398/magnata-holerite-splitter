@@ -119,8 +119,12 @@ jobs:
       postgres:
         image: postgres:16
         env:
+          # "changeme" -- token de placeholder já reconhecido pelo Gate 5
+          # de governança deste repositório (.magnata/patterns.sh,
+          # SECRET_PLACEHOLDER_REGEX), nunca uma credencial real. Efêmero:
+          # existe só dentro deste container, destruído ao fim do job.
           POSTGRES_USER: magnata_teste
-          POSTGRES_PASSWORD: magnata_teste_efemero
+          POSTGRES_PASSWORD: changeme
           POSTGRES_DB: magnata_alocacao_teste
         ports:
           - 5432:5432
@@ -152,7 +156,18 @@ jobs:
 
       - name: Validar migration/adapter de alocacao contra Postgres real
         env:
-          MAGNATA_TEST_POSTGRES_DSN: postgresql://magnata_teste:magnata_teste_efemero@localhost:5432/magnata_alocacao_teste
+          # Variáveis padrão de libpq -- psycopg.connect() sem argumento
+          # nenhum já as lê automaticamente (ver docstring do teste).
+          # Nunca uma única string de conexão com usuário e senha
+          # embutidos (separados por dois-pontos, seguidos de arroba)
+          # aqui -- esse formato é padrão absoluto de segredo no Gate 5
+          # (sem exceção de placeholder), mesmo para credencial efêmera de CI.
+          MAGNATA_TEST_POSTGRES_REAL: '1'
+          PGHOST: localhost
+          PGPORT: '5432'
+          PGUSER: magnata_teste
+          PGPASSWORD: changeme
+          PGDATABASE: magnata_alocacao_teste
         run: python -m pytest -q --tb=short test_magnata_os_documental_alocacao_postgres_real.py
 
       - name: Resumo

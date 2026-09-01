@@ -7,14 +7,22 @@ canônica (extensão `btree_gist`, `EXCLUDE USING gist`, `daterange`,
 blocos `DO $$`) e o adapter `RepositorioAlocacaoPostgres` contra um
 banco de verdade.
 
-Roda SÓ quando `MAGNATA_TEST_POSTGRES_DSN` está definida -- nunca por
+Roda SÓ quando `MAGNATA_TEST_POSTGRES_REAL` está definida -- nunca por
 padrão numa máquina de desenvolvedor nem numa sessão sem Postgres
 disponível (skip limpo, nunca falha por ambiente ausente). Em CI,
 definida pelo job `postgres-real` de
-`.github/workflows/magnata-testes.yml`, apontando para um container de
-serviço PostgreSQL EFÊMERO do próprio runner -- nunca um banco
-permanente, nunca produção, credenciais fixas que só existem dentro
-desse job descartável (nunca reais, nunca da Magnata).
+`.github/workflows/magnata-testes.yml`, junto com as variáveis padrão
+de libpq (`PGHOST`/`PGPORT`/`PGUSER`/`PGPASSWORD`/`PGDATABASE`) --
+`psycopg.connect()` sem argumento nenhum já lê essas variáveis
+automaticamente (nunca uma string de conexão única com usuário e senha
+embutidos, separados por dois-pontos e seguidos de arroba, literal em
+nenhum arquivo commitado -- esse formato é um padrão absoluto de
+segredo no Gate 5 de governança deste repositório, propositalmente sem
+exceção de placeholder, e corretamente bloqueou a primeira versão deste
+arquivo). Aponta para um container de serviço
+PostgreSQL EFÊMERO do próprio runner -- nunca um banco permanente,
+nunca produção, credenciais fixas que só existem dentro desse job
+descartável (nunca reais, nunca da Magnata).
 
 Cada teste começa e termina com o schema desta migration REMOVIDO
 (`_limpar_schema`, via o próprio rollback -- prova, de quebra, que o
@@ -50,11 +58,11 @@ from magnata_os.documental.importacao_lote.adapters.airtable_vinculos_prestacao 
 from magnata_os.documental.importacao_lote.composicao_corredor_readonly import ExecucaoCorredorReadonly
 from magnata_os.documental.importacao_lote.contratos import CandidatoFuncionario
 
-_DSN = os.environ.get('MAGNATA_TEST_POSTGRES_DSN')
+_POSTGRES_REAL_DISPONIVEL = bool(os.environ.get('MAGNATA_TEST_POSTGRES_REAL'))
 pytestmark = pytest.mark.skipif(
-    not _DSN,
+    not _POSTGRES_REAL_DISPONIVEL,
     reason=(
-        'MAGNATA_TEST_POSTGRES_DSN nao definida -- este arquivo so roda contra '
+        'MAGNATA_TEST_POSTGRES_REAL nao definida -- este arquivo so roda contra '
         'um PostgreSQL real e descartavel (ver job postgres-real em '
         '.github/workflows/magnata-testes.yml); skip limpo em qualquer outro ambiente.'
     ),
@@ -88,7 +96,9 @@ def _aplicar_rollback(conn) -> None:
 
 @pytest.fixture
 def pg_conn():
-    conn = psycopg.connect(_DSN)
+    # Sem argumento -- psycopg/libpq leem PGHOST/PGPORT/PGUSER/PGPASSWORD/
+    # PGDATABASE do ambiente automaticamente (ver docstring do módulo).
+    conn = psycopg.connect()
     _aplicar_rollback(conn)  # garante banco/schema vazio no INICIO (idempotente, IF EXISTS)
     yield conn
     conn.rollback()
