@@ -99,3 +99,83 @@ jobs:
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "Se a falha for \`ModuleNotFoundError\`, é dependência de ambiente, não regressão de código: confira \`requirements.txt\`." >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  postgres-real:
+    name: pytest (alocacao — Postgres real, efêmero)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Job SEPARADO do job `testes` acima — nunca altera o escopo
+    # deliberado daquele job (comentário no topo do arquivo: "sem
+    # serviço externo... a suíte é toda mockada"). Este job existe só
+    # para validar magnata_os/documental/alocacao/ (migration +
+    # adapter) contra um PostgreSQL REAL — mas o container de serviço é
+    # provisionado e destruído pelo PRÓPRIO runner do GitHub Actions a
+    # cada execução: nunca um banco permanente, nunca produção, nunca
+    # credencial real (as credenciais abaixo só existem dentro deste
+    # job efêmero, nunca reaproveitadas em nenhum outro lugar). Missão
+    # "VALIDAÇÃO REAL POSTGRES DA VIGÊNCIA HISTÓRICA V1".
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # "changeme" -- token de placeholder já reconhecido pelo Gate 5
+          # de governança deste repositório (.magnata/patterns.sh,
+          # SECRET_PLACEHOLDER_REGEX), nunca uma credencial real. Efêmero:
+          # existe só dentro deste container, destruído ao fim do job.
+          POSTGRES_USER: magnata_teste
+          POSTGRES_PASSWORD: changeme
+          POSTGRES_DB: magnata_alocacao_teste
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Instalar dependências
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # requirements.txt já declara psycopg[binary]==3.2.* -- driver
+          # Postgres real, nenhuma dependência extra necessária aqui.
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Validar migration/adapter de alocacao contra Postgres real
+        env:
+          # Variáveis padrão de libpq -- psycopg.connect() sem argumento
+          # nenhum já as lê automaticamente (ver docstring do teste).
+          # Nunca uma única string de conexão com usuário e senha
+          # embutidos (separados por dois-pontos, seguidos de arroba)
+          # aqui -- esse formato é padrão absoluto de segredo no Gate 5
+          # (sem exceção de placeholder), mesmo para credencial efêmera de CI.
+          MAGNATA_TEST_POSTGRES_REAL: '1'
+          PGHOST: localhost
+          PGPORT: '5432'
+          PGUSER: magnata_teste
+          PGPASSWORD: changeme
+          PGDATABASE: magnata_alocacao_teste
+        run: python -m pytest -q --tb=short test_magnata_os_documental_alocacao_postgres_real.py
+
+      - name: Resumo
+        if: always()
+        run: |
+          echo "### Validação Postgres real — alocacao" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "Migration/adapter validados contra PostgreSQL real (container efêmero, descartado ao fim do job)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Falha na validação Postgres real — ver o log do passo \`Validar migration/adapter de alocacao contra Postgres real\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
