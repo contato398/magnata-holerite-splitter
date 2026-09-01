@@ -12,16 +12,30 @@ from magnata_os.classificacao.competencia_esperada_prestacao import (
     ContextoCicloPrestacao,
 )
 from magnata_os.classificacao.contratos import DimensaoResolucao, EstadoResolucaoDimensao, ReferenciaCanonica
+from magnata_os.classificacao.holerite_obrigatorio_prestacao import avaliar_obrigatoriedade_holerite
+from magnata_os.classificacao.pacote_prestacao import EstadoPacotePrestacao, combinar_pacote_com_holerite
+from magnata_os.classificacao.politica_requisitos_prestacao import PoliticaRequisitosPrestacao
 from magnata_os.classificacao.resolucao_documento_prestacao import EstadoCorredorDocumentoPrestacao
+from magnata_os.documental.importacao_lote.adapters.airtable_colaboradores_esperados_prestacao import (
+    F_FUNC_STATUS,
+    STATUS_FUNCIONARIO_ATIVO,
+)
 from magnata_os.documental.importacao_lote.adapters.airtable_inventario_prestacao import F_FGTS_CLIENTE, TABLE_FGTS
 from magnata_os.documental.importacao_lote.adapters.airtable_leitura import F_EXT_CLIENTE, TABLE_EXTRATO
-from magnata_os.documental.importacao_lote.adapters.airtable_vinculos_prestacao import F_FUNC_LOCAIS, TABLE_FUNC
+from magnata_os.documental.importacao_lote.adapters.airtable_vinculos_prestacao import (
+    F_FUNC_LOCAIS,
+    F_LOCAL_CLIENTE,
+    TABLE_FUNC,
+    TABLE_LOCAIS,
+)
 from magnata_os.documental.importacao_lote.composicao_corredor_readonly import ExecucaoCorredorReadonly
 from magnata_os.documental.importacao_lote.contratos import CandidatoCliente, CandidatoFuncionario
 
 _CNPJ_A = '11.222.333/0001-44'
 _CLIENTE_A_ID = 'recCLIENTE_A'
 _CLIENTE_A_REF = ReferenciaCanonica('CLIENTE', _CLIENTE_A_ID)
+_CLIENTE_B_ID = 'recCLIENTE_B'
+_CLIENTE_B_REF = ReferenciaCanonica('CLIENTE', _CLIENTE_B_ID)
 _COMPETENCIA_0726 = ReferenciaCanonica('COMPETENCIA', '2026-07')
 
 
@@ -326,3 +340,207 @@ def test_rejeita_nem_pdf_nem_texto():
     execucao = ExecucaoCorredorReadonly(_leitor_vazio(), ContextoCicloPrestacao((2026, 7)))
     with pytest.raises(ValueError):
         execucao.processar_documento('doc-x', 'e' * 64)
+
+
+# ============================================================================
+# Missão "HOLERITE MULTICOLABORADOR NO CICLO REAL" -- prova que a
+# cardinalidade correta do Holerite é 1:N (1 documento por colaborador;
+# N colaboradores esperados -> N holerites esperados), pela BORDA REAL
+# (`ExecucaoCorredorReadonly.fonte_colaboradores_esperados`, novo nesta
+# missão -- reaproveita `FonteColaboradoresEsperadosPrestacaoAirtableShadow`/
+# `avaliar_obrigatoriedade_holerite`/`combinar_pacote_com_holerite`, já
+# existentes e já testados isoladamente/na camada pura; aqui prova a
+# COMPOSIÇÃO REAL, Mock() de leitor, nenhum fake de domínio). Nunca
+# "escolher 1 entre N" -- ver
+# docs/decisoes/holerite-multicolaborador-ciclo-real-v1.md.
+# ============================================================================
+
+def _leitor_para_colaboradores_esperados(func_records, locais_records=None):
+    """`func_records`: lista de dicts crus `{'id':..., 'fields': {...}}`
+    para TABLE_FUNC (mesmo formato já usado nos demais testes deste
+    arquivo). `locais_records` default: 1 local (`local-1`) vinculado a
+    `_CLIENTE_A_ID`."""
+    if locais_records is None:
+        locais_records = [{'id': 'local-1', 'fields': {F_LOCAL_CLIENTE: [_CLIENTE_A_ID]}}]
+    leitor = Mock()
+
+    def _filtrar_por_formula(registros, formula):
+        # `FonteColaboradoresEsperadosPrestacaoAirtableShadow` busca SEM
+        # filtro (todos os registros, filtra em Python); `FonteVinculosPrestacaoAirtableShadow`/
+        # `FonteUnidadePostoPrestacaoAirtableShadow` filtram por
+        # `RECORD_ID()` de 1 colaborador específico -- este duplo precisa
+        # honrar os 2 modos, senão um vínculo de OUTRO colaborador vaza
+        # para dentro da resolução de quem está sendo consultado.
+        if not formula:
+            return list(registros)
+        return [r for r in registros if f'"{r["id"]}"' in formula]
+
+    def _listar_registros(**kwargs):
+        table = kwargs.get('table_id')
+        formula = kwargs.get('filter_by_formula')
+        if table == TABLE_FUNC:
+            return _filtrar_por_formula(func_records, formula)
+        if table == TABLE_LOCAIS:
+            return _filtrar_por_formula(locais_records, formula)
+        return []
+
+    leitor.listar_registros.side_effect = _listar_registros
+    leitor.listar_clientes.return_value = []
+    return leitor
+
+
+def _texto_holerite(cpf_formatado: str) -> str:
+    return f'Recibo de Pagamento -- Total de Vencimentos\nCompetência: 07/2026\nCPF: {cpf_formatado}'
+
+
+def test_fonte_colaboradores_esperados_via_borda_real_bate_com_holerites_processados():
+    """N=2 colaboradores ATIVOS esperados do mesmo local/cliente; 1
+    inativo no MESMO local nunca entra na lista esperada (prova, pela
+    borda real, que `FonteColaboradoresEsperadosPrestacaoAirtableShadow`
+    wired via `execucao.fonte_colaboradores_esperados` funciona
+    ponta-a-ponta). Os 2 Holerites são processados normalmente via
+    `processar_documento` -- nenhuma escolha de 1 entre N, cada 1 mantém
+    identidade própria."""
+    func_records = [
+        {'id': 'func-1', 'fields': {F_FUNC_LOCAIS: ['local-1'], F_FUNC_STATUS: STATUS_FUNCIONARIO_ATIVO}},
+        {'id': 'func-2', 'fields': {F_FUNC_LOCAIS: ['local-1'], F_FUNC_STATUS: STATUS_FUNCIONARIO_ATIVO}},
+        {'id': 'func-3', 'fields': {F_FUNC_LOCAIS: ['local-1'], F_FUNC_STATUS: 'Inativo'}},
+    ]
+    leitor = _leitor_para_colaboradores_esperados(func_records)
+    ciclo = ContextoCicloPrestacao((2026, 7))
+    execucao = ExecucaoCorredorReadonly(leitor, ciclo, competencia_snapshot_comprovada=(2026, 7))
+
+    colaboradores = execucao.fonte_colaboradores_esperados.colaboradores_esperados_para(_CLIENTE_A_REF, ciclo)
+    assert set(c.entidade_id for c in colaboradores) == {'func-1', 'func-2'}  # func-3 (Inativo) fora
+
+    execucao.processar_documento(
+        'doc-hol-1', 'a' * 64, texto=_texto_holerite('111.222.333-44'),
+        candidatos_colaborador=[
+            CandidatoFuncionario(func_id='func-1', cpf='11122233344', nome_normalizado='FUNCIONARIO UM'),
+        ],
+    )
+    execucao.processar_documento(
+        'doc-hol-2', 'b' * 64, texto=_texto_holerite('222.333.444-55'),
+        candidatos_colaborador=[
+            CandidatoFuncionario(func_id='func-2', cpf='22233344455', nome_normalizado='FUNCIONARIO DOIS'),
+        ],
+    )
+
+    inventario = execucao.fonte_inventario_completa.listar(_CLIENTE_A_REF, _COMPETENCIA_0726)
+    resultado_holerite = avaliar_obrigatoriedade_holerite(_CLIENTE_A_REF, _COMPETENCIA_0726, colaboradores, inventario)
+    assert resultado_holerite.completo
+    assert set(c.entidade_id for c in resultado_holerite.colaboradores_com_holerite) == {'func-1', 'func-2'}
+
+
+def test_colaborador_esperado_sem_holerite_processado_rebaixa_pacote_pronto_para_incompleto():
+    """3 esperados ATIVOS, só 2 Holerites processados -- a ausência do
+    3º nunca é inferida como "escolher outro documento no lugar" nem
+    ignorada; `combinar_pacote_com_holerite` rebaixa o pacote (que
+    partiria PRONTO, política de contagem plana sem requisito nenhum)
+    para INCOMPLETO, com o colaborador certo apontado como faltante --
+    nunca um first-match, nunca um palpite de quem falta."""
+    func_records = [
+        {'id': 'func-1', 'fields': {F_FUNC_LOCAIS: ['local-1'], F_FUNC_STATUS: STATUS_FUNCIONARIO_ATIVO}},
+        {'id': 'func-2', 'fields': {F_FUNC_LOCAIS: ['local-1'], F_FUNC_STATUS: STATUS_FUNCIONARIO_ATIVO}},
+        {'id': 'func-3', 'fields': {F_FUNC_LOCAIS: ['local-1'], F_FUNC_STATUS: STATUS_FUNCIONARIO_ATIVO}},
+    ]
+    leitor = _leitor_para_colaboradores_esperados(func_records)
+    ciclo = ContextoCicloPrestacao((2026, 7))
+    execucao = ExecucaoCorredorReadonly(leitor, ciclo, competencia_snapshot_comprovada=(2026, 7))
+    politica_sem_requisito = PoliticaRequisitosPrestacao(version='v1', requisitos_base=())
+
+    execucao.processar_documento(
+        'doc-hol-3', 'c' * 64, texto=_texto_holerite('111.222.333-44'),
+        candidatos_colaborador=[
+            CandidatoFuncionario(func_id='func-1', cpf='11122233344', nome_normalizado='FUNCIONARIO UM'),
+        ],
+        fonte_inventario_pacote=execucao.fonte_inventario_completa, politica_requisitos=politica_sem_requisito,
+    )
+    resultados = execucao.processar_documento(
+        'doc-hol-4', 'd' * 64, texto=_texto_holerite('222.333.444-55'),
+        candidatos_colaborador=[
+            CandidatoFuncionario(func_id='func-2', cpf='22233344455', nome_normalizado='FUNCIONARIO DOIS'),
+        ],
+        fonte_inventario_pacote=execucao.fonte_inventario_completa, politica_requisitos=politica_sem_requisito,
+    )
+    pacote = resultados[0].pacote
+    assert pacote is not None
+    assert pacote.estado == EstadoPacotePrestacao.PRONTO  # sem avaliação de holerite por cardinalidade ainda
+
+    colaboradores = execucao.fonte_colaboradores_esperados.colaboradores_esperados_para(_CLIENTE_A_REF, ciclo)
+    inventario = execucao.fonte_inventario_completa.listar(_CLIENTE_A_REF, _COMPETENCIA_0726)
+    resultado_holerite = avaliar_obrigatoriedade_holerite(_CLIENTE_A_REF, _COMPETENCIA_0726, colaboradores, inventario)
+    assert not resultado_holerite.completo
+    assert resultado_holerite.colaboradores_faltantes == (ReferenciaCanonica('COLABORADOR', 'func-3'),)
+
+    pacote_combinado = combinar_pacote_com_holerite(pacote, resultado_holerite)
+    assert pacote_combinado.estado == EstadoPacotePrestacao.INCOMPLETO
+    assert 'Holerite' in pacote_combinado.tipos_faltantes
+
+
+def test_colaborador_de_outro_cliente_nunca_conta_para_obrigatoriedade_do_cliente_a():
+    """Fail-safe de identidade: func-9 pertence a um local do CLIENTE B
+    -- mesmo que seu Holerite seja processado (corretamente resolvido
+    para CLIENTE B, nunca para A, porque CLIENTE deriva do vínculo real,
+    nunca fabricado), ele NUNCA aparece como esperado nem como presente
+    para o CLIENTE A. Nenhuma contaminação cruzada, nenhum documento de
+    colaborador errado computado para o cliente errado."""
+    func_records = [
+        {'id': 'func-1', 'fields': {F_FUNC_LOCAIS: ['local-1'], F_FUNC_STATUS: STATUS_FUNCIONARIO_ATIVO}},
+        {'id': 'func-9', 'fields': {F_FUNC_LOCAIS: ['local-2'], F_FUNC_STATUS: STATUS_FUNCIONARIO_ATIVO}},
+    ]
+    locais_records = [
+        {'id': 'local-1', 'fields': {F_LOCAL_CLIENTE: [_CLIENTE_A_ID]}},
+        {'id': 'local-2', 'fields': {F_LOCAL_CLIENTE: [_CLIENTE_B_ID]}},
+    ]
+    leitor = _leitor_para_colaboradores_esperados(func_records, locais_records)
+    ciclo = ContextoCicloPrestacao((2026, 7))
+    execucao = ExecucaoCorredorReadonly(leitor, ciclo, competencia_snapshot_comprovada=(2026, 7))
+
+    execucao.processar_documento(
+        'doc-hol-5', 'e' * 64, texto=_texto_holerite('111.222.333-44'),
+        candidatos_colaborador=[
+            CandidatoFuncionario(func_id='func-1', cpf='11122233344', nome_normalizado='FUNCIONARIO UM'),
+        ],
+    )
+    execucao.processar_documento(
+        'doc-hol-9', 'f' * 64, texto=_texto_holerite('999.888.777-66'),
+        candidatos_colaborador=[
+            CandidatoFuncionario(func_id='func-9', cpf='99988877766', nome_normalizado='FUNCIONARIO NOVE'),
+        ],
+    )
+
+    colaboradores_a = execucao.fonte_colaboradores_esperados.colaboradores_esperados_para(_CLIENTE_A_REF, ciclo)
+    assert 'func-9' not in {c.entidade_id for c in colaboradores_a}
+
+    inventario_a = execucao.fonte_inventario_completa.listar(_CLIENTE_A_REF, _COMPETENCIA_0726)
+    assert 'func-9' not in {item.colaborador.entidade_id for item in inventario_a if item.colaborador is not None}
+
+    # func-9 continua corretamente contabilizado para o CLIENTE B, nunca perdido.
+    inventario_b = execucao.fonte_inventario_completa.listar(_CLIENTE_B_REF, _COMPETENCIA_0726)
+    assert 'func-9' in {item.colaborador.entidade_id for item in inventario_b if item.colaborador is not None}
+
+
+def test_holerite_reprocessado_para_mesmo_colaborador_via_borda_nao_duplica_nem_infla_obrigatoriedade():
+    """Idempotência (mesma disciplina já provada para Extrato em
+    `test_idempotencia_reprocessar_documento_via_borda_nao_duplica_inventario`)
+    aplicada ao Holerite: reprocessar o MESMO documento/hash 2x nunca
+    duplica o item no inventário nem infla `avaliar_obrigatoriedade_holerite`."""
+    func_records = [
+        {'id': 'func-1', 'fields': {F_FUNC_LOCAIS: ['local-1'], F_FUNC_STATUS: STATUS_FUNCIONARIO_ATIVO}},
+    ]
+    leitor = _leitor_para_colaboradores_esperados(func_records)
+    ciclo = ContextoCicloPrestacao((2026, 7))
+    execucao = ExecucaoCorredorReadonly(leitor, ciclo, competencia_snapshot_comprovada=(2026, 7))
+    candidatos = [CandidatoFuncionario(func_id='func-1', cpf='11122233344', nome_normalizado='FUNCIONARIO UM')]
+
+    execucao.processar_documento('doc-hol-6', 'a1' * 32, texto=_texto_holerite('111.222.333-44'), candidatos_colaborador=candidatos)
+    execucao.processar_documento('doc-hol-6', 'a1' * 32, texto=_texto_holerite('111.222.333-44'), candidatos_colaborador=candidatos)
+
+    inventario = execucao.fonte_inventario_completa.listar(_CLIENTE_A_REF, _COMPETENCIA_0726)
+    assert len(inventario) == 1
+
+    colaboradores = execucao.fonte_colaboradores_esperados.colaboradores_esperados_para(_CLIENTE_A_REF, ciclo)
+    resultado_holerite = avaliar_obrigatoriedade_holerite(_CLIENTE_A_REF, _COMPETENCIA_0726, colaboradores, inventario)
+    assert resultado_holerite.completo
+    assert len(resultado_holerite.colaboradores_com_holerite) == 1

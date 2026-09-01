@@ -1,4 +1,6 @@
 __pycache__/
+.venv/
+.pytest_cache/
 
 # Orquestrador -- estado de execucao efemero por run de CI/sessao, nunca
 # fonte de verdade (o audit log persistente e
