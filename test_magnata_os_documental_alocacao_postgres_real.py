@@ -56,6 +56,19 @@ from magnata_os.documental.alocacao.captura import (
     aplicar_vinculo_encerrado,
     aplicar_vinculo_iniciado,
 )
+from magnata_os.documental.alocacao.comparacao_airtable import (
+    EstadoComparacaoAirtable,
+    comparar_colaborador_shadow_com_airtable,
+)
+from magnata_os.documental.alocacao.confirmacao import (
+    ACAO_ADICIONAR_RATEIO,
+    ACAO_ENCERRAR,
+    ACAO_INICIAR,
+    ACAO_TRANSFERIR,
+    ColaboradorNaoIdentificadoError,
+    SolicitacaoConfirmacaoAlocacao,
+    aplicar_confirmacao_alocacao,
+)
 from magnata_os.documental.alocacao.eventos import (
     AlocacaoIniciada,
     ConflitoTemporalEventoError,
@@ -434,3 +447,158 @@ def test_retry_completo_apos_falha_real_no_postgres(repo):
     assert c.vigente_ate == date(2026, 6, 15)
     assert d.vigente_de == date(2026, 6, 15)
     assert d.vigente_ate is None
+
+
+# ============================================================================
+# Missão "CONFIRMAÇÃO DE ALOCAÇÃO SHADOW V1" -- confirmacao.py contra
+# Postgres real (FASE 9 da missão): confirmação, persistência,
+# transferência atômica, rateio, idempotência, conflito e rollback --
+# tudo sintético, reaproveitando o MESMO job/fixture `repo` já
+# existente (nenhum job novo criado).
+# ============================================================================
+
+class _ResolverSinteticoPg:
+    """Mesmo papel de `_ResolverSintetico` em
+    `test_magnata_os_documental_alocacao_confirmacao_shadow_v1.py` --
+    duplicado aqui (arquivo isolado, roda só sob
+    `MAGNATA_TEST_POSTGRES_REAL`) para não criar um import cruzado
+    entre os dois arquivos de teste."""
+
+    def __init__(self, colaboradores_existentes: set, postos_existentes: set):
+        self._colaboradores_existentes = colaboradores_existentes
+        self._postos_existentes = postos_existentes
+
+    def confirmar_colaborador_existe(self, colaborador_id: str) -> bool:
+        return colaborador_id in self._colaboradores_existentes
+
+    def confirmar_posto_existe(self, posto_id: str) -> bool:
+        return posto_id in self._postos_existentes
+
+
+def test_confirmacao_iniciar_e_idempotente_contra_postgres(repo):
+    colab = 'colab-confirmacao-pg-1'
+    resolver = _ResolverSinteticoPg({colab}, {'posto-conf-pg-A'})
+    aplicar_vinculo_iniciado(repo, VinculoIniciado(colab, date(2026, 1, 1), 'sintetico'))
+    solicitacao = SolicitacaoConfirmacaoAlocacao(
+        colaborador_id=colab, posto_id='posto-conf-pg-A', data_efetiva=date(2026, 2, 1),
+        acao=ACAO_INICIAR, origem_confirmacao='confirmacao_humana_shadow',
+    )
+    id1 = aplicar_confirmacao_alocacao(repo, resolver, solicitacao)
+    id2 = aplicar_confirmacao_alocacao(repo, resolver, solicitacao)
+    assert id1 == id2
+    vinculo = repo.vinculo_mais_recente_de(colab)
+    assert repo.alocacao_mais_recente_de(vinculo.id, 'posto-conf-pg-A').id == id1
+
+
+def test_confirmacao_rateio_dois_postos_abertos_contra_postgres(repo):
+    colab = 'colab-confirmacao-pg-2'
+    resolver = _ResolverSinteticoPg({colab}, {'posto-conf-pg-A', 'posto-conf-pg-B'})
+    aplicar_vinculo_iniciado(repo, VinculoIniciado(colab, date(2026, 1, 1), 'sintetico'))
+    aplicar_confirmacao_alocacao(repo, resolver, SolicitacaoConfirmacaoAlocacao(
+        colaborador_id=colab, posto_id='posto-conf-pg-A', data_efetiva=date(2026, 2, 1),
+        acao=ACAO_INICIAR, origem_confirmacao='confirmacao_humana_shadow',
+    ))
+    aplicar_confirmacao_alocacao(repo, resolver, SolicitacaoConfirmacaoAlocacao(
+        colaborador_id=colab, posto_id='posto-conf-pg-B', data_efetiva=date(2026, 2, 1),
+        acao=ACAO_ADICIONAR_RATEIO, origem_confirmacao='confirmacao_humana_shadow',
+    ))
+    vinculo = repo.vinculo_mais_recente_de(colab)
+    a = repo.alocacao_mais_recente_de(vinculo.id, 'posto-conf-pg-A')
+    b = repo.alocacao_mais_recente_de(vinculo.id, 'posto-conf-pg-B')
+    assert a.vigente_ate is None
+    assert b.vigente_ate is None
+
+
+def test_confirmacao_transferencia_atomica_contra_postgres(repo):
+    colab = 'colab-confirmacao-pg-3'
+    resolver = _ResolverSinteticoPg({colab}, {'posto-conf-pg-C', 'posto-conf-pg-D'})
+    aplicar_vinculo_iniciado(repo, VinculoIniciado(colab, date(2026, 1, 1), 'sintetico'))
+    aplicar_confirmacao_alocacao(repo, resolver, SolicitacaoConfirmacaoAlocacao(
+        colaborador_id=colab, posto_id='posto-conf-pg-C', data_efetiva=date(2026, 2, 1),
+        acao=ACAO_INICIAR, origem_confirmacao='confirmacao_humana_shadow',
+    ))
+    aplicar_confirmacao_alocacao(repo, resolver, SolicitacaoConfirmacaoAlocacao(
+        colaborador_id=colab, posto_id='posto-conf-pg-C', data_efetiva=date(2026, 6, 15),
+        acao=ACAO_TRANSFERIR, origem_confirmacao='confirmacao_humana_shadow',
+        posto_destino_id='posto-conf-pg-D',
+    ))
+    vinculo = repo.vinculo_mais_recente_de(colab)
+    c = repo.alocacao_mais_recente_de(vinculo.id, 'posto-conf-pg-C')
+    d = repo.alocacao_mais_recente_de(vinculo.id, 'posto-conf-pg-D')
+    assert c.vigente_ate == date(2026, 6, 15)
+    assert d.vigente_de == date(2026, 6, 15)
+    assert d.vigente_ate is None
+
+
+def test_confirmacao_transferencia_com_falha_real_faz_rollback_contra_postgres(repo):
+    colab = 'colab-confirmacao-pg-4'
+    resolver = _ResolverSinteticoPg({colab}, {'posto-conf-pg-E', 'posto-conf-pg-F'})
+    aplicar_vinculo_iniciado(repo, VinculoIniciado(colab, date(2026, 1, 1), 'sintetico'))
+    aplicar_confirmacao_alocacao(repo, resolver, SolicitacaoConfirmacaoAlocacao(
+        colaborador_id=colab, posto_id='posto-conf-pg-E', data_efetiva=date(2026, 2, 1),
+        acao=ACAO_INICIAR, origem_confirmacao='confirmacao_humana_shadow',
+    ))
+    transferencia = SolicitacaoConfirmacaoAlocacao(
+        colaborador_id=colab, posto_id='posto-conf-pg-E', data_efetiva=date(2026, 6, 15),
+        acao=ACAO_TRANSFERIR, origem_confirmacao='confirmacao_humana_shadow',
+        posto_destino_id='posto-conf-pg-F',
+    )
+    with mock.patch.object(repo, 'registrar_alocacao', side_effect=RuntimeError('falha simulada na abertura de F')):
+        with pytest.raises(RuntimeError):
+            aplicar_confirmacao_alocacao(repo, resolver, transferencia)
+
+    vinculo = repo.vinculo_mais_recente_de(colab)
+    e = repo.alocacao_mais_recente_de(vinculo.id, 'posto-conf-pg-E')
+    f = repo.alocacao_mais_recente_de(vinculo.id, 'posto-conf-pg-F')
+    assert e.vigente_ate is None  # ROLLBACK real do Postgres reverteu o fechamento de E
+    assert f is None
+
+    # retry, sem a falha -- completa normalmente
+    aplicar_confirmacao_alocacao(repo, resolver, transferencia)
+    e = repo.alocacao_mais_recente_de(vinculo.id, 'posto-conf-pg-E')
+    f = repo.alocacao_mais_recente_de(vinculo.id, 'posto-conf-pg-F')
+    assert e.vigente_ate == date(2026, 6, 15)
+    assert f.vigente_de == date(2026, 6, 15)
+
+
+def test_confirmacao_conflito_temporal_real_e_rejeitado_contra_postgres(repo):
+    colab = 'colab-confirmacao-pg-5'
+    resolver = _ResolverSinteticoPg({colab}, {'posto-conf-pg-G'})
+    aplicar_vinculo_iniciado(repo, VinculoIniciado(colab, date(2026, 1, 1), 'sintetico'))
+    aplicar_confirmacao_alocacao(repo, resolver, SolicitacaoConfirmacaoAlocacao(
+        colaborador_id=colab, posto_id='posto-conf-pg-G', data_efetiva=date(2026, 2, 1),
+        acao=ACAO_INICIAR, origem_confirmacao='confirmacao_humana_shadow',
+    ))
+    with pytest.raises(ConflitoTemporalEventoError):
+        aplicar_confirmacao_alocacao(repo, resolver, SolicitacaoConfirmacaoAlocacao(
+            colaborador_id=colab, posto_id='posto-conf-pg-G', data_efetiva=date(2026, 3, 1),
+            acao=ACAO_INICIAR, origem_confirmacao='confirmacao_humana_shadow',
+        ))
+
+
+def test_confirmacao_colaborador_nao_identificado_nao_escreve_nada_no_postgres(repo):
+    resolver = _ResolverSinteticoPg(set(), {'posto-conf-pg-H'})
+    solicitacao = SolicitacaoConfirmacaoAlocacao(
+        colaborador_id='colab-confirmacao-pg-6', posto_id='posto-conf-pg-H', data_efetiva=date(2026, 2, 1),
+        acao=ACAO_INICIAR, origem_confirmacao='confirmacao_humana_shadow',
+    )
+    with pytest.raises(ColaboradorNaoIdentificadoError):
+        aplicar_confirmacao_alocacao(repo, resolver, solicitacao)
+    assert repo.vinculo_mais_recente_de('colab-confirmacao-pg-6') is None
+
+
+def test_comparacao_shadow_airtable_consistente_contra_postgres(repo):
+    colab = 'colab-confirmacao-pg-7'
+    resolver = _ResolverSinteticoPg({colab}, {'posto-conf-pg-I'})
+    aplicar_vinculo_iniciado(repo, VinculoIniciado(colab, date(2026, 1, 1), 'sintetico'))
+    aplicar_confirmacao_alocacao(repo, resolver, SolicitacaoConfirmacaoAlocacao(
+        colaborador_id=colab, posto_id='posto-conf-pg-I', data_efetiva=date(2026, 2, 1),
+        acao=ACAO_INICIAR, origem_confirmacao='confirmacao_humana_shadow',
+    ))
+
+    class _SnapshotSintetico:
+        def postos_atuais_do_colaborador(self, colaborador_id: str):
+            return frozenset({'posto-conf-pg-I'})
+
+    estado = comparar_colaborador_shadow_com_airtable(repo, _SnapshotSintetico(), colab, date(2026, 3, 1))
+    assert estado == EstadoComparacaoAirtable.CONSISTENTE
