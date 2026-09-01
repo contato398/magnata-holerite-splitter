@@ -10,6 +10,7 @@ transferência (Fase 9)."""
 import tempfile
 from datetime import date
 from pathlib import Path
+from unittest import mock
 from unittest.mock import Mock
 
 import pytest
@@ -301,3 +302,114 @@ def test_corredor_apos_sequencia_admissao_alocacao_transferencia(repo):
     postos_transicao = repo.postos_vigentes_em(
         repo.vinculo_mais_recente_de(func_id).id, date(2026, 6, 1), date(2026, 6, 30))
     assert set(postos_transicao) == {'posto-antigo', 'posto-novo'}
+
+
+# ============================================================================
+# Missão "REVISÃO OBRIGATÓRIA PR #114 -- ATOMICIDADE DA TRANSFERÊNCIA"
+# ============================================================================
+
+def test_transferencia_atomica_normal_funciona(repo):
+    aplicar_vinculo_iniciado(repo, VinculoIniciado(_COLAB, date(2026, 1, 1), _ORIGEM))
+    aplicar_alocacao_iniciada(repo, AlocacaoIniciada(_COLAB, 'posto-A', date(2026, 1, 1), _ORIGEM))
+    aplicar_transferencia(repo, _COLAB, 'posto-A', 'posto-B', date(2026, 6, 15), _ORIGEM)
+
+    vinculo = repo.vinculo_mais_recente_de(_COLAB)
+    a = repo.alocacao_mais_recente_de(vinculo.id, 'posto-A')
+    b = repo.alocacao_mais_recente_de(vinculo.id, 'posto-B')
+    assert a.vigente_ate == date(2026, 6, 15)
+    assert b.vigente_de == date(2026, 6, 15)
+    assert b.vigente_ate is None
+
+
+def test_falha_simulada_na_abertura_de_b_mantem_a_aberta_e_b_ausente(repo):
+    """Achado real da revisão independente do PR #114: sem transação,
+    esta sequência deixaria A fechada com B nunca criada. Com
+    `repo.transacao()`, uma falha ao abrir B reverte TAMBÉM o
+    fechamento de A já feito na mesma chamada -- tudo-ou-nada real,
+    provado contra o banco de verdade (SQLite aqui; Postgres real no
+    arquivo `..._postgres_real.py`)."""
+    aplicar_vinculo_iniciado(repo, VinculoIniciado(_COLAB, date(2026, 1, 1), _ORIGEM))
+    aplicar_alocacao_iniciada(repo, AlocacaoIniciada(_COLAB, 'posto-A', date(2026, 1, 1), _ORIGEM))
+
+    with mock.patch.object(repo, 'registrar_alocacao', side_effect=RuntimeError('falha simulada na abertura de B')):
+        with pytest.raises(RuntimeError):
+            aplicar_transferencia(repo, _COLAB, 'posto-A', 'posto-B', date(2026, 6, 15), _ORIGEM)
+
+    vinculo = repo.vinculo_mais_recente_de(_COLAB)
+    a = repo.alocacao_mais_recente_de(vinculo.id, 'posto-A')
+    b = repo.alocacao_mais_recente_de(vinculo.id, 'posto-B')
+    assert a.vigente_ate is None  # fechamento de A foi REVERTIDO junto com a falha de B
+    assert b is None              # B nunca chegou a existir
+
+
+def test_retry_completo_apos_falha_simulada_funciona(repo):
+    aplicar_vinculo_iniciado(repo, VinculoIniciado(_COLAB, date(2026, 1, 1), _ORIGEM))
+    aplicar_alocacao_iniciada(repo, AlocacaoIniciada(_COLAB, 'posto-A', date(2026, 1, 1), _ORIGEM))
+
+    with mock.patch.object(repo, 'registrar_alocacao', side_effect=RuntimeError('falha simulada')):
+        with pytest.raises(RuntimeError):
+            aplicar_transferencia(repo, _COLAB, 'posto-A', 'posto-B', date(2026, 6, 15), _ORIGEM)
+
+    # Retry real, sem mock -- deve completar do zero (A ainda aberta,
+    # graças ao rollback do teste anterior).
+    aplicar_transferencia(repo, _COLAB, 'posto-A', 'posto-B', date(2026, 6, 15), _ORIGEM)
+
+    vinculo = repo.vinculo_mais_recente_de(_COLAB)
+    a = repo.alocacao_mais_recente_de(vinculo.id, 'posto-A')
+    b = repo.alocacao_mais_recente_de(vinculo.id, 'posto-B')
+    assert a.vigente_ate == date(2026, 6, 15)
+    assert b.vigente_de == date(2026, 6, 15)
+    assert b.vigente_ate is None
+
+
+def test_transferencia_atomica_e_idempotente_quando_chamada_2x_com_sucesso(repo):
+    aplicar_vinculo_iniciado(repo, VinculoIniciado(_COLAB, date(2026, 1, 1), _ORIGEM))
+    aplicar_alocacao_iniciada(repo, AlocacaoIniciada(_COLAB, 'posto-A', date(2026, 1, 1), _ORIGEM))
+    id1 = aplicar_transferencia(repo, _COLAB, 'posto-A', 'posto-B', date(2026, 6, 15), _ORIGEM)
+    id2 = aplicar_transferencia(repo, _COLAB, 'posto-A', 'posto-B', date(2026, 6, 15), _ORIGEM)
+    assert id1 == id2
+
+
+def test_transacao_aninhada_nao_e_suportada(repo):
+    with repo.transacao():
+        with pytest.raises(RuntimeError):
+            with repo.transacao():
+                pass
+
+
+def test_corredor_historico_sem_regressao_apos_atomicidade(repo):
+    """Não-regressão explícita (Fase 12): a mesma sequência de
+    admissão->alocação->transferência já provada antes desta correção
+    continua resolvendo A/B corretamente por competência através do
+    corredor real -- a mudança de atomicidade não alterou nenhum
+    resultado de leitura, só a segurança da escrita composta."""
+    func_id = 'colab-corredor-sem-regressao'
+    aplicar_vinculo_iniciado(repo, VinculoIniciado(func_id, date(2025, 1, 1), _ORIGEM))
+    aplicar_alocacao_iniciada(repo, AlocacaoIniciada(func_id, 'posto-antigo-nr', date(2025, 1, 1), _ORIGEM))
+    aplicar_transferencia(repo, func_id, 'posto-antigo-nr', 'posto-novo-nr', date(2026, 6, 15), _ORIGEM)
+
+    def _listar_registros(**kwargs):
+        table = kwargs.get('table_id')
+        if table == TABLE_FUNC:
+            return [{'id': func_id, 'fields': {F_FUNC_LOCAIS: ['local-nr']}}]
+        if table == TABLE_LOCAIS:
+            return [{'id': 'local-nr', 'fields': {F_LOCAL_CLIENTE: ['cliente-nr']}}]
+        return []
+
+    leitor = Mock()
+    leitor.listar_registros.side_effect = _listar_registros
+    leitor.listar_clientes.return_value = []
+
+    execucao = ExecucaoCorredorReadonly(
+        leitor, ContextoCicloPrestacao((2026, 8)), fonte_unidade_posto_override=repo)
+    texto = 'Recibo de Pagamento -- Total de Vencimentos\nCompetência: 08/2026\nCPF: 111.111.111-11'
+    resultados = execucao.processar_documento(
+        'doc-nr', 'c' * 64, texto=texto,
+        candidatos_colaborador=[CandidatoFuncionario(func_id=func_id, cpf='11111111111', nome_normalizado='NR')],
+    )
+    resultado = resultados[0].resultado_corredor
+    dimensoes = {r.dimensao: r for r in resultado.resolucao_semantica.resolucoes}
+    assert dimensoes[DimensaoResolucao.UNIDADE_POSTO].valores_confirmados == (
+        ReferenciaCanonica('UNIDADE_POSTO', 'posto-novo-nr'),
+    )
+    assert resultado.estado == EstadoCorredorDocumentoPrestacao.RESOLVIDO_E_AVANCOU

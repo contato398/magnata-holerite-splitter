@@ -36,6 +36,7 @@ Tatuí)."""
 import os
 from datetime import date
 from pathlib import Path
+from unittest import mock
 from unittest.mock import Mock
 
 import pytest
@@ -393,3 +394,43 @@ def test_conflito_temporal_real_e_rejeitado_contra_postgres(repo):
     aplicar_vinculo_encerrado(repo, VinculoEncerrado(colab, date(2026, 6, 30), 'sintetico'))
     with pytest.raises(ConflitoTemporalEventoError):
         aplicar_vinculo_encerrado(repo, VinculoEncerrado(colab, date(2026, 7, 15), 'sintetico'))
+
+
+# ============================================================================
+# Missão "REVISÃO OBRIGATÓRIA PR #114 -- ATOMICIDADE DA TRANSFERÊNCIA" --
+# contra Postgres real (transação real do banco, não simulada).
+# ============================================================================
+
+def test_falha_simulada_na_transferencia_mantem_a_aberta_contra_postgres_real(repo):
+    colab = 'colab-captura-pg-5'
+    aplicar_vinculo_iniciado(repo, VinculoIniciado(colab, date(2026, 1, 1), 'sintetico'))
+    aplicar_alocacao_iniciada(repo, AlocacaoIniciada(colab, 'posto-pg-atom-A', date(2026, 1, 1), 'sintetico'))
+
+    with mock.patch.object(repo, 'registrar_alocacao', side_effect=RuntimeError('falha simulada na abertura de B')):
+        with pytest.raises(RuntimeError):
+            aplicar_transferencia(repo, colab, 'posto-pg-atom-A', 'posto-pg-atom-B', date(2026, 6, 15), 'sintetico')
+
+    vinculo = repo.vinculo_mais_recente_de(colab)
+    a = repo.alocacao_mais_recente_de(vinculo.id, 'posto-pg-atom-A')
+    b = repo.alocacao_mais_recente_de(vinculo.id, 'posto-pg-atom-B')
+    assert a.vigente_ate is None  # ROLLBACK real do Postgres reverteu o fechamento de A
+    assert b is None
+
+
+def test_retry_completo_apos_falha_real_no_postgres(repo):
+    colab = 'colab-captura-pg-6'
+    aplicar_vinculo_iniciado(repo, VinculoIniciado(colab, date(2026, 1, 1), 'sintetico'))
+    aplicar_alocacao_iniciada(repo, AlocacaoIniciada(colab, 'posto-pg-atom-C', date(2026, 1, 1), 'sintetico'))
+
+    with mock.patch.object(repo, 'registrar_alocacao', side_effect=RuntimeError('falha simulada')):
+        with pytest.raises(RuntimeError):
+            aplicar_transferencia(repo, colab, 'posto-pg-atom-C', 'posto-pg-atom-D', date(2026, 6, 15), 'sintetico')
+
+    aplicar_transferencia(repo, colab, 'posto-pg-atom-C', 'posto-pg-atom-D', date(2026, 6, 15), 'sintetico')
+
+    vinculo = repo.vinculo_mais_recente_de(colab)
+    c = repo.alocacao_mais_recente_de(vinculo.id, 'posto-pg-atom-C')
+    d = repo.alocacao_mais_recente_de(vinculo.id, 'posto-pg-atom-D')
+    assert c.vigente_ate == date(2026, 6, 15)
+    assert d.vigente_de == date(2026, 6, 15)
+    assert d.vigente_ate is None

@@ -134,9 +134,20 @@ def aplicar_transferencia(
     data_efetiva, origem_evidencia: str,
 ) -> str:
     """Composição de 2 primitivas -- NUNCA um evento de negócio à
-    parte: fecha `posto_antigo` e abre `posto_novo` na MESMA data,
-    ambos idempotentes. Devolve o id da nova alocação."""
-    aplicar_alocacao_encerrada(
-        repo, AlocacaoEncerrada(colaborador_id, posto_antigo, data_efetiva, origem_evidencia))
-    return aplicar_alocacao_iniciada(
-        repo, AlocacaoIniciada(colaborador_id, posto_novo, data_efetiva, origem_evidencia))
+    parte: fecha `posto_antigo` e abre `posto_novo` na MESMA data.
+    Devolve o id da nova alocação.
+
+    ATÔMICA (missão "REVISÃO OBRIGATÓRIA PR #114 -- ATOMICIDADE DA
+    TRANSFERÊNCIA", achado real da revisão independente): as 2
+    primitivas rodam dentro de `repo.transacao()`, tudo-ou-nada -- se
+    `aplicar_alocacao_iniciada` (abrir B) falhar por qualquer motivo, o
+    fechamento de A já feito na MESMA chamada é revertido junto, nunca
+    deixando A fechada com B inexistente. Idempotência preservada:
+    reprocessar a transferência inteira depois de uma falha (retry)
+    funciona normalmente, porque cada primitiva continua checando o
+    estado real antes de agir."""
+    with repo.transacao():
+        aplicar_alocacao_encerrada(
+            repo, AlocacaoEncerrada(colaborador_id, posto_antigo, data_efetiva, origem_evidencia))
+        return aplicar_alocacao_iniciada(
+            repo, AlocacaoIniciada(colaborador_id, posto_novo, data_efetiva, origem_evidencia))

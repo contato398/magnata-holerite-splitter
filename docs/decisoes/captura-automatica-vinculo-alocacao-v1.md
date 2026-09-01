@@ -125,6 +125,79 @@ humano). Adicionalmente, **nem há Postgres de produção provisionado
 ainda** — wiring real seria prematuro mesmo que os arquivos não fossem
 tocados.
 
+## Correção da revisão independente (PR #114) — atomicidade da transferência
+
+A revisão humana do PR #114 encontrou um blocker técnico real: a
+primeira versão de `aplicar_transferencia` chamava
+`aplicar_alocacao_encerrada` (commit próprio) e depois
+`aplicar_alocacao_iniciada` (outro commit próprio) — uma falha entre
+os dois deixava estado parcial real: posto antigo fechado, posto novo
+nunca aberto. Achado válido, corrigido.
+
+**Correção:** `RepositorioAlocacaoPostgres`/`RepositorioAlocacaoSQLite`
+ganharam um contexto transacional real, `repo.transacao()`
+(`contextlib.contextmanager`) — reaproveita a MESMA conexão já
+existente (nenhum repositório/motor/schema novo). Enquanto o contexto
+está ativo (`self._em_transacao = True`), cada método de escrita
+individual (`registrar_vinculo`, `encerrar_vinculo`,
+`registrar_alocacao`, `encerrar_alocacao`) deixa de commitar/rollback
+sozinho — o commit (sucesso) ou rollback (qualquer exceção) acontece
+1 única vez, no fim do bloco `with`. Fora de uma `transacao()`, cada
+escrita continua se autoconfirmando exatamente como antes (100% dos
+testes pré-existentes, que chamam os métodos isoladamente, seguem
+passando sem alteração).
+
+`aplicar_transferencia` passou a envolver as 2 primitivas em
+`with repo.transacao(): ...` — agora genuinamente tudo-ou-nada: uma
+falha ao abrir o posto novo reverte TAMBÉM o fechamento do posto
+antigo já feito na mesma chamada, nunca deixando estado parcial real
+no banco. Idempotência preservada sem alteração — cada primitiva
+continua checando o estado real antes de agir, então um retry completo
+após uma falha funciona normalmente.
+
+**Nenhum rollback compensatório** foi usado como substituto de
+transação — ambos os adapters (Postgres real via `conexao.commit()`/
+`rollback()`; SQLite via `sqlite3.Connection.commit()`/`rollback()`)
+já suportavam transação real nativa; o `contextlib.contextmanager`
+só organiza QUANDO cada um é chamado, nunca simula atomicidade por
+cima de escritas já confirmadas.
+
+6 testes novos (SQLite) + 2 testes novos (Postgres real, CI): falha
+simulada (`unittest.mock.patch.object` no método de escrita, erro real
+propagado através de uma conexão real) mantém o posto antigo aberto e
+o novo inexistente; retry completo após a falha funciona; transferência
+ainda idempotente quando chamada 2× com sucesso; transação aninhada
+rejeitada explicitamente (`RuntimeError`); não-regressão explícita do
+corredor histórico após a mudança.
+
+```
+TRANSFERENCIA_ATOMICA=True
+POSTGRES_ATOMICIDADE_VALIDADA=True (transação real do driver psycopg 3, container efêmero de CI)
+SQLITE_ATOMICIDADE_VALIDADA=True (transação real do módulo sqlite3)
+FALHA_PARCIAL_TESTADA=True (falha simulada via mock no método de escrita, dentro de uma transação real)
+RETRY_APOS_FALHA_VALIDADO=True
+```
+
+**Duas revisões adversariais da correção:**
+
+*Primeira (a correção resolve exatamente o blocker, nada além):*
+nenhuma regra de negócio nova; nenhum repositório/schema/motor novo;
+os 4 métodos de escrita continuam com a MESMA assinatura pública,
+comportamento idêntico fora de uma transação; `transacao()` é
+estritamente aditiva (opt-in), nunca muda o caminho já usado por
+`aplicar_vinculo_iniciado`/`encerrado`/`alocacao_iniciada`/`encerrada`
+quando chamados isoladamente (fora de `aplicar_transferencia`).
+
+*Segunda (nenhuma regressão introduzida):* suíte completa
+re-executada -- 1772 passed (1766 antes + 6 novos SQLite), mesmos 5
+failed/34 errors pré-existentes, zero regressão; job `postgres-real`
+de CI validou os 2 novos testes contra Postgres de verdade (transação
+real, não simulada); teste dedicado de não-regressão do corredor
+histórico (sequência completa admissão->alocação->transferência,
+resolução por competência) confirma que a mudança de atomicidade
+nunca alterou nenhum resultado de LEITURA, só a segurança da escrita
+composta.
+
 ## FASE 8/9 — Testes
 
 25 testes novos: 21 em

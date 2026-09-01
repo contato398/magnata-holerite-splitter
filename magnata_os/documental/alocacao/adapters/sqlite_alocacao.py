@@ -17,6 +17,7 @@ nunca pelo banco. A fonte de verdade da constraint continua sendo a
 migration Postgres; este adapter é só para teste local."""
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from datetime import date
 from pathlib import Path
@@ -70,9 +71,39 @@ class RepositorioAlocacaoSQLite:
         self._conn.execute(_DDL_VINCULO)
         self._conn.execute(_DDL_ALOCACAO)
         self._conn.commit()
+        # Missão "REVISÃO OBRIGATÓRIA PR #114 -- ATOMICIDADE DA
+        # TRANSFERÊNCIA": quando True, os métodos de escrita abaixo
+        # NUNCA commitam/rollbackam individualmente -- delegam ao
+        # `with self.transacao():` que os envolve. `False` (default)
+        # preserva 100% o comportamento anterior (cada escrita já
+        # confirmada sozinha, como todo o resto do código -- inclusive
+        # os 46 testes já existentes -- já assume).
+        self._em_transacao = False
 
     def fechar(self) -> None:
         self._conn.close()
+
+    @contextlib.contextmanager
+    def transacao(self):
+        """Contexto transacional REAL -- tudo-ou-nada. Reaproveita a
+        MESMA conexão já existente (nenhum repositório/motor/schema
+        novo); só suspende o commit/rollback POR-CHAMADA dos métodos de
+        escrita enquanto o bloco `with` está ativo, e faz 1 único
+        commit (sucesso) ou 1 único rollback (qualquer exceção) ao
+        final. Uso pretendido: `captura.aplicar_transferencia`, que
+        precisa que "fechar A" e "abrir B" sejam atômicos -- nunca A
+        fechada sem B aberta."""
+        if self._em_transacao:
+            raise RuntimeError('transacao aninhada nao suportada')
+        self._em_transacao = True
+        try:
+            yield self
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        finally:
+            self._em_transacao = False
 
     # ── Escrita (mecanismo de captura -- nunca chamado com dado real
     # inventado nesta missão; usado só pelos testes desta missão e como
@@ -97,7 +128,7 @@ class RepositorioAlocacaoSQLite:
             'VALUES (?, ?, ?, ?)',
             (vinculo_id, colaborador_id, _para_texto(data_admissao), _para_texto(data_desligamento)),
         )
-        self._conn.commit()
+        self._commit_se_fora_de_transacao()
 
     def registrar_alocacao(
         self, alocacao_id: str, vinculo_trabalhista_id: str, posto_id: str,
@@ -119,7 +150,7 @@ class RepositorioAlocacaoSQLite:
             'VALUES (?, ?, ?, ?, ?)',
             (alocacao_id, vinculo_trabalhista_id, posto_id, _para_texto(vigente_de), _para_texto(vigente_ate)),
         )
-        self._conn.commit()
+        self._commit_se_fora_de_transacao()
 
     # ── Leitura temporal (consultas cruas -- testáveis isoladamente) ────
 
@@ -168,7 +199,7 @@ class RepositorioAlocacaoSQLite:
             'WHERE colaborador_id = ? AND data_desligamento IS NULL',
             (_para_texto(data_desligamento), colaborador_id),
         )
-        self._conn.commit()
+        self._commit_se_fora_de_transacao()
 
     def alocacao_mais_recente_de(self, vinculo_trabalhista_id: str, posto_id: str):
         row = self._conn.execute(
@@ -190,7 +221,16 @@ class RepositorioAlocacaoSQLite:
             'WHERE vinculo_trabalhista_id = ? AND posto_id = ? AND vigente_ate IS NULL',
             (_para_texto(vigente_ate), vinculo_trabalhista_id, posto_id),
         )
-        self._conn.commit()
+        self._commit_se_fora_de_transacao()
+
+    def _commit_se_fora_de_transacao(self) -> None:
+        """Cada escrita continua se autoconfirmando quando chamada
+        isoladamente (comportamento já testado por todos os testes
+        pré-existentes) -- só fica pendente quando `self.transacao()`
+        está ativo, para que o commit/rollback aconteça 1 única vez, no
+        escopo externo."""
+        if not self._em_transacao:
+            self._conn.commit()
 
     # ── Contrato FonteUnidadePostoPrestacao (já existente, nunca
     # duplicado) ──────────────────────────────────────────────────────
