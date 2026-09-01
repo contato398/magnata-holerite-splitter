@@ -21,6 +21,7 @@ from typing import Optional, Tuple
 from magnata_os.classificacao.contratos import ReferenciaCanonica, ResolucaoDimensao
 
 from ..resolucao import resolver_unidade_posto_via_alocacao
+from ..temporal import RegistroAlocacao, RegistroVinculo
 
 _TABELA_VINCULO = 'vinculo_trabalhista'
 _TABELA_ALOCACAO = 'alocacao'
@@ -103,6 +104,64 @@ class RepositorioAlocacaoPostgres:
             )
             linhas = cursor.fetchall()
         return tuple(linha[0] for linha in linhas)
+
+    # ── Consulta/fechamento (missão "CAPTURA AUTOMÁTICA DE VÍNCULO E
+    # ALOCAÇÃO V1") -- extensão mínima, mesmo schema, sem migration ────
+
+    def vinculo_mais_recente_de(self, colaborador_id: str):
+        with self._conexao.cursor() as cur:
+            cur.execute(
+                f'SELECT id, colaborador_id, data_admissao, data_desligamento '
+                f'FROM {_TABELA_VINCULO} WHERE colaborador_id = %s '
+                'ORDER BY data_admissao DESC LIMIT 1',
+                (colaborador_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return RegistroVinculo(id=row[0], colaborador_id=row[1], data_admissao=row[2], data_desligamento=row[3])
+
+    def encerrar_vinculo(self, colaborador_id: str, data_desligamento) -> None:
+        try:
+            with self._conexao.cursor() as cur:
+                cur.execute(
+                    f'UPDATE {_TABELA_VINCULO} SET data_desligamento = %s '
+                    'WHERE colaborador_id = %s AND data_desligamento IS NULL',
+                    (data_desligamento, colaborador_id),
+                )
+            self._conexao.commit()
+        except Exception:
+            self._conexao.rollback()
+            raise
+
+    def alocacao_mais_recente_de(self, vinculo_trabalhista_id: str, posto_id: str):
+        with self._conexao.cursor() as cur:
+            cur.execute(
+                f'SELECT id, vinculo_trabalhista_id, posto_id, vigente_de, vigente_ate '
+                f'FROM {_TABELA_ALOCACAO} WHERE vinculo_trabalhista_id = %s AND posto_id = %s '
+                'ORDER BY vigente_de DESC LIMIT 1',
+                (vinculo_trabalhista_id, posto_id),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return RegistroAlocacao(
+            id=row[0], vinculo_trabalhista_id=row[1], posto_id=row[2],
+            vigente_de=row[3], vigente_ate=row[4],
+        )
+
+    def encerrar_alocacao(self, vinculo_trabalhista_id: str, posto_id: str, vigente_ate) -> None:
+        try:
+            with self._conexao.cursor() as cur:
+                cur.execute(
+                    f'UPDATE {_TABELA_ALOCACAO} SET vigente_ate = %s '
+                    'WHERE vinculo_trabalhista_id = %s AND posto_id = %s AND vigente_ate IS NULL',
+                    (vigente_ate, vinculo_trabalhista_id, posto_id),
+                )
+            self._conexao.commit()
+        except Exception:
+            self._conexao.rollback()
+            raise
 
     # ── Contrato FonteUnidadePostoPrestacao (já existente, nunca
     # duplicado) ──────────────────────────────────────────────────────

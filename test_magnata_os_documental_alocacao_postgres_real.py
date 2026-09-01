@@ -49,6 +49,18 @@ from magnata_os.classificacao.fonte_unidade_posto_com_prioridade_historica impor
 )
 from magnata_os.classificacao.resolucao_documento_prestacao import EstadoCorredorDocumentoPrestacao
 from magnata_os.documental.alocacao.adapters.postgres_alocacao import RepositorioAlocacaoPostgres
+from magnata_os.documental.alocacao.captura import (
+    aplicar_alocacao_iniciada,
+    aplicar_transferencia,
+    aplicar_vinculo_encerrado,
+    aplicar_vinculo_iniciado,
+)
+from magnata_os.documental.alocacao.eventos import (
+    AlocacaoIniciada,
+    ConflitoTemporalEventoError,
+    VinculoEncerrado,
+    VinculoIniciado,
+)
 from magnata_os.documental.importacao_lote.adapters.airtable_vinculos_prestacao import (
     F_FUNC_LOCAIS,
     F_LOCAL_CLIENTE,
@@ -332,3 +344,52 @@ def test_corredor_real_resolve_unidade_posto_historica_via_postgres_real(repo):
     )
     assert resultado.estado == EstadoCorredorDocumentoPrestacao.RESOLVIDO_E_AVANCOU
     fonte_corrente_fake.resolver_unidade_posto.assert_not_called()
+
+
+# ============================================================================
+# Missão "CAPTURA AUTOMÁTICA DE VÍNCULO E ALOCAÇÃO V1" -- eventos.py +
+# captura.py contra Postgres real (subconjunto do que já é provado
+# exaustivamente via SQLite em test_magnata_os_documental_alocacao_captura_v1.py;
+# aqui só confirma que a mesma lógica funciona contra o banco de
+# verdade -- idempotência real, transferência real, conflito real).
+# ============================================================================
+
+def test_admissao_real_e_idempotente_contra_postgres(repo):
+    colab = 'colab-captura-pg-1'
+    id1 = aplicar_vinculo_iniciado(repo, VinculoIniciado(colab, date(2026, 1, 1), 'sintetico'))
+    id2 = aplicar_vinculo_iniciado(repo, VinculoIniciado(colab, date(2026, 1, 1), 'sintetico'))
+    assert id1 == id2
+    assert repo.vinculo_mais_recente_de(colab).id == id1
+
+
+def test_transferencia_real_fecha_a_e_abre_b_contra_postgres(repo):
+    colab = 'colab-captura-pg-2'
+    aplicar_vinculo_iniciado(repo, VinculoIniciado(colab, date(2026, 1, 1), 'sintetico'))
+    aplicar_alocacao_iniciada(repo, AlocacaoIniciada(colab, 'posto-pg-cap-A', date(2026, 1, 1), 'sintetico'))
+    aplicar_transferencia(repo, colab, 'posto-pg-cap-A', 'posto-pg-cap-B', date(2026, 6, 15), 'sintetico')
+
+    vinculo = repo.vinculo_mais_recente_de(colab)
+    a = repo.alocacao_mais_recente_de(vinculo.id, 'posto-pg-cap-A')
+    b = repo.alocacao_mais_recente_de(vinculo.id, 'posto-pg-cap-B')
+    assert a.vigente_ate == date(2026, 6, 15)
+    assert b.vigente_de == date(2026, 6, 15)
+    assert b.vigente_ate is None
+
+
+def test_readmissao_real_cria_novo_vinculo_contra_postgres(repo):
+    colab = 'colab-captura-pg-3'
+    id1 = aplicar_vinculo_iniciado(repo, VinculoIniciado(colab, date(2025, 1, 1), 'sintetico'))
+    aplicar_vinculo_encerrado(repo, VinculoEncerrado(colab, date(2025, 6, 30), 'sintetico'))
+    id2 = aplicar_vinculo_iniciado(repo, VinculoIniciado(colab, date(2026, 1, 1), 'sintetico'))
+    assert id1 != id2
+    recente = repo.vinculo_mais_recente_de(colab)
+    assert recente.id == id2
+    assert recente.data_desligamento is None
+
+
+def test_conflito_temporal_real_e_rejeitado_contra_postgres(repo):
+    colab = 'colab-captura-pg-4'
+    aplicar_vinculo_iniciado(repo, VinculoIniciado(colab, date(2026, 1, 1), 'sintetico'))
+    aplicar_vinculo_encerrado(repo, VinculoEncerrado(colab, date(2026, 6, 30), 'sintetico'))
+    with pytest.raises(ConflitoTemporalEventoError):
+        aplicar_vinculo_encerrado(repo, VinculoEncerrado(colab, date(2026, 7, 15), 'sintetico'))
