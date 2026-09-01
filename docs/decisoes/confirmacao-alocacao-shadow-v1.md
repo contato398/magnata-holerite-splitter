@@ -1,155 +1,247 @@
 # Confirmação de Alocação Shadow — V1
 
 Documento de decisão da missão "CONFIRMAÇÃO DE ALOCAÇÃO SHADOW V1".
-Contexto: `magnata_os/documental/alocacao/eventos.py`/`captura.py`
-(mecanismo idempotente de aplicação) mergeados em `main`; PR #115
-("WIRING REAL DE VÍNCULO V1 EM MODO SHADOW") ainda aberto, mas
-independente desta missão -- esta missão não depende de `wiring.py` e
-foi ramificada diretamente de `main`. Branch:
-`fix/confirmacao-alocacao-shadow-v1`.
+Baseline: `main @ ce341906e193768ad5663719aa1ce0e46809ad3a` (PR #114
+mergeado). Branch: `fix/confirmacao-alocacao-shadow-v1` (PR #116 —
+reaproveitada de uma primeira rodada de implementação nesta mesma
+branch; esta rodada a refina para o desenho completo abaixo, sem abrir
+PR novo).
 
-Autorização recebida (mensagem distinta da que descreveu o escopo):
-*"Autorizo a implementação integral da Confirmação de Alocação Shadow
-V1 no Magnata OS, usando Airtable somente em leitura para identificar
-colaborador e posto, com dados fictícios nos testes, sem escrita
-externa, sem produção, sem alterar app.py, sem merge e sem deploy."*
+Autorização recebida (mensagem distinta da que descreveu o escopo),
+com a regra pétrea explícita:
 
-## Objetivo
+> Continuar usando o Airtable durante a transição, mas toda evolução
+> nova deve reduzir — nunca aumentar — a dependência estrutural dele.
+> Magnata OS = autoridade histórica de alocação; Airtable = fotografia
+> operacional temporária; nenhuma nova verdade histórica deve nascer
+> exclusivamente no Airtable; nenhuma dependência nova deve amarrar o
+> domínio ao schema Airtable; qualquer leitura do Airtable deve passar
+> por adapter substituível.
 
-Fechar a lacuna já registrada em duas missões anteriores desta série
-(`docs/decisoes/alocacao-vigencia-historica-v1.md`,
-`VIGENCIA_FONTE_REAL_ENCONTRADA=FALSE`; e
-`docs/decisoes/captura-automatica-vinculo-alocacao-v1.md`, Fase 1:
-*"Alocação (posto) não tem NENHUMA fonte de data efetiva hoje"*): não
-existe, em lugar nenhum do sistema (legado ou novo), um evento
-automático confiável de "colaborador X foi alocado no posto Y, na data
-Z". A Fase 6 daquele ADR já havia proposto o "menor mecanismo seguro"
-para preencher essa memória: **confirmação humana explícita**, nunca
-inferência. Esta missão implementa exatamente esse mecanismo.
+## FASE 0 — Preflight
 
-## Desenho
+- `main @ ce341906e193768ad5663719aa1ce0e46809ad3a` confirmado (`git
+  rev-parse origin/main`).
+- PR #114 mergeado — confirmado (`gh pr view 114` → `MERGED`).
+- Worktree limpa antes de iniciar.
+- `eventos.py`/`captura.py`/`resolucao.py` + adapters temporais
+  (SQLite/Postgres) já existentes e reaproveitados integralmente,
+  nenhum reimplementado.
+- Mecanismo de transação/atomicidade (`repo.transacao()`, ambos os
+  adapters) já existente e reaproveitado por `aplicar_transferencia`
+  sem alteração.
+- Fontes Airtable atuais de colaboradores/locais: `TABLE_FUNC`
+  (`listar_funcionarios()`), `TABLE_LOCAIS`/`F_LOCAL_CLIENTE`,
+  `F_FUNC_LOCAIS` — todos já confirmados por auditoria real de schema
+  em missões anteriores, nenhum novo.
 
-`magnata_os/documental/alocacao/confirmacao.py` (novo, puro exceto
-pela chamada a `captura.py`/`resolver` injetado):
+## FASE 1 — Arqueologia de entrada
 
-- `SolicitacaoConfirmacaoAlocacao` — dataclass imutável com
-  `colaborador_cpf`, `posto_id`, `data_efetiva`, `tipo`
-  (`iniciar`/`encerrar`/`transferir`), `origem_evidencia`,
-  `posto_destino_id` (só para `transferir`). `__post_init__` recusa
-  qualquer `data_efetiva` que não seja `datetime.date` real — mesma
-  disciplina de `eventos.py::_exigir_data`. Não existe nenhum caminho
-  neste módulo que produza uma data sozinho; um chamador sem data
-  confirmada por uma pessoa simplesmente não consegue construir o
-  objeto.
-- `aplicar_confirmacao_alocacao(repo, resolver, solicitacao)` — resolve
-  identidade via `resolver` (injetado, nunca uma chamada Airtable
-  direta aqui) e delega a aplicação do evento inteiramente a
-  `captura.py` já existente (`aplicar_alocacao_iniciada`/
-  `_encerrada`/`aplicar_transferencia`) — nunca reimplementa
-  idempotência, conflito ou atomicidade, que já são responsabilidade
-  daquela camada.
+Auditado antes de escrever qualquer código novo: as 38 rotas Flask de
+`app.py` (`grep '@app.route'`), ausência de CLI/`argparse`/`click` em
+`magnata_os/`, e todo uso de "Locais de trabalho" em `app.py` (8+
+pontos). Achado, com evidência de código: "Locais de trabalho" é **só
+lido** em `app.py` — nunca escrito por um formulário próprio. O próprio
+código já documenta (`app.py:3524`): *"campo 'Locais de trabalho' [...]
+não é preenchido automaticamente; requer associação manual"* — mesmo
+achado já registrado na missão anterior desta série, agora confirmado
+de novo, sem nenhuma superfície nova encontrada.
 
-## Identificação (leitura real do Airtable, autorizada, sem escrita)
+```text
+PONTO_DE_ENTRADA_REUTILIZAVEL=Nenhum -- nenhuma rota Flask, nenhum comando CLI, nenhuma tela/formulario existente associa colaborador<->posto
+FONTE_COLABORADOR=Airtable TABLE_FUNC, via listar_funcionarios() (ja existente, mesmo metodo ja usado por wiring.py)
+FONTE_POSTO=Airtable TABLE_LOCAIS, via F_LOCAL_CLIENTE (ja confirmado por auditoria real de schema)
+ADAPTER_AIRTABLE_REUTILIZAVEL=LeitorAirtableSomenteLeitura (airtable_leitura.py, so GET) -- reaproveitado integralmente, nenhum cliente HTTP novo
+NOVO_COMPONENTE_REALMENTE_NECESSARIO=Sim -- confirmacao.py, comparacao_airtable.py e o adapter de identificacao/snapshot nao existiam; nenhuma superficie reaproveitavel foi encontrada para nenhum dos tres
+APP_PY_PRECISA_SER_MODIFICADO=Nao para o mecanismo (servico/contrato/testes); so no futuro, se/quando uma UI final for construida -- decisao explicitamente adiada (FASE 10)
+```
 
-`magnata_os/documental/importacao_lote/adapters/
-airtable_resolver_identidade_alocacao.py` (novo) —
-`ResolverIdentidadeAlocacaoAirtableShadow`, só métodos GET (via
-`LeitorAirtableSomenteLeitura`, já existente, nenhum método novo
-adicionado a `airtable_leitura.py`):
+## FASE 2 — Contrato da confirmação
 
-- `resolver_colaborador_id(cpf)` — reaproveita `listar_funcionarios()`
-  (já existente, mesmo método já usado por `wiring.py` para a mesma
-  finalidade); levanta `ColaboradorAmbiguoError` se mais de um
-  colaborador casar com o mesmo CPF — nunca escolhe o primeiro.
-- `confirmar_posto_existe(posto_id)` — reaproveita `TABLE_LOCAIS`/
-  `F_LOCAL_CLIENTE` (já confirmados por auditoria real de schema,
-  `docs/decisoes/piloto-real-prestacao-readonly-v1.md`) para validar
-  que o record id já informado corresponde a um Local real e atual.
+`SolicitacaoConfirmacaoAlocacao` (`magnata_os/documental/alocacao/
+confirmacao.py`): `colaborador_id`, `posto_id`, `data_efetiva`, `acao`,
+`origem_confirmacao`, `posto_destino_id` (só para `transferir`).
+**Ambos os identificadores já chegam resolvidos** (nunca CPF/nome cru)
+— resolver CPF → `colaborador_id` é responsabilidade de BORDA, de quem
+monta a solicitação, nunca deste contrato (ver FASE 3).
 
-**Decisão explícita: posto é identificado por `posto_id` (Airtable
-record id), nunca por nome livre digitado.** Um Field ID de "Nome" para
-a tabela Locais não está confirmado em nenhum documento nem código
-deste repositório até hoje. Fabricar um sem prova real violaria a
-disciplina já estabelecida em todo este pacote de adapters (nunca
-inventar Field ID) e teria um efeito silenciosamente perigoso: um ID
-errado nunca daria erro, só nunca encontraria nada — pareceria "posto
-não identificado" para sempre, sem sinalizar a causa real. A convenção
-já usada em todo o subsistema de alocação (`eventos.py`, `captura.py`,
-`resolucao.py`) já trata posto como `posto_id` opaco, nunca como nome;
-este adapter só estende essa mesma convenção até a fronteira de
-identificação. Numa tela futura, o humano confirmando SELECIONA um
-Local de uma lista (populada por leitura deste mesmo Airtable) — a
-identidade carregada por esse fluxo já seria o record id, nunca um
-texto de nome.
+`acao` tem 5 valores (`iniciar`, `encerrar`, `transferir`,
+`adicionar_rateio`, `remover_rateio`) — nenhum evento novo criado para
+eles: `iniciar`/`adicionar_rateio` traduzem para a MESMA primitiva já
+existente (`captura.aplicar_alocacao_iniciada`, correta tanto para a
+primeira alocação quanto para uma adicional sem fechar as demais);
+`encerrar`/`remover_rateio` traduzem para `captura.
+aplicar_alocacao_encerrada` (fecha só aquele posto). **Decisão
+registrada:** os 2 pares de ações não têm validação de estado
+diferenciada entre si (ex.: `iniciar` não exige que nenhum outro posto
+esteja aberto) — a distinção existe para auditoria/intenção humana,
+nunca para o schema; nenhuma coluna nova foi criada para persistir
+qual `acao` foi usada (o registro resultante — aberto ou fechado — já
+é a verdade persistida; "iniciar" vs "adicionar rateio" não muda o
+formato do dado, só o rótulo de intenção no momento da confirmação).
 
-**Nenhuma chamada real ao Airtable foi feita nesta implementação.**
-Toda a cobertura de teste do adapter usa `Mock()` de
-`LeitorAirtableSomenteLeitura` (mesma disciplina de
-`FonteColaboradoresEsperadosPrestacaoAirtableShadow`/
-`FonteVinculosPrestacaoAirtableShadow`) — a autorização concedida cobre
-a CAPACIDADE real de leitura (o adapter é funcional e pronto), não uma
-execução live nesta fase.
+## FASE 3 — Airtable somente como leitura transitória
 
-## Shadow — nunca produção
+Único ponto de leitura Airtable desta missão:
+`ResolverIdentidadeAlocacaoAirtableShadow`
+(`magnata_os/documental/importacao_lote/adapters/
+airtable_resolver_identidade_alocacao.py`), com 3 responsabilidades
+separadas, cada uma com seu próprio método:
 
-`repo` é sempre injetado por quem chama `aplicar_confirmacao_alocacao`
-— `RepositorioAlocacaoSQLite`/`RepositorioAlocacaoPostgres` (já
-existentes), sempre contra um banco local/efêmero nesta missão. Nenhum
-Postgres de produção é assumido por padrão em nenhum ponto deste
-módulo; a decisão de qual Postgres próprio hospedar essa memória de
-verdade é explicitamente o **próximo gate**, fora do escopo desta
-missão (ver fechamento abaixo).
+1. **Resolução de borda** — `resolver_colaborador_id(cpf)`: CPF →
+   `colaborador_id`, usada só por quem MONTA a solicitação, fora de
+   `confirmacao.py`.
+2. **Re-confirmação no momento da aplicação** —
+   `confirmar_colaborador_existe`/`confirmar_posto_existe`: valida que
+   um id já selecionado ainda existe no snapshot atual — é só isto que
+   `aplicar_confirmacao_alocacao` de fato chama.
+3. **Snapshot para comparação** — `postos_atuais_do_colaborador`
+   (FASE 6, diagnóstico read-only).
 
-## Idempotência, conflito, rateio, transferência
+Nenhuma escrita Airtable em nenhum método. `data_efetiva`/vigência
+NUNCA vem do Airtable — só do humano confirmando (FASE 4). Todo o
+subsistema (`confirmacao.py`, `comparacao_airtable.py`) só conhece o
+`resolver`/`snapshot_airtable` injetado, duck-typed — zero import de
+Airtable no domínio, exatamente como pedido ("contratos genéricos de
+fonte... injetar o adapter Airtable na borda").
 
-Todos herdados de `captura.py`, já provados por
-`test_magnata_os_documental_alocacao_captura_v1.py` — esta missão só
-adiciona a fronteira de confirmação humana + identificação por cima,
-nunca duplica aquela lógica. Cobertura nova
-(`test_magnata_os_documental_alocacao_confirmacao_shadow_v1.py`, 21
-testes):
+**Decisão registrada sobre identificação de posto:** `posto_id` é
+sempre o record id do Airtable — nunca resolvido por nome livre. Um
+Field ID de "Nome" para a tabela Locais não está confirmado em nenhum
+documento nem código deste repositório; fabricar um sem prova real
+seria uma dependência NOVA e não verificável do schema Airtable —
+exatamente o que a regra pétrea desta missão proíbe. Resolver por id
+já selecionado (nunca por busca textual) é, por si, uma escolha que
+REDUZ superfície de acoplamento ao schema, não aumenta.
 
-- validação de `SolicitacaoConfirmacaoAlocacao` na construção (data
-  ausente, data como string, tipo inválido, `posto_destino_id`
-  obrigatório só em `transferir`);
-- iniciar/encerrar/transferir com identidade resolvida — aplica e
-  persiste corretamente;
-- idempotência (reprocessar a mesma solicitação nunca duplica nem
-  aplica duas vezes);
-- conflito temporal (segunda confirmação com data divergente para o
-  mesmo posto aberto propaga `ConflitoTemporalEventoError`, nunca
-  sobrescreve);
-- rateio (dois postos abertos ao mesmo tempo para o mesmo vínculo,
-  nenhum fecha o outro);
-- colaborador/posto não identificados — a confirmação é recusada
-  (`ColaboradorNaoIdentificadoError`/`PostoNaoIdentificadoError`) e
-  **nada é aplicado** (inclusive: falha ao identificar o posto de
-  destino numa transferência nunca deixa a origem fechada pela
-  metade — mesma garantia de atomicidade que
-  `captura.aplicar_transferencia` já oferece);
-- `ResolverIdentidadeAlocacaoAirtableShadow` isolado, com CPF exato,
-  CPF normalizado (formatos distintos), CPF não encontrado, CPF
-  ambíguo (2 colaboradores), posto existente/inexistente — todos com
-  `Mock()` de leitor, nunca Airtable real.
+**Decisão registrada sobre "colaborador atual":** `confirmar_colaborador_
+existe` não filtra por Status Airtable (Ativo/Inativo) — a garantia de
+"não alocar quem já foi desligado" já vem inteiramente do PRÓPRIO
+Magnata OS (`captura.aplicar_alocacao_iniciada` exige vínculo aberto;
+um colaborador com `vinculo.data_desligamento` preenchido dispara
+`EventoForaDeOrdemError`, nunca silenciosamente aceito). Depender do
+campo de Status do Airtable para essa garantia seria uma dependência
+estrutural NOVA do domínio ao schema Airtable — a regra pétrea desta
+missão pede o oposto: a autoridade sobre "pode alocar ou não" já é,
+deliberadamente, 100% do Magnata OS.
 
-## O que NÃO foi feito nesta missão (fora de escopo, registrado)
+## FASE 4 — Confirmação humana obrigatória
 
-- Nenhuma tela/UI — a confirmação é só a função Python
-  `aplicar_confirmacao_alocacao`, chamável de qualquer front-end
-  futuro.
-- Nenhuma escrita real no Airtable, nenhuma execução contra Airtable
-  live, nenhuma produção, nenhuma alteração em `app.py`.
-- Nenhuma decisão sobre onde hospedar a tela nem qual Postgres próprio
-  usar para a memória real — **esse é o próximo gate**, explicitamente
-  adiado pelo pedido que autorizou esta missão.
+`SolicitacaoConfirmacaoAlocacao.__post_init__` recusa `data_efetiva`
+que não seja `datetime.date` real (nunca `None`, nunca string, nunca
+inferida) — mesma disciplina de `eventos.py::_exigir_data`. Nenhum
+caminho deste módulo produz uma data sozinho; um chamador sem data
+confirmada por uma pessoa não consegue construir o objeto.
+
+## FASE 5 — Shadow
+
+`repo` é sempre injetado — `RepositorioAlocacaoSQLite` (testes locais)
+ou `RepositorioAlocacaoPostgres` (job `postgres-real` efêmero de CI).
+Nenhum Postgres de produção é assumido em nenhum ponto. Pipeline
+completo, provado ponta a ponta por
+`test_confirmacao_alimenta_leitura_historica_do_corredor`:
+
+```text
+confirmação humana → validação de identidade → evento canônico
+→ captura temporal → persistência shadow → leitura histórica para conferência
+```
+
+O último passo (leitura histórica) reaproveita o contrato
+`FonteUnidadePostoPrestacao` já implementado por
+`RepositorioAlocacaoSQLite`/`Postgres` (`resolver_unidade_posto`) —
+nunca reimplementado.
+
+## FASE 6 — Comparação com Airtable
+
+`magnata_os/documental/alocacao/comparacao_airtable.py` (novo, puro):
+`EstadoComparacaoAirtable` (`CONSISTENTE`, `DIFERENTE`,
+`MAGNATA_SEM_DADO`, `AIRTABLE_SEM_VINCULO`, `AMBIGUO`) +
+`comparar_postos` (pura, 2 conjuntos → estado) +
+`comparar_colaborador_shadow_com_airtable` (única função com I/O,
+delega a `repo` shadow + `snapshot_airtable` injetado). **Diagnóstico
+apenas — nunca reconciliação automática**: nenhuma escrita em nenhum
+dos 2 lados em nenhum caminho desta função. Qualquer exceção do lado
+Airtable (`ColaboradorAmbiguoError`, indisponibilidade de rede) vira
+`AMBIGUO` — a função de diagnóstico nunca propaga uma falha do
+Airtable como se fosse um erro do Magnata OS.
+
+## FASE 7 — Semântica de ações
+
+Todas as 5 ações validadas contra `RepositorioAlocacaoSQLite` (21+21
+cenários, ver FASE 8) e replicadas contra Postgres real (FASE 9):
+iniciar primeira alocação, transferir A→B atomicamente, rateio A+B
+(2 postos abertos simultâneos, nenhum fecha o outro), remover só A
+(rateio parcial), encerrar, repetir mesma confirmação (idempotência),
+conflito com confirmação anterior, confirmação fora de ordem (iniciar
+sem vínculo aberto, encerrar sem alocação prévia). Todas as regras já
+aprovadas preservadas — nenhuma reimplementada, todas herdadas de
+`captura.py`.
+
+## FASE 8 — Testes adversariais
+
+`test_magnata_os_documental_alocacao_confirmacao_shadow_v1.py` (42
+testes) cobre os 16 cenários pedidos: 1 primeira alocação; 2 mesma
+confirmação 2x; 3 transferência; 4 falha no meio da transferência
+(resolver que quebra na 2ª chamada de identificação do destino); 5
+retry após falha; 6 rateio; 7 remoção parcial; 8 data ausente; 9
+colaborador inexistente; 10 posto inexistente; 11 snapshot Airtable
+divergente (`DIFERENTE`); 12 Airtable sem vínculo
+(`AIRTABLE_SEM_VINCULO`); 13 conflito temporal; 14 evento fora de
+ordem (2 casos); 15 consulta histórica posterior (via
+`resolver_unidade_posto`); 16 Airtable indisponível — domínio/captura
+nunca corrompidos (propaga a falha, shadow permanece intocado;
+`comparacao_airtable` nunca derruba, vira `AMBIGUO`).
+
+## FASE 9 — Postgres real efêmero
+
+Reaproveitado o MESMO job `postgres-real` já existente
+(`.github/workflows/magnata-testes.yml`) — nenhum job novo.
+`test_magnata_os_documental_alocacao_postgres_real.py` estendido (não
+duplicado) com 7 testes novos: confirmação idempotente, rateio (2
+postos abertos), transferência atômica, transferência com falha real
+simulada + rollback real do Postgres + retry completo, conflito
+temporal real, colaborador não identificado nunca escreve nada,
+comparação Airtable consistente. Tudo sintético.
+
+## FASE 10 — Não feito nesta missão (registrado, não escondido)
+
+- `app.py` não foi tocado.
+- Nenhum campo novo no Airtable, nenhuma escrita Airtable, nenhuma
+  execução live contra Airtable real.
+- Nenhum Postgres de produção provisionado/tocado, nenhuma migration
+  em produção, nenhum deploy, Render, WhatsApp, Gmail.
+- Nenhum dado real usado em nenhum teste.
+- Nenhuma UI final — só o serviço/contrato/composição, chamável por
+  qualquer front-end futuro.
+- Nenhum backfill.
+
+## FASE 11 — Duas revisões adversariais (autocorrigidas nesta rodada)
+
+**Primeira (temporalidade/identidade/atomicidade/idempotência/
+rateio/conflito/ausência de data):** encontrado e corrigido — faltava
+cobertura explícita de "confirmação fora de ordem"
+(`EventoForaDeOrdemError`) via a camada de confirmação (só existia via
+`captura.py` diretamente); adicionados 2 testes (iniciar sem vínculo
+aberto, encerrar sem alocação prévia).
+
+**Segunda (independência do Airtable/acoplamento/duplicação/
+persistência/produção/segurança/substituibilidade futura):** nenhum
+import de Airtable em `confirmacao.py`/`comparacao_airtable.py`
+confirmado; nenhum Field ID novo fabricado; nenhuma migration nova;
+`posto_id`/`colaborador_id` tratados como identificadores opacos em
+todo o subsistema (nenhum acoplamento ao formato de id do Airtable);
+CPF nunca retornado/logado (mesma disciplina já estabelecida no
+pacote). Nenhum problema técnico novo encontrado nesta segunda
+passada — só a adição, já registrada acima, da FASE 5 fechando o
+pipeline completo até a leitura histórica.
+
+## FASE 12 — Testes/Governança
+
+Suíte completa local: 1811 passed, 5 failed, 34 errors (mesma baseline
+pré-existente de sandbox Windows, sem regressão nova). Governança
+local: 15/15 gates. `git diff --check` limpo. Busca manual por padrão
+de segredo no diff: nenhum encontrado.
 
 ## Resultado
 
-`APP_PY_MODIFICADO=False`
-`ESCRITA_AIRTABLE_REAL=False`
-`AIRTABLE_LIVE_EXECUTADO=False`
-`PRODUCAO_TOCADA=False`
-`POSTO_IDENTIFICADO_POR=posto_id (Airtable record id), nunca nome`
-`FIELD_ID_NOVO_FABRICADO=Nenhum -- só reaproveita TABLE_LOCAIS/F_LOCAL_CLIENTE ja confirmados`
-`MECANISMO_REUTILIZADO=captura.py (idempotencia/conflito/atomicidade), eventos.py, listar_funcionarios(), normalizar_cpf`
-`PROXIMO_GATE=Decidir onde hospedar a tela de confirmacao e qual Postgres proprio usar para a memoria real (fora de escopo desta missao)`
+Ver relatório estruturado na entrega do PR #116.
