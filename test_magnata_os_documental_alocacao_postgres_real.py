@@ -434,3 +434,45 @@ def test_retry_completo_apos_falha_real_no_postgres(repo):
     assert c.vigente_ate == date(2026, 6, 15)
     assert d.vigente_de == date(2026, 6, 15)
     assert d.vigente_ate is None
+
+
+# ============================================================================
+# Missão "WIRING REAL DE VÍNCULO V1 EM MODO SHADOW" -- sequência
+# admissão documental (extrator real) -> VinculoIniciado -> persistência
+# -> encerramento -> readmissão documental -> novo vínculo, contra
+# Postgres real. Rescisão via documento real NÃO incluída aqui --
+# extrator vive dentro de app.py, gate deliberado (ver ADR); o
+# encerramento usa o evento canônico já provado diretamente.
+# ============================================================================
+
+def test_sequencia_admissao_documental_ate_readmissao_contra_postgres_real(repo):
+    from magnata_os.documental.alocacao.wiring import construir_vinculo_iniciado_de_holerite
+
+    cpf = '222.333.444-55'
+    colaborador_id = 'colab-wiring-pg-1'
+
+    def _resolver(cpf_extraido):
+        return colaborador_id if cpf_extraido.strip() == cpf else None
+
+    texto_admissao_1 = (
+        '456 FULANO EXEMPLO PG 999999 1 1\n'
+        f'CARGO EXEMPLO Admissão: 10/01/2025\nCPF: {cpf}\n'
+    )
+    evento1 = construir_vinculo_iniciado_de_holerite(texto_admissao_1, _resolver)
+    id1 = aplicar_vinculo_iniciado(repo, evento1)
+
+    aplicar_vinculo_encerrado(repo, VinculoEncerrado(colaborador_id, date(2025, 6, 30), 'sintetico'))
+
+    texto_admissao_2 = (
+        '789 FULANO EXEMPLO PG 999999 1 1\n'
+        'CARGO EXEMPLO Admissão: 05/01/2026\n'
+        f'CPF: {cpf}\n'
+    )
+    evento2 = construir_vinculo_iniciado_de_holerite(texto_admissao_2, _resolver)
+    id2 = aplicar_vinculo_iniciado(repo, evento2)
+
+    assert id1 != id2
+    recente = repo.vinculo_mais_recente_de(colaborador_id)
+    assert recente.id == id2
+    assert recente.data_admissao == date(2026, 1, 5)
+    assert recente.data_desligamento is None
