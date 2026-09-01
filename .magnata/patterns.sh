@@ -934,6 +934,21 @@ ALLOWED_PATHS=(
   "^test_airtable_cliente_direto_documento\.py$"
   "^test_magnata_os_classificacao_e2e_bloqueios_corredor_live_v2\.py$"
   "^docs/decisoes/corredor-live-v2-bloqueios-reais-v1\.md$"
+  # Excecao exata e restrita (missao "CONSTRUIR ORQUESTRADOR REAL
+  # READ-ONLY DO CORREDOR V2 + PREPARAR PRIMEIRO LIVE CONTROLADO SEM
+  # EXECUTA-LO", branch fix/orquestrador-readonly-corredor-v2) --
+  # orquestrador canonico/puro (classificacao/) + composicao de borda
+  # com adapters reais (importacao_lote/), testes nominais e ADR da
+  # missao. test_magnata_os_classificacao_arquitetura_sem_dependencia_
+  # airtable.py (modificado, novos testes de arquitetura) ja estava no
+  # escopo permitido de missao anterior, nao precisa de nova entrada.
+  # Nao libera "^magnata_os/classificacao/", "^magnata_os/documental/
+  # importacao_lote/" nem "^test_"/"^docs/decisoes/" de forma ampla.
+  "^magnata_os/classificacao/orquestrador_corredor_readonly\.py$"
+  "^magnata_os/documental/importacao_lote/composicao_corredor_readonly\.py$"
+  "^test_magnata_os_classificacao_orquestrador_corredor_readonly\.py$"
+  "^test_importacao_lote_composicao_corredor_readonly\.py$"
+  "^docs/decisoes/orquestrador-readonly-corredor-v2\.md$"
 )
 
 # ============================================================================
