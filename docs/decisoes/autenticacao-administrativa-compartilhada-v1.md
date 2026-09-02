@@ -249,3 +249,80 @@ pré-existente de sandbox Windows, sem regressão nova). Governança
 local: 15/15 gates. `git diff --check` limpo. Job `postgres-real` de CI
 estendido (1 linha de `run:`, nenhum job novo) para também validar
 `magnata_os/autenticacao/migrations/` contra Postgres real efêmero.
+
+## Correção obrigatória — REVISÃO OBRIGATÓRIA PR #118 (HEAD `2666320`)
+
+Revisão independente encontrou **blocker real de segurança**: perfil
+resolvido pela allowlist só no login, gravado no cookie, e nunca
+revalidado depois — trocar `MAGNATA_ADMIN_ALLOWLIST` + reiniciar o
+serviço não revogava nem rebaixava sessões já emitidas enquanto o
+cookie continuasse válido (até 8h, ou até logout). Contradiz a
+afirmação original de que "revogação/rotação é só trocar a variável de
+ambiente".
+
+**Correção (mesma branch, mesmo PR):**
+
+- `adapters/sessao.py`: `sujeito_da_sessao()` (cache do login) deixa de
+  ser usada para decisão de autorização — documentada explicitamente
+  como nunca-autoridade, único uso legítimo restante é `logout()`
+  (encerrar a própria sessão nunca deveria depender de ainda estar na
+  allowlist). Nova `sujeito_autorizado_da_sessao(construir_resolvedor=None)`:
+  lê só a IDENTIDADE (e-mail) do cache, mas **revalida o perfil contra
+  a allowlist ATUAL a cada chamada** (`ResolvedorAllowlistAmbiente`
+  construído do zero, sem cache entre chamadas — a mesma leitura fresca
+  de `os.environ` que o login já fazia). Fail-closed: qualquer erro
+  construindo/consultando o resolvedor (allowlist malformada, fonte
+  indisponível) devolve `None` — nunca um `Sujeito` com perfil
+  adivinhado, nunca uma exceção não tratada que mascare a negação como
+  sucesso.
+- `adapters/blueprint_login.py`: `/auth/me` e `exigir_sessao_com_perfil`
+  agora usam a função revalidadora — um usuário revogado vê
+  `autenticado: false`/`401` na primeira requisição seguinte à mudança
+  de config, sem esperar expiração nem fazer logout. `logout()`
+  continua no cache não-revalidado, deliberadamente (permite a um
+  usuário revogado limpar seu próprio cookie).
+- 8 testes novos (`test_magnata_os_autenticacao_revalidacao_v1.py`)
+  cobrindo os 12 cenários pedidos: rebaixamento GESTOR→OPERACIONAL na
+  mesma sessão (nega a rota antiga, aceita a nova, sem novo login);
+  remoção completa da allowlist (401 imediato); "restart simulado"
+  (mudança de env var basta — o resolvedor nunca é cacheado entre
+  chamadas, então não há diferença observável entre "mudou a env var"
+  e "reiniciou o processo com a env var nova"); allowlist malformada
+  falha fechado; fonte de autorização indisponível nunca vira
+  allow-all; zero regressão em login/logout/CSRF; perfil autodeclarado
+  continua impossível mesmo tentando injetar `perfil`/`sujeito_id` no
+  corpo de uma rota protegida; usuário revogado ainda consegue
+  encerrar a própria sessão.
+
+**Auditoria — revisão adversarial adicional (não-blocker, tratada na
+mesma correção):** confirmado que `executar_com_auditoria` executa a
+operação de domínio e só DEPOIS grava a auditoria, em repositórios
+potencialmente distintos, sem transação única cobrindo os dois — se a
+gravação da auditoria falhar após o domínio já ter sido aplicado com
+sucesso, a mudança canônica fica sem trilha correspondente.
+**Classificado como GATE ARQUITETURAL** (unificar a conexão de
+`repo`/`repo_auditoria` sob uma transação comum é decisão própria, fora
+do escopo desta correção de segurança de sessão — documentado na
+docstring de `auditoria_integracao.py`, nunca escondido). Mitigação
+aplicada agora, sem exigir esse redesenho: a falha da auditoria após
+sucesso do domínio vira `FalhaAoRegistrarAuditoriaAposSucesso` (nomeada,
+encadeada, nunca mascarada); simetricamente, se o domínio falhar E a
+gravação do evento de ERRO também falhar, a exceção de domínio original
+nunca é substituída pela de auditoria — só encadeada. 2 testes novos
+provam os dois casos.
+
+Suíte completa local pós-correção: 1895 passed, 5 failed, 34 errors
+(mesma baseline pré-existente, sem regressão nova). Governança local:
+15/15 gates (validados contra o range de commit real).
+
+```text
+HEAD_ANTERIOR=2666320aed0026f50441ea0ad1fe00f7b6cfcba7
+AUTORIZACAO_REVALIDADA_POR_REQUEST=True
+PERFIL_EM_SESSAO_E_AUTORIDADE=False -- so sujeito_autorizado_da_sessao() e autoridade; o cache do cookie nunca decide permissao
+REVOGACAO_SEM_EXPIRAR_SESSAO=True
+REBAIXAMENTO_GESTOR_OPERACIONAL=True -- refletido na mesma sessao, sem novo login
+USUARIO_REMOVIDO_ALLOWLIST_NEGADO=True
+COOKIE_ANTIGO_NAO_MANTEM_PRIVILEGIO=True
+FAIL_CLOSED=True -- allowlist malformada ou fonte indisponivel sempre nega, nunca allow-all
+AUDITORIA_ATOMICA_OU_GATE=GATE -- registrado explicitamente, nunca mascarado; mitigado com excecao nomeada/encadeada em vez de falha silenciosa
+```

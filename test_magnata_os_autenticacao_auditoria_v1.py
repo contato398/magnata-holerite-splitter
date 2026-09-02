@@ -139,6 +139,44 @@ def test_executar_com_auditoria_erro_grava_1_linha_e_repropaga(repo_auditoria):
     assert registros[0].erro_codigo == 'ValueError'
 
 
+def test_falha_ao_registrar_auditoria_apos_sucesso_nunca_e_mascarada(repo_auditoria):
+    """Revisão independente PR #118 -- gate arquitetural registrado: se
+    a operação de domínio já teve sucesso e a GRAVAÇÃO da auditoria
+    falha depois, isso vira uma exceção nomeada e encadeada -- nunca
+    silenciosa, nunca um erro genérico."""
+    from magnata_os.autenticacao.auditoria_integracao import FalhaAoRegistrarAuditoriaAposSucesso
+
+    def _repo_auditoria_que_falha_no_sucesso(*args, **kwargs):
+        raise ConnectionError('auditoria indisponivel (simulado)')
+
+    repo_auditoria.inserir_operacao = _repo_auditoria_que_falha_no_sucesso  # type: ignore[method-assign]
+
+    with pytest.raises(FalhaAoRegistrarAuditoriaAposSucesso) as excinfo:
+        executar_com_auditoria(repo_auditoria, _SUJEITO_GESTOR, 'operacao_generica', lambda: 'resultado-999')
+    assert isinstance(excinfo.value.__cause__, ConnectionError)  # causa real encadeada, nunca escondida
+
+
+def test_falha_de_auditoria_no_caminho_de_erro_nunca_substitui_o_erro_de_dominio(repo_auditoria):
+    """Se a operação de domínio falha E a gravação do evento de ERRO
+    TAMBÉM falha, o chamador continua vendo a exceção de DOMÍNIO
+    original -- nunca a de infraestrutura de auditoria no lugar dela."""
+    def _falha_dominio():
+        raise ValueError('falha real de negocio')
+
+    def _repo_auditoria_que_falha(*args, **kwargs):
+        raise ConnectionError('auditoria tambem indisponivel (simulado)')
+
+    repo_auditoria.inserir_operacao = _repo_auditoria_que_falha  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError) as excinfo:
+        executar_com_auditoria(
+            repo_auditoria, _SUJEITO_GESTOR, 'operacao_generica', _falha_dominio,
+            referencia_agregado_de_erro='ref-dupla-falha',
+        )
+    assert 'falha real de negocio' in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, ConnectionError)  # falha da auditoria so encadeada, nunca no lugar
+
+
 # ============================================================================
 # confirmar_alocacao_com_auditoria -- integração ponta a ponta real
 # ============================================================================

@@ -16,7 +16,17 @@ neste pacote) -- nunca o `app` real de `app.py`.
 `login`/`me`/`logout` nunca aceitam `perfil` do corpo da requisição --
 perfil vem SEMPRE de `allowlist.py` (autoridade do Magnata OS), nunca
 autodeclarado pelo cliente (mesma disciplina já valia para os handlers
-de alocação, agora reforçada na própria borda de autenticação)."""
+de alocação, agora reforçada na própria borda de autenticação).
+
+**Correção obrigatória (revisão independente do PR #118, HEAD
+`2666320`):** `/me` e `exigir_sessao_com_perfil` agora usam
+`sujeito_autorizado_da_sessao()` (revalida a allowlist ATUAL a cada
+chamada, nunca confia no perfil cacheado no cookie) -- ver
+`sessao.py` para o desenho completo. `logout()` continua usando
+`sujeito_da_sessao()` (cache, não-revalidado) de propósito: encerrar a
+própria sessão é sempre seguro, mesmo para quem acabou de ser
+revogado -- não deveria depender de ainda estar na allowlist para
+poder limpar seu próprio cookie."""
 from __future__ import annotations
 
 import functools
@@ -33,7 +43,15 @@ from ..provedor_google_oidc import (
     TokenGoogleInvalido,
     verificar_id_token_google,
 )
-from .sessao import CsrfInvalido, encerrar_sessao, gerar_csrf_token, iniciar_sessao, sujeito_da_sessao, validar_csrf_token
+from .sessao import (
+    CsrfInvalido,
+    encerrar_sessao,
+    gerar_csrf_token,
+    iniciar_sessao,
+    sujeito_autorizado_da_sessao,
+    sujeito_da_sessao,
+    validar_csrf_token,
+)
 
 auth_bp = Blueprint('magnata_autenticacao', __name__, url_prefix='/auth')
 
@@ -79,7 +97,11 @@ def logout():
 
 @auth_bp.route('/me', methods=['GET'])
 def me():
-    sujeito = sujeito_da_sessao()
+    """Revalida contra a allowlist atual (ver `sujeito_autorizado_da_sessao`)
+    -- um usuário revogado vê `autenticado: false` aqui, mesmo com o
+    cookie de sessão ainda tecnicamente presente, sinalizando
+    corretamente para o front-end pedir login de novo."""
+    sujeito = sujeito_autorizado_da_sessao()
     if sujeito is None:
         return jsonify({'autenticado': False}), 200
     return jsonify({
@@ -91,13 +113,14 @@ def me():
 def exigir_sessao_com_perfil(perfis_permitidos: FrozenSet[Perfil]) -> Callable:
     """Decorator para rotas de domínio FUTURAS (ex.: a rota real de
     Confirmação de Alocação, quando o gate de `app.py` for fechado):
-    constrói `Sujeito` a partir da SESSÃO (nunca do request), exige
-    perfil, e só então chama a view -- `sujeito` é passado como
-    primeiro argumento posicional para a view decorada."""
+    constrói `Sujeito` REVALIDANDO a allowlist ATUAL a cada requisição
+    (`sujeito_autorizado_da_sessao`, nunca o cache do cookie -- ver
+    `sessao.py`), exige perfil, e só então chama a view -- `sujeito` é
+    passado como primeiro argumento posicional para a view decorada."""
     def decorador(view: Callable) -> Callable:
         @functools.wraps(view)
         def rota(*args, **kwargs):
-            sujeito: Optional[Sujeito] = sujeito_da_sessao()
+            sujeito: Optional[Sujeito] = sujeito_autorizado_da_sessao()
             if sujeito is None:
                 return jsonify({'erro': 'nao_autenticado'}), 401
             try:

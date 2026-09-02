@@ -32,6 +32,23 @@ Checklist da FASE 4, cada item com seu mecanismo:
                            `session`, comparado ao token enviado pelo
                            formulário/header em toda escrita)
 
+**Correção obrigatória (revisão independente do PR #118, HEAD
+`2666320`): revogação/mudança de perfil em sessão já aberta.** A versão
+anterior gravava `perfil` no cookie no login e `sujeito_da_sessao()`
+reconstruía `Sujeito` confiando nesse valor cacheado por até 8h --
+remover alguém da allowlist (ou rebaixar o perfil) e reiniciar o
+serviço com a `MAGNATA_ADMIN_ALLOWLIST` nova NÃO revogava sessões já
+emitidas, porque nenhuma rota protegida voltava a consultar a
+allowlist depois do login. Corrigido: a sessão agora guarda só
+IDENTIDADE estável (`email`/`sujeito_id`) com valor de conveniência
+para UI; `sujeito_autorizado_da_sessao()` é a ÚNICA função que produz
+um `Sujeito` com autoridade para decisão de permissão, e ela SEMPRE
+revalida o `perfil` contra a allowlist ATUAL, a cada chamada -- nunca
+contra o valor gravado no cookie no momento do login. `sujeito_da_sessao()`
+(cacheado) continua existindo só para `logout()` (que precisa saber "há
+sessão?", nunca "com que perfil?") -- documentado explicitamente como
+NUNCA-autoridade em sua própria docstring.
+
 Nenhuma sessão real de produção é ativada por importar/testar este
 módulo -- `configurar_sessao_segura` só CONFIGURA um app Flask já
 existente, passado pelo chamador (nunca `app.py`, protegido; ver
@@ -43,10 +60,11 @@ import hmac
 import os
 import secrets
 from datetime import timedelta
-from typing import Optional
+from typing import Callable, Optional
 
 import flask
 
+from ..allowlist import ResolvedorAllowlistAmbiente
 from ..identidade import Perfil, Sujeito
 
 _CHAVE_SESSAO_SUJEITO = 'magnata_sujeito'
@@ -107,17 +125,70 @@ def encerrar_sessao() -> None:
 
 
 def sujeito_da_sessao() -> Optional[Sujeito]:
-    """Reconstrói `Sujeito` a partir da sessão Flask corrente -- `None`
-    se não houver sessão autenticada (nunca um `Sujeito` "anônimo" com
-    perfil implícito). Único lugar deste pacote onde um `Sujeito` nasce
-    de uma requisição HTTP real -- nenhum handler de domínio aceita
-    `perfil` vindo direto do corpo/query da requisição."""
+    """Reconstrói `Sujeito` a partir do CACHE gravado no cookie no
+    momento do login -- `None` se não houver sessão.
+
+    **NUNCA AUTORIDADE DE DECISÃO DE PERMISSÃO.** O `perfil` aqui é só
+    o valor de conveniência gravado em `iniciar_sessao()`, que pode
+    estar desatualizado (a allowlist pode ter mudado depois do login) --
+    usar isto para checar permissão foi exatamente o blocker de
+    segurança corrigido nesta revisão. Único uso legítimo restante:
+    `blueprint_login.py::logout()`, que só precisa saber "existe uma
+    sessão para encerrar?", nunca "com que perfil ela foi aberta?". Para
+    QUALQUER decisão de autorização, usar `sujeito_autorizado_da_sessao()`."""
     dados = flask.session.get(_CHAVE_SESSAO_SUJEITO)
     if not dados:
         return None
     return Sujeito(
         perfil=Perfil(dados['perfil']), sujeito_id=dados.get('sujeito_id'),
-        email=dados.get('email'), autenticado_por='sessao_flask',
+        email=dados.get('email'), autenticado_por='sessao_flask_cache',
+    )
+
+
+def sujeito_autorizado_da_sessao(
+    construir_resolvedor: Optional[Callable[[], object]] = None,
+) -> Optional[Sujeito]:
+    """**Única função deste pacote que produz um `Sujeito` com
+    autoridade para decisão de permissão.** Lê a IDENTIDADE (e-mail) do
+    cache da sessão, mas RE-CONSULTA a allowlist ATUAL a cada chamada
+    para obter o `perfil` -- nunca confia no perfil gravado no cookie no
+    momento do login. Efeito direto: trocar `MAGNATA_ADMIN_ALLOWLIST` e
+    reiniciar o serviço passa a valer IMEDIATAMENTE para toda sessão já
+    aberta, na primeira requisição protegida seguinte -- sem exigir
+    logout nem esperar a expiração de 8h.
+
+    Devolve `None` (nunca um `Sujeito` com perfil adivinhado/antigo)
+    quando: não há sessão; o e-mail da sessão não está mais na
+    allowlist (revogado); ou QUALQUER erro ocorrer construindo/
+    consultando o resolvedor (allowlist malformada, fonte indisponível)
+    -- **fail-closed**: erro na fonte de autorização nunca vira
+    allow-all, nunca vira exceção não tratada que um chamador
+    descuidado poderia interpretar como sucesso.
+
+    `construir_resolvedor`: fábrica injetável (default
+    `ResolvedorAllowlistAmbiente`, que já lê `MAGNATA_ADMIN_ALLOWLIST`
+    do zero a cada instanciação -- nenhum cache entre chamadas, nenhuma
+    variável de estado deste módulo guarda um resolvedor "antigo")."""
+    dados = flask.session.get(_CHAVE_SESSAO_SUJEITO)
+    if not dados:
+        return None
+    email = dados.get('email')
+    if not email:
+        return None
+
+    fabrica = construir_resolvedor if construir_resolvedor is not None else ResolvedorAllowlistAmbiente
+    try:
+        resolvedor = fabrica()
+        perfil_atual = resolvedor.perfil_para_email(email)
+    except Exception:
+        return None  # fail-closed -- qualquer erro na fonte de autorizacao nunca vira allow-all
+
+    if perfil_atual is None:
+        return None  # revogado -- nao esta mais na allowlist atual
+
+    return Sujeito(
+        perfil=perfil_atual, sujeito_id=dados.get('sujeito_id'),
+        email=email, autenticado_por='sessao_flask_revalidada',
     )
 
 
