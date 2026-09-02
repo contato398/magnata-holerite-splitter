@@ -101,20 +101,22 @@ jobs:
           fi
 
   postgres-real:
-    name: pytest (alocacao — Postgres real, efêmero)
+    name: pytest (alocacao/autenticacao — Postgres real, efêmero)
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     # Job SEPARADO do job `testes` acima — nunca altera o escopo
     # deliberado daquele job (comentário no topo do arquivo: "sem
-    # serviço externo... a suíte é toda mockada"). Este job existe só
-    # para validar magnata_os/documental/alocacao/ (migration +
-    # adapter) contra um PostgreSQL REAL — mas o container de serviço é
+    # serviço externo... a suíte é toda mockada"). Este job existe para
+    # validar migrations/adapters Postgres reais deste repositório
+    # (hoje: magnata_os/documental/alocacao/ + magnata_os/autenticacao/,
+    # missões "VALIDAÇÃO REAL POSTGRES DA VIGÊNCIA HISTÓRICA V1" e
+    # "AUTENTICAÇÃO ADMINISTRATIVA COMPARTILHADA V1" — reaproveitado, não
+    # um job novo por módulo) — mas o container de serviço é
     # provisionado e destruído pelo PRÓPRIO runner do GitHub Actions a
     # cada execução: nunca um banco permanente, nunca produção, nunca
     # credencial real (as credenciais abaixo só existem dentro deste
-    # job efêmero, nunca reaproveitadas em nenhum outro lugar). Missão
-    # "VALIDAÇÃO REAL POSTGRES DA VIGÊNCIA HISTÓRICA V1".
+    # job efêmero, nunca reaproveitadas em nenhum outro lugar).
     services:
       postgres:
         image: postgres:16
@@ -154,7 +156,7 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
 
-      - name: Validar migration/adapter de alocacao contra Postgres real
+      - name: Validar migrations/adapters (alocacao + autenticacao) contra Postgres real
         env:
           # Variáveis padrão de libpq -- psycopg.connect() sem argumento
           # nenhum já as lê automaticamente (ver docstring do teste).
@@ -168,7 +170,7 @@ jobs:
           PGUSER: magnata_teste
           PGPASSWORD: changeme
           PGDATABASE: magnata_alocacao_teste
-        run: python -m pytest -q --tb=short test_magnata_os_documental_alocacao_postgres_real.py
+        run: python -m pytest -q --tb=short test_magnata_os_documental_alocacao_postgres_real.py test_magnata_os_autenticacao_postgres_real.py
 
       - name: Resumo
         if: always()
