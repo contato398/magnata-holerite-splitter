@@ -62,6 +62,17 @@ def _mem_mb():
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB máx upload
 
+# ── Autenticação Administrativa Compartilhada V1 (wiring mínimo) ───────────────
+# Só conecta a infraestrutura já implementada e testada no PR #118
+# (magnata_os/autenticacao/) ao app Flask real -- nenhuma lógica nova aqui.
+# configurar_sessao_segura lê MAGNATA_SESSION_SECRET_KEY do ambiente e falha
+# de forma explícita (SegredoSessaoAusente) se ausente -- fail-closed, nunca
+# um segredo gerado on-the-fly nem hardcoded.
+from magnata_os.autenticacao.adapters.blueprint_login import auth_bp
+from magnata_os.autenticacao.adapters.sessao import configurar_sessao_segura
+configurar_sessao_segura(app)
+app.register_blueprint(auth_bp)
+
 # ── Integração Secullum Ponto Web (módulo isolado) ──────────────────────────────
 from src.services.secullum_ponto import secullum_bp
 app.register_blueprint(secullum_bp)

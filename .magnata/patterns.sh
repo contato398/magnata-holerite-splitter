@@ -949,6 +949,15 @@ ALLOWED_PATHS=(
   "^test_magnata_os_classificacao_orquestrador_corredor_readonly\.py$"
   "^test_importacao_lote_composicao_corredor_readonly\.py$"
   "^docs/decisoes/orquestrador-readonly-corredor-v2\.md$"
+  # Exceção nominal exata e restrita -- missão "ATIVAÇÃO MÍNIMA DA
+  # AUTENTICAÇÃO ADMINISTRATIVA NO APP.PY" (autorização humana explícita,
+  # branch fix/ativacao-minima-autenticacao-app-py, 2026-09-02): só estes
+  # 2 caminhos exatos, batidos por igualdade de string completa via âncora
+  # $ no fim. Não libera "^test_" nem "^conftest" de forma ampla -- nenhum
+  # outro conftest.py (inclusive em subdiretório) nem qualquer outro
+  # test_*.py passa por esta entrada.
+  "^conftest\.py$"
+  "^test_magnata_os_autenticacao_composicao_app_real_v1\.py$"
 )
 
 # ============================================================================

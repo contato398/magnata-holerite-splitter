@@ -1,0 +1,20 @@
+# Autorização humana específica — Ativação mínima da Autenticação
+# Administrativa Compartilhada V1 no app.py real.
+# Base: 6ff5aaab0918d609b91b9ce1060d95e9c2dc17e7 (main, após o merge do PR #118)
+# Branch: fix/ativacao-minima-autenticacao-app-py
+# Data: 2026-09-02
+# Autorização: mensagem do usuário "MISSÃO — ATIVAÇÃO MÍNIMA DA AUTENTICAÇÃO
+# ADMINISTRATIVA NO APP.PY", seção "AUTORIZAÇÃO HUMANA EXPLÍCITA": "Está
+# AUTORIZADA a alteração mínima do arquivo protegido app.py, exclusivamente
+# para conectar ao Flask real a Autenticação Administrativa Compartilhada V1
+# já mergeada no PR #118."
+#
+# Escopo autorizado (nominal, do próprio texto da missão): importar `auth_bp`
+# de `magnata_os/autenticacao/adapters/blueprint_login.py`, importar
+# `configurar_sessao_segura` de `magnata_os/autenticacao/adapters/sessao.py`,
+# chamar `configurar_sessao_segura(app)` e `app.register_blueprint(auth_bp)`
+# logo após `app = Flask(__name__)` -- nenhuma outra linha de app.py tocada.
+# Somente blob exato aprovado; qualquer alteração subsequente (inclusive
+# reordenar, adicionar linha ou trocar comentário) invalida esta autorização
+# e exige um novo blob nominal.
+811354074ed71e5fa3e5c713e339e44a16d66e64  app.py

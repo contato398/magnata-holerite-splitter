@@ -408,6 +408,17 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # nominais novos: orquestrador canônico e composição de borda.
   "test_magnata_os_classificacao_orquestrador_corredor_readonly.py"
   "test_importacao_lote_composicao_corredor_readonly.py"
+  # Exceção nominal exata e restrita -- missão "ATIVAÇÃO MÍNIMA DA
+  # AUTENTICAÇÃO ADMINISTRATIVA NO APP.PY" (autorização humana explícita,
+  # branch fix/ativacao-minima-autenticacao-app-py, 2026-09-02): só este
+  # arquivo, mesmo caminho exato usado em ALLOWED_PATHS (.magnata/patterns.sh).
+  # Mantém "^test_" bloqueado por padrão para todo o resto -- sem isto,
+  # ficaria bloqueado por SCRATCH_SCOPE_PATTERNS antes mesmo de chegar à
+  # checagem de ALLOWED_PATHS. conftest.py não entra aqui -- essa lista é só
+  # para o padrão "^test_"; conftest.py passa direto pela entrada nominal
+  # equivalente em ALLOWED_PATHS (.magnata/patterns.sh), sem precisar de
+  # exceção nesta lista.
+  "test_magnata_os_autenticacao_composicao_app_real_v1.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
