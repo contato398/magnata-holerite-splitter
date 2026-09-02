@@ -1,52 +1,37 @@
 """
-Camada de autorizacao abstrata da API de esteira (Modulo 01, Fase 4).
+Camada de autorização da API de esteira (Modulo 01, Fase 4).
 
-SEM AUTENTICACAO REAL NESTA FASE: `Sujeito` e um portador de perfil
-declarado pelo chamador, nao o resultado de validar uma sessao, token
-ou senha -- isso e explicitamente fora do escopo (ver "Nao implementar
-ainda" em MAGNATA_OS_DOCUMENTAL_MODULO01_FASE4.md). Quando uma fase
-futura implementar autenticacao real, o unico ponto de integracao e
-onde `Sujeito` e construido (fora deste modulo, no adapter web) -- toda
-a logica de "quem pode consultar o que" already vive aqui e nao muda.
+**Consolidado** na missão "AUTENTICAÇÃO ADMINISTRATIVA COMPARTILHADA
+V1" -- este arquivo era antes uma cópia completa e independente de
+`Perfil`/`Sujeito`/`exigir_perfil`; agora é um shim fino sobre
+`magnata_os/autenticacao/identidade.py` (fonte única). Nenhum import
+existente quebra: `Perfil`, `Sujeito` e `exigir_perfil` continuam
+exportados daqui com o MESMO comportamento observável de antes --
+`Sujeito(Perfil.GESTOR)` continua funcionando, `exigir_perfil` continua
+levantando `PermissaoNegada` DESTE módulo (`.erros.PermissaoNegada`,
+que é um `ApiError` com `codigo`/`status_http`, consumido por
+`erros.tratar_erro_para_resposta` -- nunca trocado pela base genérica
+do pacote compartilhado, que não é um `ApiError`).
 
-Cada handler DECLARA explicitamente qual conjunto de perfis exige
-(constantes PERMISSAO_* em handlers.py) e chama `exigir_perfil()` como
-a PRIMEIRA coisa que faz -- nunca None, nunca implicito.
+Continua SEM AUTENTICAÇÃO REAL: `Sujeito` é um portador de perfil,
+nunca o resultado de validar uma sessão/token/senha por si só -- quem
+de fato autentica agora é `magnata_os/autenticacao/sessao.py`
+(gate fechado nesta mesma missão para o Magnata OS inteiro).
 """
 from __future__ import annotations
 
-import dataclasses
-from enum import Enum
 from typing import FrozenSet
+
+from magnata_os.autenticacao.identidade import Perfil, Sujeito
+from magnata_os.autenticacao.identidade import exigir_perfil as _exigir_perfil_base
 
 from .erros import PermissaoNegada
 
-
-class Perfil(str, Enum):
-    """Perfis operacionais abstratos desta fase. Nenhum perfil novo
-    entra aqui sem decisao explicita."""
-
-    OPERACIONAL = 'OPERACIONAL'
-    GESTOR = 'GESTOR'
-    AUDITOR = 'AUDITOR'
-
-
-@dataclasses.dataclass(frozen=True)
-class Sujeito:
-    """Quem esta fazendo a chamada -- so o perfil, sem identidade real
-    nesta fase (nenhum nome de usuario, e-mail ou token)."""
-
-    perfil: Perfil
+__all__ = ['Perfil', 'Sujeito', 'PermissaoNegada', 'exigir_perfil']
 
 
 def exigir_perfil(sujeito: Sujeito, perfis_permitidos: FrozenSet[Perfil]) -> None:
-    """Levanta PermissaoNegada se `sujeito.perfil` nao estiver em
-    `perfis_permitidos`. Nunca aplica excecao a regra em silencio --
-    toda consulta que chama isso declara explicitamente seu proprio
-    conjunto de perfis permitidos (ver handlers.py)."""
-    if sujeito.perfil not in perfis_permitidos:
-        perfis_str = ', '.join(sorted(p.value for p in perfis_permitidos))
-        raise PermissaoNegada(
-            f'Perfil {sujeito.perfil.value} nao tem permissao para esta consulta '
-            f'(permitido: {perfis_str}).'
-        )
+    """Mesma assinatura/comportamento de sempre -- delega à checagem
+    compartilhada, injetando `.erros.PermissaoNegada` (nunca a base
+    genérica) para preservar `codigo`/`status_http` no erro levantado."""
+    _exigir_perfil_base(sujeito, perfis_permitidos, classe_erro=PermissaoNegada)
