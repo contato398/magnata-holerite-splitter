@@ -509,6 +509,11 @@ EVOLUTION_API_URL  = os.environ.get('EVOLUTION_API_URL', 'http://143.95.214.239:
 EVOLUTION_INSTANCE = os.environ.get('EVOLUTION_INSTANCE', 'magnata')
 EVOLUTION_API_KEY  = os.environ.get('EVOLUTION_API_KEY', '')
 
+# Limite estrito para o conteudo binario aceito pela rota dedicada de video.
+# Mantido abaixo do limite global do Flask para evitar payloads excessivos na
+# memoria e para produzir arquivos adequados ao transporte pelo WhatsApp.
+WHATSAPP_VIDEO_MAX_BYTES = 15 * 1024 * 1024
+
 # Regras de classificação de documento (Fase 2)
 # Lista de (tipo_documento, [regex de palavras-chave]) — primeira que casar vence
 TIPO_DOC_REGRAS = [
@@ -7068,6 +7073,106 @@ def whatsapp_enviar_texto():
         return jsonify({'status': 'ok', 'numero': numero, 'resultado': resultado})
     except Exception as exc:
         return jsonify({'status': 'erro', 'erro': str(exc)}), 502
+
+
+def _sanitizar_nome_video(nome_arquivo):
+    """Retorna um nome MP4 seguro, sem caminho ou caracteres de controle."""
+    if nome_arquivo is None:
+        return 'video.mp4'
+    if not isinstance(nome_arquivo, str):
+        return None
+    nome = nome_arquivo.strip()
+    if not nome or '/' in nome or '\\' in nome or '\x00' in nome:
+        return None
+    nome = unicodedata.normalize('NFKD', nome).encode('ascii', 'ignore').decode('ascii')
+    nome = re.sub(r'[^A-Za-z0-9._-]', '_', nome)
+    nome = re.sub(r'_+', '_', nome).strip('._')
+    if not nome or len(nome) > 120 or not nome.lower().endswith('.mp4'):
+        return None
+    return nome
+
+
+def _decodificar_video_mp4(video_base64):
+    """Valida base64 estrito, tamanho e assinatura ISO BMFF/MP4."""
+    if not isinstance(video_base64, str) or not video_base64:
+        raise ValueError('video_base64 é obrigatório.')
+    if len(video_base64) > 4 * ((WHATSAPP_VIDEO_MAX_BYTES + 2) // 3):
+        raise ValueError('Vídeo acima do limite permitido.')
+    try:
+        conteudo = base64.b64decode(video_base64, validate=True)
+    except (ValueError, UnicodeEncodeError) as exc:
+        raise ValueError('video_base64 inválido.') from exc
+    if len(conteudo) > WHATSAPP_VIDEO_MAX_BYTES:
+        raise ValueError('Vídeo acima do limite permitido.')
+    if len(conteudo) < 12 or conteudo[4:8] != b'ftyp':
+        raise ValueError('Conteúdo não é um MP4 válido.')
+    tamanho_caixa = int.from_bytes(conteudo[:4], 'big')
+    if tamanho_caixa < 8 or tamanho_caixa > len(conteudo):
+        raise ValueError('Conteúdo não é um MP4 válido.')
+    return conteudo
+
+
+def _evolution_enviar_video(numero: str, video_base64: str, nome_arquivo: str):
+    """Envia um MP4 já validado como base64 pela Evolution API."""
+    endpoint = f'{EVOLUTION_API_URL}/message/sendMedia/{EVOLUTION_INSTANCE}'
+    payload = {
+        'number': numero,
+        'mediatype': 'video',
+        'mimetype': 'video/mp4',
+        'media': video_base64,
+        'fileName': nome_arquivo,
+    }
+    resposta = requests.post(
+        endpoint,
+        headers={'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json'},
+        json=payload,
+        timeout=90,
+    )
+    if not (200 <= resposta.status_code < 300):
+        raise RuntimeError(f'Evolution HTTP {resposta.status_code}')
+    return resposta.json()
+
+
+@app.route('/whatsapp/enviar-video', methods=['POST', 'OPTIONS'])
+def whatsapp_enviar_video():
+    """Envia exclusivamente um MP4 em base64; não aceita URLs externas."""
+    if request.method == 'OPTIONS':
+        return '', 204
+
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or not secrets.compare_digest(api_key, EMAIL_WEBHOOK_KEY):
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+    if not EVOLUTION_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'Integração indisponível.'}), 503
+
+    body = request.get_json(silent=True)
+    campos_permitidos = {'numero', 'video_base64', 'nome_arquivo'}
+    if not isinstance(body, dict) or set(body) - campos_permitidos:
+        return jsonify({'status': 'erro', 'erro': 'JSON ou campos inválidos.'}), 400
+
+    numero = _normalizar_numero_evolution(body.get('numero'))
+    if not numero:
+        return jsonify({'status': 'erro', 'erro': 'Número inválido.'}), 400
+    nome_arquivo = _sanitizar_nome_video(body.get('nome_arquivo'))
+    if not nome_arquivo:
+        return jsonify({'status': 'erro', 'erro': 'Nome de arquivo inválido.'}), 400
+    try:
+        _decodificar_video_mp4(body.get('video_base64'))
+    except ValueError as exc:
+        return jsonify({'status': 'erro', 'erro': str(exc)}), 400
+
+    try:
+        resultado = _evolution_enviar_video(numero, body['video_base64'], nome_arquivo)
+    except (requests.RequestException, RuntimeError, ValueError):
+        return jsonify({'status': 'erro', 'erro': 'Falha ao enviar vídeo.'}), 502
+
+    identificador = resultado.get('key', {}).get('id') if isinstance(resultado, dict) else None
+    if not identificador and isinstance(resultado, dict):
+        identificador = resultado.get('id')
+    resposta = {'status': 'ok'}
+    if identificador:
+        resposta['id'] = identificador
+    return jsonify(resposta), 200
 
 
 def _evolution_enviar_documento(numero: str, media_url: str, filename: str, caption=None,
