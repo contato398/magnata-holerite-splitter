@@ -1,0 +1,13 @@
+# Autorização humana específica — endpoint dedicado de vídeo WhatsApp
+# Base: ea17ac8 (estado local equivalente a main após o PR #119)
+# Branch: fix/whatsapp-enviar-video
+# Data: 2026-09-02
+# Autorização: o usuário autorizou expressamente a implementação mínima de
+# POST /whatsapp/enviar-video no legado protegido app.py, usando a integração
+# Evolution existente e a mesma autenticação de /whatsapp/enviar-texto.
+#
+# Escopo exclusivo: rota de vídeo MP4 em base64, validações de telefone,
+# base64, assinatura, tamanho e nome; chamada sendMedia com timeout; testes
+# totalmente simulados. Nenhum endpoint genérico, alteração no endpoint de
+# texto, deploy ou envio real. Somente o blob exato abaixo é autorizado.
+1ceaf322e5735a5db2c40cd82cda6208675599b6  app.py

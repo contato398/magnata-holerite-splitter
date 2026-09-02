@@ -1,0 +1,12 @@
+# Autorização humana específica — endpoint direto de PDF comum no WhatsApp
+# Base: 7309a45 (main local após incorporação do PR #121)
+# Branch: fix/whatsapp-enviar-documento
+# Data: 2026-09-02
+# Autorização: o usuário autorizou expressamente a implementação mínima de
+# POST /whatsapp/enviar-documento no legado protegido app.py.
+#
+# Escopo exclusivo: receber numero, documento_base64 e nome_arquivo; validar
+# telefone, base64, assinatura PDF, tamanho e nome; chamar o sendMedia da
+# Evolution como document/application/pdf. Sem Airtable, assinatura digital,
+# rastreamento, deploy ou envio real. Somente o blob exato é autorizado.
+0cfe889b07b2e953868a86e98b01f7fae27179da  app.py
