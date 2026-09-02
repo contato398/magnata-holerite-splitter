@@ -45,7 +45,7 @@ def _app_teste(monkeypatch, verificador_fake):
 
 def _fake_verificar(email, sub='sub-sintetico-1'):
     def _v(token, client_id=None, **kwargs):
-        if token != 'token-valido':
+        if token != 'test':
             from magnata_os.autenticacao.provedor_google_oidc import TokenGoogleInvalido
             raise TokenGoogleInvalido('token invalido (fake)')
         from magnata_os.autenticacao.provedor_google_oidc import IdentidadeGoogleVerificada
@@ -67,21 +67,21 @@ def test_login_sem_id_token_falha_400(monkeypatch):
 def test_login_com_token_invalido_falha_401(monkeypatch):
     app = _app_teste(monkeypatch, _fake_verificar(_EMAIL_GESTOR))
     cliente = app.test_client()
-    resp = cliente.post('/auth/login', json={'id_token': 'token-forjado'})
+    resp = cliente.post('/auth/login', json={'id_token': 'fake'})
     assert resp.status_code == 401
 
 
 def test_login_com_email_fora_da_allowlist_falha_403(monkeypatch):
     app = _app_teste(monkeypatch, _fake_verificar(_EMAIL_FORA_DA_ALLOWLIST))
     cliente = app.test_client()
-    resp = cliente.post('/auth/login', json={'id_token': 'token-valido'})
+    resp = cliente.post('/auth/login', json={'id_token': 'test'})
     assert resp.status_code == 403
 
 
 def test_login_valido_com_perfil_gestor_seta_sessao(monkeypatch):
     app = _app_teste(monkeypatch, _fake_verificar(_EMAIL_GESTOR))
     cliente = app.test_client()
-    resp = cliente.post('/auth/login', json={'id_token': 'token-valido'})
+    resp = cliente.post('/auth/login', json={'id_token': 'test'})
     assert resp.status_code == 200
     corpo = resp.get_json()
     assert corpo['email'] == _EMAIL_GESTOR
@@ -96,7 +96,7 @@ def test_login_ignora_perfil_autodeclarado_no_corpo(monkeypatch):
     e sempre o da allowlist -- nunca o do corpo."""
     app = _app_teste(monkeypatch, _fake_verificar(_EMAIL_OPERACIONAL))
     cliente = app.test_client()
-    resp = cliente.post('/auth/login', json={'id_token': 'token-valido', 'perfil': 'GESTOR'})
+    resp = cliente.post('/auth/login', json={'id_token': 'test', 'perfil': 'GESTOR'})
     assert resp.status_code == 200
     assert resp.get_json()['perfil'] == 'OPERACIONAL'  # nunca GESTOR
 
@@ -104,7 +104,7 @@ def test_login_ignora_perfil_autodeclarado_no_corpo(monkeypatch):
 def test_cookie_de_sessao_e_httponly_e_samesite(monkeypatch):
     app = _app_teste(monkeypatch, _fake_verificar(_EMAIL_GESTOR))
     cliente = app.test_client()
-    resp = cliente.post('/auth/login', json={'id_token': 'token-valido'})
+    resp = cliente.post('/auth/login', json={'id_token': 'test'})
     set_cookie = resp.headers.get('Set-Cookie', '')
     assert 'HttpOnly' in set_cookie
     assert 'SameSite=Lax' in set_cookie
@@ -125,7 +125,7 @@ def test_me_sem_sessao_devolve_nao_autenticado(monkeypatch):
 def test_me_com_sessao_devolve_identidade(monkeypatch):
     app = _app_teste(monkeypatch, _fake_verificar(_EMAIL_GESTOR))
     cliente = app.test_client()
-    cliente.post('/auth/login', json={'id_token': 'token-valido'})
+    cliente.post('/auth/login', json={'id_token': 'test'})
     resp = cliente.get('/auth/me')
     corpo = resp.get_json()
     assert corpo['autenticado'] is True
@@ -147,7 +147,7 @@ def test_logout_sem_sessao_falha_401(monkeypatch):
 def test_logout_sem_csrf_falha_403(monkeypatch):
     app = _app_teste(monkeypatch, _fake_verificar(_EMAIL_GESTOR))
     cliente = app.test_client()
-    cliente.post('/auth/login', json={'id_token': 'token-valido'})
+    cliente.post('/auth/login', json={'id_token': 'test'})
     resp = cliente.post('/auth/logout')  # sem header X-CSRF-Token
     assert resp.status_code == 403
 
@@ -155,15 +155,15 @@ def test_logout_sem_csrf_falha_403(monkeypatch):
 def test_logout_com_csrf_adulterado_falha_403(monkeypatch):
     app = _app_teste(monkeypatch, _fake_verificar(_EMAIL_GESTOR))
     cliente = app.test_client()
-    cliente.post('/auth/login', json={'id_token': 'token-valido'})
-    resp = cliente.post('/auth/logout', headers={'X-CSRF-Token': 'token-forjado-qualquer'})
+    cliente.post('/auth/login', json={'id_token': 'test'})
+    resp = cliente.post('/auth/logout', headers={'X-CSRF-Token': 'fake'})
     assert resp.status_code == 403
 
 
 def test_logout_com_csrf_correto_encerra_sessao(monkeypatch):
     app = _app_teste(monkeypatch, _fake_verificar(_EMAIL_GESTOR))
     cliente = app.test_client()
-    login = cliente.post('/auth/login', json={'id_token': 'token-valido'})
+    login = cliente.post('/auth/login', json={'id_token': 'test'})
     csrf = login.get_json()['csrf_token']
     resp = cliente.post('/auth/logout', headers={'X-CSRF-Token': csrf})
     assert resp.status_code == 204
@@ -197,7 +197,7 @@ def test_rota_protegida_com_perfil_insuficiente_recusa(monkeypatch):
     app = _app_teste(monkeypatch, _fake_verificar(_EMAIL_OPERACIONAL))
     _rota_protegida_de_teste(app)
     cliente = app.test_client()
-    login = cliente.post('/auth/login', json={'id_token': 'token-valido'})
+    login = cliente.post('/auth/login', json={'id_token': 'test'})
     csrf = login.get_json()['csrf_token']
     resp = cliente.post('/protegida', headers={'X-CSRF-Token': csrf})
     assert resp.status_code == 403
@@ -211,7 +211,7 @@ def test_rota_protegida_com_gestor_e_csrf_funciona_e_identidade_chega_ao_handler
     app = _app_teste(monkeypatch, _fake_verificar(_EMAIL_GESTOR, sub='sub-gestor-xyz'))
     _rota_protegida_de_teste(app)
     cliente = app.test_client()
-    login = cliente.post('/auth/login', json={'id_token': 'token-valido'})
+    login = cliente.post('/auth/login', json={'id_token': 'test'})
     csrf = login.get_json()['csrf_token']
     resp = cliente.post('/protegida', headers={'X-CSRF-Token': csrf})
     assert resp.status_code == 200
@@ -224,7 +224,7 @@ def test_rota_protegida_sem_csrf_mesmo_autenticado_recusa(monkeypatch):
     app = _app_teste(monkeypatch, _fake_verificar(_EMAIL_GESTOR))
     _rota_protegida_de_teste(app)
     cliente = app.test_client()
-    cliente.post('/auth/login', json={'id_token': 'token-valido'})
+    cliente.post('/auth/login', json={'id_token': 'test'})
     resp = cliente.post('/protegida')  # sem X-CSRF-Token
     assert resp.status_code == 403
 

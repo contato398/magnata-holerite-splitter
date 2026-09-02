@@ -82,7 +82,7 @@ def configurar_sessao_segura(
             'MAGNATA_SESSION_SECRET_KEY nao configurada -- sessao segura real '
             'exige essa variavel de ambiente.'
         )
-    app.secret_key = chave
+    app.secret_key = chave  # variavel local (lida do ambiente acima), nunca um literal
     app.config['SESSION_COOKIE_HTTPONLY'] = True
     app.config['SESSION_COOKIE_SECURE'] = secure
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
