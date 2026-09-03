@@ -28,6 +28,19 @@ import inspect
 import re
 from typing import Optional
 
+# Reaproveitamento REAL confirmado (revisão independente): a cardinalidade
+# múltipla de cliente (transferência de posto dentro do período do
+# documento) já tem representação pronta em ResolucaoDimensao
+# (magnata_os/classificacao/contratos.py) -- nunca uma modelagem nova.
+# Importar aqui não viola o isolamento da prova: é módulo de domínio puro
+# já existente do próprio Magnata OS, nunca Airtable/requests/app.py.
+from magnata_os.classificacao.contratos import (
+    DimensaoResolucao,
+    EstadoResolucaoDimensao,
+    ReferenciaCanonica,
+    ResolucaoDimensao,
+)
+
 # ---------------------------------------------------------------------------
 # 1) Extração pura de período (prova) -- mesma forma de
 #    "Período: dd/mm/aaaa até dd/mm/aaaa" já validada contra PDF real em
@@ -112,13 +125,38 @@ class _AlocacaoSintetica:
     vigente_ate: Optional[datetime.date]
 
 
-def resolver_cliente_por_alocacao_historica(alocacoes, colaborador_id: str, data: datetime.date):
+def resolver_clientes_por_periodo_documental(
+    alocacoes, colaborador_id: str, periodo_inicio: datetime.date, periodo_fim: datetime.date,
+) -> ResolucaoDimensao:
+    """Resolve cliente(s) por INTERSEÇÃO temporal entre o período do
+    documento e as alocações do colaborador -- nunca por um único ponto
+    no tempo (um PDF cobre um INTERVALO de dias; o colaborador pode ter
+    tido mais de uma alocação válida dentro dele -- transferência de
+    posto no meio do ciclo). Reaproveita `ResolucaoDimensao`
+    (`classificacao/contratos.py`) já existente: `valores_confirmados`
+    já é uma tupla, já suporta N clientes legítimos sem modelagem nova
+    -- MESMO mecanismo já usado para "vínculo múltiplo genuíno" de
+    Holerite (`adaptador_inventario_prestacao.py::
+    itens_para_multiplos_clientes_do_vinculo`)."""
+    clientes = []
     for a in alocacoes:
         if a.colaborador_id != colaborador_id:
             continue
-        if a.vigente_de <= data and (a.vigente_ate is None or data <= a.vigente_ate):
-            return a.cliente_id
-    return None
+        fim_efetivo = a.vigente_ate  # None = vigente sem fim (nunca tratado como "ate agora" aqui: intersecao so precisa saber que cobre ate o fim do periodo ou alem)
+        intersecta = a.vigente_de <= periodo_fim and (fim_efetivo is None or fim_efetivo >= periodo_inicio)
+        if intersecta:
+            cliente = ReferenciaCanonica('CLIENTE', a.cliente_id)
+            if cliente not in clientes:
+                clientes.append(cliente)
+
+    if not clientes:
+        return ResolucaoDimensao(
+            dimensao=DimensaoResolucao.CLIENTE, estado=EstadoResolucaoDimensao.NAO_ENCONTRADA,
+        )
+    return ResolucaoDimensao(
+        dimensao=DimensaoResolucao.CLIENTE, estado=EstadoResolucaoDimensao.RESOLVIDA,
+        valores_confirmados=tuple(clientes),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -166,35 +204,79 @@ def test_documento_sem_periodo_fica_nao_encontrada_nunca_inventa():
     assert resolucao.periodo_inicio is None
 
 
-def test_resolucao_de_cliente_usa_alocacao_vigente_na_data_do_documento_nunca_atual():
+def test_resolucao_de_cliente_usa_alocacao_vigente_no_periodo_do_documento_nunca_cadastro_atual():
     alocacoes = (
         _AlocacaoSintetica('func-1', 'cliente-A', datetime.date(2026, 1, 1), datetime.date(2026, 5, 31)),
         _AlocacaoSintetica('func-1', 'cliente-B', datetime.date(2026, 6, 1), None),  # transferencia, vigente agora
     )
-    # Documento cujo periodo cai ANTES da transferencia -- deve resolver cliente-A,
-    # mesmo que o cadastro "atual" (alocacao vigente=None) já seja cliente-B.
-    cliente_no_periodo_antigo = resolver_cliente_por_alocacao_historica(
-        alocacoes, 'func-1', datetime.date(2026, 4, 15),
+    # Documento cujo periodo cai INTEIRAMENTE ANTES da transferencia -- deve
+    # resolver só cliente-A, mesmo que o cadastro "atual" (alocacao
+    # vigente=None) já seja cliente-B.
+    resolucao_antiga = resolver_clientes_por_periodo_documental(
+        alocacoes, 'func-1', datetime.date(2026, 4, 1), datetime.date(2026, 4, 30),
     )
-    cliente_no_periodo_novo = resolver_cliente_por_alocacao_historica(
-        alocacoes, 'func-1', datetime.date(2026, 6, 10),
+    resolucao_nova = resolver_clientes_por_periodo_documental(
+        alocacoes, 'func-1', datetime.date(2026, 6, 5), datetime.date(2026, 6, 30),
     )
-    assert cliente_no_periodo_antigo == 'cliente-A'
-    assert cliente_no_periodo_novo == 'cliente-B'
+    assert resolucao_antiga.estado == EstadoResolucaoDimensao.RESOLVIDA
+    assert resolucao_antiga.valores_confirmados == (ReferenciaCanonica('CLIENTE', 'cliente-A'),)
+    assert resolucao_nova.estado == EstadoResolucaoDimensao.RESOLVIDA
+    assert resolucao_nova.valores_confirmados == (ReferenciaCanonica('CLIENTE', 'cliente-B'),)
 
 
-def test_colaborador_sem_alocacao_na_data_nunca_inventa_cliente():
+def test_transferencia_de_posto_dentro_do_periodo_documental_preserva_as_duas_alocacoes():
+    """Caso adversarial confirmado pela revisão: ciclo 29/05/2026 a
+    28/06/2026, Cliente A vigente até 10/06/2026, Cliente B vigente a
+    partir de 11/06/2026 -- as duas alocações intersectam o MESMO
+    documento. Nenhuma pode ser descartada; nenhuma escolhida
+    arbitrariamente; nenhuma reduzida silenciosamente a uma só."""
+    alocacoes = (
+        _AlocacaoSintetica('func-transferido', 'cliente-A', datetime.date(2026, 1, 1), datetime.date(2026, 6, 10)),
+        _AlocacaoSintetica('func-transferido', 'cliente-B', datetime.date(2026, 6, 11), None),
+    )
+    resolucao = resolver_clientes_por_periodo_documental(
+        alocacoes, 'func-transferido', datetime.date(2026, 5, 29), datetime.date(2026, 6, 28),
+    )
+    assert resolucao.estado == EstadoResolucaoDimensao.RESOLVIDA
+    assert set(resolucao.valores_confirmados) == {
+        ReferenciaCanonica('CLIENTE', 'cliente-A'), ReferenciaCanonica('CLIENTE', 'cliente-B'),
+    }
+    assert len(resolucao.valores_confirmados) == 2  # nenhuma das duas foi descartada
+
+
+def test_transferencia_intraperiodo_e_deterministica():
+    alocacoes = (
+        _AlocacaoSintetica('func-transferido', 'cliente-A', datetime.date(2026, 1, 1), datetime.date(2026, 6, 10)),
+        _AlocacaoSintetica('func-transferido', 'cliente-B', datetime.date(2026, 6, 11), None),
+    )
+    primeira = resolver_clientes_por_periodo_documental(
+        alocacoes, 'func-transferido', datetime.date(2026, 5, 29), datetime.date(2026, 6, 28),
+    )
+    segunda = resolver_clientes_por_periodo_documental(
+        alocacoes, 'func-transferido', datetime.date(2026, 5, 29), datetime.date(2026, 6, 28),
+    )
+    assert primeira == segunda
+
+
+def test_colaborador_sem_alocacao_no_periodo_nunca_inventa_cliente_fica_nao_encontrada():
     alocacoes = (
         _AlocacaoSintetica('func-1', 'cliente-A', datetime.date(2026, 6, 1), None),
     )
-    assert resolver_cliente_por_alocacao_historica(alocacoes, 'func-2', datetime.date(2026, 6, 10)) is None
-    assert resolver_cliente_por_alocacao_historica(alocacoes, 'func-1', datetime.date(2026, 1, 1)) is None
+    sem_alocacao_alguma = resolver_clientes_por_periodo_documental(
+        alocacoes, 'func-2', datetime.date(2026, 6, 1), datetime.date(2026, 6, 30),
+    )
+    periodo_antes_de_qualquer_alocacao = resolver_clientes_por_periodo_documental(
+        alocacoes, 'func-1', datetime.date(2026, 1, 1), datetime.date(2026, 1, 31),
+    )
+    assert sem_alocacao_alguma.estado == EstadoResolucaoDimensao.NAO_ENCONTRADA
+    assert sem_alocacao_alguma.valores_confirmados == ()
+    assert periodo_antes_de_qualquer_alocacao.estado == EstadoResolucaoDimensao.NAO_ENCONTRADA
 
 
 def test_pipeline_ponta_a_ponta_documento_mais_alocacao():
     """Prova completa: PDF -> período -> competência -> objeto canônico
-    -> colaborador -> cliente via alocação histórica -- tudo em memória,
-    nenhuma escrita em Airtable/Postgres."""
+    -> colaborador -> cliente(s) via alocação histórica por interseção
+    de período -- tudo em memória, nenhuma escrita em Airtable/Postgres."""
     conteudo = b'%PDF-1.7 cartao ponto sintetico junho'
     texto = 'CARTAO DE PONTO\nPeríodo: 29/05/2026 até 28/06/2026'
     resolucao = resolver_documento_conceitual(conteudo, texto, colaborador_id='func-sintetico-2')
@@ -202,13 +284,14 @@ def test_pipeline_ponta_a_ponta_documento_mais_alocacao():
     alocacoes = (
         _AlocacaoSintetica('func-sintetico-2', 'cliente-sintetico-Z', datetime.date(2026, 1, 1), None),
     )
-    cliente = resolver_cliente_por_alocacao_historica(
-        alocacoes, resolucao.colaborador_id, resolucao.periodo_fim,
+    resolucao_cliente = resolver_clientes_por_periodo_documental(
+        alocacoes, resolucao.colaborador_id, resolucao.periodo_inicio, resolucao.periodo_fim,
     )
 
     assert resolucao.estado_resolucao == 'RESOLVIDA'
     assert resolucao.competencia == '2026-06'
-    assert cliente == 'cliente-sintetico-Z'
+    assert resolucao_cliente.estado == EstadoResolucaoDimensao.RESOLVIDA
+    assert resolucao_cliente.valores_confirmados == (ReferenciaCanonica('CLIENTE', 'cliente-sintetico-Z'),)
 
 
 def _e_docstring(no_expr: ast.Expr) -> bool:

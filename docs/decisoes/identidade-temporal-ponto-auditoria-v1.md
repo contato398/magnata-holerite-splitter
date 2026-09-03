@@ -151,6 +151,58 @@ consultar `alocacao` diretamente (quando um Postgres real existir) é
 **só uma nova implementação do MESMO Protocol** — nenhuma mudança na
 `classificacao/` que consome o Protocol.
 
+### Correção (revisão independente) — transferência de posto/cliente DENTRO do período do documento
+
+Um PDF de Folha de Ponto cobre um INTERVALO de dias (`periodo_inicio`..
+`periodo_fim`), não um instante — e o colaborador pode ter tido MAIS DE
+UMA alocação válida dentro desse intervalo (transferência de posto no
+meio do ciclo). Exemplo sintético confirmado: ciclo 29/05/2026 a
+28/06/2026, Cliente A vigente até 10/06/2026, Cliente B vigente a
+partir de 11/06/2026 — as duas alocações são legítimas e cobrem partes
+reais e distintas do mesmo documento.
+
+**A resolução correta é por INTERSEÇÃO temporal**, nunca um ponto único
+no tempo: toda alocação cujo intervalo `[vigente_de, vigente_ate ou
+sem-fim]` intersecta `[periodo_inicio, periodo_fim]` do documento é uma
+relação válida para este documento — nunca só a que cobre "a maior
+parte" nem a "mais recente" (isso seria escolher arbitrariamente, regra
+pétrea #8 proíbe).
+
+**Reaproveitamento confirmado — nenhuma modelagem nova necessária**:
+`ResolucaoDimensao` (`classificacao/contratos.py`, linha ~275) já
+representa exatamente esta cardinalidade — `valores_confirmados:
+Tuple[ReferenciaCanonica, ...]`, já **plural por design**, sem limite
+de 1 valor. Este é o MESMO mecanismo que já resolve "vínculo múltiplo
+genuíno" para Holerite (`adaptador_inventario_prestacao.py::
+itens_para_multiplos_clientes_do_vinculo`, comentário: "quando a
+dimensão CLIENTE resolveu RESOLVIDA com 2+ valores confirmados... gera
+1 item por cliente, MESMO documento_id em todos"). A transferência
+intra-período de Ponto é o MESMO padrão: 1 documento físico, N
+resoluções lógicas legítimas — nunca uma segunda modelagem.
+
+Mapeamento de cardinalidade (vocabulário já existente, sem novo
+estado):
+- **zero** alocações intersectam o período → `EstadoResolucaoDimensao.
+  NAO_ENCONTRADA` (mesmo vocabulário já usado; a readiness a jusante já
+  trata isso como `REVISAR`, sem alteração);
+- **uma** alocação intersecta → `RESOLVIDA`, `valores_confirmados` com
+  1 valor — caso inequívoco;
+- **duas ou mais** alocações distintas intersectam (transferência
+  dentro do período) → `RESOLVIDA`, `valores_confirmados` com **todos**
+  os clientes distintos — nunca reduzido a 1; o documento contribui
+  para a completude de CADA cliente envolvido, mesma semântica já usada
+  por `itens_para_multiplos_clientes_do_vinculo` (mesmo `documento_id`
+  em cada item lógico, nunca duplicado fisicamente).
+
+**Decisão de modelo mantida**: cliente/posto continua **fora** de
+`resolucao_documental_temporal` como coluna — a auditoria confirma que
+isso seria não só desnecessário, mas ATIVAMENTE ERRADO no caso de
+transferência intra-período (uma única coluna não poderia representar
+2 clientes legítimos para o mesmo documento sem duplicar a linha ou
+inventar uma escolha). A resolução por interseção, feita em tempo de
+consulta contra `alocacao`, é estritamente necessária para este caso —
+reforça, em vez de enfraquecer, a decisão original do ADR.
+
 ## Airtable — disciplina desta proposta
 
 - Origem transitória/read-only apenas: o PDF é baixado da `url` do
@@ -246,9 +298,12 @@ Airtable/Postgres real:
 4. montagem do objeto canônico em memória (equivalente a
    `resolucao_documental_temporal`, como `dataclass` puro, só para a
    prova);
-5. resolução de colaborador→cliente via alocação histórica SINTÉTICA
-   (dict em memória simulando `vinculo_trabalhista`/`alocacao`,
-   consultada por data — nunca por cadastro atual);
+5. resolução de colaborador→cliente(s) via alocação histórica SINTÉTICA
+   (tupla em memória simulando `vinculo_trabalhista`/`alocacao`),
+   **por INTERSEÇÃO com o intervalo `[periodo_inicio, periodo_fim]` do
+   documento** — nunca um único ponto no tempo, nunca cadastro atual;
+   inclui o caso de transferência intra-período (2 clientes distintos,
+   ambos retornados, nenhum descartado);
 6. confirmação, por teste AST, de que nenhum import de Airtable/
    `requests`/`app.py` existe no arquivo de prova.
 
