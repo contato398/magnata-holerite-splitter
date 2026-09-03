@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import enum
 from typing import Optional, Protocol, Tuple
 
 from .contratos import (
@@ -206,3 +207,110 @@ def resolver_documento_ponto(
             fonte_alocacao, colaborador_id, periodo_inicio, periodo_fim,
         )
     return resolucao_documental, resolucao_cliente
+
+
+# ============================================================================
+# Semântica de REPROCESSAMENTO (revisão independente pós-PR #127)
+# ============================================================================
+#
+# Pergunta que motivou esta seção: se o mesmo `documento_id` for
+# reprocessado (nova extração de período/competência) e o resultado
+# divergir do já persistido, o sistema pode sobrescrever silenciosamente
+# a verdade anterior? Resposta: NUNCA. As 4 transições abaixo são as
+# ÚNICAS possíveis, e são a MESMA classificação usada tanto pelo
+# repositório em memória quanto pelo adapter Postgres — nenhuma duplica
+# esta decisão.
+
+class TransicaoResolucaoTemporal(str, enum.Enum):
+    """Classificação determinística de um `salvar_com_evento` contra o
+    estado já persistido (se houver) para o MESMO `documento_id`."""
+
+    NOVA = 'NOVA'
+    """Nenhuma resolução anterior para este documento -- INSERT normal."""
+
+    EQUIVALENTE = 'EQUIVALENTE'
+    """Resolução anterior existe e é IDÊNTICA à nova (mesmo colaborador,
+    período, estado e valor de competência) -- idempotência real: NENHUMA
+    escrita, NENHUM evento novo (reprocessar o mesmo resultado nunca
+    produz ruído na auditoria)."""
+
+    ATUALIZACAO = 'ATUALIZACAO'
+    """Resolução anterior existe e DIFERE da nova, mas não são 2
+    competências RESOLVIDAS conflitantes entre si (ex.: extração antes
+    NAO_ENCONTRADA, agora RESOLVIDA -- uma correção legítima, nunca uma
+    disputa). A nova resolução é aplicada; o valor ANTERIOR nunca é
+    apagado sem registro -- fica preservado para sempre no evento de
+    auditoria (`EventoHistorico`, append-only)."""
+
+    CONFLITO = 'CONFLITO'
+    """Resolução anterior e nova são AMBAS `RESOLVIDA`, mas com valores de
+    competência DIFERENTES -- disputa real entre 2 extrações confiantes.
+    O sistema NUNCA decide sozinho qual prevalece: a dimensão COMPETENCIA
+    persistida é rebaixada para `EstadoResolucaoDimensao.CONFLITO`
+    (vocabulário já existente, nunca um estado novo) e o período fica
+    `None` (não confiável enquanto a disputa não for resolvida por um
+    humano) -- mesma filosofia de `EstadoPrestacaoReadiness.REVISAR` a
+    jusante. Os 2 valores em disputa ficam preservados no evento de
+    auditoria, nunca perdidos."""
+
+
+def resolucoes_equivalentes(
+    anterior: ResolucaoDocumentalTemporalPonto, novo: ResolucaoDocumentalTemporalPonto,
+) -> bool:
+    """Compara os campos observáveis -- nunca `documento_id`/
+    `tipo_documental` (esses são sempre iguais para o mesmo documento,
+    por construção de quem chama)."""
+    return (
+        anterior.colaborador_id == novo.colaborador_id
+        and anterior.periodo_inicio == novo.periodo_inicio
+        and anterior.periodo_fim == novo.periodo_fim
+        and anterior.resolucao_competencia.estado == novo.resolucao_competencia.estado
+        and anterior.resolucao_competencia.valores_confirmados == novo.resolucao_competencia.valores_confirmados
+    )
+
+
+def classificar_transicao_resolucao(
+    anterior: Optional[ResolucaoDocumentalTemporalPonto],
+    novo: ResolucaoDocumentalTemporalPonto,
+) -> TransicaoResolucaoTemporal:
+    """Função PURA e determinística — única fonte desta decisão,
+    reaproveitada por `repositorio_resolucao_temporal.py` (memória) e
+    `adapters/postgres_resolucao_temporal.py` (Postgres), nunca
+    duplicada entre os dois."""
+    if anterior is None:
+        return TransicaoResolucaoTemporal.NOVA
+    if resolucoes_equivalentes(anterior, novo):
+        return TransicaoResolucaoTemporal.EQUIVALENTE
+    ambas_resolvidas_e_diferentes = (
+        anterior.resolucao_competencia.estado == EstadoResolucaoDimensao.RESOLVIDA
+        and novo.resolucao_competencia.estado == EstadoResolucaoDimensao.RESOLVIDA
+        and anterior.resolucao_competencia.valores_confirmados != novo.resolucao_competencia.valores_confirmados
+    )
+    if ambas_resolvidas_e_diferentes:
+        return TransicaoResolucaoTemporal.CONFLITO
+    return TransicaoResolucaoTemporal.ATUALIZACAO
+
+
+def resolucao_a_persistir_para_transicao(
+    transicao: TransicaoResolucaoTemporal,
+    novo: ResolucaoDocumentalTemporalPonto,
+) -> ResolucaoDocumentalTemporalPonto:
+    """Resolução efetivamente escrita para cada transição. `NOVA`/
+    `ATUALIZACAO` aplicam `novo` sem alteração. `CONFLITO` NUNCA decide
+    sozinho qual dos dois valores prevalece -- rebaixa a dimensão
+    COMPETENCIA para `CONFLITO` e limpa o período (ambos preservados,
+    sem alteração, no evento de auditoria correspondente, nunca
+    perdidos). `EQUIVALENTE` nunca chega aqui (tratado como no-op antes)."""
+    if transicao != TransicaoResolucaoTemporal.CONFLITO:
+        return novo
+    resolucao_conflito = ResolucaoDimensao(
+        dimensao=DimensaoResolucao.COMPETENCIA,
+        estado=EstadoResolucaoDimensao.CONFLITO,
+        metodo='classificar_transicao_resolucao',
+        motivos=('competencia_divergente_entre_reprocessamentos',),
+    )
+    return ResolucaoDocumentalTemporalPonto(
+        documento_id=novo.documento_id, tipo_documental=novo.tipo_documental,
+        colaborador_id=novo.colaborador_id, periodo_inicio=None, periodo_fim=None,
+        resolucao_competencia=resolucao_conflito,
+    )

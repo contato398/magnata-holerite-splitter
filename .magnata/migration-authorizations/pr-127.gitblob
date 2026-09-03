@@ -7,3 +7,10 @@
 # migration nova listada, com o hash exato — nenhuma outra alteração de
 # schema. Migration NÃO aplicada em nenhum banco por esta autorização.
 2d6b4c36e486388d099a331506789c2e37aba9c0  magnata_os/documental/modulo01/migrations/0010_criar_tabela_resolucao_documental_temporal.sql
+#
+# Atualização — revisão final do PR #127 (mesma missão, mesmo escopo):
+# autoriza também o rollback explícito da 0010, exigido pela mesma
+# convenção já usada em 0009_itens_importacao_lote_rollback.sql e
+# documental/alocacao/migrations/0001_..._rollback.sql. Não aplicado em
+# nenhum banco.
+8529281a35f1405c36411e4a0b7ef9c9c06cd988  magnata_os/documental/modulo01/migrations/0010_criar_tabela_resolucao_documental_temporal_rollback.sql

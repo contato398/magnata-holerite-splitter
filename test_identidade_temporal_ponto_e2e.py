@@ -32,6 +32,7 @@ from magnata_os.classificacao.prestacao_readiness import ItemInventarioPrestacao
 from magnata_os.classificacao.produtores_evidencia_ponto import TIPO_FOLHA_DE_PONTO
 from magnata_os.classificacao.resolucao_temporal_ponto import (
     AlocacaoHistorica,
+    TransicaoResolucaoTemporal,
     resolver_documento_ponto,
 )
 from magnata_os.documental.modulo01 import dominio as modulo_dominio
@@ -93,12 +94,32 @@ def _registrar_documento(repo_docs, conteudo: bytes, origem: str = 'teste-sintet
     return documento, criado
 
 
-def _evento_resolucao_registrada(documento_id: str) -> EventoHistorico:
+_NOMES_EVENTO_POR_TRANSICAO = {
+    'NOVA': 'RESOLUCAO_TEMPORAL_PONTO_REGISTRADA',
+    'ATUALIZACAO': 'RESOLUCAO_TEMPORAL_PONTO_ATUALIZADA',
+    'CONFLITO': 'RESOLUCAO_TEMPORAL_PONTO_DIVERGENTE',
+}
+
+
+def _fabricar_evento(transicao, anterior, novo) -> EventoHistorico:
+    """Fábrica de evento usada pelos testes -- reflete a transição
+    classificada pelo repositório, preservando anterior/novo nos
+    detalhes (nunca um evento genérico que esconda o que mudou)."""
     agora = datetime.datetime(2026, 7, 1, tzinfo=datetime.timezone.utc)
+    detalhes = {
+        'competencia_anterior': (
+            anterior.resolucao_competencia.valores_confirmados[0].entidade_id
+            if anterior and anterior.resolucao_competencia.valores_confirmados else None
+        ),
+        'competencia_nova': (
+            novo.resolucao_competencia.valores_confirmados[0].entidade_id
+            if novo.resolucao_competencia.valores_confirmados else None
+        ),
+    }
     return EventoHistorico(
-        documento_id=documento_id, evento='RESOLUCAO_TEMPORAL_PONTO_REGISTRADA',
+        documento_id=novo.documento_id, evento=_NOMES_EVENTO_POR_TRANSICAO[transicao.value],
         status_anterior=None, status_novo=None, timestamp=agora,
-        correlation_id=gerar_correlation_id(), detalhes={},
+        correlation_id=gerar_correlation_id(), detalhes=detalhes,
     )
 
 
@@ -165,12 +186,117 @@ def test_caso5_mesmo_hash_reapresentado_nunca_duplica_documento_nem_resolucao():
 
     texto = _texto_cartao_ponto('29/05/2026', '28/06/2026')
     resolucao, _cliente = resolver_documento_ponto(documento_1.documento_id, texto, 'func-1', _FonteAlocacaoEmMemoria(()))
-    repo_resolucao.salvar_com_evento(resolucao, lambda: _evento_resolucao_registrada(documento_1.documento_id))
-    # Reprocessar o MESMO documento_id -- sobrescreve a MESMA linha (nunca uma segunda).
-    repo_resolucao.salvar_com_evento(resolucao, lambda: _evento_resolucao_registrada(documento_1.documento_id))
+    transicao_1 = repo_resolucao.salvar_com_evento(resolucao, _fabricar_evento)
+    # Reprocessar o MESMO documento_id com a MESMA resolução -- EQUIVALENTE
+    # (idempotência real: nenhuma escrita nova, nenhum evento novo).
+    transicao_2 = repo_resolucao.salvar_com_evento(resolucao, _fabricar_evento)
 
+    assert transicao_1 == TransicaoResolucaoTemporal.NOVA
+    assert transicao_2 == TransicaoResolucaoTemporal.EQUIVALENTE
     assert len(repo_resolucao.listar_todos()) == 1
     assert len(repo_docs.listar_todos()) == 1
+    assert len(repo_historico.listar_por_documento(documento_1.documento_id)) == 1  # so 1 evento, nunca 2
+
+
+# ---------------------------------------------------------------------------
+# Reprocessamento: equivalente / atualização legítima / conflito real
+# (revisão independente pós-PR #127 -- gate de reprocessamento)
+# ---------------------------------------------------------------------------
+
+def test_reprocessamento_equivalente_e_idempotente_sem_evento_novo():
+    repo_historico = RepositorioHistoricoEmMemoria()
+    repo_resolucao = RepositorioResolucaoTemporalEmMemoria(repo_historico)
+    texto = _texto_cartao_ponto('29/05/2026', '28/06/2026')
+    resolucao, _c = resolver_documento_ponto('doc-reproc-1', texto, 'func-r1', _FonteAlocacaoEmMemoria(()))
+
+    t1 = repo_resolucao.salvar_com_evento(resolucao, _fabricar_evento)
+    t2 = repo_resolucao.salvar_com_evento(resolucao, _fabricar_evento)  # mesmo resultado, reprocessado
+
+    assert t1 == TransicaoResolucaoTemporal.NOVA
+    assert t2 == TransicaoResolucaoTemporal.EQUIVALENTE
+    assert len(repo_historico.listar_por_documento('doc-reproc-1')) == 1
+    assert repo_resolucao.buscar_por_documento_id('doc-reproc-1') == resolucao
+
+
+def test_reprocessamento_correcao_legitima_nao_encontrada_para_resolvida_e_atualizacao():
+    """Primeira extração falhou (sem período); reprocessamento com um
+    extrator corrigido agora encontra o período -- isso é uma CORREÇÃO
+    legítima, nunca uma disputa (não há 2 valores RESOLVIDA
+    conflitantes) -- ATUALIZACAO, nunca CONFLITO."""
+    repo_historico = RepositorioHistoricoEmMemoria()
+    repo_resolucao = RepositorioResolucaoTemporalEmMemoria(repo_historico)
+
+    resolucao_sem_periodo, _c = resolver_documento_ponto(
+        'doc-reproc-2', 'texto sem periodo declarado', 'func-r2', _FonteAlocacaoEmMemoria(()),
+    )
+    t1 = repo_resolucao.salvar_com_evento(resolucao_sem_periodo, _fabricar_evento)
+    assert t1 == TransicaoResolucaoTemporal.NOVA
+    assert resolucao_sem_periodo.resolucao_competencia.estado == EstadoResolucaoDimensao.NAO_ENCONTRADA
+
+    texto_corrigido = _texto_cartao_ponto('29/05/2026', '28/06/2026')
+    resolucao_corrigida, _c2 = resolver_documento_ponto(
+        'doc-reproc-2', texto_corrigido, 'func-r2', _FonteAlocacaoEmMemoria(()),
+    )
+    t2 = repo_resolucao.salvar_com_evento(resolucao_corrigida, _fabricar_evento)
+
+    assert t2 == TransicaoResolucaoTemporal.ATUALIZACAO
+    persistida = repo_resolucao.buscar_por_documento_id('doc-reproc-2')
+    assert persistida.resolucao_competencia.estado == EstadoResolucaoDimensao.RESOLVIDA
+    assert persistida.resolucao_competencia.valores_confirmados == (
+        ReferenciaCanonica('COMPETENCIA', '2026-06'),
+    )
+    eventos = repo_historico.listar_por_documento('doc-reproc-2')
+    assert len(eventos) == 2  # NOVA + ATUALIZACAO -- historico completo preservado
+    assert eventos[1].detalhes['competencia_anterior'] is None
+    assert eventos[1].detalhes['competencia_nova'] == '2026-06'
+
+
+def test_reprocessamento_divergente_vira_conflito_nunca_escolhe_um_valor_sozinho():
+    """2 extrações CONFIANTES (RESOLVIDA) mas com competências
+    DIFERENTES -- disputa real. O sistema NUNCA decide sozinho qual
+    prevalece: rebaixa a competência persistida para CONFLITO e limpa o
+    período -- mas preserva OS DOIS valores no evento de auditoria."""
+    repo_historico = RepositorioHistoricoEmMemoria()
+    repo_resolucao = RepositorioResolucaoTemporalEmMemoria(repo_historico)
+
+    texto_junho = _texto_cartao_ponto('29/05/2026', '28/06/2026')
+    resolucao_junho, _c = resolver_documento_ponto('doc-reproc-3', texto_junho, 'func-r3', _FonteAlocacaoEmMemoria(()))
+    repo_resolucao.salvar_com_evento(resolucao_junho, _fabricar_evento)
+
+    texto_julho = _texto_cartao_ponto('29/06/2026', '28/07/2026')
+    resolucao_julho, _c2 = resolver_documento_ponto('doc-reproc-3', texto_julho, 'func-r3', _FonteAlocacaoEmMemoria(()))
+    transicao = repo_resolucao.salvar_com_evento(resolucao_julho, _fabricar_evento)
+
+    assert transicao == TransicaoResolucaoTemporal.CONFLITO
+    persistida = repo_resolucao.buscar_por_documento_id('doc-reproc-3')
+    assert persistida.resolucao_competencia.estado == EstadoResolucaoDimensao.CONFLITO
+    assert persistida.resolucao_competencia.valores_confirmados == ()  # nunca escolhe um dos dois
+    assert persistida.periodo_inicio is None and persistida.periodo_fim is None  # nao confiavel em disputa
+
+    eventos = repo_historico.listar_por_documento('doc-reproc-3')
+    assert len(eventos) == 2
+    assert eventos[1].evento == 'RESOLUCAO_TEMPORAL_PONTO_DIVERGENTE'
+    assert eventos[1].detalhes['competencia_anterior'] == '2026-06'  # preservado, nunca perdido
+    assert eventos[1].detalhes['competencia_nova'] == '2026-07'  # preservado, nunca perdido
+
+
+def test_reprocessamento_e_deterministico():
+    repo_historico_1 = RepositorioHistoricoEmMemoria()
+    repo_resolucao_1 = RepositorioResolucaoTemporalEmMemoria(repo_historico_1)
+    repo_historico_2 = RepositorioHistoricoEmMemoria()
+    repo_resolucao_2 = RepositorioResolucaoTemporalEmMemoria(repo_historico_2)
+
+    texto_junho = _texto_cartao_ponto('29/05/2026', '28/06/2026')
+    texto_julho = _texto_cartao_ponto('29/06/2026', '28/07/2026')
+    resolucao_junho, _c = resolver_documento_ponto('doc-det', texto_junho, 'func-det', _FonteAlocacaoEmMemoria(()))
+    resolucao_julho, _c2 = resolver_documento_ponto('doc-det', texto_julho, 'func-det', _FonteAlocacaoEmMemoria(()))
+
+    for repo in (repo_resolucao_1, repo_resolucao_2):
+        repo.salvar_com_evento(resolucao_junho, _fabricar_evento)
+        transicao = repo.salvar_com_evento(resolucao_julho, _fabricar_evento)
+        assert transicao == TransicaoResolucaoTemporal.CONFLITO
+
+    assert repo_resolucao_1.buscar_por_documento_id('doc-det') == repo_resolucao_2.buscar_por_documento_id('doc-det')
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +363,7 @@ def test_caso10_falha_de_auditoria_reverte_a_resolucao_documento_novo():
     texto = _texto_cartao_ponto('29/05/2026', '28/06/2026')
     resolucao, _cliente = resolver_documento_ponto('doc-10', texto, 'func-10', _FonteAlocacaoEmMemoria(()))
 
-    def _fabricar_evento_com_falha():
+    def _fabricar_evento_com_falha(transicao, anterior, novo):
         raise RuntimeError('falha simulada de auditoria')
 
     with pytest.raises(FalhaAuditoriaResolucaoTemporal):
@@ -255,12 +381,12 @@ def test_caso10b_falha_de_auditoria_reverte_para_o_estado_anterior_documento_ja_
     repo_resolucao = RepositorioResolucaoTemporalEmMemoria(repo_historico)
     texto_original = _texto_cartao_ponto('29/05/2026', '28/06/2026')
     resolucao_original, _c = resolver_documento_ponto('doc-10b', texto_original, 'func-10b', _FonteAlocacaoEmMemoria(()))
-    repo_resolucao.salvar_com_evento(resolucao_original, lambda: _evento_resolucao_registrada('doc-10b'))
+    repo_resolucao.salvar_com_evento(resolucao_original, _fabricar_evento)
 
     texto_novo = _texto_cartao_ponto('29/06/2026', '28/07/2026')
     resolucao_nova, _c2 = resolver_documento_ponto('doc-10b', texto_novo, 'func-10b', _FonteAlocacaoEmMemoria(()))
 
-    def _fabricar_evento_com_falha():
+    def _fabricar_evento_com_falha(transicao, anterior, novo):
         raise RuntimeError('falha simulada de auditoria na atualizacao')
 
     with pytest.raises(FalhaAuditoriaResolucaoTemporal):
@@ -288,9 +414,7 @@ def test_pipeline_completo_documento_ate_item_inventario_prestacao():
     resolucao, resolucao_cliente = resolver_documento_ponto(
         documento.documento_id, texto, 'func-pipeline', _FonteAlocacaoEmMemoria(alocacoes),
     )
-    repo_resolucao.salvar_com_evento(
-        resolucao, lambda: _evento_resolucao_registrada(documento.documento_id),
-    )
+    repo_resolucao.salvar_com_evento(resolucao, _fabricar_evento)
 
     # Leitura de volta
     lida = repo_resolucao.buscar_por_documento_id(documento.documento_id)

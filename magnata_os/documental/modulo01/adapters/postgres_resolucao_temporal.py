@@ -9,27 +9,42 @@ teste). A tabela esperada é criada pela migration
 NÃO aplicada por este módulo, e não aplicada em nenhum banco real por
 esta missão.
 
-GATE DE ATOMICIDADE: `salvar_com_evento` insere a resolução E o evento
+GATE DE ATOMICIDADE: `salvar_com_evento` lê o estado atual (`SELECT ...
+FOR UPDATE`, trava a linha se já existir), classifica a transição
+(`classificar_transicao_resolucao`, mesma função pura do repositório em
+memória — nunca duplicada) e insere/atualiza a resolução MAIS o evento
 de auditoria (`eventos_documentais`, já existente) na MESMA transação —
-uma única conexão, um único `commit()`. Se qualquer um dos dois INSERTs
-falhar, `rollback()` desfaz AMBOS -- nunca um estado em que a resolução
-exista sem o evento correspondente. Isto é intencionalmente MAIS
-restrito que `RepositorioHistoricoPostgres.registrar` (que faz seu
-próprio commit isolado) -- este adapter nunca chama aquele método
-diretamente, monta os 2 INSERTs manualmente na mesma transação."""
+uma única conexão, um único `commit()`. Se qualquer escrita falhar,
+`rollback()` desfaz TUDO -- nunca um estado em que a resolução exista
+sem o evento correspondente, e nunca uma atualização parcial. Isto é
+intencionalmente MAIS restrito que `RepositorioHistoricoPostgres.
+registrar` (que faz seu próprio commit isolado) -- este adapter nunca
+chama aquele método diretamente, monta os INSERTs/UPDATE manualmente na
+mesma transação.
+
+GATE DE REPROCESSAMENTO: mesma semântica do repositório em memória —
+EQUIVALENTE nunca escreve nada (libera o lock com `rollback()`, nunca
+`commit()` de uma transação vazia); CONFLITO nunca decide sozinho qual
+valor prevalece (rebaixa a competência persistida para `CONFLITO`,
+preserva os 2 valores em disputa no evento de auditoria)."""
 from __future__ import annotations
 
 import json
-from typing import Callable, List, Optional
+from typing import List, Optional
 
-from ..dominio import EventoHistorico
 from magnata_os.classificacao.contratos import (
     DimensaoResolucao,
     EstadoResolucaoDimensao,
     ReferenciaCanonica,
     ResolucaoDimensao,
 )
-from magnata_os.classificacao.resolucao_temporal_ponto import ResolucaoDocumentalTemporalPonto
+from magnata_os.classificacao.resolucao_temporal_ponto import (
+    ResolucaoDocumentalTemporalPonto,
+    TransicaoResolucaoTemporal,
+    classificar_transicao_resolucao,
+    resolucao_a_persistir_para_transicao,
+)
+from magnata_os.documental.modulo01.repositorio_resolucao_temporal import FabricanteEvento
 
 _COLUNAS_RESOLUCAO = (
     'resolucao_id', 'documento_id', 'tipo_documental', 'colaborador_id',
@@ -104,35 +119,70 @@ class RepositorioResolucaoTemporalPostgres:
     def salvar_com_evento(
         self,
         resolucao: ResolucaoDocumentalTemporalPonto,
-        fabricar_evento: Callable[[], EventoHistorico],
-    ) -> None:
+        fabricar_evento: FabricanteEvento,
+    ) -> TransicaoResolucaoTemporal:
         """`resolucao_id` é derivado deterministicamente do
         `documento_id` (`restemp:<documento_id>`) -- coerente com a
         constraint UNIQUE(documento_id) da migration (1 resolução
         canônica por documento; reprocessar o mesmo documento produz o
         MESMO `resolucao_id`, nunca uma segunda linha por acidente de
-        geração aleatória). Ambos os INSERTs (resolução + evento)
-        acontecem na MESMA transação: um único `commit()` ao final,
-        `rollback()` completo em qualquer falha -- nunca um commit
-        parcial."""
+        geração aleatória).
+
+        Fluxo, tudo na MESMA transação: `SELECT ... FOR UPDATE` (trava a
+        linha existente, se houver) -> classifica a transição -> por
+        transição:
+          - EQUIVALENTE: `rollback()` (libera o lock, nenhuma escrita,
+            nenhum evento -- nunca um commit de transação vazia);
+          - NOVA: `INSERT` da resolução;
+          - ATUALIZACAO/CONFLITO: `UPDATE` da linha já existente (nunca
+            um segundo `INSERT` -- UNIQUE(documento_id) preservado);
+        seguido, para os 3 últimos casos, do `INSERT` do evento de
+        auditoria e um único `commit()`. Qualquer falha em qualquer
+        etapa -> `rollback()` completo, nunca uma escrita parcial."""
         resolucao_id = f'restemp:{resolucao.documento_id}'
         evidencias: dict = {}  # proveniência sanitizada -- vazio nesta fase (nenhuma coletada ainda)
         try:
             with self._conexao.cursor() as cur:
+                colunas_select = ', '.join(_COLUNAS_RESOLUCAO)
                 cur.execute(
-                    f"""
-                    INSERT INTO resolucao_documental_temporal ({', '.join(_COLUNAS_RESOLUCAO)})
-                    VALUES ({', '.join(['%s'] * len(_COLUNAS_RESOLUCAO))})
-                    """,
-                    (
-                        resolucao_id, resolucao.documento_id, resolucao.tipo_documental,
-                        resolucao.colaborador_id, resolucao.periodo_inicio, resolucao.periodo_fim,
-                        _competencia_para_texto(resolucao),
-                        resolucao.resolucao_competencia.estado.value,
-                        json.dumps(evidencias),
-                    ),
+                    f'SELECT {colunas_select} FROM resolucao_documental_temporal '
+                    f'WHERE documento_id = %s FOR UPDATE',
+                    (resolucao.documento_id,),
                 )
-                evento = fabricar_evento()
+                linha_anterior = cur.fetchone()
+                anterior = _linha_para_resolucao(linha_anterior) if linha_anterior else None
+                transicao = classificar_transicao_resolucao(anterior, resolucao)
+
+                if transicao == TransicaoResolucaoTemporal.EQUIVALENTE:
+                    self._conexao.rollback()  # libera o lock -- nenhuma escrita, nenhum evento
+                    return transicao
+
+                a_persistir = resolucao_a_persistir_para_transicao(transicao, resolucao)
+                valores_resolucao = (
+                    a_persistir.colaborador_id, a_persistir.periodo_inicio, a_persistir.periodo_fim,
+                    _competencia_para_texto(a_persistir), a_persistir.resolucao_competencia.estado.value,
+                    json.dumps(evidencias),
+                )
+                if transicao == TransicaoResolucaoTemporal.NOVA:
+                    cur.execute(
+                        f"""
+                        INSERT INTO resolucao_documental_temporal ({', '.join(_COLUNAS_RESOLUCAO)})
+                        VALUES ({', '.join(['%s'] * len(_COLUNAS_RESOLUCAO))})
+                        """,
+                        (resolucao_id, a_persistir.documento_id, a_persistir.tipo_documental, *valores_resolucao),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE resolucao_documental_temporal
+                        SET tipo_documental = %s, colaborador_id = %s, periodo_inicio = %s,
+                            periodo_fim = %s, competencia = %s, estado_resolucao = %s, evidencias = %s
+                        WHERE documento_id = %s
+                        """,
+                        (a_persistir.tipo_documental, *valores_resolucao, resolucao.documento_id),
+                    )
+
+                evento = fabricar_evento(transicao, anterior, resolucao)
                 cur.execute(
                     f"""
                     INSERT INTO eventos_documentais ({', '.join(_COLUNAS_EVENTOS)})
@@ -146,9 +196,10 @@ class RepositorioResolucaoTemporalPostgres:
                     ),
                 )
             self._conexao.commit()
+            return transicao
         except Exception:
-            # Rollback COMPLETO: desfaz o INSERT da resolução também --
-            # nunca um commit parcial (gate de atomicidade desta missão).
+            # Rollback COMPLETO: desfaz também o INSERT/UPDATE da
+            # resolução -- nunca um commit parcial (gate de atomicidade).
             self._conexao.rollback()
             raise
 
