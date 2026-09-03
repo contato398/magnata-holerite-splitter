@@ -16,15 +16,24 @@ evidência.
 Default: mês civil da própria competência (dia 1 até o último dia do
 mês) — cobre a esmagadora maioria dos clientes, que fecham a folha de
 ponto pelo calendário. Alguns ciclos de ponto não coincidem com o mês
-civil (ex.: 28 a 28) — isso é representado como OVERRIDE explícito por
-cliente, nunca um `if` de nome de cliente espalhado pelo motor, mesmo
-padrão já usado por `competencia_esperada_prestacao.py` para o
-deslocamento de competência. `overrides=()` (vazio) é o default seguro
-— nenhuma exceção real de ciclo de Ponto está confirmada hoje para
-nenhum cliente; a missão que introduziu este módulo usa um cliente
-SINTÉTICO com dia de corte 28 apenas como caso adversarial de teste
-(nunca SKY Tatuí — nenhuma regra de negócio nova foi inventada para ele
-aqui)."""
+civil — isso é representado como OVERRIDE explícito por cliente, nunca
+um `if` de nome de cliente espalhado pelo motor, mesmo padrão já usado
+por `competencia_esperada_prestacao.py` para o deslocamento de
+competência. `overrides=()` (vazio) é o default seguro — nenhuma
+exceção real de ciclo de Ponto está confirmada hoje para nenhum
+cliente; a missão que introduziu este módulo usa um cliente SINTÉTICO
+com dia de fechamento 28 apenas como caso adversarial de teste (nunca
+SKY Tatuí — nenhuma regra de negócio nova foi inventada para ele aqui).
+
+REGRA CONFIRMADA (revisão independente, correção sobre a v1 original
+deste módulo): um override representa o DIA DE FECHAMENTO do ciclo
+(`dia_fechamento`), nunca o dia de início. O ciclo da competência X é
+`[dia seguinte ao fechamento do ciclo anterior, dia_fechamento de X]`,
+ambos inclusive — ex.: fechamento=28, competência junho/2026 -> ciclo
+29/05/2026 a 28/06/2026 (nunca 28/05 a 28/06 -- essa era a modelagem
+INCORRETA da v1 original, corrigida aqui). Por construção, ciclos
+consecutivos nunca se sobrepõem e nunca deixam lacuna: o início de um
+ciclo é sempre, literalmente, `fim do ciclo anterior + 1 dia`."""
 from __future__ import annotations
 
 import calendar
@@ -75,27 +84,27 @@ class JanelaCicloPonto:
 
 @dataclasses.dataclass(frozen=True)
 class CicloPontoClienteOverride:
-    """UM override explícito de dia de corte do ciclo de Ponto para um
-    cliente — mecanismo de exceção, nunca uma regra inventada por este
-    módulo. `dia_corte` é o dia do mês em que o ciclo do cliente COMEÇA
-    (ex.: 28 -> ciclo vai do dia 28 do mês anterior ao dia 28 do mês da
-    própria competência, ambos inclusive). `dia_corte=1` equivale ao mês
-    civil (mesmo resultado do default sem override — incluído aqui só
-    para permitir reafirmar explicitamente, nunca é necessário)."""
+    """UM override explícito do dia de FECHAMENTO do ciclo de Ponto para
+    um cliente — mecanismo de exceção, nunca uma regra inventada por
+    este módulo. `dia_fechamento` é o dia do mês em que o ciclo do
+    cliente TERMINA (ex.: 28 -> o ciclo da competência de junho/2026
+    termina em 28/06/2026 e começa no dia seguinte ao fechamento do
+    ciclo anterior, 29/05/2026 -- nunca no próprio dia 28 do mês
+    anterior, o que sobreporia 1 dia entre ciclos consecutivos)."""
 
     cliente: ReferenciaCanonica
-    dia_corte: int
+    dia_fechamento: int
 
     def __post_init__(self) -> None:
         if self.cliente.tipo_entidade != 'CLIENTE':
             raise ValueError('cliente deve ser referencia canonica de CLIENTE')
-        if isinstance(self.dia_corte, bool) or not isinstance(self.dia_corte, int):
-            raise ValueError('dia_corte deve ser inteiro')
-        if not 1 <= self.dia_corte <= 28:
+        if isinstance(self.dia_fechamento, bool) or not isinstance(self.dia_fechamento, int):
+            raise ValueError('dia_fechamento deve ser inteiro')
+        if not 1 <= self.dia_fechamento <= 28:
             # 28 é o maior dia garantido em qualquer mês (inclusive
             # fevereiro) -- nunca um dia que possa não existir no mês
             # anterior, o que tornaria a janela ambígua.
-            raise ValueError('dia_corte deve estar entre 1 e 28')
+            raise ValueError('dia_fechamento deve estar entre 1 e 28')
 
 
 @dataclasses.dataclass(frozen=True)
@@ -122,17 +131,24 @@ class PoliticaCicloPontoPrestacao:
         ano, mes = _competencia_para_ano_mes(competencia)
 
         override = next((item for item in self.overrides if item.cliente == cliente), None)
-        dia_corte = override.dia_corte if override is not None else 1
-
-        if dia_corte == 1:
+        if override is None:
             data_inicio = datetime.date(ano, mes, 1)
             ultimo_dia = calendar.monthrange(ano, mes)[1]
             data_fim = datetime.date(ano, mes, ultimo_dia)
             return JanelaCicloPonto(data_inicio, data_fim)
 
+        # Fechamento no dia `dia_fechamento` da própria competência;
+        # início = dia SEGUINTE ao fechamento do ciclo anterior -- nunca
+        # o mesmo dia do mês anterior (isso sobreporia 1 dia entre
+        # ciclos consecutivos). `dia_fechamento <= 28` garante que tanto
+        # o fechamento atual quanto o do ciclo anterior sejam datas
+        # válidas em QUALQUER mês (inclusive fevereiro não-bissexto);
+        # somar 1 dia via `timedelta` rola corretamente para o mês
+        # seguinte quando necessário -- nunca aritmética de mês manual.
+        data_fim = datetime.date(ano, mes, override.dia_fechamento)
         ano_anterior, mes_anterior = _mes_anterior(ano, mes)
-        data_inicio = datetime.date(ano_anterior, mes_anterior, dia_corte)
-        data_fim = datetime.date(ano, mes, dia_corte)
+        data_fim_ciclo_anterior = datetime.date(ano_anterior, mes_anterior, override.dia_fechamento)
+        data_inicio = data_fim_ciclo_anterior + datetime.timedelta(days=1)
         return JanelaCicloPonto(data_inicio, data_fim)
 
 

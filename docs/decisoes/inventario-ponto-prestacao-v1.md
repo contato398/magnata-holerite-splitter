@@ -36,12 +36,18 @@ justamente a agregação por janela de dias, nunca um classificador novo.
 1. **`magnata_os/classificacao/ciclo_ponto_prestacao.py`** — política
    pura da janela de dias do ciclo de Ponto (`PoliticaCicloPontoPrestacao`,
    `JanelaCicloPonto`, `CicloPontoClienteOverride`). Default = mês civil
-   da competência; override por cliente representa ciclos deslocados
-   (ex.: dia de corte 28) — mesmo padrão de exceção-como-configuração já
-   usado por `DeslocamentoCompetenciaCliente`
+   da competência; override por cliente representa ciclos deslocados,
+   configurado pelo DIA DE FECHAMENTO (`dia_fechamento`) — o ciclo
+   termina nesse dia, INCLUSIVE, e começa no dia seguinte ao fechamento
+   do ciclo anterior (ex.: fechamento=28, competência junho/2026 ->
+   ciclo 29/05/2026 a 28/06/2026 — **correção de uma revisão
+   independente**: a v1 original deste módulo modelava incorretamente
+   esse mesmo caso como 28/05 a 28/06, sobrepondo 1 dia entre ciclos
+   consecutivos; corrigido antes do merge). Mesmo padrão de
+   exceção-como-configuração já usado por `DeslocamentoCompetenciaCliente`
    (`competencia_esperada_prestacao.py`). `overrides=()` é o default
    seguro: **nenhuma exceção real de ciclo de Ponto está confirmada
-   hoje para nenhum cliente** — o cenário 28/05–28/06 usado nos testes é
+   hoje para nenhum cliente** — o cenário 29/05–28/06 usado nos testes é
    um caso adversarial SINTÉTICO pedido pela missão, nunca uma regra
    real do SKY Tatuí.
 
@@ -98,13 +104,16 @@ regra nova foi inventada para ele.
 
 ## Testes
 
-- `test_magnata_os_classificacao_ciclo_ponto_prestacao.py` (11 testes) —
-  política de janela: mês civil, override 28→28, virada de ano,
-  fevereiro bissexto, validações de construção.
+- `test_magnata_os_classificacao_ciclo_ponto_prestacao.py` (18 testes) —
+  política de janela: mês civil, fechamento 28 (junho e julho/2026,
+  29/05–28/06 e 29/06–28/07), ausência de sobreposição/lacuna entre
+  ciclos consecutivos, virada de ano, fevereiro bissexto e
+  não-bissexto, determinismo, validações de construção.
 - `test_magnata_os_classificacao_fonte_inventario_ponto_prestacao.py`
   (16 testes) — folha correta/ausente, colaborador errado, período
-  errado, ciclo 28/05–28/06, duplicidade equivalente/conflitante,
-  vínculo histórico presente/ausente, determinismo, AST (nenhum import
+  errado, ciclo com fechamento 28 (29/05–28/06), duplicidade
+  equivalente/conflitante, vínculo histórico presente/ausente,
+  determinismo, AST (nenhum import
   de Airtable, nenhum cliente hardcoded).
 - `test_inventario_ponto_composicao_e2e.py` (3 testes) — composição
   ponta-a-ponta + validação estrutural SKY.

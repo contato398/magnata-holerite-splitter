@@ -120,24 +120,24 @@ def test_folha_de_outra_competencia_periodo_nunca_satisfaz():
     assert fonte.listar(_CLIENTE_ALVO, _COMPETENCIA) == ()
 
 
-def test_ciclo_28_a_28_inclui_dias_do_mes_anterior_e_exclui_fora_da_janela():
-    """Caso adversarial sintético: competência junho/2026, ciclo de
-    ponto 28/05/2026 a 28/06/2026 -- cliente SINTÉTICO com override,
-    nunca SKY Tatuí."""
+def test_ciclo_fechamento_28_inclui_dias_do_mes_anterior_e_exclui_fora_da_janela():
+    """Caso adversarial confirmado: competência junho/2026, ciclo de
+    ponto 29/05/2026 a 28/06/2026 (fechamento no dia 28) -- cliente
+    SINTÉTICO com override, nunca SKY Tatuí."""
     cliente_ciclo_deslocado = ReferenciaCanonica('CLIENTE', 'rec_cliente_ciclo_deslocado')
     politica = PoliticaCicloPontoPrestacao(
         version='teste',
-        overrides=(CicloPontoClienteOverride(cliente=cliente_ciclo_deslocado, dia_corte=28),),
+        overrides=(CicloPontoClienteOverride(cliente=cliente_ciclo_deslocado, dia_fechamento=28),),
     )
     vinculos = _FonteVinculosFixa({(_FUNC_ESPERADO, _COMPETENCIA): cliente_ciclo_deslocado})
     registros = [
-        RegistroPontoBruto(  # dentro da janela (mês anterior, dia 28)
+        RegistroPontoBruto(  # dentro da janela -- primeiro dia do ciclo (mês anterior, 29)
             documento_id='rec_dentro_1', colaborador=_FUNC_ESPERADO,
-            data=datetime.date(2026, 5, 28), batidas=('08:00', '17:00'),
+            data=datetime.date(2026, 5, 29), batidas=('08:00', '17:00'),
         ),
-        RegistroPontoBruto(  # fora da janela -- 1 dia antes do corte
+        RegistroPontoBruto(  # fora da janela -- pertence ao ciclo ANTERIOR (fechou em 28/05)
             documento_id='rec_fora', colaborador=_FUNC_ESPERADO,
-            data=datetime.date(2026, 5, 27), batidas=('08:00', '17:00'),
+            data=datetime.date(2026, 5, 28), batidas=('08:00', '17:00'),
         ),
     ]
     fonte = FonteInventarioPontoPrestacao(
