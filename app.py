@@ -513,6 +513,8 @@ EVOLUTION_API_KEY  = os.environ.get('EVOLUTION_API_KEY', '')
 # Mantido abaixo do limite global do Flask para evitar payloads excessivos na
 # memoria e para produzir arquivos adequados ao transporte pelo WhatsApp.
 WHATSAPP_VIDEO_MAX_BYTES = 15 * 1024 * 1024
+# Mesmo raciocínio para a rota dedicada de PDF direto (sem Airtable/assinatura).
+WHATSAPP_DOCUMENTO_MAX_BYTES = 15 * 1024 * 1024
 
 # Regras de classificação de documento (Fase 2)
 # Lista de (tipo_documento, [regex de palavras-chave]) — primeira que casar vence
@@ -7208,6 +7210,86 @@ def _evolution_enviar_documento(numero: str, media_url: str, filename: str, capt
     if not (200 <= r.status_code < 300):
         raise RuntimeError(f'Evolution HTTP {r.status_code}: {r.text[:300]}')
     return r.json()
+
+
+def _sanitizar_nome_documento_pdf(nome_arquivo):
+    """Retorna um nome PDF seguro, sem caminho ou caracteres de controle."""
+    if not isinstance(nome_arquivo, str):
+        return None
+    nome = nome_arquivo.strip()
+    if not nome or '/' in nome or '\\' in nome or '\x00' in nome:
+        return None
+    nome = unicodedata.normalize('NFKD', nome).encode('ascii', 'ignore').decode('ascii')
+    nome = re.sub(r'[^A-Za-z0-9._-]', '_', nome)
+    nome = re.sub(r'_+', '_', nome).strip('._')
+    if not nome or len(nome) > 120 or not nome.lower().endswith('.pdf'):
+        return None
+    return nome
+
+
+def _decodificar_documento_pdf(documento_base64):
+    """Valida base64 estrito, limite binário e assinatura de um PDF."""
+    if not isinstance(documento_base64, str) or not documento_base64:
+        raise ValueError('documento_base64 é obrigatório.')
+    limite_base64 = 4 * ((WHATSAPP_DOCUMENTO_MAX_BYTES + 2) // 3)
+    if len(documento_base64) > limite_base64:
+        raise ValueError('Documento acima do limite permitido.')
+    try:
+        conteudo = base64.b64decode(documento_base64, validate=True)
+    except (ValueError, UnicodeEncodeError) as exc:
+        raise ValueError('documento_base64 inválido.') from exc
+    if len(conteudo) > WHATSAPP_DOCUMENTO_MAX_BYTES:
+        raise ValueError('Documento acima do limite permitido.')
+    if not conteudo.startswith(b'%PDF-'):
+        raise ValueError('Conteúdo não é um PDF válido.')
+    return conteudo
+
+
+@app.route('/whatsapp/enviar-documento', methods=['POST', 'OPTIONS'])
+def whatsapp_enviar_documento():
+    """Envia diretamente um PDF em base64, sem Airtable ou assinatura."""
+    if request.method == 'OPTIONS':
+        return '', 204
+
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or not secrets.compare_digest(api_key, EMAIL_WEBHOOK_KEY):
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+    if not EVOLUTION_API_KEY:
+        return jsonify({'status': 'erro', 'erro': 'Integração indisponível.'}), 503
+
+    body = request.get_json(silent=True)
+    campos_permitidos = {'numero', 'documento_base64', 'nome_arquivo'}
+    if not isinstance(body, dict) or set(body) - campos_permitidos:
+        return jsonify({'status': 'erro', 'erro': 'JSON ou campos inválidos.'}), 400
+
+    numero = _normalizar_numero_evolution(body.get('numero'))
+    if not numero:
+        return jsonify({'status': 'erro', 'erro': 'Número inválido.'}), 400
+    nome_arquivo = _sanitizar_nome_documento_pdf(body.get('nome_arquivo'))
+    if not nome_arquivo:
+        return jsonify({'status': 'erro', 'erro': 'Nome de arquivo inválido.'}), 400
+    try:
+        documento = _decodificar_documento_pdf(body.get('documento_base64'))
+    except ValueError as exc:
+        return jsonify({'status': 'erro', 'erro': str(exc)}), 400
+
+    try:
+        resultado = _evolution_enviar_documento(
+            numero,
+            None,
+            nome_arquivo,
+            media_bytes=documento,
+        )
+    except (requests.RequestException, RuntimeError, ValueError):
+        return jsonify({'status': 'erro', 'erro': 'Falha ao enviar documento.'}), 502
+
+    identificador = resultado.get('key', {}).get('id') if isinstance(resultado, dict) else None
+    if not identificador and isinstance(resultado, dict):
+        identificador = resultado.get('id')
+    resposta = {'status': 'ok'}
+    if identificador:
+        resposta['id'] = identificador
+    return jsonify(resposta), 200
 
 
 def _marcar_envio_status(envio_id: str, status: str, erro: str = None):
