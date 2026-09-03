@@ -1,0 +1,9 @@
+# Autorização humana específica — PR 127 — 2026-09-03
+# Missão "IDENTIDADE TEMPORAL DOCUMENTAL DA FOLHA/CARTÃO DE PONTO V1":
+# a missão especificou explicitamente, com requisitos detalhados (FK
+# para documentos.documento_id, integridade referencial, constraints
+# mínimas, idempotência por UNIQUE(documento_id), nenhuma coluna de
+# cliente/posto), a criação da migration abaixo. Autoriza somente a
+# migration nova listada, com o hash exato — nenhuma outra alteração de
+# schema. Migration NÃO aplicada em nenhum banco por esta autorização.
+2d6b4c36e486388d099a331506789c2e37aba9c0  magnata_os/documental/modulo01/migrations/0010_criar_tabela_resolucao_documental_temporal.sql
