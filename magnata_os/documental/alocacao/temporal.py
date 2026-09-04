@@ -58,6 +58,31 @@ class RegistroAlocacao:
     vigente_ate: Optional[date] = None
 
 
+@dataclasses.dataclass(frozen=True)
+class TuplaAlocacaoComClientes:
+    """Forma pura do resultado de leitura histórica: alocação de colaborador
+    com cliente(s) resolvido(s) por período. Une 2 tabelas temporais
+    (alocacao + vigencia_cliente_por_posto) via interseção temporal.
+
+    Campos vigência do colaborador + vigência da relação cliente vêm ambos,
+    permitindo auditoria de "qual era a vigência de cada coisa naquele período".
+
+    cliente_id = NULL significa relação histórica desconhecida (não fabricada).
+    Quando cliente_id é NULL, os períodos de cliente também são NULL (não
+    inventados). Quando cliente_id é preenchido, ambos cliente_vigente_de e
+    cliente_vigente_ate refletem a verdadeira intersecção temporal."""
+
+    vinculo_id: str
+    colaborador_id: str
+    alocacao_id: str
+    posto_id: str
+    cliente_id: Optional[str]  # NULL = cliente historicamente desconhecido
+    alocacao_vigente_de: date
+    alocacao_vigente_ate: Optional[date]
+    cliente_vigente_de: Optional[date]  # NULL quando cliente_id é NULL
+    cliente_vigente_ate: Optional[date]  # NULL quando cliente_id é NULL
+
+
 class SobreposicaoVinculoError(ValueError):
     """Levantado pelo adapter SQLite (aplicação) quando um novo vínculo
     sobrepõe outro já registrado do MESMO colaborador -- mesma
