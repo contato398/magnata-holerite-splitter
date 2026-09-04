@@ -958,6 +958,16 @@ ALLOWED_PATHS=(
   # test_*.py passa por esta entrada.
   "^conftest\.py$"
   "^test_magnata_os_autenticacao_composicao_app_real_v1\.py$"
+  # Exceção exata e restrita (missão "FUNDAÇÃO TEMPORAL POSTO↔CLIENTE V1",
+  # branch fix/vigencia-cliente-por-posto-v1, 2026-09-04) — adapter Postgres
+  # inerte, dataclass temporal, migrations de vigência cliente-por-posto,
+  # e teste nominal. Não libera magnata_os/documental/alocacao/ de forma
+  # ampla nem qualquer outro test_*.py — apenas estes 5 caminhos exatos.
+  "^magnata_os/documental/alocacao/adapters/postgres_alocacao\.py$"
+  "^magnata_os/documental/alocacao/temporal\.py$"
+  "^magnata_os/documental/alocacao/migrations/0002_criar_vigencia_cliente_por_posto\.sql$"
+  "^magnata_os/documental/alocacao/migrations/0002_criar_vigencia_cliente_por_posto_rollback\.sql$"
+  "^test_vigencia_cliente_por_posto_v1\.py$"
 )
 
 # ============================================================================
