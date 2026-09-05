@@ -65,7 +65,9 @@ CREATE TABLE IF NOT EXISTS vigencia_cliente_por_posto (
     -- muda de cliente na data D) requer 2 rows:
     --   - anterior: vigente_ate = D-1
     --   - novo: vigente_de = D
-    -- Nenhuma lacuna, nenhuma sobreposição (constraint abaixo).
+    -- Nenhuma sobreposição do MESMO POSTO em períodos diferentes (constraint abaixo).
+    -- Lacunas de histórico (períodos sem cliente comprovado retornando cliente_id=NULL)
+    -- são permitidas e tratadas pelo resolvedor temporal.
     vigente_de          DATE NOT NULL,
     vigente_ate         DATE,
 

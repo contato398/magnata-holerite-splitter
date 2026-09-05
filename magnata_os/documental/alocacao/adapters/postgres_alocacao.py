@@ -209,6 +209,9 @@ class RepositorioAlocacaoPostgres:
           6. Múltiplos clientes legítimos aparecem como rows separadas
           7. Lacunas temporais (períodos sem cliente comprovado) retornam NULL
           8. Ordenação: determinística (posto_id, cliente_id, data)
+
+        SEGMENTAÇÃO TEMPORAL: Para materializar cobertura completa com lacunas
+        explícitas, consulte resolucao_segmentos_temporais.materializar_segmentos_alocacao_com_cliente.
         """
         from ..temporal import TuplaAlocacaoComClientes
 

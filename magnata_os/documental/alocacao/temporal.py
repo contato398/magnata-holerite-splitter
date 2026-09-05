@@ -96,3 +96,52 @@ class SobreposicaoAlocacaoError(ValueError):
     outra já registrada do MESMO vínculo NO MESMO posto -- rateio entre
     postos DIFERENTES nunca levanta este erro (ver nota de reconciliação
     na migration 0001)."""
+
+
+class SobreposicaoClientePorPostoError(ValueError):
+    """Levantado quando dois CLIENTES DIFERENTES sobrepostos temporalmente
+    são detectados para o MESMO POSTO. Conflito de integridade temporal
+    que impede materialização de segmentos (não é escolhível, não é
+    truncável, não é resolvível silenciosamente). Responsabilidade do
+    resolvedor temporal validar e rejeitar explicitamente."""
+
+
+import enum
+
+
+class StatusSegmentoTemporal(enum.Enum):
+    """Status canônico de segmento temporal materializado.
+
+    COMPROVADO: existe fato real no banco (cliente_id preenchido).
+    HISTORICO_NAO_COMPROVADO: período sem cliente real comprovado,
+        lacuna temporal (cliente_id=NULL, nunca inventado).
+    """
+
+    COMPROVADO = "COMPROVADO"
+    HISTORICO_NAO_COMPROVADO = "HISTORICO_NAO_COMPROVADO"
+
+
+@dataclasses.dataclass(frozen=True)
+class SegmentoTemporalAlocacao:
+    """Segmento temporal materializado da alocação com cliente resolvido.
+
+    Representa um período contíguo dentro da vigência de uma alocação,
+    com cliente definido (ou NULL para lacuna histórica). Toda alocação
+    é decomposta em segmentos contínuos que cobrem 100% do intervalo
+    efetivo (alocação ∩ janela consultada), sem buracos, sem sobreposição.
+
+    Campos:
+        alocacao_id: identidade opaca da alocação.
+        posto_id: identidade opaca do posto (validação de isolamento).
+        segmento_de: início do segmento (inclusivo).
+        segmento_ate: fim do segmento (inclusivo); NULL = aberto até hoje.
+        cliente_id: identidade opaca do cliente (NULL = lacuna histórica).
+        status: COMPROVADO (fato real) ou HISTORICO_NAO_COMPROVADO (lacuna).
+    """
+
+    alocacao_id: str
+    posto_id: str
+    segmento_de: date
+    segmento_ate: Optional[date]
+    cliente_id: Optional[str]
+    status: StatusSegmentoTemporal
