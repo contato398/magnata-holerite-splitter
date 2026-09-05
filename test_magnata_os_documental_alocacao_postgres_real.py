@@ -624,13 +624,16 @@ def _aplicar_rollback_0002(conn) -> None:
 
 @pytest.fixture
 def pg_conn_com_vigencia_cliente(pg_conn):
-    """Estende pg_conn com migration 0002 aplicada (vigencia_cliente_por_posto)."""
+    """Estende pg_conn com migration 0002 aplicada (vigencia_cliente_por_posto).
+
+    Fixture filha: pg_conn (pai) é responsável pelo close(). Fixture filha
+    gerencia apenas a migration 0002, não o ciclo da conexão.
+    """
     _aplicar_rollback_0002(pg_conn)  # garantir banco/schema vazio no inicio
     _aplicar_migration_0002(pg_conn)
     yield pg_conn
     pg_conn.rollback()
     _aplicar_rollback_0002(pg_conn)
-    pg_conn.close()
 
 
 def test_migration_0002_cria_tabela_vigencia_cliente_por_posto(pg_conn_com_vigencia_cliente):
