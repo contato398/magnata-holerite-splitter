@@ -1,0 +1,5 @@
+# Autorizacao nominal: isolar credencial Airtable exclusiva das rotas /assinatura.
+# Escopo: fallback integral para AIRTABLE_API_KEY; demais rotas preservadas.
+# Autorizacao humana: usuario aprovou iniciar pela urgente e avancar ate implantacao final.
+# Blob Git exato de app.py validado pelo gate de governanca.
+c2511e49b18f499e8af640d37ace2beb92546fdd  app.py
