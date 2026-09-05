@@ -7114,8 +7114,8 @@ def _decodificar_video_mp4(video_base64):
     return conteudo
 
 
-def _evolution_enviar_video(numero: str, video_base64: str, nome_arquivo: str):
-    """Envia um MP4 já validado como base64 pela Evolution API."""
+def _evolution_enviar_video(numero: str, video_base64: str, nome_arquivo: str, legenda: str = ''):
+    """Envia um MP4 já validado como base64 pela Evolution API, com legenda opcional."""
     endpoint = f'{EVOLUTION_API_URL}/message/sendMedia/{EVOLUTION_INSTANCE}'
     payload = {
         'number': numero,
@@ -7124,6 +7124,8 @@ def _evolution_enviar_video(numero: str, video_base64: str, nome_arquivo: str):
         'media': video_base64,
         'fileName': nome_arquivo,
     }
+    if legenda:
+        payload['caption'] = legenda
     resposta = requests.post(
         endpoint,
         headers={'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json'},
@@ -7148,7 +7150,7 @@ def whatsapp_enviar_video():
         return jsonify({'status': 'erro', 'erro': 'Integração indisponível.'}), 503
 
     body = request.get_json(silent=True)
-    campos_permitidos = {'numero', 'video_base64', 'nome_arquivo'}
+    campos_permitidos = {'numero', 'video_base64', 'nome_arquivo', 'legenda'}
     if not isinstance(body, dict) or set(body) - campos_permitidos:
         return jsonify({'status': 'erro', 'erro': 'JSON ou campos inválidos.'}), 400
 
@@ -7158,13 +7160,17 @@ def whatsapp_enviar_video():
     nome_arquivo = _sanitizar_nome_video(body.get('nome_arquivo'))
     if not nome_arquivo:
         return jsonify({'status': 'erro', 'erro': 'Nome de arquivo inválido.'}), 400
+    legenda = body.get('legenda')
+    if legenda is not None and not isinstance(legenda, str):
+        return jsonify({'status': 'erro', 'erro': 'Legenda inválida.'}), 400
+    legenda = (legenda or '').strip()
     try:
         _decodificar_video_mp4(body.get('video_base64'))
     except ValueError as exc:
         return jsonify({'status': 'erro', 'erro': str(exc)}), 400
 
     try:
-        resultado = _evolution_enviar_video(numero, body['video_base64'], nome_arquivo)
+        resultado = _evolution_enviar_video(numero, body['video_base64'], nome_arquivo, legenda=legenda)
     except (requests.RequestException, RuntimeError, ValueError):
         return jsonify({'status': 'erro', 'erro': 'Falha ao enviar vídeo.'}), 502
 
