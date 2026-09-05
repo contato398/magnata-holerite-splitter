@@ -103,6 +103,23 @@ class TestWhatsappEnviarVideo(unittest.TestCase):
         })
 
     @patch('app.requests.post')
+    def test_sucesso_com_legenda_envia_caption(self, post):
+        resposta_evolution = MagicMock(status_code=201)
+        resposta_evolution.json.return_value = {'key': {'id': 'mensagem-com-legenda'}}
+        post.return_value = resposta_evolution
+
+        payload = {**self.payload, 'legenda': 'Benefícios Magnata'}
+        resposta = self.client.post('/whatsapp/enviar-video', json=payload, headers=self.headers)
+
+        self.assertEqual(resposta.status_code, 200)
+        chamada = post.call_args
+        self.assertEqual(chamada.kwargs['json']['caption'], 'Benefícios Magnata')
+        self.assertEqual(chamada.kwargs['json']['fileName'], 'beneficios_video.mp4')
+
+    def test_legenda_nao_string_e_rejeitada_sem_envio(self):
+        self._rejeitado_sem_envio({**self.payload, 'legenda': ['invalida']})
+
+    @patch('app.requests.post')
     def test_falha_simulada_da_evolution_sem_expor_resposta(self, post):
         resposta_evolution = MagicMock(status_code=500)
         resposta_evolution.text = 'segredo retornado pelo fornecedor'

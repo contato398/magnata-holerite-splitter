@@ -1,0 +1,5 @@
+# Autorizacao nominal: wiring protegido de legenda opcional no envio de video WhatsApp.
+# Escopo: somente helper/rota /whatsapp/enviar-video; sem deploy, Airtable ou envio real.
+# Autorizacao humana: "MERGE PR #130 E SIGA ATE A FINALIZACAO", apos o gate declarar esta etapa de app.py.
+# O blob exato invalida a autorizacao diante de qualquer mudanca adicional.
+8dd573ce98b2cf86020c222ed46273eaf3b88cc8  app.py
