@@ -1,0 +1,23 @@
+# Autorização humana específica — COMUNICADO como tipo documental
+# assinável em /assinatura/gerar.
+# Base: 4c34da1ec08310a7bbe63ea236508fcafc2b42d2 (origin/main, após o merge do PR #131)
+# Branch: fix/comunicado-tipo-assinavel-v1
+# Data: 2026-09-05
+# Autorização: mensagem do usuário "Implemente em branch separada a
+# extensão mínima para tornar COMUNICADO um tipo assinável, reaproveitando
+# 100% o fluxo legado de /assinatura/gerar.", com as regras "Não criar
+# rota nova. Não criar motor novo. Não alterar Airtable. Não alterar
+# Evolution/WhatsApp. [...] app.py é protegido: alteração mínima e
+# justificada." e o escopo nominal: "adicionar 'COMUNICADO' em
+# TIPOS_DOCUMENTO_VALIDOS; adicionar 'COMUNICADO': 'Comunicado' em
+# NOMES_DOCUMENTOS."
+#
+# Escopo autorizado (nominal, do próprio texto da missão): adicionar o
+# literal 'COMUNICADO' ao conjunto TIPOS_DOCUMENTO_VALIDOS e o par
+# 'COMUNICADO': 'Comunicado' ao dicionário NOMES_DOCUMENTOS -- nenhuma
+# outra linha de app.py tocada. Nenhuma rota nova, nenhum motor novo,
+# nenhuma alteração de Airtable/Evolution/WhatsApp.
+# Somente blob exato aprovado; qualquer alteração subsequente (inclusive
+# reordenar, adicionar linha ou trocar comentário) invalida esta
+# autorização e exige um novo blob nominal.
+d11faa02645e4d4ac6b855a6dcc63fce324499b0  app.py

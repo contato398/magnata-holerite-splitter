@@ -356,6 +356,7 @@ TIPOS_DOCUMENTO_VALIDOS = {
     'CONTRATO_EXPERIENCIA',
     'CONTRATO_TRABALHO',
     'HOLERITE_FOLHA_PONTO',
+    'COMUNICADO',
 }
 
 # Nomes de exibição (mapa de canônicos para português)
@@ -367,6 +368,7 @@ NOMES_DOCUMENTOS = {
     'CONTRATO_EXPERIENCIA': 'Contrato de Experiência',
     'CONTRATO_TRABALHO': 'Contrato de Trabalho',
     'HOLERITE_FOLHA_PONTO': 'Holerite + Folha de Ponto',
+    'COMUNICADO': 'Comunicado',
 }
 
 # ─── PACOTE HOLERITE + FOLHA DE PONTO (extensão mínima, decisão arquitetural) ──
