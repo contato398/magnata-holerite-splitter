@@ -40,12 +40,7 @@ jobs:
           if count < 1:
               raise SystemExit('nenhum header Airtable global encontrado para substituir')
           s = s.replace(old, "f'Bearer {_airtable_api_key_atual()}'")
-
-          # Qualquer gate de presença de credencial em app.py passa a consultar
-          # a credencial efetiva da fronteira atual. Fora de /assinatura o
-          # resultado continua sendo AIRTABLE_API_KEY.
           s = s.replace('if not AIRTABLE_API_KEY:', 'if not _airtable_api_key_atual():')
-
           p.write_text(s, encoding='utf-8')
 
           test = Path('test_assinatura_credencial_airtable_isolada.py')
@@ -66,6 +61,11 @@ jobs:
 
       - name: Remove temporary workflow from final diff
         run: rm -f .github/workflows/urgent-assinatura-key-isolation.yml
+
+      - name: Install validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
 
       - name: Focused validation
         env:
