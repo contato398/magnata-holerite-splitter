@@ -976,6 +976,16 @@ ALLOWED_PATHS=(
   "^test_magnata_os_documental_alocacao_resolucao_segmentos_temporais\.py$"
   # Extensão de teste Postgres real PRÉ-EXISTENTE para validar migration 0002 (PENDÊNCIA 2)
   "^test_magnata_os_documental_alocacao_postgres_real\.py$"
+  # Exceção exata e restrita (PR #128 — WIRING REAL FOLHA/CARTÃO DE PONTO +
+  # CARDINALIDADE GENÉRICA, branch fix/wiring-ponto-inventario-v2, 2026-09-05) —
+  # cardinalidade genérica por colaborador (reutilizável por Holerite/Ponto/etc.),
+  # adaptação Holerite como wrapper, integração pacote/ciclo, fonte de Ponto temporal,
+  # e testes (cardinalidade + Ponto). Não libera magnata_os/classificacao/
+  # ampla; apenas estes 4 caminhos exatos + testes conforme nomeação.
+  "^magnata_os/classificacao/cardinalidade_colaborador_por_tipo\.py$"
+  "^magnata_os/classificacao/fonte_inventario_prestacao_ponto_temporal\.py$"
+  "^test_magnata_os_classificacao_cardinalidade_colaborador_por_tipo\.py$"
+  "^test_magnata_os_classificacao_fonte_inventario_prestacao_ponto_temporal\.py$"
 )
 
 # ============================================================================
