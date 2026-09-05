@@ -8,11 +8,12 @@ independente do fornecedor e o legado pode ser migrado incrementalmente.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, Mapping, Optional, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 
 from .politica_comunicacao import (
     PreviewComunicacao,
     TipoItem,
+    hash_texto_comunicacao,
     validar_autorizacao_disparo,
 )
 
@@ -92,7 +93,7 @@ def montar_plano_disparo(
     )
 
     texto_limpo = (texto or "").strip()
-    if preview.tem_texto != bool(texto_limpo):
+    if hash_texto_comunicacao(texto_limpo) != preview.texto_sha256:
         raise PlanoComunicacaoError("texto não corresponde à prévia autorizada")
 
     indice = _indexar_conteudos(conteudos)
