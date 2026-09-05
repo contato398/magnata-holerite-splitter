@@ -93,6 +93,23 @@ def _add_cors(response):
 
 # ── Airtable ──────────────────────────────────────────────────────────────────
 AIRTABLE_API_KEY = os.environ.get('AIRTABLE_API_KEY', '')
+AIRTABLE_ASSINATURA_API_KEY = os.environ.get('AIRTABLE_ASSINATURA_API_KEY', '')
+
+
+def _airtable_api_key_atual():
+    """Seleciona credencial Airtable por fronteira HTTP.
+
+    Rotas /assinatura usam a credencial dedicada quando configurada. Todos os
+    demais fluxos preservam AIRTABLE_API_KEY. Fora de contexto Flask, também
+    preserva a credencial global. Isso isola assinatura sem alterar legado.
+    """
+    if AIRTABLE_ASSINATURA_API_KEY:
+        try:
+            if request.path.startswith('/assinatura'):
+                return AIRTABLE_ASSINATURA_API_KEY
+        except RuntimeError:
+            pass
+    return AIRTABLE_API_KEY
 BASE_ID     = 'appaCpIVj7Q97VhFy'
 TABLE_FUNC  = 'tblNd8G66kjwos3eP'   # Funcionários
 TABLE_HOL   = 'tblVaUgZeFfa5zRcH'   # Holerites
@@ -648,7 +665,7 @@ def _at_throttle():
 
 def _at_headers():
     return {
-        'Authorization': f'Bearer {AIRTABLE_API_KEY}',
+        'Authorization': f'Bearer {_airtable_api_key_atual()}',
         'Content-Type': 'application/json'
     }
 
@@ -1460,7 +1477,7 @@ def buscar_mes_contabilidade_atual():
     _at_throttle()
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_CONT}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         params={
             'filterByFormula': f'{{Mês - Contabilidade}}="{nome}"',
             'maxRecords': 1,
@@ -1476,7 +1493,7 @@ def buscar_mes_contabilidade_atual():
 
 
 def buscar_funcionario_por_cpf(cpf: str):
-    headers = {'Authorization': f'Bearer {AIRTABLE_API_KEY}'}
+    headers = {'Authorization': f'Bearer {_airtable_api_key_atual()}'}
     cpf_num = re.sub(r'\D', '', cpf)
     formulas = [
         f'{{CPF}}="{cpf}"',
@@ -1534,7 +1551,7 @@ def buscar_funcionario_por_nome(nome: str):
     """
     if not nome:
         return None, None
-    headers = {'Authorization': f'Bearer {AIRTABLE_API_KEY}'}
+    headers = {'Authorization': f'Bearer {_airtable_api_key_atual()}'}
     nome_escapado = nome.replace('"', '\\"')
     formula = f'UPPER({{Nome Completo}})=UPPER("{nome_escapado}")'
     _at_throttle()
@@ -1672,7 +1689,7 @@ def anexar_pdf_holerite(record_id, pdf_bytes, filename):
     r = requests.post(
         url,
         headers={
-            'Authorization': f'Bearer {AIRTABLE_API_KEY}',
+            'Authorization': f'Bearer {_airtable_api_key_atual()}',
             'Content-Type': 'application/json',
         },
         json={
@@ -1707,7 +1724,7 @@ def _buscar_por_campo(table_id: str, campo_nome: str, valor: str):
     formula = f'{{{campo_nome}}}="{valor_escapado}"'
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{table_id}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         params={'filterByFormula': formula, 'maxRecords': 1},
         timeout=30,
     )
@@ -1723,7 +1740,7 @@ def _anexar_attachment(table_id: str, record_id: str, field_id: str,
     url = f'https://content.airtable.com/v0/{BASE_ID}/{record_id}/{field_id}/uploadAttachment'
     r = requests.post(
         url,
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}', 'Content-Type': 'application/json'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}', 'Content-Type': 'application/json'},
         json={
             'contentType': content_type,
             'filename': filename,
@@ -1938,7 +1955,7 @@ def _buscar_cpf_por_funcionario_id(func_id: str) -> str:
     _at_throttle()
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         timeout=15,
     )
     if r.ok:
@@ -1955,7 +1972,7 @@ def _buscar_contabilidade_mensal_por_nome(nome: str):
     nome_escapado = nome.replace('"', '\\"')
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_CONT}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         params={
             'filterByFormula': f'{{Mês - Contabilidade}}="{nome_escapado}"',
             'maxRecords': 1,
@@ -1976,7 +1993,7 @@ def _buscar_holerite_existente(func_id: str, folha_mensal: str):
     folha_escapada = folha_mensal.replace('"', '\\"')
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_HOL}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         params={
             'filterByFormula': f'{{Folha Mensal}}="{folha_escapada}"',
             'returnFieldsByFieldId': 'true',
@@ -2562,7 +2579,7 @@ def _buscar_documentos_irmaos_kit_admissao(ctx: dict):
     _at_throttle()
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}/{ctx["proc_id"]}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         timeout=15,
     )
     if not r.ok:
@@ -2584,7 +2601,7 @@ def _buscar_documentos_irmaos_kit_admissao(ctx: dict):
     _at_throttle()
     r2 = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         params={'filterByFormula': formula, 'maxRecords': 20},
         timeout=30,
     )
@@ -2607,7 +2624,7 @@ def _buscar_documentos_irmaos_kit_admissao(ctx: dict):
         _at_throttle()
         r_arq_irmao = requests.get(
             f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ARQUIVOS}/{arquivo_id}',
-            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
             params={'returnFieldsByFieldId': 'true'},
             timeout=15,
         )
@@ -2642,7 +2659,7 @@ def _vincular_documento_ao_funcionario(func_id: str, arquivo_id: str):
     _at_throttle()
     r_arq = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ARQUIVOS}/{arquivo_id}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         params={'returnFieldsByFieldId': 'true'},
         timeout=15,
     )
@@ -2658,7 +2675,7 @@ def _vincular_documento_ao_funcionario(func_id: str, arquivo_id: str):
     _at_throttle()
     r_func = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         params={'returnFieldsByFieldId': 'true'},
         timeout=15,
     )
@@ -2680,7 +2697,7 @@ def _baixar_pdf_arquivo(arquivo_id: str):
     _at_throttle()
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ARQUIVOS}/{arquivo_id}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         params={'returnFieldsByFieldId': 'true'},
         timeout=15,
     )
@@ -2905,7 +2922,7 @@ def _buscar_pendencia_kit_identidade_existente(chave: str):
         try:
             r = requests.get(
                 f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PENDENCIAS}',
-                headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
                 params=params, timeout=30,
             )
         except Exception:
@@ -3033,7 +3050,7 @@ def _montar_e_disparar_kit_admissao(ctx: dict, func_id: str, dry_run: bool,
     _at_throttle()
     r_func = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         params={'returnFieldsByFieldId': 'true'}, timeout=15,
     )
 
@@ -3168,7 +3185,7 @@ def _montar_e_disparar_kit_admissao(ctx: dict, func_id: str, dry_run: bool,
         _at_throttle()
         r_arquivo_novo = requests.post(
             f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ARQUIVOS}',  # ✅ corrigido: tblbgJqXh0u1Cjq1s não existe na base
-            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'} ,
+            headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'} ,
             json={
                 'fields': {
                     F_ARQ_NOME: nome_kit,
@@ -3806,7 +3823,7 @@ def _processar_folha_ponto(ctx: dict, dry_run: bool) -> dict:
     _at_throttle()
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         params={'returnFieldsByFieldId': 'true'},
         timeout=30,
     )
@@ -4083,7 +4100,7 @@ def health():
     try:
         r = requests.get(
             f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}',
-            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
             params={'maxRecords': 1, 'fields[]': ['CPF']},
             timeout=10,
         )
@@ -4217,7 +4234,7 @@ def _fazer_upload_pdf_airtable(record_id: str, pdf_bytes: bytes, filename: str =
 
         r = requests.post(
             upload_url,
-            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
             json={
                 'contentType': 'application/pdf',
                 'file': pdf_b64,
@@ -4367,7 +4384,7 @@ def separar():
         try:
             r = requests.get(
                 f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}/{record_id}',
-                headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
                 timeout=10,
             )
             if r.status_code != 200:
@@ -4408,7 +4425,7 @@ def separar():
                 app.logger.info(f"record_id={record_id!r}")
                 requests.patch(
                     f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}/{record_id}',
-                    headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                    headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
                     json={'fields': {F_PROC_STATUS: 'Erro', F_PROC_TIPO_DOC: 'UPLOAD_FAILED'}},
                     timeout=10,
                 )
@@ -4431,7 +4448,7 @@ def separar():
             try:
                 r = requests.get(
                     f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}/{record_id}?returnFieldsByFieldId=true',
-                    headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                    headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
                     timeout=10,
                 )
                 if r.status_code != 200:
@@ -4647,7 +4664,7 @@ def processar_holerites():
     etapa = 'init'
     caminho_pdf = None
     try:
-        if not AIRTABLE_API_KEY:
+        if not _airtable_api_key_atual():
             return jsonify({
                 'status': 'erro',
                 'erro': 'AIRTABLE_API_KEY não configurada no servidor.',
@@ -4943,7 +4960,7 @@ def _processar_folha_ponto_arquivo(caminho_pdf, folha_mensal, disparar_assinatur
                     _at_throttle()
                     r_check = requests.get(
                         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
-                        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
                         params={'returnFieldsByFieldId': 'true'}, timeout=15,
                     )
                     anexo_url = None
@@ -4958,7 +4975,7 @@ def _processar_folha_ponto_arquivo(caminho_pdf, folha_mensal, disparar_assinatur
                                 _at_throttle()
                                 r_arquivo = requests.post(
                                     f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ARQUIVOS}',  # ✅ corrigido: tblbgJqXh0u1Cjq1s não existe na base
-                                    headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                                    headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
                                     json={
                                         'fields': {
                                             F_ARQ_NOME: filename,
@@ -5045,7 +5062,7 @@ def processar_folha_ponto_master():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     caminho_master = extrair_pdf_do_request('pdf')
@@ -5199,7 +5216,7 @@ def corrigir_valores():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     data = request.get_json(force=True, silent=True) or {}
@@ -5258,7 +5275,7 @@ def corrigir_valores():
             params['offset'] = offset
         r = requests.get(
             f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_HOL}',
-            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
             params=params,
             timeout=30,
         )
@@ -5558,7 +5575,7 @@ def email_webhook():
     if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
         return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
 
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     data = request.get_json(force=True, silent=True) or {}
@@ -5851,7 +5868,7 @@ def processar_fila():
     if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
         return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
 
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     data = request.get_json(force=True, silent=True) or {}
@@ -5925,7 +5942,7 @@ def processar_fila():
     _at_throttle()
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         params={
             'filterByFormula': formula,
             'maxRecords': limit,
@@ -5974,7 +5991,7 @@ def processar_fila():
             _at_throttle()
             r_arq = requests.get(
                 f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ARQUIVOS}/{arquivo_id}',
-                headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
                 params={'returnFieldsByFieldId': 'true'},
                 timeout=30,
             )
@@ -6078,7 +6095,7 @@ def _at_listar_todos(table_id, field_names=None, filter_formula=None):
         _at_throttle()
         r = requests.get(
             f'https://api.airtable.com/v0/{BASE_ID}/{table_id}',
-            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
             params=params,
             timeout=30,
         )
@@ -6099,7 +6116,7 @@ def _at_obter_registro(table_id: str, record_id: str, field_names=None) -> dict:
     _at_throttle()
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{table_id}/{record_id}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         params=params,
         timeout=15,
     )
@@ -6426,7 +6443,7 @@ def diagnostico_holerites():
     if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
         return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
 
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     folha_mensal = request.args.get('folha_mensal')
@@ -6722,7 +6739,7 @@ def gerar_fila_envios():
     if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
         return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
 
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     body = request.get_json(silent=True) or {}
@@ -6755,7 +6772,7 @@ def gerar_fila_envios_ponto():
     if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
         return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
 
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     body = request.get_json(silent=True) or {}
@@ -6905,7 +6922,7 @@ def gerar_fila_envios_combinado():
     if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
         return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
 
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     body = request.get_json(silent=True) or {}
@@ -6992,7 +7009,7 @@ def normalizar_whatsapp():
     if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
         return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
 
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     body = request.get_json(silent=True) or {}
@@ -7420,7 +7437,7 @@ def disparar_fila_combinado():
     api_key = request.headers.get('X-API-KEY', '')
     if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
         return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     body = request.get_json(silent=True) or {}
@@ -7637,7 +7654,7 @@ def processar_doc_cliente():
     api_key = request.headers.get('X-API-KEY', '')
     if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
         return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     tipo = (request.form.get('tipo') or '').strip().lower()
@@ -7697,7 +7714,7 @@ def _buscar_cliente_do_funcionario(func_id: str):
     _at_throttle()
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         timeout=15,
     )
     if not r.ok:
@@ -7710,7 +7727,7 @@ def _buscar_cliente_do_funcionario(func_id: str):
         _at_throttle()
         rl = requests.get(
             f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_LOCAIS}/{local_id}',
-            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
             timeout=15,
         )
         if not rl.ok:
@@ -7722,7 +7739,7 @@ def _buscar_cliente_do_funcionario(func_id: str):
             _at_throttle()
             rc = requests.get(
                 f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_CLIENTES}/{cid}',
-                headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
                 timeout=15,
             )
             # Sem params 'fields[]' de propósito: GET de registro único do
@@ -8269,7 +8286,7 @@ def processar_beneficios():
     """
     if request.method == 'OPTIONS':
         return jsonify({}), 200
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     tipo = (request.form.get('tipo') or '').strip().lower()
@@ -8332,7 +8349,7 @@ def processar_beneficios_extrato_lista():
     """
     if request.method == 'OPTIONS':
         return jsonify({}), 200
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     data = request.get_json(force=True, silent=True) or {}
@@ -8534,7 +8551,7 @@ def gerar_fila_envios_email():
     api_key = request.headers.get('X-API-KEY', '')
     if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
         return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     body = request.get_json(silent=True) or {}
@@ -8856,7 +8873,7 @@ def _dry_run_outros_documentos_para_envios(competencia_substr):
         _at_throttle()
         r = requests.get(
             f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ENVIOS}/{envio_id}',
-            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
             timeout=30,
         )
         r.raise_for_status()
@@ -8900,7 +8917,7 @@ def _aplicar_outros_documentos_no_envio(envio_id, competencia_substr):
     _at_throttle()
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ENVIOS}/{envio_id}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         timeout=30,
     )
     r.raise_for_status()
@@ -9163,7 +9180,7 @@ def processar_guia():
     api_key = request.headers.get('X-API-KEY', '')
     if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
         return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     tipo_guia = (request.form.get('tipo') or '').strip()
@@ -9257,7 +9274,7 @@ def processar_recibos():
     api_key = request.headers.get('X-API-KEY', '')
     if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
         return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     tipo = (request.form.get('tipo') or 'Recibo').strip()
@@ -9282,7 +9299,7 @@ def recibo_leitura(hash_recibo):
     para o PDF do Holerite associado. Endpoint público — o hash funciona
     como token de acesso ao documento.
     """
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return 'Serviço indisponível.', 503
 
     registro = _buscar_por_campo(TABLE_ENVIOS, 'Hash Recibo', hash_recibo)
@@ -9315,7 +9332,7 @@ def recibo_leitura(hash_recibo):
         _at_throttle()
         r = requests.get(
             f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_HOL}/{holerite_ids[0]}',
-            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
             timeout=30,
         )
         if r.ok:
@@ -9686,7 +9703,7 @@ def _buscar_funcionario_nome_whatsapp(func_id: str):
     _at_throttle()
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         timeout=30,
     )
     if not r.ok:
@@ -10008,7 +10025,7 @@ def assinatura_gerar():
         logger.warning(f'[ASSINATURA] Acesso negado | Request: {request_id}')
         return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente', 'request_id': request_id}), 401
 
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     # ✅ v3.6: Validar configuração de Field IDs
@@ -10203,7 +10220,7 @@ def _gerar_assinatura_core(funcionario_id, tipo_documento, arquivo_record_id=Non
             _at_throttle()
             r_arquivo = requests.get(
                 f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ARQUIVOS}/{arquivo_record_id}',  # ✅ corrigido: tblbgJqXh0u1Cjq1s não existe na base
-                headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
                 params={'returnFieldsByFieldId': 'true'},
                 timeout=15,
             )
@@ -10270,7 +10287,7 @@ def _gerar_assinatura_core(funcionario_id, tipo_documento, arquivo_record_id=Non
         try:
             r_existente = requests.get(
                 f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}',
-                headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+                headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
                 params={
                     'filterByFormula': f'{{{F_ASS_CHAVE_IDEMPOTENCIA}}}="{idempotency_key}"',
                     'maxRecords': 1,
@@ -10495,7 +10512,7 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
         _at_throttle()
         r_arq = requests.get(
             f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ARQUIVOS}/{arquivo_id}',
-            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
             params={'returnFieldsByFieldId': 'true'},
             timeout=15,
         )
@@ -10569,7 +10586,7 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
     try:
         r_existente = requests.get(
             f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}',
-            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
             params={
                 'filterByFormula': f'{{{F_ASS_CHAVE_IDEMPOTENCIA}}}="{idempotency_key}"',
                 'maxRecords': 1,
@@ -10801,7 +10818,7 @@ def assinatura_gerar_lote():
             'request_id': request_id,
         }), 401
 
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     # ✅ v3.6: Validar configuração de Field IDs
@@ -10913,7 +10930,7 @@ def admissao_consolidar_kit():
     """
     if request.method == 'OPTIONS':
         return jsonify({}), 200
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     data = request.get_json(force=True, silent=True) or {}
@@ -10936,7 +10953,7 @@ def admissao_consolidar_kit():
     _at_throttle()
     r_func = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{funcionario_id}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         params={'returnFieldsByFieldId': 'true'}, timeout=15,
     )
     nome_func = (r_func.json().get('fields', {}).get(F_FUNC_NOME) if r_func.ok else None) or funcionario_id
@@ -11077,7 +11094,7 @@ def _reenviar_pacote_holerite_ponto(rec: dict, fields: dict, func_id: str, dry_r
     _at_throttle()
     r_recheck = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{rec["id"]}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'}, timeout=15,
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'}, timeout=15,
     )
     if r_recheck.ok and r_recheck.json().get('fields', {}).get('Status') != 'Reenviar':
         item['acao'] = 'ja_processado_outra_instancia'
@@ -11147,7 +11164,7 @@ def assinatura_processar_reenvios():
     if not EMAIL_WEBHOOK_KEY or api_key != EMAIL_WEBHOOK_KEY:
         return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
 
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY não configurada'}), 500
 
     data = request.get_json(force=True, silent=True) or {}
@@ -11158,7 +11175,7 @@ def assinatura_processar_reenvios():
     _at_throttle()
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         params={'filterByFormula': '{Status}="Reenviar"'},
         timeout=30,
     )
@@ -11619,7 +11636,7 @@ def assinatura_documento_pagina_png(hash_token, idx, num):
     pré-visualização — ver _pdf_para_paginas_png. `num` é 1-based.
     Mesmo controle de acesso do resto do fluxo: só o hash_token.
     """
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return 'Serviço indisponível.', 503
 
     registro = _buscar_por_campo(TABLE_ASSINATURAS, 'Hash Token', hash_token)
@@ -11662,7 +11679,7 @@ def assinatura_documento_proxy(hash_token, idx):
     idx: 0 = Holerite, 1 = Folha de Ponto — mesma ordem de anexação usada
     em toda a Macro (holerite sempre primeiro, ponto sempre depois).
     """
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return 'Serviço indisponível.', 503
     if idx not in (0, 1):
         return 'Documento inválido.', 404
@@ -11704,7 +11721,7 @@ def assinatura_pagina(hash_token):
     POST valida o CPF contra Funcionários e, se bater, registra IP/User-Agent/
     timestamp e marca a Assinatura (e o Processar Arquivos de origem) como
     "Assinado". O hash funciona como token de acesso ao documento."""
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return 'Serviço indisponível.', 503
 
     registro = _buscar_por_campo(TABLE_ASSINATURAS, 'Hash Token', hash_token)
@@ -11820,7 +11837,7 @@ def assinatura_pagina(hash_token):
     _at_throttle()
     r_func = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_FUNC}/{func_id}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
         timeout=30,
     )
     if not r_func.ok:
@@ -11865,7 +11882,7 @@ def assinatura_pagina(hash_token):
     _at_throttle()
     r_recheck = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}/{registro["id"]}',
-        headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'}, timeout=15,
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'}, timeout=15,
     )
     if r_recheck.ok and r_recheck.json().get('fields', {}).get('Status') == 'Assinado':
         quando = _fmt_quando(r_recheck.json().get('fields', {}).get('Data/Hora Assinatura'))
@@ -12180,7 +12197,7 @@ def processar_vr_va():
     """
     if request.method == 'OPTIONS':
         return jsonify({}), 200
-    if not AIRTABLE_API_KEY:
+    if not _airtable_api_key_atual():
         return jsonify({'status': 'erro', 'erro': 'AIRTABLE_API_KEY nao configurada'}), 500
 
     folha_mensal = (request.form.get('folha_mensal') or '').strip()
