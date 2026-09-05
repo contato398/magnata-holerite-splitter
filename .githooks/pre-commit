@@ -419,6 +419,19 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # equivalente em ALLOWED_PATHS (.magnata/patterns.sh), sem precisar de
   # exceção nesta lista.
   "test_magnata_os_autenticacao_composicao_app_real_v1.py"
+  # Exceção exata e restrita (missão "FUNDAÇÃO TEMPORAL POSTO↔CLIENTE V1",
+  # branch fix/vigencia-cliente-por-posto-v1, 2026-09-04). Mantém "^test_"
+  # bloqueado por padrão e libera somente este teste nominal. Mesmo padrão
+  # nominal já usado para Macro 5, Macro 6A, Orquestrador, etc.
+  "test_vigencia_cliente_por_posto_v1.py"
+  # Exceção exata e restrita (ULTRAPLAN CORRETIVO PR #129 — RESOLUÇÃO TEMPORAL
+  # POSTO↔CLIENTE V1, branch fix/vigencia-cliente-por-posto-v1, 2026-09-04).
+  # Mantém "^test_" bloqueado por padrão e libera somente este teste nominal novo.
+  # Resolvedor temporal puro + 23 testes puros de segmentação temporal.
+  "test_magnata_os_documental_alocacao_resolucao_segmentos_temporais.py"
+  # Extensão de teste Postgres real PRÉ-EXISTENTE para validar migration 0002
+  # (PENDÊNCIA 2 de autonomia PR #129). Mantém mesmo padrão nominal exato.
+  "test_magnata_os_documental_alocacao_postgres_real.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

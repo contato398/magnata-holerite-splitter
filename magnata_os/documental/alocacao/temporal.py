@@ -58,6 +58,31 @@ class RegistroAlocacao:
     vigente_ate: Optional[date] = None
 
 
+@dataclasses.dataclass(frozen=True)
+class TuplaAlocacaoComClientes:
+    """Forma pura do resultado de leitura histórica: alocação de colaborador
+    com cliente(s) resolvido(s) por período. Une 2 tabelas temporais
+    (alocacao + vigencia_cliente_por_posto) via interseção temporal.
+
+    Campos vigência do colaborador + vigência da relação cliente vêm ambos,
+    permitindo auditoria de "qual era a vigência de cada coisa naquele período".
+
+    cliente_id = NULL significa relação histórica desconhecida (não fabricada).
+    Quando cliente_id é NULL, os períodos de cliente também são NULL (não
+    inventados). Quando cliente_id é preenchido, ambos cliente_vigente_de e
+    cliente_vigente_ate refletem a verdadeira intersecção temporal."""
+
+    vinculo_id: str
+    colaborador_id: str
+    alocacao_id: str
+    posto_id: str
+    cliente_id: Optional[str]  # NULL = cliente historicamente desconhecido
+    alocacao_vigente_de: date
+    alocacao_vigente_ate: Optional[date]
+    cliente_vigente_de: Optional[date]  # NULL quando cliente_id é NULL
+    cliente_vigente_ate: Optional[date]  # NULL quando cliente_id é NULL
+
+
 class SobreposicaoVinculoError(ValueError):
     """Levantado pelo adapter SQLite (aplicação) quando um novo vínculo
     sobrepõe outro já registrado do MESMO colaborador -- mesma
@@ -71,3 +96,52 @@ class SobreposicaoAlocacaoError(ValueError):
     outra já registrada do MESMO vínculo NO MESMO posto -- rateio entre
     postos DIFERENTES nunca levanta este erro (ver nota de reconciliação
     na migration 0001)."""
+
+
+class SobreposicaoClientePorPostoError(ValueError):
+    """Levantado quando dois CLIENTES DIFERENTES sobrepostos temporalmente
+    são detectados para o MESMO POSTO. Conflito de integridade temporal
+    que impede materialização de segmentos (não é escolhível, não é
+    truncável, não é resolvível silenciosamente). Responsabilidade do
+    resolvedor temporal validar e rejeitar explicitamente."""
+
+
+import enum
+
+
+class StatusSegmentoTemporal(enum.Enum):
+    """Status canônico de segmento temporal materializado.
+
+    COMPROVADO: existe fato real no banco (cliente_id preenchido).
+    HISTORICO_NAO_COMPROVADO: período sem cliente real comprovado,
+        lacuna temporal (cliente_id=NULL, nunca inventado).
+    """
+
+    COMPROVADO = "COMPROVADO"
+    HISTORICO_NAO_COMPROVADO = "HISTORICO_NAO_COMPROVADO"
+
+
+@dataclasses.dataclass(frozen=True)
+class SegmentoTemporalAlocacao:
+    """Segmento temporal materializado da alocação com cliente resolvido.
+
+    Representa um período contíguo dentro da vigência de uma alocação,
+    com cliente definido (ou NULL para lacuna histórica). Toda alocação
+    é decomposta em segmentos contínuos que cobrem 100% do intervalo
+    efetivo (alocação ∩ janela consultada), sem buracos, sem sobreposição.
+
+    Campos:
+        alocacao_id: identidade opaca da alocação.
+        posto_id: identidade opaca do posto (validação de isolamento).
+        segmento_de: início do segmento (inclusivo).
+        segmento_ate: fim do segmento (inclusivo); NULL = aberto até hoje.
+        cliente_id: identidade opaca do cliente (NULL = lacuna histórica).
+        status: COMPROVADO (fato real) ou HISTORICO_NAO_COMPROVADO (lacuna).
+    """
+
+    alocacao_id: str
+    posto_id: str
+    segmento_de: date
+    segmento_ate: Optional[date]
+    cliente_id: Optional[str]
+    status: StatusSegmentoTemporal

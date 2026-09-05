@@ -602,3 +602,187 @@ def test_comparacao_shadow_airtable_consistente_contra_postgres(repo):
 
     estado = comparar_colaborador_shadow_com_airtable(repo, _SnapshotSintetico(), colab, date(2026, 3, 1))
     assert estado == EstadoComparacaoAirtable.CONSISTENTE
+
+
+# ============================================================================
+# Missão "FUNDAÇÃO TEMPORAL POSTO ↔ CLIENTE V1" -- Migration 0002 +
+# resolvedor temporal contra Postgres real (validação de migration real,
+# constraints, LEFT JOIN semântica, segmentação temporal com lacunas).
+# ============================================================================
+
+_MIGRATION_SQL_0002 = (Path(__file__).parent / 'magnata_os' / 'documental' / 'alocacao' / 'migrations' / '0002_criar_vigencia_cliente_por_posto.sql').read_text(encoding='utf-8')
+_ROLLBACK_SQL_0002 = (Path(__file__).parent / 'magnata_os' / 'documental' / 'alocacao' / 'migrations' / '0002_criar_vigencia_cliente_por_posto_rollback.sql').read_text(encoding='utf-8')
+
+
+def _aplicar_migration_0002(conn) -> None:
+    _executar_script_sql(conn, _MIGRATION_SQL_0002)
+
+
+def _aplicar_rollback_0002(conn) -> None:
+    _executar_script_sql(conn, _ROLLBACK_SQL_0002)
+
+
+@pytest.fixture
+def pg_conn_com_vigencia_cliente(pg_conn):
+    """Estende pg_conn com migration 0002 aplicada (vigencia_cliente_por_posto).
+
+    Fixture filha: pg_conn (pai) é responsável pelo close(). Fixture filha
+    gerencia apenas a migration 0002, não o ciclo da conexão.
+    """
+    _aplicar_rollback_0002(pg_conn)  # garantir banco/schema vazio no inicio
+    _aplicar_migration_0002(pg_conn)
+    yield pg_conn
+    pg_conn.rollback()
+    _aplicar_rollback_0002(pg_conn)
+
+
+def test_migration_0002_cria_tabela_vigencia_cliente_por_posto(pg_conn_com_vigencia_cliente):
+    """Migration 0002 cria tabela vigencia_cliente_por_posto com schema correto."""
+    with pg_conn_com_vigencia_cliente.cursor() as cur:
+        cur.execute("SELECT to_regclass('vigencia_cliente_por_posto')")
+        assert cur.fetchone()[0] is not None
+
+
+def test_migration_0002_check_vigente_ate_valido(pg_conn_com_vigencia_cliente):
+    """CHECK constraint rejeita vigente_ate < vigente_de."""
+    with pg_conn_com_vigencia_cliente.cursor() as cur:
+        with pytest.raises(Exception):  # psycopg levanta exceção de constraint
+            cur.execute(
+                "INSERT INTO vigencia_cliente_por_posto (id, posto_id, cliente_id, vigente_de, vigente_ate, origem_evidencia) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                ('vc-check-err', 'p1', 'c1', date(2026, 6, 30), date(2026, 6, 1), 'teste'),
+            )
+        pg_conn_com_vigencia_cliente.rollback()
+
+
+def test_migration_0002_exclude_rejeita_sobreposicao_mesmo_posto(pg_conn_com_vigencia_cliente):
+    """EXCLUDE constraint rejeita dois clientes DIFERENTES sobrepostos no MESMO POSTO."""
+    with pg_conn_com_vigencia_cliente.cursor() as cur:
+        # Inserir primeiro cliente
+        cur.execute(
+            "INSERT INTO vigencia_cliente_por_posto (id, posto_id, cliente_id, vigente_de, vigente_ate, origem_evidencia) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            ('vc1', 'posto-exclus', 'cliente-A', date(2026, 6, 1), date(2026, 6, 30), 'teste'),
+        )
+        pg_conn_com_vigencia_cliente.commit()
+
+        # Tentar inserir segundo cliente sobrepostoño mesmo posto
+        with pytest.raises(Exception):  # EXCLUDE levanta erro
+            cur.execute(
+                "INSERT INTO vigencia_cliente_por_posto (id, posto_id, cliente_id, vigente_de, vigente_ate, origem_evidencia) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                ('vc2', 'posto-exclus', 'cliente-B', date(2026, 6, 15), date(2026, 7, 15), 'teste'),
+            )
+        pg_conn_com_vigencia_cliente.rollback()
+
+
+def test_migration_0002_multiplos_postos_simultaneos_permitidos(pg_conn_com_vigencia_cliente):
+    """Múltiplos postos podem ter clientes vigentes simultaneamente (rateio)."""
+    with pg_conn_com_vigencia_cliente.cursor() as cur:
+        cur.execute(
+            "INSERT INTO vigencia_cliente_por_posto (id, posto_id, cliente_id, vigente_de, vigente_ate, origem_evidencia) "
+            "VALUES (%s, %s, %s, %s, %s, %s), (%s, %s, %s, %s, %s, %s)",
+            ('vc-multi-1', 'posto-A', 'cliente-X', date(2026, 6, 1), date(2026, 12, 31), 'teste',
+             'vc-multi-2', 'posto-B', 'cliente-X', date(2026, 6, 1), date(2026, 12, 31), 'teste'),
+        )
+        pg_conn_com_vigencia_cliente.commit()
+
+        cur.execute("SELECT COUNT(*) FROM vigencia_cliente_por_posto WHERE cliente_id = 'cliente-X'")
+        assert cur.fetchone()[0] == 2
+
+
+def test_left_join_sem_cliente_retorna_alocacao_com_null(pg_conn_com_vigencia_cliente, repo):
+    """LEFT JOIN sem match em vigencia_cliente_por_posto retorna alocacao com cliente_id=NULL."""
+    # Preparar dados: vínculo + alocação, mas SEM entrada em vigencia_cliente_por_posto
+    repo.registrar_vinculo('v-left-join', 'colab-left-join', date(2026, 1, 1))
+    repo.registrar_alocacao('a-left-join', 'v-left-join', 'posto-left-join', date(2026, 6, 1), date(2026, 6, 30))
+
+    # Consultar com listar_alocacoes_com_clientes_para_colaborador
+    resultado = repo.listar_alocacoes_com_clientes_para_colaborador(
+        'colab-left-join',
+        date(2026, 6, 1),
+        date(2026, 6, 30)
+    )
+
+    # LEFT JOIN sem match = 1 row com cliente_id=NULL
+    assert len(resultado) == 1
+    assert resultado[0].cliente_id is None
+    assert resultado[0].alocacao_vigente_de == date(2026, 6, 1)
+
+
+def test_resolvedor_segmentos_com_2_clientes_e_lacuna(pg_conn_com_vigencia_cliente, repo):
+    """Cenário obrigatório: alocação 01/06→31/07 + A (01/06→30/06) + B (05/07→31/07).
+    Resolvedor materializa 3 segmentos: A-COMPROVADO, LACUNA, B-COMPROVADO.
+    """
+    from magnata_os.documental.alocacao.resolucao_segmentos_temporais import materializar_segmentos_alocacao_com_cliente
+    from datetime import timedelta
+
+    # Preparar dados
+    repo.registrar_vinculo('v-cenario', 'colab-cenario', date(2026, 1, 1))
+    repo.registrar_alocacao('a-cenario', 'v-cenario', 'posto-cenario', date(2026, 6, 1), date(2026, 7, 31))
+
+    # Registrar vigências de cliente
+    with pg_conn_com_vigencia_cliente.cursor() as cur:
+        cur.execute(
+            "INSERT INTO vigencia_cliente_por_posto (id, posto_id, cliente_id, vigente_de, vigente_ate, origem_evidencia) "
+            "VALUES (%s, %s, %s, %s, %s, %s), (%s, %s, %s, %s, %s, %s)",
+            ('vc-cenario-A', 'posto-cenario', 'cliente-A', date(2026, 6, 1), date(2026, 6, 30), 'teste',
+             'vc-cenario-B', 'posto-cenario', 'cliente-B', date(2026, 7, 5), date(2026, 7, 31), 'teste'),
+        )
+        pg_conn_com_vigencia_cliente.commit()
+
+    # Obter tuplas via adapter
+    tuplas = repo.listar_alocacoes_com_clientes_para_colaborador(
+        'colab-cenario',
+        date(2026, 6, 1),
+        date(2026, 7, 31)
+    )
+
+    # Materializar segmentos
+    segmentos = materializar_segmentos_alocacao_com_cliente(
+        alocacao_id='a-cenario',
+        posto_id='posto-cenario',
+        vigente_de=date(2026, 6, 1),
+        vigente_ate=date(2026, 7, 31),
+        janela_inicio=date(2026, 6, 1),
+        janela_fim=date(2026, 7, 31),
+        tuplas_do_adapter=tuplas
+    )
+
+    # Validar 3 segmentos: A, LACUNA, B
+    assert len(segmentos) == 3
+
+    # Segmento 1: Cliente A (01/06 → 30/06)
+    assert segmentos[0].cliente_id == 'cliente-A'
+    assert segmentos[0].segmento_de == date(2026, 6, 1)
+    assert segmentos[0].segmento_ate == date(2026, 6, 30)
+    assert str(segmentos[0].status) == 'StatusSegmentoTemporal.COMPROVADO'
+
+    # Segmento 2: Lacuna (01/07 → 04/07)
+    assert segmentos[1].cliente_id is None
+    assert segmentos[1].segmento_de == date(2026, 7, 1)
+    assert segmentos[1].segmento_ate == date(2026, 7, 4)
+    assert str(segmentos[1].status) == 'StatusSegmentoTemporal.HISTORICO_NAO_COMPROVADO'
+
+    # Segmento 3: Cliente B (05/07 → 31/07)
+    assert segmentos[2].cliente_id == 'cliente-B'
+    assert segmentos[2].segmento_de == date(2026, 7, 5)
+    assert segmentos[2].segmento_ate == date(2026, 7, 31)
+    assert str(segmentos[2].status) == 'StatusSegmentoTemporal.COMPROVADO'
+
+    # Validar cobertura integral
+    soma_dias = (
+        (segmentos[0].segmento_ate - segmentos[0].segmento_de).days + 1 +
+        (segmentos[1].segmento_ate - segmentos[1].segmento_de).days + 1 +
+        (segmentos[2].segmento_ate - segmentos[2].segmento_de).days + 1
+    )
+    esperado_dias = (date(2026, 7, 31) - date(2026, 6, 1)).days + 1
+    assert soma_dias == esperado_dias
+
+
+def test_migration_0002_rollback_remove_vigencia_cliente_por_posto(pg_conn_com_vigencia_cliente):
+    """Rollback 0002 remove tabela vigencia_cliente_por_posto."""
+    _aplicar_rollback_0002(pg_conn_com_vigencia_cliente)
+    with pg_conn_com_vigencia_cliente.cursor() as cur:
+        cur.execute("SELECT to_regclass('vigencia_cliente_por_posto')")
+        assert cur.fetchone()[0] is None

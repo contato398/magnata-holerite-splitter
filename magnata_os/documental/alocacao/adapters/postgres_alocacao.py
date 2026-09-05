@@ -190,6 +190,82 @@ class RepositorioAlocacaoPostgres:
                     (vigente_ate, vinculo_trabalhista_id, posto_id),
                 )
 
+    # ── Leitura histórica com clientes (missão "FUNDAÇÃO TEMPORAL
+    # POSTO ↔ CLIENTE V1") ──────────────────────────────────────────────
+
+    def listar_alocacoes_com_clientes_para_colaborador(
+        self, colaborador_id: str, data_inicio, data_fim,
+    ) -> Tuple:
+        """Retorna TODAS as alocações históricas com clientes associados
+        (via interseção temporal com vigencia_cliente_por_posto).
+
+        Garantias:
+          1. Colaborador DEVE ter vínculo aberto durante [data_inicio, data_fim]
+          2. Alocação (colaborador ao posto) intersecta [data_inicio, data_fim]
+          3. Relação posto→cliente PODE existir em [data_inicio, data_fim]
+          4. ALOCAÇÃO E VIGÊNCIA_CLIENTE_POR_POSTO DEVEM INTERSECTAR ENTRE SI
+             (não basta intersectar a janela consultada separadamente)
+          5. Ausência de relação histórica NÃO fabrica cliente (LEFT JOIN + NULL)
+          6. Múltiplos clientes legítimos aparecem como rows separadas
+          7. Lacunas temporais (períodos sem cliente comprovado) retornam NULL
+          8. Ordenação: determinística (posto_id, cliente_id, data)
+
+        SEGMENTAÇÃO TEMPORAL: Para materializar cobertura completa com lacunas
+        explícitas, consulte resolucao_segmentos_temporais.materializar_segmentos_alocacao_com_cliente.
+        """
+        from ..temporal import TuplaAlocacaoComClientes
+
+        with self._conexao.cursor() as cursor:
+            cursor.execute(
+                f'''
+                SELECT
+                    v.id,
+                    v.colaborador_id,
+                    a.id,
+                    a.posto_id,
+                    vc.cliente_id,
+                    a.vigente_de,
+                    a.vigente_ate,
+                    vc.vigente_de,
+                    vc.vigente_ate
+                FROM {_TABELA_VINCULO} v
+                INNER JOIN {_TABELA_ALOCACAO} a
+                    ON a.vinculo_trabalhista_id = v.id
+                LEFT JOIN vigencia_cliente_por_posto vc
+                    ON a.posto_id = vc.posto_id
+                    AND vc.vigente_de <= %s
+                    AND (vc.vigente_ate IS NULL OR vc.vigente_ate >= %s)
+                    AND (vc.vigente_ate IS NULL OR a.vigente_de <= vc.vigente_ate)
+                    AND (a.vigente_ate IS NULL OR vc.vigente_de <= a.vigente_ate)
+                WHERE v.colaborador_id = %s
+                AND v.data_admissao <= %s
+                AND (v.data_desligamento IS NULL OR v.data_desligamento >= %s)
+                AND a.vigente_de <= %s
+                AND (a.vigente_ate IS NULL OR a.vigente_ate >= %s)
+                ORDER BY a.posto_id, vc.cliente_id, a.vigente_de ASC
+                ''',
+                (data_fim, data_inicio,  # vc temporal filter (janela)
+                 colaborador_id,          # v.colaborador_id
+                 data_fim, data_inicio,   # v temporal filter
+                 data_fim, data_inicio),  # a temporal filter
+            )
+            linhas = cursor.fetchall()
+
+        return tuple(
+            TuplaAlocacaoComClientes(
+                vinculo_id=linha[0],
+                colaborador_id=linha[1],
+                alocacao_id=linha[2],
+                posto_id=linha[3],
+                cliente_id=linha[4],  # NULL se nenhuma relação intersecta com alocacao
+                alocacao_vigente_de=linha[5],
+                alocacao_vigente_ate=linha[6],
+                cliente_vigente_de=linha[7],
+                cliente_vigente_ate=linha[8],
+            )
+            for linha in linhas
+        )
+
     # ── Contrato FonteUnidadePostoPrestacao (já existente, nunca
     # duplicado) ──────────────────────────────────────────────────────
 
