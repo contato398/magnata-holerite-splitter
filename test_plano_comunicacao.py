@@ -26,15 +26,19 @@ def _preview(preferencia="otimizar"):
     )
 
 
+def _conteudos():
+    return [
+        ConteudoItem("video", "v1.mp4", "BASE64-1"),
+        ConteudoItem("video", "v2.mp4", "BASE64-2"),
+    ]
+
+
 def test_plano_otimizado_materializa_legenda_no_primeiro_video():
     preview = _preview()
     plano = montar_plano_disparo(
         preview=preview,
         texto="Benefícios Magnata",
-        conteudos=[
-            ConteudoItem("video", "v1.mp4", "BASE64-1"),
-            ConteudoItem("video", "v2.mp4", "BASE64-2"),
-        ],
+        conteudos=_conteudos(),
         preview_id_autorizado=preview.preview_id,
         autorizacao_explicita=True,
     )
@@ -51,10 +55,7 @@ def test_plano_separado_preserva_texto_mais_dois_videos():
     plano = montar_plano_disparo(
         preview=preview,
         texto="Benefícios Magnata",
-        conteudos=[
-            ConteudoItem("video", "v1.mp4", "BASE64-1"),
-            ConteudoItem("video", "v2.mp4", "BASE64-2"),
-        ],
+        conteudos=_conteudos(),
         preview_id_autorizado=preview.preview_id,
         autorizacao_explicita=True,
     )
@@ -71,10 +72,7 @@ def test_plano_revalida_gate_de_autorizacao():
         montar_plano_disparo(
             preview=preview,
             texto="Benefícios Magnata",
-            conteudos=[
-                ConteudoItem("video", "v1.mp4", "1"),
-                ConteudoItem("video", "v2.mp4", "2"),
-            ],
+            conteudos=_conteudos(),
             preview_id_autorizado="outra-previa",
             autorizacao_explicita=True,
         )
@@ -99,8 +97,7 @@ def test_plano_recusa_conteudo_extra():
             preview=preview,
             texto="Benefícios Magnata",
             conteudos=[
-                ConteudoItem("video", "v1.mp4", "1"),
-                ConteudoItem("video", "v2.mp4", "2"),
+                *_conteudos(),
                 ConteudoItem("video", "v3.mp4", "3"),
             ],
             preview_id_autorizado=preview.preview_id,
@@ -108,16 +105,25 @@ def test_plano_recusa_conteudo_extra():
         )
 
 
-def test_plano_recusa_texto_diferente_da_previa_na_presenca():
+def test_plano_recusa_texto_ausente_quando_previa_tinha_texto():
     preview = _preview()
     with pytest.raises(PlanoComunicacaoError, match="texto não corresponde"):
         montar_plano_disparo(
             preview=preview,
             texto="",
-            conteudos=[
-                ConteudoItem("video", "v1.mp4", "1"),
-                ConteudoItem("video", "v2.mp4", "2"),
-            ],
+            conteudos=_conteudos(),
+            preview_id_autorizado=preview.preview_id,
+            autorizacao_explicita=True,
+        )
+
+
+def test_plano_recusa_troca_de_texto_apos_previa():
+    preview = _preview()
+    with pytest.raises(PlanoComunicacaoError, match="texto não corresponde"):
+        montar_plano_disparo(
+            preview=preview,
+            texto="Outro texto também não vazio",
+            conteudos=_conteudos(),
             preview_id_autorizado=preview.preview_id,
             autorizacao_explicita=True,
         )
