@@ -27,6 +27,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Mapping, Optional, Tuple
 
+from .cardinalidade_colaborador_por_tipo import avaliar_obrigatoriedade_por_tipo_documental
 from .competencia_esperada_prestacao import ContextoCicloPrestacao
 from .contratos import ReferenciaCanonica, ResultadoResolucaoSemantico
 from .fonte_clientes_prestacao import FonteClientesPrestacao
@@ -40,6 +41,7 @@ from .pacote_prestacao import (
     PacotePrestacaoCliente,
     avaliar_e_montar_pacote,
     combinar_pacote_com_holerite,
+    combinar_pacote_com_obrigatoriedade_documental,
 )
 from .politica_requisitos_prestacao import OverrideRequisitosPrestacao, PoliticaRequisitosPrestacao
 from .prestacao_readiness import RequisitoDocumentalPrestacao
@@ -154,6 +156,7 @@ def executar_ciclo_prestacao(
     competencias_por_cliente: Mapping[ReferenciaCanonica, ReferenciaCanonica],
     tipos_condicionais_para_auditoria: Tuple[str, ...] = (),
     fonte_colaboradores_esperados: Optional[FonteColaboradoresEsperadosPrestacao] = None,
+    tipos_obrigatorios_por_colaborador: Tuple[str, ...] = (TIPO_HOLERITE,),
 ) -> ResultadoCicloPrestacao:
     """Executa 1 ciclo, ponta-a-ponta, sem efeito colateral.
 
@@ -173,20 +176,19 @@ def executar_ciclo_prestacao(
     duck-typed, nunca parte obrigatória do Protocol `FonteRequisitosPrestacao`
     do PR #98 -- uma fonte sem essa extensão simplesmente não relata
     esta informação, nunca quebra).
-    `fonte_colaboradores_esperados`: quando informada, Holerite é
-    avaliado por CARDINALIDADE colaborador (`holerite_obrigatorio_
-    prestacao`) para TODO cliente, nunca só pela presença agregada do
-    tipo no inventário -- "HOLERITE É OBRIGATÓRIO EM TODA PRESTAÇÃO DE
-    CONTAS" (Adendo de Regra de Negócio, confirmado pelo negócio numa
-    mensagem distinta; a missão "FECHAMENTO DA BASE CANÔNICA" havia
-    temporariamente gateado essa avaliação por configuração condicional
-    explícita por cliente -- ADENDO DE CONTINUIDADE do mesmo dia
-    REVOGOU esse gate antes deste PR ser mesclado: Holerite volta a ser
-    universal, nunca condicional, ver docs/decisoes/
-    fechamento-base-canonica-ciclo-piloto-readonly-v1.md para o
-    histórico completo das 2 reversões). `None` (default) preserva o
-    comportamento anterior a qualquer um dos adendos (Holerite avaliado
-    só pela contagem plana, se estiver na política efetiva do cliente)."""
+    `fonte_colaboradores_esperados`: quando informada, tipos em
+    `tipos_obrigatorios_por_colaborador` são avaliados por CARDINALIDADE
+    colaborador para TODO cliente, nunca só pela presença agregada do
+    tipo no inventário -- "TIPOS OBRIGATÓRIOS SÃO EXIGIDOS EM TODA
+    PRESTAÇÃO DE CONTAS" (Adendo de Regra de Negócio, generalizado de
+    Holerite para suportar Folha de Ponto e outros). `None` (default)
+    preserva o comportamento anterior (tipos avaliados só pela contagem
+    plana, se estiverem na política efetiva do cliente).
+    `tipos_obrigatorios_por_colaborador`: tuple de tipos_documental que
+    devem ser avaliados por cardinalidade colaborador quando
+    `fonte_colaboradores_esperados` é fornecida. Default = (TIPO_HOLERITE,)
+    para compatibilidade. Pode incluir 'Folha de Ponto' ou outros tipos
+    que tenham granularidade colaborador."""
     resultados = []
     for cliente in fonte_clientes.listar_ativos(contexto):
         competencia = competencias_por_cliente.get(cliente)
@@ -202,21 +204,33 @@ def executar_ciclo_prestacao(
             cliente, contexto, requisitos_base, fonte_requisitos)
         pacote = avaliar_e_montar_pacote(cliente, competencia, resolucao_ancora, fonte_inventario, politica)
 
+        # Avalia cardinalidade por colaborador para TODOS os tipos obrigatórios
+        # (não só Holerite). Compatibilidade: se `fonte_colaboradores_esperados`
+        # é None, comportamento anterior preservado (contagem plana).
         resultado_holerite = None
+        resultados_obrigatoriedade = {}
         if fonte_colaboradores_esperados is not None:
             colaboradores_esperados = fonte_colaboradores_esperados.colaboradores_esperados_para(cliente, contexto)
-            resultado_holerite = avaliar_obrigatoriedade_holerite(
-                cliente, competencia, colaboradores_esperados, pacote.itens_incluidos)
-            pacote = combinar_pacote_com_holerite(pacote, resultado_holerite)
+            for tipo_obrigatorio in tipos_obrigatorios_por_colaborador:
+                resultado = avaliar_obrigatoriedade_por_tipo_documental(
+                    cliente, competencia, tipo_obrigatorio, colaboradores_esperados, pacote.itens_incluidos
+                )
+                resultados_obrigatoriedade[tipo_obrigatorio] = resultado
+                # Compatibilidade Holerite: manter campo `resultado_holerite` preenchido
+                if tipo_obrigatorio == TIPO_HOLERITE:
+                    resultado_holerite = avaliar_obrigatoriedade_holerite(
+                        cliente, competencia, colaboradores_esperados, pacote.itens_incluidos
+                    )
+                # Combina pacote com obrigatoriedade de cada tipo
+                pacote = combinar_pacote_com_obrigatoriedade_documental(pacote, resultado)
 
-        # TIPO_HOLERITE só ganha tratamento por-colaborador quando a
-        # fonte de colaboradores esperados foi informada -- sem ela,
-        # preserva o comportamento anterior (contagem plana, se
-        # 'Holerite' estiver na base efetiva) para retrocompatibilidade.
+        # Tipos faltantes por cardinalidade: exclui tipos já processados
+        # por-colaborador quando fonte de colaboradores foi informada
+        tipos_excluir_necessidade_generica = (
+            set(tipos_obrigatorios_por_colaborador) if fonte_colaboradores_esperados is not None else set()
+        )
         tipos_para_necessidade_generica = (
-            tuple(tipo for tipo in pacote.tipos_faltantes if tipo != TIPO_HOLERITE)
-            if fonte_colaboradores_esperados is not None
-            else pacote.tipos_faltantes
+            tuple(tipo for tipo in pacote.tipos_faltantes if tipo not in tipos_excluir_necessidade_generica)
         )
         necessidades = tuple(
             NecessidadeDocumentoPrestacao(
@@ -226,16 +240,23 @@ def executar_ciclo_prestacao(
             )
             for tipo in tipos_para_necessidade_generica
         )
-        if resultado_holerite is not None and resultado_holerite.colaboradores_faltantes:
-            necessidades = necessidades + tuple(
-                NecessidadeDocumentoPrestacao(
-                    cliente=cliente, competencia=competencia, tipo_documental=TIPO_HOLERITE,
-                    motivo_exigencia='holerite_obrigatorio_por_colaborador_esperado',
-                    fontes_ainda_nao_consultadas=('gmail', 'airtable', 'armazenamento_documental'),
-                    colaborador=colaborador_faltante,
+        # Gera necessidades por-colaborador para cada tipo com cardinalidade
+        for tipo_obrigatorio, resultado_obrigatoriedade in resultados_obrigatoriedade.items():
+            if resultado_obrigatoriedade.colaboradores_faltantes:
+                necessidades = necessidades + tuple(
+                    NecessidadeDocumentoPrestacao(
+                        cliente=cliente, competencia=competencia, tipo_documental=tipo_obrigatorio,
+                        motivo_exigencia=f'{tipo_obrigatorio.lower()}_obrigatorio_por_colaborador_esperado',
+                        fontes_ainda_nao_consultadas=('gmail', 'airtable', 'armazenamento_documental'),
+                        colaborador=colaborador_faltante,
+                    )
+                    for colaborador_faltante in resultado_obrigatoriedade.colaboradores_faltantes
                 )
-                for colaborador_faltante in resultado_holerite.colaboradores_faltantes
-            )
+
+        # Compatibilidade: preencher campo `holerite` no pacote se foi avaliado
+        # (consumidores existentes podem inspecionar este campo)
+        if resultado_holerite is not None:
+            pacote = dataclasses.replace(pacote, holerite=resultado_holerite)
 
         requisitos_nao_configurados = ()
         if tipos_condicionais_para_auditoria:
