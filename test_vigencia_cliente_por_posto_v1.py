@@ -76,13 +76,18 @@ def test_caso_adversarial_alocacao_cliente_nao_intersectam():
       Posto→Cliente: 01/07/2026 → 31/12/2026
 
     Ambos intersectam a janela, MAS não se intersectam entre si.
-    Resultado esperado: NÃO associar cliente a esta alocação (query filtra).
+    Resultado esperado: LEFT JOIN sem match = retorna alocação com cliente_id=NULL.
     """
     from magnata_os.documental.alocacao.adapters.postgres_alocacao import RepositorioAlocacaoPostgres
 
-    # Mock data: nenhuma interseção entre alocação e cliente
-    # Query com LEFT JOIN não retorna nada quando não há interseção real
-    mock_conn = MockConnection(rows=[])
+    # Mock data: LEFT JOIN sem match = preserva alocação, cliente_id=NULL
+    # SQL: alocação existe mas nenhuma vigencia_cliente_por_posto intersecta
+    row = (
+        'v1', 'func-1', 'a1', 'p1', None,  # cliente_id = NULL (LEFT JOIN sem match)
+        datetime.date(2026, 1, 1), datetime.date(2026, 6, 30),  # alocação
+        None, None  # cliente períodos = NULL
+    )
+    mock_conn = MockConnection(rows=[row])
     repo = RepositorioAlocacaoPostgres(mock_conn)
 
     # Executar query
@@ -92,8 +97,10 @@ def test_caso_adversarial_alocacao_cliente_nao_intersectam():
         datetime.date(2026, 12, 31)
     )
 
-    # Sem interseção real entre alocação e cliente, resultado está vazio
-    assert len(resultado) == 0
+    # Sem interseção real entre alocação e cliente: 1 row com cliente=NULL
+    assert len(resultado) == 1
+    assert resultado[0].cliente_id is None
+    assert resultado[0].alocacao_vigente_de == datetime.date(2026, 1, 1)
 
 
 def test_alocacao_cliente_realmente_intersectam():
