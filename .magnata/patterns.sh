@@ -968,6 +968,14 @@ ALLOWED_PATHS=(
   "^magnata_os/documental/alocacao/migrations/0002_criar_vigencia_cliente_por_posto\.sql$"
   "^magnata_os/documental/alocacao/migrations/0002_criar_vigencia_cliente_por_posto_rollback\.sql$"
   "^test_vigencia_cliente_por_posto_v1\.py$"
+  # Exceção exata e restrita (ULTRAPLAN CORRETIVO PR #129 — RESOLUÇÃO TEMPORAL
+  # POSTO↔CLIENTE V1, branch fix/vigencia-cliente-por-posto-v1, 2026-09-04) —
+  # resolvedor temporal puro (domínio) e testes puros (23 casos + bônus).
+  # Não libera magnata_os/documental/alocacao/ ampla; apenas estes 2 caminhos.
+  "^magnata_os/documental/alocacao/resolucao_segmentos_temporais\.py$"
+  "^test_magnata_os_documental_alocacao_resolucao_segmentos_temporais\.py$"
+  # Extensão de teste Postgres real PRÉ-EXISTENTE para validar migration 0002 (PENDÊNCIA 2)
+  "^test_magnata_os_documental_alocacao_postgres_real\.py$"
 )
 
 # ============================================================================
