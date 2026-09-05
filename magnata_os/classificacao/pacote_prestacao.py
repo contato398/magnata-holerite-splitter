@@ -20,6 +20,7 @@ import dataclasses
 import enum
 from typing import Optional, Tuple
 
+from .cardinalidade_colaborador_por_tipo import ResultadoObrigatoriedadeDocumental
 from .contratos import ReferenciaCanonica, ResultadoResolucaoSemantico
 from .holerite_obrigatorio_prestacao import TIPO_HOLERITE, ResultadoObrigatoriedadeHolerite
 from .inventario_prestacao import FonteInventarioPrestacao
@@ -121,18 +122,48 @@ def avaliar_e_montar_pacote(
     return montar_pacote_logico(readiness, requisitos, inventario)
 
 
+def combinar_pacote_com_obrigatoriedade_documental(
+    pacote: PacotePrestacaoCliente,
+    resultado_obrigatoriedade: ResultadoObrigatoriedadeDocumental,
+) -> PacotePrestacaoCliente:
+    """GENÉRICO: combina um pacote JÁ MONTADO com obrigatoriedade de
+    qualquer tipo_documental por cardinalidade colaborador (Holerite,
+    Folha de Ponto, etc.).
+
+    Regras (idênticas às do Holerite, agora generalizadas):
+    - Se completo (zero faltantes) → retorna pacote inalterado + registro
+    - Se incompleto → rebaixa PRONTO→INCOMPLETO, adiciona tipo aos faltantes
+    - Nunca upgrada BLOQUEADO/EM_REVISAO (herança de cautela)
+    - Nunca promove um pacote já incompleto por outro motivo
+
+    Retorna pacote com estado potencialmente rebaixado, tipos_faltantes
+    potencialmente aumentado."""
+    if resultado_obrigatoriedade.completo:
+        return pacote  # Sem alteração se completo
+    novo_estado = pacote.estado
+    if novo_estado == EstadoPacotePrestacao.PRONTO:
+        novo_estado = EstadoPacotePrestacao.INCOMPLETO
+    tipos_faltantes = pacote.tipos_faltantes
+    if resultado_obrigatoriedade.tipo_documental not in tipos_faltantes:
+        tipos_faltantes = tuple(
+            sorted(tipos_faltantes + (resultado_obrigatoriedade.tipo_documental,))
+        )
+    return dataclasses.replace(
+        pacote, estado=novo_estado, tipos_faltantes=tipos_faltantes,
+    )
+
+
 def combinar_pacote_com_holerite(
     pacote: PacotePrestacaoCliente,
     resultado_holerite: ResultadoObrigatoriedadeHolerite,
 ) -> PacotePrestacaoCliente:
-    """Adendo de Regra de Negócio (Holerite): combina um pacote JÁ
-    MONTADO (via `montar_pacote_logico`/`avaliar_e_montar_pacote`, sem
-    nenhuma alteração) com a obrigatoriedade do Holerite por
-    cardinalidade colaborador. Nunca upgrada um pacote já problemático
-    (BLOQUEADO/EM_REVISAO continuam como estavam); só rebaixa PRONTO
-    para INCOMPLETO quando falta Holerite de algum colaborador esperado
-    -- nunca o inverso (Holerite completo nunca promove um pacote já
-    incompleto/bloqueado por outro motivo)."""
+    """COMPATIBILIDADE V1: wrapper que applica lógica Holerite diretamente.
+
+    Não delega à função genérica (pois `ResultadoObrigatoriedadeHolerite`
+    não tem `tipo_documental` como field). Mantém assinatura original
+    por compatibilidade com consumidores existentes. Campo `holerite`
+    no pacote continua sendo preenchido (usado em consumidores que
+    precisam inspecionar detalhes de Holerite)."""
     if resultado_holerite.completo:
         return dataclasses.replace(pacote, holerite=resultado_holerite)
     novo_estado = pacote.estado

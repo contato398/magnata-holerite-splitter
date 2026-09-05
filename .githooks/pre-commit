@@ -432,6 +432,12 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # Extensão de teste Postgres real PRÉ-EXISTENTE para validar migration 0002
   # (PENDÊNCIA 2 de autonomia PR #129). Mantém mesmo padrão nominal exato.
   "test_magnata_os_documental_alocacao_postgres_real.py"
+  # Exceção exata e restrita (PR #128 — WIRING REAL FOLHA/CARTÃO DE PONTO +
+  # CARDINALIDADE GENÉRICA, branch fix/wiring-ponto-inventario-v2, 2026-09-05).
+  # Testes puros de segmentação temporal (5 adversariais: cliente único, lacuna
+  # histórica, transferência sintética, idempotência, modo stub). Mesmo padrão
+  # nominal já usado para Macro 5, Macro 6A, PR #129, etc.
+  "test_magnata_os_classificacao_fonte_inventario_prestacao_ponto_temporal.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
