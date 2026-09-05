@@ -50,6 +50,7 @@ class PassoComposicao:
 class PreviewComunicacao:
     destinatarios: Tuple[str, ...]
     tem_texto: bool
+    texto_sha256: str
     itens: Tuple[ItemComunicacao, ...]
     assinatura: bool
     comprovante: bool
@@ -122,6 +123,11 @@ def _gerar_preview_id(payload: dict) -> str:
     return sha256(canonico.encode("utf-8")).hexdigest()
 
 
+def hash_texto_comunicacao(texto: str) -> str:
+    """Hash canônico do texto efetivo exibido/autorizado na prévia."""
+    return sha256((texto or "").strip().encode("utf-8")).hexdigest()
+
+
 def montar_preview_comunicacao(
     *,
     destinatarios: Iterable[str],
@@ -144,6 +150,7 @@ def montar_preview_comunicacao(
 
     dests = _normalizar_destinatarios(destinatarios)
     texto_limpo = (texto or "").strip()
+    texto_sha256 = hash_texto_comunicacao(texto_limpo)
     itens_tupla = tuple(itens)
     if not texto_limpo and not itens_tupla:
         raise PoliticaComunicacaoError("a campanha precisa ter texto ou ao menos um item")
@@ -155,7 +162,7 @@ def montar_preview_comunicacao(
 
     payload_id = {
         "destinatarios": dests,
-        "texto": texto_limpo,
+        "texto_sha256": texto_sha256,
         "itens": [(i.tipo, i.nome) for i in itens_tupla],
         "assinatura": assinatura,
         "comprovante": comprovante,
@@ -169,6 +176,7 @@ def montar_preview_comunicacao(
     return PreviewComunicacao(
         destinatarios=dests,
         tem_texto=bool(texto_limpo),
+        texto_sha256=texto_sha256,
         itens=itens_tupla,
         assinatura=assinatura,
         comprovante=comprovante,
