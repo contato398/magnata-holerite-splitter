@@ -1,0 +1,38 @@
+# Autorização humana específica — ATIVAÇÃO ORQUESTRADOR POSTGRES V1 — 2026-09-06
+#
+# Escopo autorizado nesta missão:
+# 1) preflight somente leitura no Postgres real magnata_os;
+# 2) confirmar backup/recuperação antes de qualquer DDL;
+# 3) aplicar PRIMEIRO a migration 0001 do Grande Orquestrador;
+# 4) validar o schema/tabelas/constraints/triggers criados;
+# 5) somente se 0001 validar, aplicar a migration 0002 de autorizacoes_gate;
+# 6) validar 0002;
+# 7) executar somente depois um E2E sintético sem transporte externo.
+#
+# Proibido por esta autorização:
+# - aplicar 0002 sem 0001 válida;
+# - tocar app.py, Evolution, WhatsApp, Airtable, credenciais ou deploy;
+# - enviar comunicação real;
+# - executar rollback automaticamente;
+# - usar fallback silencioso ou criar banco/fila paralelos.
+#
+# Blobs EXATOS versionados em main e autorizados para aplicação controlada
+# somente após confirmação de backup/recuperação e preflight verde:
+e0c02b46ca16d907c4073ade9bba351e4719605e  magnata_os/orquestrador/migrations/0001_repositorio_execucoes.sql
+e0e293105ebc3a6b80d631db016f9b0088dab94e  magnata_os/orquestrador/migrations/0002_autorizacoes_gate.sql
+#
+# Rollbacks EXATOS conhecidos e aprovados apenas como plano de recuperação.
+# São destrutivos e NÃO estão autorizados para execução automática:
+3ebef876d027f2bd78ee018e1165b5d5f01ba794  magnata_os/orquestrador/migrations/0001_repositorio_execucoes_rollback.sql
+6e1294991c07b6abd022d016de51537bb05bb18b  magnata_os/orquestrador/migrations/0002_autorizacoes_gate_rollback.sql
+#
+# Preflight já confirmado em modo read-only antes deste registro:
+# - banco: magnata_os / PostgreSQL 18.4
+# - schema magnata_orquestrador: ausente
+# - migration 0001: ainda não aplicada
+# - migration 0002: ainda não aplicada
+# - usuário do banco possui privilégio CREATE no database
+# - nenhuma escrita foi realizada durante a auditoria
+#
+# Esta autorização NÃO substitui a confirmação técnica de backup/recuperação.
+# Se backup/recuperação não puder ser confirmado, PARAR antes do primeiro DDL.
