@@ -35,6 +35,10 @@ _POLITICA: Mapping[TipoEvento, NivelAutonomia] = {
     TipoEvento.PR_MESCLADO: NivelAutonomia.EXECUTE_SAFE,
     TipoEvento.SUITE_DIVERGIU: NivelAutonomia.EXECUTE_SAFE,
     TipoEvento.ESTRUTURA_CODIGO_DIVERGIU: NivelAutonomia.PROPOSE,
+    # Comunicacao operacional jamais executa por simples deteccao de uma
+    # origem pronta. O V1 apenas registra/propoe e para em WAITING_GATE.
+    # Uma futura mudanca deste nivel exigira decisao arquitetural explicita.
+    TipoEvento.COMUNICACAO_SOLICITADA: NivelAutonomia.HUMAN_REQUIRED,
 }
 
 
