@@ -32,6 +32,11 @@ class TipoEvento(str, Enum):
     PR_MESCLADO = 'PR_MESCLADO'
     SUITE_DIVERGIU = 'SUITE_DIVERGIU'
     ESTRUTURA_CODIGO_DIVERGIU = 'ESTRUTURA_CODIGO_DIVERGIU'
+    # Evento operacional GENERICO: uma origem do Magnata OS propos uma
+    # comunicacao. Nao significa WhatsApp, nao autoriza envio e nunca
+    # carrega texto/destinatarios no envelope. Em V1 permanece sob gate
+    # humano obrigatorio (politica_autonomia.py).
+    COMUNICACAO_SOLICITADA = 'COMUNICACAO_SOLICITADA'
 
 
 class EstadoExecucao(str, Enum):
