@@ -1005,6 +1005,15 @@ ALLOWED_PATHS=(
   "^test_wiring_prestacao_comunicacao_shadow\.py$"
   "^test_wiring_autorizacao_plano_shadow\.py$"
   "^test_autorizacao_gate_canonica_shadow\.py$"
+  # Excecao exata e restrita (missao "ACOES DE EXECUCAO DO PLANO — SHADOW
+  # V1", branch fix/acoes-execucao-plano-postgres-shadow-v1, 2026-09-07).
+  # Migration 0003 inerte, rollback, repositorio Postgres e dois testes.
+  # Nao autoriza aplicacao real nem libera diretorios ou test_* amplos.
+  "^magnata_os/orquestrador/migrations/0003_acoes_execucao_plano\.sql$"
+  "^magnata_os/orquestrador/migrations/0003_acoes_execucao_plano_rollback\.sql$"
+  "^magnata_os/orquestrador/repositorio_acoes_execucao_plano_postgres\.py$"
+  "^test_repositorio_acoes_execucao_plano_postgres\.py$"
+  "^test_repositorio_acoes_execucao_plano_postgres_real\.py$"
 )
 
 # ============================================================================
