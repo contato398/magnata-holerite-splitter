@@ -450,6 +450,9 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_wiring_prestacao_comunicacao_shadow.py"
   "test_wiring_autorizacao_plano_shadow.py"
   "test_autorizacao_gate_canonica_shadow.py"
+  # Acoes persistentes do PlanoDisparo — somente os dois testes nominais.
+  "test_repositorio_acoes_execucao_plano_postgres.py"
+  "test_repositorio_acoes_execucao_plano_postgres_real.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
