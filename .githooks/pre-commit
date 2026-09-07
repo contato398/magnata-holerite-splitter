@@ -462,7 +462,9 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_aquisicao_complementar_corredor_e2e.py"
   # Exceção exata e restrita (ULTRAPLAN IDENTIDADE CANÔNICA DE
   # COLABORADOR V1, branch fix/identidade-canonica-colaborador-v1,
-  # 2026-09-07). Domínio, configuração, adapter, migration, bootstrap, 4 testes.
+  # 2026-09-06 -- autorização humana específica de governança de
+  # testes, mensagem dedicada do usuário). Só estes 4 testes
+  # permanentes desta missão.
   "test_identidade_colaborador.py"
   "test_configuracao_identidade_colaborador.py"
   "test_postgres_identidade_colaborador.py"
