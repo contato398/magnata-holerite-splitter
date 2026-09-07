@@ -1014,6 +1014,22 @@ ALLOWED_PATHS=(
   "^magnata_os/orquestrador/repositorio_acoes_execucao_plano_postgres\.py$"
   "^test_repositorio_acoes_execucao_plano_postgres\.py$"
   "^test_repositorio_acoes_execucao_plano_postgres_real\.py$"
+  # Excecao exata e restrita (missao "IDENTIDADE CANONICA DE COLABORADOR V1",
+  # branch fix/identidade-canonica-colaborador-v1-final, 2026-09-07).
+  # Dominio puro com HMAC-SHA256 versionado, configuracao, adapter Postgres
+  # inerte, migration 0003 inerte, bootstrap Airtable temporario, 4 testes
+  # nominais. Nao autoriza aplicacao real nem libera magnata_os/documental/
+  # ampla; apenas estes 10 caminhos exatos.
+  "^magnata_os/documental/alocacao/identidade_colaborador\.py$"
+  "^magnata_os/documental/alocacao/configuracao_identidade_colaborador\.py$"
+  "^magnata_os/documental/alocacao/adapters/postgres_identidade_colaborador\.py$"
+  "^magnata_os/documental/alocacao/migrations/0003_criar_identidade_colaborador_observada\.sql$"
+  "^magnata_os/documental/alocacao/migrations/0003_criar_identidade_colaborador_observada_rollback\.sql$"
+  "^magnata_os/documental/importacao_lote/adapters/bootstrap_identidade_colaborador_airtable\.py$"
+  "^test_identidade_colaborador\.py$"
+  "^test_configuracao_identidade_colaborador\.py$"
+  "^test_postgres_identidade_colaborador\.py$"
+  "^test_bootstrap_identidade_colaborador_airtable\.py$"
 )
 
 # ============================================================================
