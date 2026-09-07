@@ -438,6 +438,18 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # histórica, transferência sintética, idempotência, modo stub). Mesmo padrão
   # nominal já usado para Macro 5, Macro 6A, PR #129, etc.
   "test_magnata_os_classificacao_fonte_inventario_prestacao_ponto_temporal.py"
+  # Excecoes exatas da composicao Prestacao -> Orquestrador Postgres Shadow V1
+  # (2026-09-06). Nao liberam nenhum outro test_*.py.
+  "test_wiring_prestacao_orquestrador_postgres_shadow.py"
+  "test_wiring_prestacao_orquestrador_postgres_shadow_real.py"
+  # Testes nominais do contrato de integridade de midia e dos wirings
+  # diretamente acoplados. Nenhum wildcard foi adicionado.
+  "test_politica_comunicacao.py"
+  "test_plano_comunicacao.py"
+  "test_transporte_comunicacao.py"
+  "test_wiring_prestacao_comunicacao_shadow.py"
+  "test_wiring_autorizacao_plano_shadow.py"
+  "test_autorizacao_gate_canonica_shadow.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

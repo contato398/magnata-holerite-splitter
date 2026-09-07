@@ -15,7 +15,10 @@ from magnata_os.orquestrador.autorizacao_gate import (
 )
 from magnata_os.orquestrador.eventos import EstadoExecucao
 from magnata_os.orquestrador.plano_comunicacao import ConteudoItem
-from magnata_os.orquestrador.politica_comunicacao import ItemComunicacao
+from magnata_os.orquestrador.politica_comunicacao import (
+    ItemComunicacao,
+    hash_conteudo_comunicacao,
+)
 from magnata_os.orquestrador.repositorio_execucoes import RepositorioExecucoesEmMemoria
 from magnata_os.orquestrador.wiring_autorizacao_persistida_plano_shadow import (
     materializar_plano_com_autorizacao_persistida_shadow,
@@ -25,6 +28,7 @@ from magnata_os.orquestrador.wiring_prestacao_comunicacao_shadow import registra
 
 _INSTANTE = datetime(2026, 9, 6, 15, 30, tzinfo=timezone.utc)
 _TEXTO = 'Prestação disponível para conferência.'
+_DOCUMENTO = b'documento-prestacao-sintetico'
 
 
 def _intencao(repo):
@@ -48,7 +52,9 @@ def _intencao(repo):
         repositorio=repo,
         destinatarios=('5515999999999',),
         texto=_TEXTO,
-        itens=(ItemComunicacao('documento', 'prestacao.pdf'),),
+        itens=(ItemComunicacao(
+            'documento', 'prestacao.pdf', hash_conteudo_comunicacao(_DOCUMENTO),
+        ),),
         assinatura=False,
         comprovante=True,
         instante=_INSTANTE,
@@ -134,7 +140,7 @@ def test_fato_autorizado_materializa_plano_sem_transporte():
         repositorio_execucoes=repo_exec,
         autorizacao=auth,
         texto=_TEXTO,
-        conteudos=(ConteudoItem('documento', 'prestacao.pdf', 'storage://doc-001'),),
+        conteudos=(ConteudoItem('documento', 'prestacao.pdf', _DOCUMENTO),),
     )
 
     assert resultado.plano.total_notificacoes == 1
@@ -153,7 +159,7 @@ def test_fato_recusado_nunca_materializa_plano():
             repositorio_execucoes=repo_exec,
             autorizacao=auth,
             texto=_TEXTO,
-            conteudos=(ConteudoItem('documento', 'prestacao.pdf', 'storage://doc-001'),),
+            conteudos=(ConteudoItem('documento', 'prestacao.pdf', _DOCUMENTO),),
         )
 
 
@@ -178,5 +184,5 @@ def test_autorizacao_de_outra_previa_nao_e_reutilizavel():
             repositorio_execucoes=repo_exec,
             autorizacao=adulterado,
             texto=_TEXTO,
-            conteudos=(ConteudoItem('documento', 'prestacao.pdf', 'storage://doc-001'),),
+            conteudos=(ConteudoItem('documento', 'prestacao.pdf', _DOCUMENTO),),
         )

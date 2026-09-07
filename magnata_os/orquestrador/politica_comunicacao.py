@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+import re
 from typing import Iterable, Literal, Optional, Sequence, Tuple
 
 PreferenciaComposicao = Literal["otimizar", "separado"]
@@ -33,10 +34,17 @@ class AutorizacaoObrigatoriaError(PoliticaComunicacaoError):
 class ItemComunicacao:
     tipo: TipoItem
     nome: str = ""
+    conteudo_sha256: str = ""
 
     def __post_init__(self) -> None:
         if self.tipo not in {"video", "documento", "imagem", "audio", "texto"}:
             raise PoliticaComunicacaoError(f"tipo de item não suportado: {self.tipo}")
+        if self.tipo != "texto" and not re.fullmatch(
+            r"[0-9a-f]{64}", self.conteudo_sha256
+        ):
+            raise PoliticaComunicacaoError(
+                "mídia exige SHA-256 canônico do conteúdo"
+            )
 
 
 @dataclass(frozen=True)
@@ -128,6 +136,15 @@ def hash_texto_comunicacao(texto: str) -> str:
     return sha256((texto or "").strip().encode("utf-8")).hexdigest()
 
 
+def hash_conteudo_comunicacao(conteudo: bytes) -> str:
+    """Calcula a identidade criptográfica de conteúdo binário efetivo."""
+    if not isinstance(conteudo, (bytes, bytearray, memoryview)):
+        raise PoliticaComunicacaoError(
+            "conteúdo de mídia deve ser binário para cálculo de integridade"
+        )
+    return sha256(bytes(conteudo)).hexdigest()
+
+
 def montar_preview_comunicacao(
     *,
     destinatarios: Iterable[str],
@@ -163,7 +180,7 @@ def montar_preview_comunicacao(
     payload_id = {
         "destinatarios": dests,
         "texto_sha256": texto_sha256,
-        "itens": [(i.tipo, i.nome) for i in itens_tupla],
+        "itens": [(i.tipo, i.nome, i.conteudo_sha256) for i in itens_tupla],
         "assinatura": assinatura,
         "comprovante": comprovante,
         "preferencia": preferencia,

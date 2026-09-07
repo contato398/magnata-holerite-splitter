@@ -11,7 +11,10 @@ from magnata_os.classificacao.pacote_prestacao import (
 from magnata_os.classificacao.prestacao_readiness import ItemInventarioPrestacao
 from magnata_os.orquestrador.eventos import EstadoExecucao, TipoEvento
 from magnata_os.orquestrador.politica_autonomia import NivelAutonomia, nivel_para
-from magnata_os.orquestrador.politica_comunicacao import ItemComunicacao
+from magnata_os.orquestrador.politica_comunicacao import (
+    ItemComunicacao,
+    hash_conteudo_comunicacao,
+)
 from magnata_os.orquestrador.repositorio_execucoes import RepositorioExecucoesEmMemoria
 from magnata_os.orquestrador.wiring_prestacao_comunicacao_shadow import (
     WiringPrestacaoComunicacaoError,
@@ -22,6 +25,7 @@ from magnata_os.orquestrador.wiring_prestacao_comunicacao_shadow import (
 _CLIENTE = ReferenciaCanonica('CLIENTE', 'cliente-1')
 _COMPETENCIA = ReferenciaCanonica('COMPETENCIA', '2026-07')
 _INSTANTE = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
+_DOCUMENTO = b'documento-prestacao-sintetico'
 
 
 def _pacote(estado=EstadoPacotePrestacao.PRONTO):
@@ -47,7 +51,9 @@ def _registrar(repo, **overrides):
         repositorio=repo,
         destinatarios=('5515999999999',),
         texto='Prestação disponível para conferência.',
-        itens=(ItemComunicacao('documento', 'prestacao.pdf'),),
+        itens=(ItemComunicacao(
+            'documento', 'prestacao.pdf', hash_conteudo_comunicacao(_DOCUMENTO),
+        ),),
         assinatura=False,
         comprovante=True,
         instante=_INSTANTE,

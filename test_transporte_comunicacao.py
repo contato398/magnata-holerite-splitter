@@ -6,6 +6,7 @@ from magnata_os.orquestrador.plano_comunicacao import (
 )
 from magnata_os.orquestrador.politica_comunicacao import (
     ItemComunicacao,
+    hash_conteudo_comunicacao,
     montar_preview_comunicacao,
 )
 from magnata_os.orquestrador.transporte_comunicacao import (
@@ -13,6 +14,13 @@ from magnata_os.orquestrador.transporte_comunicacao import (
     TransporteComunicacaoError,
     executar_plano_disparo,
 )
+
+_VIDEO_1 = b"video-sintetico-1"
+_VIDEO_2 = b"video-sintetico-2"
+
+
+def _midia(tipo, nome, conteudo):
+    return ItemComunicacao(tipo, nome, hash_conteudo_comunicacao(conteudo))
 
 
 class TransporteFake:
@@ -41,8 +49,8 @@ def _plano_dois_videos():
         destinatarios=["5515999999999"],
         texto="Benefícios Magnata",
         itens=[
-            ItemComunicacao("video", "v1.mp4"),
-            ItemComunicacao("video", "v2.mp4"),
+            _midia("video", "v1.mp4", _VIDEO_1),
+            _midia("video", "v2.mp4", _VIDEO_2),
         ],
         assinatura=False,
         comprovante=False,
@@ -52,8 +60,8 @@ def _plano_dois_videos():
         preview=preview,
         texto="Benefícios Magnata",
         conteudos=[
-            ConteudoItem("video", "v1.mp4", "B64-1"),
-            ConteudoItem("video", "v2.mp4", "B64-2"),
+            ConteudoItem("video", "v1.mp4", _VIDEO_1),
+            ConteudoItem("video", "v2.mp4", _VIDEO_2),
         ],
         preview_id_autorizado=preview.preview_id,
         autorizacao_explicita=True,
@@ -70,7 +78,7 @@ def test_executor_respeita_ordem_e_legenda_do_plano_otimizado():
     assert [tipo for tipo, _ in transporte.chamadas] == ["video", "video"]
     assert transporte.chamadas[0][1] == {
         "numero": "5515999999999",
-        "conteudo": "B64-1",
+        "conteudo": _VIDEO_1,
         "nome_arquivo": "v1.mp4",
         "legenda": "Benefícios Magnata",
     }
@@ -81,7 +89,7 @@ def test_executor_separado_chama_texto_antes_das_midias():
     preview = montar_preview_comunicacao(
         destinatarios=["5515999999999"],
         texto="Mensagem",
-        itens=[ItemComunicacao("documento", "arquivo.pdf")],
+        itens=[_midia("documento", "arquivo.pdf", b"pdf-sintetico")],
         assinatura=False,
         comprovante=False,
         preferencia="separado",
@@ -89,7 +97,7 @@ def test_executor_separado_chama_texto_antes_das_midias():
     plano = montar_plano_disparo(
         preview=preview,
         texto="Mensagem",
-        conteudos=[ConteudoItem("documento", "arquivo.pdf", "PDF")],
+        conteudos=[ConteudoItem("documento", "arquivo.pdf", b"pdf-sintetico")],
         preview_id_autorizado=preview.preview_id,
         autorizacao_explicita=True,
     )
@@ -116,14 +124,14 @@ def test_preflight_bloqueia_tipo_sem_adapter_antes_de_qualquer_io():
     preview = montar_preview_comunicacao(
         destinatarios=["5515999999999"],
         texto="",
-        itens=[ItemComunicacao("audio", "audio.ogg")],
+        itens=[_midia("audio", "audio.ogg", b"audio-sintetico")],
         assinatura=False,
         comprovante=False,
     )
     plano = montar_plano_disparo(
         preview=preview,
         texto="",
-        conteudos=[ConteudoItem("audio", "audio.ogg", "AUDIO")],
+        conteudos=[ConteudoItem("audio", "audio.ogg", b"audio-sintetico")],
         preview_id_autorizado=preview.preview_id,
         autorizacao_explicita=True,
     )
