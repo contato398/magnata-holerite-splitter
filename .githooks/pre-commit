@@ -438,18 +438,9 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # histórica, transferência sintética, idempotência, modo stub). Mesmo padrão
   # nominal já usado para Macro 5, Macro 6A, PR #129, etc.
   "test_magnata_os_classificacao_fonte_inventario_prestacao_ponto_temporal.py"
-  # Exceção exata e restrita (ULTRAPLAN BUSCA COMPLEMENTAR DOCUMENTAL REAL V1,
-  # branch fix/busca-complementar-documental-real-v1, 2026-09-05).
-  # Orquestrador puro de aquisição complementar (15 testes do domínio).
-  # Corredor E2E completo (3 testes de integração: satisfeita/ambíguo/não_encontrado).
-  # Mesmo padrão nominal já usado para Macro 5, Macro 6A, PR #128, etc.
-  "test_magnata_os_documental_importacao_lote_aquisicao_complementar.py"
-  "test_aquisicao_complementar_corredor_e2e.py"
-  # Exceção exata e restrita (ULTRAPLAN IDENTIDADE CANÔNICA DE
-  # COLABORADOR V1, branch fix/identidade-canonica-colaborador-v1,
-  # 2026-09-06 -- autorização humana específica de governança de
-  # testes, mensagem dedicada do usuário). Só estes 4 testes
-  # permanentes desta missão.
+  # Exceção exata e restrita (ULTRAPLAN IDENTIDADE CANÔNICA DE COLABORADOR V1,
+  # branch fix/identidade-canonica-colaborador-v1-pr-final, 2026-09-07).
+  # Domínio, configuração, adapter, migration, bootstrap, 4 testes nominais.
   "test_identidade_colaborador.py"
   "test_configuracao_identidade_colaborador.py"
   "test_postgres_identidade_colaborador.py"
