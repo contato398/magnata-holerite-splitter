@@ -8,8 +8,16 @@ from magnata_os.orquestrador.plano_comunicacao import (
 from magnata_os.orquestrador.politica_comunicacao import (
     AutorizacaoObrigatoriaError,
     ItemComunicacao,
+    hash_conteudo_comunicacao,
     montar_preview_comunicacao,
 )
+
+_VIDEO_1 = b"video-sintetico-1"
+_VIDEO_2 = b"video-sintetico-2"
+
+
+def _midia(tipo, nome, conteudo):
+    return ItemComunicacao(tipo, nome, hash_conteudo_comunicacao(conteudo))
 
 
 def _preview(preferencia="otimizar"):
@@ -17,8 +25,8 @@ def _preview(preferencia="otimizar"):
         destinatarios=["5515999999999"],
         texto="Benefícios Magnata",
         itens=[
-            ItemComunicacao("video", "v1.mp4"),
-            ItemComunicacao("video", "v2.mp4"),
+            _midia("video", "v1.mp4", _VIDEO_1),
+            _midia("video", "v2.mp4", _VIDEO_2),
         ],
         assinatura=False,
         comprovante=False,
@@ -28,8 +36,8 @@ def _preview(preferencia="otimizar"):
 
 def _conteudos():
     return [
-        ConteudoItem("video", "v1.mp4", "BASE64-1"),
-        ConteudoItem("video", "v2.mp4", "BASE64-2"),
+        ConteudoItem("video", "v1.mp4", _VIDEO_1),
+        ConteudoItem("video", "v2.mp4", _VIDEO_2),
     ]
 
 
@@ -47,7 +55,7 @@ def test_plano_otimizado_materializa_legenda_no_primeiro_video():
     assert [a.tipo for a in plano.acoes] == ["video", "video"]
     assert plano.acoes[0].legenda == "Benefícios Magnata"
     assert plano.acoes[1].legenda == ""
-    assert plano.acoes[0].conteudo == "BASE64-1"
+    assert plano.acoes[0].conteudo == _VIDEO_1
 
 
 def test_plano_separado_preserva_texto_mais_dois_videos():
@@ -84,7 +92,7 @@ def test_plano_recusa_conteudo_ausente():
         montar_plano_disparo(
             preview=preview,
             texto="Benefícios Magnata",
-            conteudos=[ConteudoItem("video", "v1.mp4", "1")],
+            conteudos=[ConteudoItem("video", "v1.mp4", _VIDEO_1)],
             preview_id_autorizado=preview.preview_id,
             autorizacao_explicita=True,
         )
@@ -98,7 +106,7 @@ def test_plano_recusa_conteudo_extra():
             texto="Benefícios Magnata",
             conteudos=[
                 *_conteudos(),
-                ConteudoItem("video", "v3.mp4", "3"),
+                ConteudoItem("video", "v3.mp4", b"video-sintetico-3"),
             ],
             preview_id_autorizado=preview.preview_id,
             autorizacao_explicita=True,
@@ -133,16 +141,38 @@ def test_plano_deduplicado_na_previa_nao_duplica_acoes():
     preview = montar_preview_comunicacao(
         destinatarios=["5515999999999", "5515999999999"],
         texto="Oi",
-        itens=[ItemComunicacao("video", "v.mp4")],
+        itens=[_midia("video", "v.mp4", b"video-unico")],
         assinatura=False,
         comprovante=False,
     )
     plano = montar_plano_disparo(
         preview=preview,
         texto="Oi",
-        conteudos=[ConteudoItem("video", "v.mp4", "X")],
+        conteudos=[ConteudoItem("video", "v.mp4", b"video-unico")],
         preview_id_autorizado=preview.preview_id,
         autorizacao_explicita=True,
     )
     assert len(plano.destinatarios) == 1
     assert len(plano.acoes) == 1
+
+
+def test_mesmo_tipo_nome_e_bytes_diferentes_sao_rejeitados():
+    preview = _preview()
+    adulterados = [
+        ConteudoItem("video", "v1.mp4", b"bytes-adulterados"),
+        ConteudoItem("video", "v2.mp4", _VIDEO_2),
+    ]
+
+    with pytest.raises(PlanoComunicacaoError, match="diverge da prévia"):
+        montar_plano_disparo(
+            preview=preview,
+            texto="Benefícios Magnata",
+            conteudos=adulterados,
+            preview_id_autorizado=preview.preview_id,
+            autorizacao_explicita=True,
+        )
+
+
+def test_conteudo_por_referencia_sem_bytes_falha_explicitamente():
+    with pytest.raises(PlanoComunicacaoError, match="deve ser binário"):
+        ConteudoItem("video", "v1.mp4", "storage://referencia-sem-bytes")

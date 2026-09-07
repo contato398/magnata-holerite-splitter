@@ -170,7 +170,7 @@ jobs:
           PGUSER: magnata_teste
           PGPASSWORD: changeme
           PGDATABASE: magnata_alocacao_teste
-        run: python -m pytest -q --tb=short test_magnata_os_documental_alocacao_postgres_real.py test_magnata_os_autenticacao_postgres_real.py
+        run: python -m pytest -q --tb=short test_magnata_os_documental_alocacao_postgres_real.py test_magnata_os_autenticacao_postgres_real.py test_wiring_prestacao_orquestrador_postgres_shadow_real.py
 
       - name: Resumo
         if: always()

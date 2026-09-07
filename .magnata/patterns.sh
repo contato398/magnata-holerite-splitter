@@ -986,6 +986,25 @@ ALLOWED_PATHS=(
   "^magnata_os/classificacao/fonte_inventario_prestacao_ponto_temporal\.py$"
   "^test_magnata_os_classificacao_cardinalidade_colaborador_por_tipo\.py$"
   "^test_magnata_os_classificacao_fonte_inventario_prestacao_ponto_temporal\.py$"
+  # Excecao exata e restrita (missao "PRESTACAO -> ORQUESTRADOR POSTGRES
+  # SHADOW V1", branch fix/wiring-prestacao-orquestrador-postgres-shadow-v1,
+  # 2026-09-06). Autoriza somente a composicao sem transporte e seus dois
+  # testes nominais; nao libera magnata_os/orquestrador/ nem test_* de forma
+  # ampla.
+  "^magnata_os/orquestrador/wiring_prestacao_orquestrador_postgres_shadow\.py$"
+  "^test_wiring_prestacao_orquestrador_postgres_shadow\.py$"
+  "^test_wiring_prestacao_orquestrador_postgres_shadow_real\.py$"
+  # Extensao nominal da mesma missao: integridade criptografica obrigatoria
+  # da midia no preview/plano e adequacao dos testes diretamente acoplados.
+  # Cada caminho e completo; nenhum diretorio ou test_* e liberado.
+  "^magnata_os/orquestrador/politica_comunicacao\.py$"
+  "^magnata_os/orquestrador/plano_comunicacao\.py$"
+  "^test_politica_comunicacao\.py$"
+  "^test_plano_comunicacao\.py$"
+  "^test_transporte_comunicacao\.py$"
+  "^test_wiring_prestacao_comunicacao_shadow\.py$"
+  "^test_wiring_autorizacao_plano_shadow\.py$"
+  "^test_autorizacao_gate_canonica_shadow\.py$"
 )
 
 # ============================================================================

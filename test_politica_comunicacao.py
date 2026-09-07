@@ -5,16 +5,22 @@ from magnata_os.orquestrador.politica_comunicacao import (
     ItemComunicacao,
     PoliticaComunicacaoError,
     PreviewObrigatorioError,
+    hash_conteudo_comunicacao,
     montar_preview_comunicacao,
     validar_autorizacao_disparo,
 )
+
+
+def _midia(tipo, nome, conteudo=None):
+    bytes_efetivos = conteudo if conteudo is not None else f"bytes:{nome}".encode()
+    return ItemComunicacao(tipo, nome, hash_conteudo_comunicacao(bytes_efetivos))
 
 
 def test_texto_video_otimizado_vira_uma_notificacao_por_pessoa():
     preview = montar_preview_comunicacao(
         destinatarios=["5515999999999", "5515888888888"],
         texto="Olá! Veja o vídeo.",
-        itens=[ItemComunicacao("video", "beneficios.mp4")],
+        itens=[_midia("video", "beneficios.mp4")],
         assinatura=False,
         comprovante=False,
         preferencia="otimizar",
@@ -30,7 +36,7 @@ def test_texto_dois_videos_otimiza_de_tres_para_duas_notificacoes():
     preview = montar_preview_comunicacao(
         destinatarios=["5515999999999"] * 2,
         texto="Benefícios Magnata",
-        itens=[ItemComunicacao("video", "v1.mp4"), ItemComunicacao("video", "v2.mp4")],
+        itens=[_midia("video", "v1.mp4"), _midia("video", "v2.mp4")],
         assinatura=False,
         comprovante=False,
         preferencia="otimizar",
@@ -47,7 +53,7 @@ def test_operador_pode_exigir_separado_mas_recebe_alerta_e_alternativa():
     preview = montar_preview_comunicacao(
         destinatarios=["5515999999999"],
         texto="Mensagem",
-        itens=[ItemComunicacao("video", "v1.mp4"), ItemComunicacao("video", "v2.mp4")],
+        itens=[_midia("video", "v1.mp4"), _midia("video", "v2.mp4")],
         assinatura=False,
         comprovante=False,
         preferencia="separado",
@@ -75,7 +81,7 @@ def test_assinatura_e_comprovante_fazem_parte_da_previa():
     preview = montar_preview_comunicacao(
         destinatarios=["5515999999999"],
         texto="Assine o documento",
-        itens=[ItemComunicacao("documento", "folha.pdf")],
+        itens=[_midia("documento", "folha.pdf")],
         assinatura=True,
         comprovante=True,
         preferencia="otimizar",
@@ -128,7 +134,7 @@ def test_autorizacao_da_previa_atual_libera_gate():
     preview = montar_preview_comunicacao(
         destinatarios=["5515999999999"],
         texto="Oi",
-        itens=[ItemComunicacao("video", "v.mp4")],
+        itens=[_midia("video", "v.mp4")],
         assinatura=False,
         comprovante=False,
     )
@@ -137,3 +143,38 @@ def test_autorizacao_da_previa_atual_libera_gate():
         preview_id_autorizado=preview.preview_id,
         autorizacao_explicita=True,
     )
+
+
+def test_midia_sem_digest_e_rejeitada_no_preview():
+    with pytest.raises(PoliticaComunicacaoError, match="SHA-256"):
+        ItemComunicacao("video", "sem-integridade.mp4")
+
+
+def test_mesmos_bytes_geram_digest_e_preview_deterministicos():
+    conteudo = b"midia-sintetica-estavel"
+    item_a = _midia("video", "video.mp4", conteudo)
+    item_b = _midia("video", "video.mp4", bytes(conteudo))
+    kwargs = dict(
+        destinatarios=["destinatario-sintetico"], texto="Mensagem sintética",
+        assinatura=False, comprovante=False,
+    )
+
+    assert item_a.conteudo_sha256 == item_b.conteudo_sha256
+    assert montar_preview_comunicacao(itens=[item_a], **kwargs).preview_id == (
+        montar_preview_comunicacao(itens=[item_b], **kwargs).preview_id
+    )
+
+
+def test_bytes_diferentes_mudam_preview_mesmo_com_tipo_e_nome_iguais():
+    kwargs = dict(
+        destinatarios=["destinatario-sintetico"], texto="Mensagem sintética",
+        assinatura=False, comprovante=False,
+    )
+    preview_a = montar_preview_comunicacao(
+        itens=[_midia("video", "video.mp4", b"conteudo-a")], **kwargs,
+    )
+    preview_b = montar_preview_comunicacao(
+        itens=[_midia("video", "video.mp4", b"conteudo-b")], **kwargs,
+    )
+
+    assert preview_a.preview_id != preview_b.preview_id

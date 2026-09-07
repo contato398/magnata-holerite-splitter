@@ -13,6 +13,7 @@ from typing import Dict, Iterable, Optional, Tuple
 from .politica_comunicacao import (
     PreviewComunicacao,
     TipoItem,
+    hash_conteudo_comunicacao,
     hash_texto_comunicacao,
     validar_autorizacao_disparo,
 )
@@ -33,7 +34,20 @@ class ConteudoItem:
 
     tipo: TipoItem
     nome: str
-    conteudo: object
+    conteudo: bytes
+
+    def __post_init__(self) -> None:
+        try:
+            conteudo_imutavel = bytes(self.conteudo)
+        except (TypeError, ValueError) as exc:
+            raise PlanoComunicacaoError(
+                "conteúdo de mídia deve ser binário para validar integridade"
+            ) from exc
+        object.__setattr__(self, "conteudo", conteudo_imutavel)
+
+    @property
+    def conteudo_sha256(self) -> str:
+        return hash_conteudo_comunicacao(self.conteudo)
 
 
 @dataclass(frozen=True)
@@ -107,6 +121,13 @@ def montar_plano_disparo(
     if extras:
         extras_txt = ", ".join(f"{t}:{n}" for t, n in sorted(extras))
         raise PlanoComunicacaoError(f"conteúdo não previsto na prévia: {extras_txt}")
+
+    for previsto in preview.itens:
+        efetivo = indice[_chave(previsto.tipo, previsto.nome)]
+        if efetivo.conteudo_sha256 != previsto.conteudo_sha256:
+            raise PlanoComunicacaoError(
+                f"conteúdo diverge da prévia autorizada: {previsto.tipo}:{previsto.nome}"
+            )
 
     acoes = []
     for destinatario in preview.destinatarios:

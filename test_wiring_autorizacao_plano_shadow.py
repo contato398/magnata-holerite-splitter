@@ -11,7 +11,11 @@ from magnata_os.classificacao.pacote_prestacao import (
 from magnata_os.classificacao.prestacao_readiness import ItemInventarioPrestacao
 from magnata_os.orquestrador.eventos import EstadoExecucao
 from magnata_os.orquestrador.plano_comunicacao import ConteudoItem, PlanoComunicacaoError
-from magnata_os.orquestrador.politica_comunicacao import AutorizacaoObrigatoriaError, ItemComunicacao
+from magnata_os.orquestrador.politica_comunicacao import (
+    AutorizacaoObrigatoriaError,
+    ItemComunicacao,
+    hash_conteudo_comunicacao,
+)
 from magnata_os.orquestrador.repositorio_execucoes import RepositorioExecucoesEmMemoria
 from magnata_os.orquestrador.wiring_autorizacao_plano_shadow import (
     WiringAutorizacaoPlanoError,
@@ -24,6 +28,7 @@ from magnata_os.orquestrador.wiring_prestacao_comunicacao_shadow import (
 _CLIENTE = ReferenciaCanonica('CLIENTE', 'cliente-1')
 _COMPETENCIA = ReferenciaCanonica('COMPETENCIA', '2026-07')
 _INSTANTE = datetime(2026, 9, 6, 15, 0, tzinfo=timezone.utc)
+_DOCUMENTO = b'documento-prestacao-sintetico'
 
 
 def _pacote():
@@ -49,7 +54,9 @@ def _intencao(repo):
         repositorio=repo,
         destinatarios=('5515999999999',),
         texto='Prestação disponível para conferência.',
-        itens=(ItemComunicacao('documento', 'prestacao.pdf'),),
+        itens=(ItemComunicacao(
+            'documento', 'prestacao.pdf', hash_conteudo_comunicacao(_DOCUMENTO),
+        ),),
         assinatura=False,
         comprovante=True,
         instante=_INSTANTE,
@@ -57,7 +64,7 @@ def _intencao(repo):
 
 
 def _conteudos():
-    return (ConteudoItem('documento', 'prestacao.pdf', 'storage://doc-001'),)
+    return (ConteudoItem('documento', 'prestacao.pdf', _DOCUMENTO),)
 
 
 def test_autorizacao_exata_materializa_plano_sem_mudar_waiting_gate():
