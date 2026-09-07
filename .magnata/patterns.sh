@@ -986,14 +986,6 @@ ALLOWED_PATHS=(
   "^magnata_os/classificacao/fonte_inventario_prestacao_ponto_temporal\.py$"
   "^test_magnata_os_classificacao_cardinalidade_colaborador_por_tipo\.py$"
   "^test_magnata_os_classificacao_fonte_inventario_prestacao_ponto_temporal\.py$"
-  # Exceção nominal exata (ULTRAPLAN BUSCA COMPLEMENTAR DOCUMENTAL REAL V1,
-  # branch fix/busca-complementar-documental-real-v1, 2026-09-05) — orquestrador
-  # puro de aquisição complementar em camada importacao_lote, adapter Gmail readonly,
-  # e testes (domínio + integração + E2E).
-  "^magnata_os/documental/importacao_lote/aquisicao_complementar\.py$"
-  "^magnata_os/documental/importacao_lote/adapters/adapter_aquisicao_gmail\.py$"
-  "^test_magnata_os_documental_importacao_lote_aquisicao_complementar\.py$"
-  "^test_aquisicao_complementar_corredor_e2e\.py$"
   # Exceção nominal exata (ULTRAPLAN IDENTIDADE CANÔNICA DE COLABORADOR
   # V1, branch fix/identidade-canonica-colaborador-v1, 2026-09-06 —
   # autorização humana específica de governança de escopo, mensagem
