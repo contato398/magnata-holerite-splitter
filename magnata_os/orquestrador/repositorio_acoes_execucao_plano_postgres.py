@@ -221,13 +221,24 @@ class RepositorioAcoesExecucaoPlanoPostgres:
             with self._conexao.cursor() as cursor:
                 cursor.execute(
                     f'''WITH candidata AS (
-                           SELECT acao_execucao_id FROM {_TABELA}
-                            WHERE event_id = %s AND preview_id = %s
-                              AND (estado = %s OR (
-                                  estado = %s AND
-                                  (proxima_tentativa_em IS NULL OR
-                                   proxima_tentativa_em <= %s)))
-                            ORDER BY ordem ASC, destinatario_sha256 ASC
+                       SELECT candidata.acao_execucao_id FROM {_TABELA} AS candidata
+                            WHERE candidata.event_id = %s
+                              AND candidata.preview_id = %s
+                              AND (candidata.estado = %s OR (
+                                  candidata.estado = %s AND
+                                  (candidata.proxima_tentativa_em IS NULL OR
+                                   candidata.proxima_tentativa_em <= %s)))
+                              AND NOT EXISTS (
+                                  SELECT 1 FROM {_TABELA} AS anterior
+                                   WHERE anterior.event_id = candidata.event_id
+                                     AND anterior.preview_id = candidata.preview_id
+                                     AND anterior.destinatario_sha256 =
+                                         candidata.destinatario_sha256
+                                     AND anterior.ordem < candidata.ordem
+                                     AND anterior.estado <> %s
+                              )
+                            ORDER BY candidata.ordem ASC,
+                                     candidata.destinatario_sha256 ASC
                             FOR UPDATE SKIP LOCKED LIMIT 1
                        )
                        UPDATE {_TABELA} AS a
@@ -244,6 +255,7 @@ class RepositorioAcoesExecucaoPlanoPostgres:
                         EstadoAcaoExecucaoPlano.PENDING.value,
                         EstadoAcaoExecucaoPlano.FAILED_RETRYABLE.value,
                         reivindicado_em,
+                        EstadoAcaoExecucaoPlano.SUCCEEDED.value,
                         EstadoAcaoExecucaoPlano.EXECUTING.value,
                         claim_sha256, reivindicado_em, reivindicado_em,
                         EstadoAcaoExecucaoPlano.PENDING.value,

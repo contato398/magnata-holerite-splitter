@@ -154,6 +154,39 @@ def test_claim_e_cas_atomico_incrementam_attempt():
     assert 'estado IN (%s, %s)' in sql
 
 
+def test_claim_exige_todas_as_anteriores_do_destinatario_succeeded():
+    conexao = _Conexao(respostas=(None,))
+    repo = RepositorioAcoesExecucaoPlanoPostgres(conexao)
+    assert repo.reivindicar_proxima(
+        event_id='evento-1', preview_id='preview-1',
+        claim_referencia='worker:sintetico', reivindicado_em=AGORA,
+    ) is None
+    sql, parametros = conexao.executados[0]
+    assert 'NOT EXISTS (' in sql
+    assert 'anterior.event_id = candidata.event_id' in sql
+    assert 'anterior.preview_id = candidata.preview_id' in sql
+    assert 'anterior.destinatario_sha256 =' in sql
+    assert 'candidata.destinatario_sha256' in sql
+    assert 'anterior.ordem < candidata.ordem' in sql
+    assert 'anterior.estado <> %s' in sql
+    assert EstadoAcaoExecucaoPlano.SUCCEEDED.value in parametros
+
+
+def test_claim_nao_serializa_destinatarios_independentes():
+    conexao = _Conexao(respostas=(None,))
+    repo = RepositorioAcoesExecucaoPlanoPostgres(conexao)
+    repo.reivindicar_proxima(
+        event_id='evento-1', preview_id='preview-1',
+        claim_referencia='worker:sintetico', reivindicado_em=AGORA,
+    )
+    sql = conexao.executados[0][0]
+    predicado = sql[sql.index('AND NOT EXISTS'):sql.index('ORDER BY candidata')]
+    assert 'anterior.destinatario_sha256' in predicado
+    assert 'anterior.ordem < candidata.ordem' in predicado
+    assert 'anterior.event_id = candidata.event_id' in predicado
+    assert 'anterior.preview_id = candidata.preview_id' in predicado
+
+
 def test_sem_elegivel_inclui_sucesso_falha_final_e_executing_orfao():
     conexao = _Conexao(respostas=(None, None, None))
     repo = RepositorioAcoesExecucaoPlanoPostgres(conexao)
