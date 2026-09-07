@@ -453,6 +453,11 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # Acoes persistentes do PlanoDisparo — somente os dois testes nominais.
   "test_repositorio_acoes_execucao_plano_postgres.py"
   "test_repositorio_acoes_execucao_plano_postgres_real.py"
+  # Identidade Canônica de Colaborador V1 — 4 testes nominais
+  "test_identidade_colaborador.py"
+  "test_configuracao_identidade_colaborador.py"
+  "test_postgres_identidade_colaborador.py"
+  "test_bootstrap_identidade_colaborador_airtable.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

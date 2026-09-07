@@ -1014,6 +1014,17 @@ ALLOWED_PATHS=(
   "^magnata_os/orquestrador/repositorio_acoes_execucao_plano_postgres\.py$"
   "^test_repositorio_acoes_execucao_plano_postgres\.py$"
   "^test_repositorio_acoes_execucao_plano_postgres_real\.py$"
+  # Identidade Canônica de Colaborador V1 — HMAC-SHA256, migration inerte, bootstrap Airtable
+  "^magnata_os/documental/alocacao/identidade_colaborador\.py$"
+  "^magnata_os/documental/alocacao/configuracao_identidade_colaborador\.py$"
+  "^magnata_os/documental/alocacao/adapters/postgres_identidade_colaborador\.py$"
+  "^magnata_os/documental/alocacao/migrations/0003_criar_identidade_colaborador_observada\.sql$"
+  "^magnata_os/documental/alocacao/migrations/0003_criar_identidade_colaborador_observada_rollback\.sql$"
+  "^magnata_os/documental/importacao_lote/adapters/bootstrap_identidade_colaborador_airtable\.py$"
+  "^test_identidade_colaborador\.py$"
+  "^test_configuracao_identidade_colaborador\.py$"
+  "^test_postgres_identidade_colaborador\.py$"
+  "^test_bootstrap_identidade_colaborador_airtable\.py$"
 )
 
 # ============================================================================
