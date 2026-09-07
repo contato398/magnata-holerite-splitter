@@ -986,34 +986,26 @@ ALLOWED_PATHS=(
   "^magnata_os/classificacao/fonte_inventario_prestacao_ponto_temporal\.py$"
   "^test_magnata_os_classificacao_cardinalidade_colaborador_por_tipo\.py$"
   "^test_magnata_os_classificacao_fonte_inventario_prestacao_ponto_temporal\.py$"
-  # Excecao exata e restrita (missao "PRESTACAO -> ORQUESTRADOR POSTGRES
-  # SHADOW V1", branch fix/wiring-prestacao-orquestrador-postgres-shadow-v1,
-  # 2026-09-06). Autoriza somente a composicao sem transporte e seus dois
-  # testes nominais; nao libera magnata_os/orquestrador/ nem test_* de forma
-  # ampla.
-  "^magnata_os/orquestrador/wiring_prestacao_orquestrador_postgres_shadow\.py$"
-  "^test_wiring_prestacao_orquestrador_postgres_shadow\.py$"
-  "^test_wiring_prestacao_orquestrador_postgres_shadow_real\.py$"
-  # Extensao nominal da mesma missao: integridade criptografica obrigatoria
-  # da midia no preview/plano e adequacao dos testes diretamente acoplados.
-  # Cada caminho e completo; nenhum diretorio ou test_* e liberado.
-  "^magnata_os/orquestrador/politica_comunicacao\.py$"
-  "^magnata_os/orquestrador/plano_comunicacao\.py$"
-  "^test_politica_comunicacao\.py$"
-  "^test_plano_comunicacao\.py$"
-  "^test_transporte_comunicacao\.py$"
-  "^test_wiring_prestacao_comunicacao_shadow\.py$"
-  "^test_wiring_autorizacao_plano_shadow\.py$"
-  "^test_autorizacao_gate_canonica_shadow\.py$"
-  # Excecao exata e restrita (missao "ACOES DE EXECUCAO DO PLANO — SHADOW
-  # V1", branch fix/acoes-execucao-plano-postgres-shadow-v1, 2026-09-07).
-  # Migration 0003 inerte, rollback, repositorio Postgres e dois testes.
-  # Nao autoriza aplicacao real nem libera diretorios ou test_* amplos.
-  "^magnata_os/orquestrador/migrations/0003_acoes_execucao_plano\.sql$"
-  "^magnata_os/orquestrador/migrations/0003_acoes_execucao_plano_rollback\.sql$"
-  "^magnata_os/orquestrador/repositorio_acoes_execucao_plano_postgres\.py$"
-  "^test_repositorio_acoes_execucao_plano_postgres\.py$"
-  "^test_repositorio_acoes_execucao_plano_postgres_real\.py$"
+  # Exceção nominal exata (ULTRAPLAN IDENTIDADE CANÔNICA DE COLABORADOR
+  # V1, branch fix/identidade-canonica-colaborador-v1, 2026-09-06 —
+  # autorização humana específica de governança de escopo, mensagem
+  # dedicada do usuário nesta mesma branch/sessão). Domínio puro de
+  # identidade (hash HMAC de identificador observado -> colaborador_id
+  # opaco, LEGADO/TRANSICIONAL), configuração de segredo versionada,
+  # migration inerte (0003, nunca aplicada), adapter Postgres, bootstrap
+  # transitório Airtable (código apenas, nunca executado contra Airtable
+  # real), e os 4 testes nominais. Não libera magnata_os/documental/
+  # alocacao/ de forma ampla — apenas estes 10 caminhos exatos.
+  "^magnata_os/documental/alocacao/identidade_colaborador\.py$"
+  "^magnata_os/documental/alocacao/configuracao_identidade_colaborador\.py$"
+  "^magnata_os/documental/alocacao/adapters/postgres_identidade_colaborador\.py$"
+  "^magnata_os/documental/alocacao/migrations/0003_criar_identidade_colaborador_observada\.sql$"
+  "^magnata_os/documental/alocacao/migrations/0003_criar_identidade_colaborador_observada_rollback\.sql$"
+  "^magnata_os/documental/importacao_lote/adapters/bootstrap_identidade_colaborador_airtable\.py$"
+  "^test_identidade_colaborador\.py$"
+  "^test_configuracao_identidade_colaborador\.py$"
+  "^test_postgres_identidade_colaborador\.py$"
+  "^test_bootstrap_identidade_colaborador_airtable\.py$"
 )
 
 # ============================================================================
