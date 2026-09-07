@@ -1,0 +1,19 @@
+# Autorizacao humana especifica — ATIVACAO ORQUESTRADOR POSTGRES 0003 V1 — 2026-09-07
+#
+# Autoriza exclusivamente a aplicacao controlada, no Postgres real magnata_os,
+# da migration 0003 ja revisada e mesclada pelo PR #142. Antes do DDL exige:
+# main canonica, blob exato, recovery/PITR disponivel e preflight somente leitura.
+#
+# Proibido por esta autorizacao:
+# - alterar a migration ou aplicar qualquer outro SQL de schema;
+# - executar rollback automaticamente;
+# - tocar app.py, Evolution, WhatsApp, Airtable, credenciais ou deploy;
+# - executar transporte ou comunicacao real.
+#
+# Blob Git EXATO autorizado:
+7fa098725637eaa9dfb27c586c7163a424f123a1  magnata_os/orquestrador/migrations/0003_acoes_execucao_plano.sql
+#
+# SHA-256 documental do mesmo conteudo: 188b99f2d653b27dc06511d3ac2be4555d58e3474e6267b0144db1f21a24cb4f
+#
+# Rollback conhecido, destrutivo e NAO autorizado para execucao automatica:
+# magnata_os/orquestrador/migrations/0003_acoes_execucao_plano_rollback.sql
