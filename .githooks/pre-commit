@@ -453,6 +453,13 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # Acoes persistentes do PlanoDisparo — somente os dois testes nominais.
   "test_repositorio_acoes_execucao_plano_postgres.py"
   "test_repositorio_acoes_execucao_plano_postgres_real.py"
+  # Exceção exata e restrita (ULTRAPLAN IDENTIDADE CANÔNICA DE COLABORADOR V1,
+  # branch fix/identidade-canonica-colaborador-v1-pr-final, 2026-09-07).
+  # Domínio, configuração, adapter, migration, bootstrap, 4 testes nominais.
+  "test_identidade_colaborador.py"
+  "test_configuracao_identidade_colaborador.py"
+  "test_postgres_identidade_colaborador.py"
+  "test_bootstrap_identidade_colaborador_airtable.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
