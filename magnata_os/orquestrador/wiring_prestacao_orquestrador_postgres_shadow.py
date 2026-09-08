@@ -3,12 +3,19 @@
 Encadeia exclusivamente contratos já existentes até ``PlanoDisparo`` e para.
 O módulo não importa transporte, Evolution, Flask, Airtable ou requests e não
 expõe qualquer dependência capaz de enviar uma comunicação.
+
+``materializar_prestacao_orquestrador_persistente_shadow`` estende a mesma
+composição um passo além: persiste as ações do ``PlanoDisparo`` autorizado em
+``magnata_orquestrador.acoes_execucao_plano`` via
+``RepositorioAcoesExecucaoPlanoPostgres`` (claim/checkpoint/retry já
+existentes e testados nesse repositório, reutilizados sem alteração). Mantém
+o sufixo ``_shadow`` porque nenhum transporte é acionado a partir daqui.
 """
 from __future__ import annotations
 
 import dataclasses
-from datetime import datetime
-from typing import Iterable, Sequence
+from datetime import datetime, timezone
+from typing import Iterable, Sequence, Tuple
 
 from magnata_os.classificacao.pacote_prestacao import PacotePrestacaoCliente
 
@@ -21,6 +28,10 @@ from .autorizacao_gate import (
 )
 from .plano_comunicacao import ConteudoItem
 from .politica_comunicacao import ItemComunicacao, PreferenciaComposicao
+from .repositorio_acoes_execucao_plano_postgres import (
+    RegistroAcaoExecucaoPlano,
+    RepositorioAcoesExecucaoPlanoPostgres,
+)
 from .repositorio_autorizacoes_gate_postgres import (
     RepositorioAutorizacoesGatePostgres,
 )
@@ -112,6 +123,104 @@ def materializar_prestacao_orquestrador_postgres_shadow(
     return materializar_prestacao_orquestrador_shadow(
         repositorio_execucoes=RepositorioExecucoesPostgres(conexao_postgres),
         repositorio_autorizacoes=RepositorioAutorizacoesGatePostgres(
+            conexao_postgres
+        ),
+        **kwargs,
+    )
+
+
+@dataclasses.dataclass(frozen=True)
+class ResultadoPrestacaoOrquestradorPersistenteShadow:
+    """Resultado da composição completa, com as ações já persistidas.
+
+    ``acoes`` são os registros efetivamente gravados (ou já existentes, em
+    caso de reaplicação idempotente) em ``acoes_execucao_plano``. Nenhum
+    transporte é acionado por esta função nem por qualquer coisa que ela
+    chame.
+    """
+
+    intencao: ResultadoWiringPrestacaoComunicacaoShadow
+    autorizacao: RegistroAutorizacaoGate
+    plano: ResultadoAutorizacaoPlanoShadow
+    acoes: Tuple[RegistroAcaoExecucaoPlano, ...]
+
+
+def materializar_prestacao_orquestrador_persistente_shadow(
+    *,
+    pacote: PacotePrestacaoCliente,
+    repositorio_execucoes: RepositorioExecucoes,
+    repositorio_autorizacoes: RepositorioAutorizacoesGate,
+    repositorio_acoes: RepositorioAcoesExecucaoPlanoPostgres,
+    destinatarios: Iterable[str],
+    texto: str,
+    itens: Sequence[ItemComunicacao],
+    conteudos: Iterable[ConteudoItem],
+    assinatura: bool,
+    comprovante: bool,
+    preview_id_autorizado: str,
+    ator_referencia: str,
+    proveniencia_autorizacao: str,
+    preferencia: PreferenciaComposicao = 'otimizar',
+    canal_preferencial: str = 'WHATSAPP',
+    instante: datetime | None = None,
+) -> ResultadoPrestacaoOrquestradorPersistenteShadow:
+    """Estende a composição shadow persistindo as ações do plano autorizado.
+
+    Reutiliza ``materializar_prestacao_orquestrador_shadow`` sem alterá-la e
+    encadeia ``RepositorioAcoesExecucaoPlanoPostgres.materializar_plano`` —
+    mesmo claim/checkpoint/retry já existentes e testados nesse repositório,
+    nenhum mecanismo novo. Ainda para exatamente antes do transporte: nenhuma
+    ação aqui reivindica (`reivindicar_proxima`), executa ou finaliza
+    (`marcar_sucesso`/`marcar_falha`) — apenas materializa.
+    """
+    agora = instante or datetime.now(timezone.utc)
+    resultado = materializar_prestacao_orquestrador_shadow(
+        pacote=pacote,
+        repositorio_execucoes=repositorio_execucoes,
+        repositorio_autorizacoes=repositorio_autorizacoes,
+        destinatarios=destinatarios,
+        texto=texto,
+        itens=itens,
+        conteudos=conteudos,
+        assinatura=assinatura,
+        comprovante=comprovante,
+        preview_id_autorizado=preview_id_autorizado,
+        ator_referencia=ator_referencia,
+        proveniencia_autorizacao=proveniencia_autorizacao,
+        preferencia=preferencia,
+        canal_preferencial=canal_preferencial,
+        instante=agora,
+    )
+    acoes = repositorio_acoes.materializar_plano(
+        event_id=resultado.intencao.execucao.event_id,
+        plano=resultado.plano.plano,
+        autorizacao=resultado.autorizacao,
+        criado_em=agora,
+    )
+    return ResultadoPrestacaoOrquestradorPersistenteShadow(
+        intencao=resultado.intencao,
+        autorizacao=resultado.autorizacao,
+        plano=resultado.plano,
+        acoes=acoes,
+    )
+
+
+def materializar_prestacao_orquestrador_persistente_postgres_shadow(
+    *, conexao_postgres, **kwargs,
+) -> ResultadoPrestacaoOrquestradorPersistenteShadow:
+    """Compõe os três adapters Postgres sobre a mesma conexão DB-API.
+
+    A mesma conexão é compartilhada pelos três repositórios para que a
+    intenção, a autorização e a persistência das ações fiquem sob a
+    disciplina transacional de cada adapter, sem introduzir uma segunda
+    conexão nem uma transação distribuída.
+    """
+    return materializar_prestacao_orquestrador_persistente_shadow(
+        repositorio_execucoes=RepositorioExecucoesPostgres(conexao_postgres),
+        repositorio_autorizacoes=RepositorioAutorizacoesGatePostgres(
+            conexao_postgres
+        ),
+        repositorio_acoes=RepositorioAcoesExecucaoPlanoPostgres(
             conexao_postgres
         ),
         **kwargs,
