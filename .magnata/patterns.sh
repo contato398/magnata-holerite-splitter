@@ -1020,6 +1020,7 @@ ALLOWED_PATHS=(
   "^magnata_os/classificacao/adapters/postgres_execucoes_prestacao\.py$"
   "^magnata_os/orquestrador/migrations/0004_execucoes_prestacao\.sql$"
   "^magnata_os/orquestrador/migrations/0004_execucoes_prestacao_rollback\.sql$"
+  "^test_execucao_ciclo_prestacao\.py$"
 )
 
 # ============================================================================
