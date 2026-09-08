@@ -1006,6 +1006,20 @@ ALLOWED_PATHS=(
   "^test_configuracao_identidade_colaborador\.py$"
   "^test_postgres_identidade_colaborador\.py$"
   "^test_bootstrap_identidade_colaborador_airtable\.py$"
+  # Exceção exata e restrita (FUNDAÇÃO PERSISTENTE DE EXECUÇÃO DE PRESTAÇÃO
+  # V1, branch fix/execucao-prestacao-persistente-v1, 2026-09-08 —
+  # autorização humana explícita). Fundação para ações filhas (Busca
+  # Complementar, conferência, etc.) referenciar execução pai via
+  # Evento.correlation_id. ExecucaoPrestacao (dataclass frozen), Protocol
+  # RepositorioExecucoesPrestacao, implementações (Memória/Postgres via
+  # DB-API 2.0), migrations inerte (0004, nunca aplicada), testes (19 casos).
+  # Não libera magnata_os/classificacao/ ampla; apenas estes 4 caminhos
+  # exatos. Não libera magnata_os/orquestrador/migrations/ ampla;
+  # apenas a migration 0004 desta fundação (nunca aplicada a produção).
+  "^magnata_os/classificacao/execucao_ciclo_prestacao\.py$"
+  "^magnata_os/classificacao/adapters/postgres_execucoes_prestacao\.py$"
+  "^magnata_os/orquestrador/migrations/0004_execucoes_prestacao\.sql$"
+  "^magnata_os/orquestrador/migrations/0004_execucoes_prestacao_rollback\.sql$"
 )
 
 # ============================================================================
