@@ -443,6 +443,14 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_configuracao_identidade_colaborador.py"
   "test_postgres_identidade_colaborador.py"
   "test_bootstrap_identidade_colaborador_airtable.py"
+  # Exceção exata e restrita (FUNDAÇÃO PERSISTENTE DE EXECUÇÃO DE PRESTAÇÃO
+  # V1, branch fix/execucao-prestacao-persistente-v1, 2026-09-08 —
+  # autorização humana explícita). Teste de 21 casos cobrindo 14+ cenários
+  # obrigatórios (A-Q): identidade opaca, imutabilidade, persistência,
+  # replay, múltiplas execuções, purity de ciclo_prestacao, zero dependência
+  # (Airtable/Documento/app.py), migrations inerte validadas.
+  # Mantém "^test_" bloqueado por padrão e libera somente este teste nominal.
+  "test_execucao_ciclo_prestacao.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
