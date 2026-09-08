@@ -37,10 +37,10 @@ Por isso:
     automatico) -- fica `magnata_os` por design, e e so informativo no
     relatorio, nunca criterio de falha.
 
-Uso (a partir de uma sessao com acesso real a DATABASE_URL de producao --
-este ambiente de desenvolvimento nao tem essa credencial):
+Uso (a partir de uma sessao em que DATABASE_URL ja esteja configurada no
+ambiente de forma segura):
 
-    DATABASE_URL="postgres://..." python scripts/verificar_credencial_worker_postgres.py \\
+    python scripts/verificar_credencial_worker_postgres.py \
         --banco-esperado magnata_os --usuario-esperado magnata_worker_rot2
 
 Este script e so a PROVA, nao a correcao. A correcao (fazer o worker do
