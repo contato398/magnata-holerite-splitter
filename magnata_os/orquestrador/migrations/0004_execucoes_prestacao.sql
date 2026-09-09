@@ -30,8 +30,6 @@ BEGIN
         -- Índices para queries operacionais
         CREATE INDEX idx_execucoes_prestacao_competencia
             ON magnata_orquestrador.execucoes_prestacao(competencia_base);
-        CREATE INDEX idx_execucoes_prestacao_estado
-            ON magnata_orquestrador.execucoes_prestacao(estado);
         CREATE INDEX idx_execucoes_prestacao_criado_em
             ON magnata_orquestrador.execucoes_prestacao(criado_em DESC);
     END IF;

@@ -1017,7 +1017,7 @@ ALLOWED_PATHS=(
   # exatos. Não libera magnata_os/orquestrador/migrations/ ampla;
   # apenas a migration 0004 desta fundação (nunca aplicada a produção).
   "^RELATORIO_EXECUCAO_PRESTACAO_V1\.md$"
-  "^magnata_os/classificacao/execucao_ciclo_prestacao\.py$"
+  "^magnata_os/classificacao/execucao_prestacao\.py$"
   "^magnata_os/classificacao/adapters/postgres_execucoes_prestacao\.py$"
   "^magnata_os/orquestrador/migrations/0004_execucoes_prestacao\.sql$"
   "^magnata_os/orquestrador/migrations/0004_execucoes_prestacao_rollback\.sql$"
