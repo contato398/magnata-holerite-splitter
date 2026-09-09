@@ -1,0 +1,15 @@
+# Autorização humana específica — token/link reservado para assinatura V1.
+# Base: b7e431dae27d8f3a295b3fedc8b2376ff5cd6eb7 (origin/main, PR #148 mesclado)
+# Branch: fix/token-link-reservado-assinatura-v1
+# Data: 2026-09-09
+#
+# Escopo nominal autorizado pelo usuário: app.py e testes específicos para
+# aceitar token previamente reservado e acao_execucao_id opaco no motor legado,
+# preservar o comportamento sem os parâmetros, validar formato/diversidade,
+# garantir idempotência e conflitos explícitos, manter disparar_whatsapp=false
+# no caminho reservado e não acessar Airtable/Evolution reais.
+#
+# O blob abaixo autoriza somente esta versão exata de app.py. Qualquer mudança
+# posterior, inclusive comentário, invalida a autorização. Não autoriza rota
+# nova, migration, schema, deploy, credencial, webhook, envio ou merge.
+7a7d48b317faccca5d1fa4b4cfb91a82a9871763  app.py
