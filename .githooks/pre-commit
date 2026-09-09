@@ -451,6 +451,11 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # (Airtable/Documento/app.py), migrations inerte validadas.
   # Mantém "^test_" bloqueado por padrão e libera somente este teste nominal.
   "test_execucao_ciclo_prestacao.py"
+  # Exceção exata (CI Postgres real para ExecutacaoPrestacao, mesma branch
+  # fix/execucao-prestacao-persistente-v1, 2026-09-08). Teste de validação
+  # contra Postgres efêmero: migration 0004, criar/recuperar, transições,
+  # invariantes, rollback. Reusa padrão existente de teste Postgres real.
+  "test_execucao_prestacao_postgres_real.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
