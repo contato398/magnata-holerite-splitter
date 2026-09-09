@@ -451,6 +451,8 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_repositorio_acoes_execucao_plano_postgres_real.py"
   "test_wiring_prestacao_orquestrador_persistente_shadow.py"
   "test_wiring_prestacao_orquestrador_persistente_shadow_real.py"
+  # Token/Link Reservado para Assinatura V1 — nome exato, sem wildcard.
+  "test_assinatura_token_reservado.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

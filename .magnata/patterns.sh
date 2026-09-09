@@ -1023,6 +1023,10 @@ ALLOWED_PATHS=(
   "^test_repositorio_acoes_execucao_plano_postgres_real\.py$"
   "^test_wiring_prestacao_orquestrador_persistente_shadow\.py$"
   "^test_wiring_prestacao_orquestrador_persistente_shadow_real\.py$"
+  # Exceção nominal exata — Token/Link Reservado para Assinatura V1.
+  # Não libera outro teste, app.py (autorizado separadamente por blob),
+  # migration, integração externa ou caminho genérico.
+  "^test_assinatura_token_reservado\.py$"
 )
 
 # ============================================================================
