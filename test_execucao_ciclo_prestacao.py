@@ -22,7 +22,7 @@ Q. Constraints estado/concluido_em coerentes
 import pytest
 from datetime import datetime, timezone
 
-from magnata_os.classificacao.execucao_ciclo_prestacao import (
+from magnata_os.classificacao.execucao_prestacao import (
     ExecucaoPrestacao,
     criar_execucao_prestacao,
     RepositorioExecucoesPrestacaoMemoria,
