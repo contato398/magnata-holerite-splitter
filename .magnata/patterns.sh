@@ -1006,6 +1006,23 @@ ALLOWED_PATHS=(
   "^test_configuracao_identidade_colaborador\.py$"
   "^test_postgres_identidade_colaborador\.py$"
   "^test_bootstrap_identidade_colaborador_airtable\.py$"
+  # Excecao nominal exata — Envelope Executavel Persistente V1. Somente
+  # contrato, migration inerte, composicao, executor fake e testes desta
+  # missao; nao libera diretorios, storage real ou transporte.
+  "^magnata_os/orquestrador/envelope_execucao_autorizada\.py$"
+  "^magnata_os/orquestrador/executor_persistente_fake\.py$"
+  "^magnata_os/orquestrador/repositorio_acoes_execucao_plano_postgres\.py$"
+  "^magnata_os/orquestrador/wiring_prestacao_orquestrador_postgres_shadow\.py$"
+  "^magnata_os/orquestrador/migrations/0004_envelope_execucao_autorizada\.sql$"
+  "^magnata_os/orquestrador/migrations/0004_envelope_execucao_autorizada_rollback\.sql$"
+  "^docs/decisoes/envelope-executavel-persistente-v1\.md$"
+  "^test_envelope_execucao_autorizada\.py$"
+  "^test_executor_persistente_fake\.py$"
+  "^test_executor_persistente_fake_postgres_real\.py$"
+  "^test_repositorio_acoes_execucao_plano_postgres\.py$"
+  "^test_repositorio_acoes_execucao_plano_postgres_real\.py$"
+  "^test_wiring_prestacao_orquestrador_persistente_shadow\.py$"
+  "^test_wiring_prestacao_orquestrador_persistente_shadow_real\.py$"
 )
 
 # ============================================================================

@@ -14,8 +14,9 @@ from enum import Enum
 from typing import Optional, Tuple
 
 from .autorizacao_gate import DecisaoGate, RegistroAutorizacaoGate
+from .envelope_execucao_autorizada import calcular_identidades_acao
 from .plano_comunicacao import AcaoEnvio, PlanoDisparo
-from .politica_comunicacao import hash_conteudo_comunicacao, hash_texto_comunicacao
+from .politica_comunicacao import hash_conteudo_comunicacao
 
 
 class EstadoAcaoExecucaoPlano(str, Enum):
@@ -42,6 +43,7 @@ class RegistroAcaoExecucaoPlano:
     nome_sha256: Optional[str]
     conteudo_sha256: Optional[str]
     texto_sha256: Optional[str]
+    envelope_sha256: Optional[str]
     estado: EstadoAcaoExecucaoPlano
     attempt: int
     proxima_tentativa_em: Optional[datetime]
@@ -59,36 +61,24 @@ _TABELA = 'magnata_orquestrador.acoes_execucao_plano'
 _COLUNAS = (
     'acao_execucao_id', 'event_id', 'preview_id', 'autorizacao_id',
     'ordem', 'tipo', 'destinatario_sha256', 'nome_sha256',
-    'conteudo_sha256', 'texto_sha256', 'estado', 'attempt',
+    'conteudo_sha256', 'texto_sha256', 'envelope_sha256', 'estado', 'attempt',
     'proxima_tentativa_em', 'claim_sha256', 'reivindicado_em',
     'ultimo_erro_classe', 'resultado_referencia', 'evidencia_sha256',
     'criado_em', 'atualizado_em', 'concluido_em',
 )
 _COLUNAS_SQL = ', '.join(_COLUNAS)
-
-
-def _sha256_texto(valor: str) -> str:
-    return hashlib.sha256(valor.encode('utf-8')).hexdigest()
+_COLUNAS_SQL_ACAO = ', '.join(f'a.{coluna}' for coluna in _COLUNAS)
 
 
 def _identidades_acao(acao: AcaoEnvio) -> Tuple[str, Optional[str], Optional[str], Optional[str]]:
-    destinatario = str(acao.destinatario or '').strip()
-    if not destinatario:
-        raise RepositorioAcoesExecucaoPlanoError('destinatario canonico e obrigatorio')
-    destinatario_sha256 = _sha256_texto(destinatario)
-    nome_sha256 = _sha256_texto(acao.nome) if acao.nome else None
-    if acao.tipo == 'texto':
-        texto_sha256 = hash_texto_comunicacao(acao.texto)
-        conteudo_sha256 = None
-    else:
-        try:
-            conteudo_sha256 = hash_conteudo_comunicacao(acao.conteudo)
-        except (TypeError, ValueError) as exc:
-            raise RepositorioAcoesExecucaoPlanoError(
-                'acao de midia exige conteudo binario integro'
-            ) from exc
-        texto_sha256 = hash_texto_comunicacao(acao.legenda) if acao.legenda else None
-    return destinatario_sha256, nome_sha256, conteudo_sha256, texto_sha256
+    try:
+        ids = calcular_identidades_acao(acao)
+    except ValueError as exc:
+        raise RepositorioAcoesExecucaoPlanoError(str(exc)) from exc
+    return (
+        ids.destinatario_sha256, ids.nome_sha256,
+        ids.conteudo_sha256, ids.texto_sha256,
+    )
 
 
 def criar_registro_acao_plano(
@@ -123,6 +113,7 @@ def criar_registro_acao_plano(
         preview_id=plano.preview_id, autorizacao_id=autorizacao.autorizacao_id,
         ordem=acao.ordem, tipo=acao.tipo, destinatario_sha256=dest,
         nome_sha256=nome, conteudo_sha256=conteudo, texto_sha256=texto,
+        envelope_sha256=None,
         estado=EstadoAcaoExecucaoPlano.PENDING, attempt=0,
         proxima_tentativa_em=None, claim_sha256=None, reivindicado_em=None,
         ultimo_erro_classe=None, resultado_referencia=None,
@@ -139,7 +130,7 @@ def _linha_para_registro(linha) -> RegistroAcaoExecucaoPlano:
 
 def _linha_registro(registro: RegistroAcaoExecucaoPlano) -> tuple:
     valores = dataclasses.astuple(registro)
-    return valores[:10] + (registro.estado.value,) + valores[11:]
+    return valores[:11] + (registro.estado.value,) + valores[12:]
 
 
 class RepositorioAcoesExecucaoPlanoPostgres:
@@ -156,10 +147,27 @@ class RepositorioAcoesExecucaoPlanoPostgres:
             event_id=event_id, plano=plano, autorizacao=autorizacao,
             acao=acao, criado_em=criado_em,
         ) for acao in plano.acoes)
+        return self.materializar_registros(
+            registros=registros, autorizacao=autorizacao,
+        )
+
+    def materializar_registros(
+        self, *, registros: Tuple[RegistroAcaoExecucaoPlano, ...],
+        autorizacao: RegistroAutorizacaoGate,
+    ) -> Tuple[RegistroAcaoExecucaoPlano, ...]:
+        """Persiste registros já preparados; blobs devem existir antes."""
         persistidos = []
         try:
             with self._conexao.cursor() as cursor:
                 for registro in registros:
+                    if (
+                        registro.autorizacao_id != autorizacao.autorizacao_id
+                        or registro.event_id != autorizacao.event_id
+                        or registro.preview_id != autorizacao.preview_id
+                    ):
+                        raise RepositorioAcoesExecucaoPlanoError(
+                            'registro diverge da autorizacao exata'
+                        )
                     marcadores = ', '.join(['%s'] * len(_COLUNAS))
                     cursor.execute(
                         f'INSERT INTO {_TABELA} ({_COLUNAS_SQL}) '
@@ -170,8 +178,8 @@ class RepositorioAcoesExecucaoPlanoPostgres:
                         'ON CONFLICT (acao_execucao_id) DO NOTHING '
                         'RETURNING acao_execucao_id',
                         _linha_registro(registro) + (
-                            autorizacao.autorizacao_id, event_id,
-                            plano.preview_id, DecisaoGate.AUTORIZADO.value,
+                            autorizacao.autorizacao_id, registro.event_id,
+                            registro.preview_id, DecisaoGate.AUTORIZADO.value,
                         ),
                     )
                     inserida = cursor.fetchone()
@@ -187,7 +195,7 @@ class RepositorioAcoesExecucaoPlanoPostgres:
                                 'autorizacao AUTORIZADO exata nao encontrada'
                             )
                         existente_registro = _linha_para_registro(existente)
-                        if _linha_registro(existente_registro)[:10] != _linha_registro(registro)[:10]:
+                        if _linha_registro(existente_registro)[:11] != _linha_registro(registro)[:11]:
                             raise RepositorioAcoesExecucaoPlanoError(
                                 'colisao de identidade com acao persistida divergente'
                             )
@@ -209,6 +217,96 @@ class RepositorioAcoesExecucaoPlanoPostgres:
             linha = cursor.fetchone()
         return _linha_para_registro(linha) if linha else None
 
+    @staticmethod
+    def _predicado_elegibilidade(alias: str) -> str:
+        return f'''{alias}.envelope_sha256 IS NOT NULL
+                  AND ({alias}.estado = %s OR (
+                      {alias}.estado = %s AND
+                      ({alias}.proxima_tentativa_em IS NULL OR
+                       {alias}.proxima_tentativa_em <= %s)))
+                  AND NOT EXISTS (
+                      SELECT 1 FROM {_TABELA} AS anterior
+                       WHERE anterior.event_id = {alias}.event_id
+                         AND anterior.preview_id = {alias}.preview_id
+                         AND anterior.destinatario_sha256 =
+                             {alias}.destinatario_sha256
+                         AND anterior.ordem < {alias}.ordem
+                         AND anterior.estado <> %s
+                  )'''
+
+    @staticmethod
+    def _parametros_elegibilidade(instante: datetime) -> tuple:
+        return (
+            EstadoAcaoExecucaoPlano.PENDING.value,
+            EstadoAcaoExecucaoPlano.FAILED_RETRYABLE.value,
+            instante,
+            EstadoAcaoExecucaoPlano.SUCCEEDED.value,
+        )
+
+    def buscar_proxima_elegivel(
+        self, *, event_id: str, preview_id: str, instante: datetime,
+    ) -> Optional[RegistroAcaoExecucaoPlano]:
+        """Descobre sem lock/claim; o claim exato fará novo CAS completo."""
+        with self._conexao.cursor() as cursor:
+            cursor.execute(
+                f'''SELECT {_COLUNAS_SQL} FROM {_TABELA} AS candidata
+                     WHERE candidata.event_id = %s
+                       AND candidata.preview_id = %s
+                       AND {self._predicado_elegibilidade('candidata')}
+                     ORDER BY candidata.ordem ASC,
+                              candidata.destinatario_sha256 ASC
+                     LIMIT 1''',
+                (event_id, preview_id) + self._parametros_elegibilidade(instante),
+            )
+            linha = cursor.fetchone()
+        return _linha_para_registro(linha) if linha else None
+
+    def reivindicar_acao_exata(
+        self, *, acao_execucao_id: str, claim_referencia: str,
+        reivindicado_em: datetime,
+    ) -> Optional[RegistroAcaoExecucaoPlano]:
+        """CAS da ação previamente verificada; nunca troca por outra candidata."""
+        claim_limpo = str(claim_referencia or '').strip()
+        if not claim_limpo:
+            raise RepositorioAcoesExecucaoPlanoError('claim_referencia e obrigatoria')
+        claim_sha256 = hashlib.sha256(claim_limpo.encode('utf-8')).hexdigest()
+        try:
+            with self._conexao.cursor() as cursor:
+                cursor.execute(
+                    f'''WITH candidata AS (
+                           SELECT candidata.acao_execucao_id
+                             FROM {_TABELA} AS candidata
+                            WHERE candidata.acao_execucao_id = %s
+                              AND {self._predicado_elegibilidade('candidata')}
+                            FOR UPDATE SKIP LOCKED
+                       )
+                       UPDATE {_TABELA} AS a
+                          SET estado = %s, attempt = attempt + 1,
+                              claim_sha256 = %s, reivindicado_em = %s,
+                              proxima_tentativa_em = NULL, atualizado_em = %s
+                         FROM candidata
+                        WHERE a.acao_execucao_id = candidata.acao_execucao_id
+                          AND a.acao_execucao_id = %s
+                          AND a.envelope_sha256 IS NOT NULL
+                          AND a.estado IN (%s, %s)
+                    RETURNING {_COLUNAS_SQL_ACAO}''',
+                    (
+                        acao_execucao_id,
+                        *self._parametros_elegibilidade(reivindicado_em),
+                        EstadoAcaoExecucaoPlano.EXECUTING.value,
+                        claim_sha256, reivindicado_em, reivindicado_em,
+                        acao_execucao_id,
+                        EstadoAcaoExecucaoPlano.PENDING.value,
+                        EstadoAcaoExecucaoPlano.FAILED_RETRYABLE.value,
+                    ),
+                )
+                linha = cursor.fetchone()
+            self._conexao.commit()
+            return _linha_para_registro(linha) if linha else None
+        except Exception:
+            self._conexao.rollback()
+            raise
+
     def reivindicar_proxima(
         self, *, event_id: str, preview_id: str,
         claim_referencia: str, reivindicado_em: datetime,
@@ -216,7 +314,7 @@ class RepositorioAcoesExecucaoPlanoPostgres:
         claim_limpo = str(claim_referencia or '').strip()
         if not claim_limpo:
             raise RepositorioAcoesExecucaoPlanoError('claim_referencia e obrigatoria')
-        claim_sha256 = _sha256_texto(claim_limpo)
+        claim_sha256 = hashlib.sha256(claim_limpo.encode('utf-8')).hexdigest()
         try:
             with self._conexao.cursor() as cursor:
                 cursor.execute(
@@ -224,6 +322,7 @@ class RepositorioAcoesExecucaoPlanoPostgres:
                        SELECT candidata.acao_execucao_id FROM {_TABELA} AS candidata
                             WHERE candidata.event_id = %s
                               AND candidata.preview_id = %s
+                              AND candidata.envelope_sha256 IS NOT NULL
                               AND (candidata.estado = %s OR (
                                   candidata.estado = %s AND
                                   (candidata.proxima_tentativa_em IS NULL OR
@@ -249,7 +348,7 @@ class RepositorioAcoesExecucaoPlanoPostgres:
                          FROM candidata
                         WHERE a.acao_execucao_id = candidata.acao_execucao_id
                           AND a.estado IN (%s, %s)
-                    RETURNING a.*''',
+                    RETURNING {_COLUNAS_SQL_ACAO}''',
                     (
                         event_id, preview_id,
                         EstadoAcaoExecucaoPlano.PENDING.value,
@@ -315,7 +414,9 @@ class RepositorioAcoesExecucaoPlanoPostgres:
         evidencia_sha256 = (
             hash_conteudo_comunicacao(evidencia) if evidencia is not None else None
         )
-        claim_sha256 = _sha256_texto(str(claim_referencia or '').strip())
+        claim_sha256 = hashlib.sha256(
+            str(claim_referencia or '').strip().encode('utf-8')
+        ).hexdigest()
         try:
             with self._conexao.cursor() as cursor:
                 cursor.execute(

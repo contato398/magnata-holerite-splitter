@@ -7,6 +7,11 @@ import ast
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
+from magnata_os.documental.modulo01.armazenamento import (
+    ArmazenamentoArquivosEmMemoria,
+)
 from magnata_os.classificacao.contratos import ReferenciaCanonica
 from magnata_os.classificacao.pacote_prestacao import (
     EstadoPacotePrestacao,
@@ -77,23 +82,7 @@ class _RepositorioAcoesFalso:
     def __init__(self):
         self._por_id = {}
 
-    def materializar_plano(self, *, event_id, plano, autorizacao, criado_em):
-        from magnata_os.orquestrador.autorizacao_gate import DecisaoGate
-        from magnata_os.orquestrador.repositorio_acoes_execucao_plano_postgres import (
-            RepositorioAcoesExecucaoPlanoError,
-            criar_registro_acao_plano,
-        )
-
-        if autorizacao.decisao != DecisaoGate.AUTORIZADO:
-            raise RepositorioAcoesExecucaoPlanoError('autorizacao recusada nao materializa acoes')
-
-        registros = tuple(
-            criar_registro_acao_plano(
-                event_id=event_id, plano=plano, autorizacao=autorizacao,
-                acao=acao, criado_em=criado_em,
-            )
-            for acao in plano.acoes
-        )
+    def materializar_registros(self, *, registros, autorizacao):
         persistidos = []
         for registro in registros:
             existente = self._por_id.get(registro.acao_execucao_id)
@@ -105,15 +94,20 @@ class _RepositorioAcoesFalso:
         return tuple(persistidos)
 
 
-def _executar(repo_exec=None, repo_auth=None, repo_acoes=None, **overrides):
+def _executar(
+    repo_exec=None, repo_auth=None, repo_acoes=None, armazenamento=None,
+    **overrides,
+):
     repo_exec = repo_exec or RepositorioExecucoesEmMemoria()
     repo_auth = repo_auth or RepositorioAutorizacoesGateEmMemoria()
     repo_acoes = repo_acoes or _RepositorioAcoesFalso()
+    armazenamento = armazenamento or ArmazenamentoArquivosEmMemoria()
     kwargs = dict(
         pacote=_pacote(),
         repositorio_execucoes=repo_exec,
         repositorio_autorizacoes=repo_auth,
         repositorio_acoes=repo_acoes,
+        armazenamento=armazenamento,
         destinatarios=(_DESTINATARIO,),
         texto=_TEXTO,
         itens=(_item(),),
@@ -148,13 +142,20 @@ def test_reaplicacao_do_mesmo_evento_e_idempotente_na_persistencia():
     repo_exec = RepositorioExecucoesEmMemoria()
     repo_auth = RepositorioAutorizacoesGateEmMemoria()
     repo_acoes = _RepositorioAcoesFalso()
+    armazenamento = ArmazenamentoArquivosEmMemoria()
 
-    primeiro, _, _, _ = _executar(repo_exec, repo_auth, repo_acoes)
-    segundo, _, _, _ = _executar(repo_exec, repo_auth, repo_acoes)
+    primeiro, _, _, _ = _executar(
+        repo_exec, repo_auth, repo_acoes, armazenamento,
+    )
+    segundo, _, _, _ = _executar(
+        repo_exec, repo_auth, repo_acoes, armazenamento,
+    )
 
     assert len(primeiro.acoes) == len(segundo.acoes) == 1
     assert primeiro.acoes[0].acao_execucao_id == segundo.acoes[0].acao_execucao_id
     assert len(repo_acoes._por_id) == 1
+    assert primeiro.acoes[0].envelope_sha256 is not None
+    assert armazenamento.existe(primeiro.acoes[0].envelope_sha256)
 
 
 def test_acoes_persistidas_nao_contem_destinatario_texto_ou_midia_em_claro():
@@ -165,6 +166,24 @@ def test_acoes_persistidas_nao_contem_destinatario_texto_ou_midia_em_claro():
         assert _DESTINATARIO not in campo
         assert _TEXTO not in campo
         assert _MIDIA.decode(errors='ignore') not in campo
+
+
+def test_blob_e_gravado_antes_do_banco_e_falha_de_db_deixa_so_orfao():
+    armazenamento = ArmazenamentoArquivosEmMemoria()
+
+    class _RepositorioFalha:
+        def materializar_registros(self, *, registros, autorizacao):
+            assert all(
+                armazenamento.existe(registro.envelope_sha256)
+                for registro in registros
+            )
+            raise RuntimeError('falha sintetica de banco')
+
+    with pytest.raises(RuntimeError, match='falha sintetica'):
+        _executar(
+            repo_acoes=_RepositorioFalha(), armazenamento=armazenamento,
+        )
+    assert len(armazenamento._objetos) == 2  # mídia + envelope órfãos
 
 
 def dataclass_fields_texto(registro):

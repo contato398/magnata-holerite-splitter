@@ -443,6 +443,14 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_configuracao_identidade_colaborador.py"
   "test_postgres_identidade_colaborador.py"
   "test_bootstrap_identidade_colaborador_airtable.py"
+  # Envelope Executavel Persistente V1 — nomes exatos, sem wildcard.
+  "test_envelope_execucao_autorizada.py"
+  "test_executor_persistente_fake.py"
+  "test_executor_persistente_fake_postgres_real.py"
+  "test_repositorio_acoes_execucao_plano_postgres.py"
+  "test_repositorio_acoes_execucao_plano_postgres_real.py"
+  "test_wiring_prestacao_orquestrador_persistente_shadow.py"
+  "test_wiring_prestacao_orquestrador_persistente_shadow_real.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
