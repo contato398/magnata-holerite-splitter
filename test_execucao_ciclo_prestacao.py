@@ -250,7 +250,7 @@ class TestK_L_M_Dependencias:
 
     def test_K_zero_airtable_import(self):
         """K. Zero Airtable — sem import."""
-        import magnata_os.classificacao.execucao_ciclo_prestacao as mod
+        import magnata_os.classificacao.execucao_prestacao as mod
         source = open(mod.__file__).read()
 
         # Verificar imports reais, não menções em docstrings
@@ -259,7 +259,7 @@ class TestK_L_M_Dependencias:
 
     def test_L_zero_documento_import(self):
         """L. Zero Documento — sem import real."""
-        import magnata_os.classificacao.execucao_ciclo_prestacao as mod
+        import magnata_os.classificacao.execucao_prestacao as mod
         source = open(mod.__file__).read()
 
         # Verificar imports reais, não menções em docstrings
@@ -268,7 +268,7 @@ class TestK_L_M_Dependencias:
 
     def test_M_zero_app_py_import(self):
         """M. Zero app.py — sem import real."""
-        import magnata_os.classificacao.execucao_ciclo_prestacao as mod
+        import magnata_os.classificacao.execucao_prestacao as mod
         source = open(mod.__file__).read()
 
         # Verificar imports reais, não menções em docstrings
