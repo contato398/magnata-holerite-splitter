@@ -1023,6 +1023,9 @@ ALLOWED_PATHS=(
   "^test_repositorio_acoes_execucao_plano_postgres_real\.py$"
   "^test_wiring_prestacao_orquestrador_persistente_shadow\.py$"
   "^test_wiring_prestacao_orquestrador_persistente_shadow_real\.py$"
+  # Auditoria/decisao nominal da costura WhatsApp + assinatura V1. Libera
+  # somente o relatorio; nao autoriza app.py, migration, adapter ou transporte.
+  "^docs/decisoes/fluxo-whatsapp-assinatura-v1\.md$"
 )
 
 # ============================================================================
