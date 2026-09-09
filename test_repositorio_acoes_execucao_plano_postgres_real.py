@@ -1,4 +1,5 @@
 """E2E PostgreSQL efêmero das ações do plano; nunca executa transporte."""
+import dataclasses
 import os
 import threading
 from datetime import datetime, timedelta, timezone
@@ -13,6 +14,7 @@ from magnata_os.orquestrador.plano_comunicacao import AcaoEnvio, PlanoDisparo
 from magnata_os.orquestrador.repositorio_acoes_execucao_plano_postgres import (
     EstadoAcaoExecucaoPlano,
     RepositorioAcoesExecucaoPlanoPostgres,
+    criar_registro_acao_plano,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -35,6 +37,16 @@ def _preparar(conn):
         cursor.execute("SELECT to_regclass('magnata_orquestrador.acoes_execucao_plano')")
         if cursor.fetchone()[0] is None:
             cursor.execute((RAIZ / '0003_acoes_execucao_plano.sql').read_text())
+        cursor.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema='magnata_orquestrador' "
+            "AND table_name='acoes_execucao_plano' "
+            "AND column_name='envelope_sha256'"
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                (RAIZ / '0004_envelope_execucao_autorizada.sql').read_text()
+            )
         cursor.execute(
             """INSERT INTO magnata_orquestrador.execucoes
                (event_id,event_type,estado,nivel_autonomia,acao,attempt,
@@ -121,15 +133,33 @@ def _plano_ordenado(preview_id, destinatarios=('dest:A', 'dest:B'), passos=3):
     )
 
 
+def _materializar_com_envelope(
+    repo, *, event_id, plano, autorizacao, criado_em,
+):
+    registros = tuple(
+        dataclasses.replace(
+            criar_registro_acao_plano(
+                event_id=event_id, plano=plano, autorizacao=autorizacao,
+                acao=acao, criado_em=criado_em,
+            ),
+            envelope_sha256='e' * 64,
+        )
+        for acao in plano.acoes
+    )
+    return repo.materializar_registros(
+        registros=registros, autorizacao=autorizacao,
+    )
+
+
 def test_e2e_idempotencia_claim_concorrencia_retry_restart_e_terminais():
     conn = psycopg.connect(cursor_factory=psycopg.ClientCursor)
     _preparar(conn)
     repo = RepositorioAcoesExecucaoPlanoPostgres(conn)
-    primeira = repo.materializar_plano(
+    primeira = _materializar_com_envelope(repo,
         event_id='evento-acoes-e2e', plano=_plano(),
         autorizacao=_autorizacao(), criado_em=AGORA,
     )[0]
-    segunda = repo.materializar_plano(
+    segunda = _materializar_com_envelope(repo,
         event_id='evento-acoes-e2e', plano=_plano(),
         autorizacao=_autorizacao(), criado_em=AGORA + timedelta(minutes=1),
     )[0]
@@ -223,7 +253,7 @@ def test_autorizacao_ausente_nao_persiste_acao():
         proveniencia='e2e:efemero',
     )
     with pytest.raises(ValueError, match='nao encontrada'):
-        repo.materializar_plano(
+        _materializar_com_envelope(repo,
             event_id='evento-acoes-e2e', plano=_plano(),
             autorizacao=ausente, criado_em=AGORA,
         )
@@ -241,7 +271,7 @@ def test_ordem_por_destinatario_retry_restart_e_concorrencia_segura():
     )
     plano = _plano_ordenado(preview_id)
     repo = RepositorioAcoesExecucaoPlanoPostgres(conn)
-    registros = repo.materializar_plano(
+    registros = _materializar_com_envelope(repo,
         event_id=event_id, plano=plano, autorizacao=autorizacao,
         criado_em=AGORA,
     )

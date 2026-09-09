@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Iterable, Sequence, Tuple
 
 from magnata_os.classificacao.pacote_prestacao import PacotePrestacaoCliente
+from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivos
 
 from .autorizacao_gate import (
     AutorizacaoGateError,
@@ -27,10 +28,12 @@ from .autorizacao_gate import (
     registrar_decisao_gate_shadow,
 )
 from .plano_comunicacao import ConteudoItem
+from .envelope_execucao_autorizada import armazenar_acao_e_envelope_v1
 from .politica_comunicacao import ItemComunicacao, PreferenciaComposicao
 from .repositorio_acoes_execucao_plano_postgres import (
     RegistroAcaoExecucaoPlano,
     RepositorioAcoesExecucaoPlanoPostgres,
+    criar_registro_acao_plano,
 )
 from .repositorio_autorizacoes_gate_postgres import (
     RepositorioAutorizacoesGatePostgres,
@@ -151,6 +154,7 @@ def materializar_prestacao_orquestrador_persistente_shadow(
     repositorio_execucoes: RepositorioExecucoes,
     repositorio_autorizacoes: RepositorioAutorizacoesGate,
     repositorio_acoes: RepositorioAcoesExecucaoPlanoPostgres,
+    armazenamento: ArmazenamentoArquivos,
     destinatarios: Iterable[str],
     texto: str,
     itens: Sequence[ItemComunicacao],
@@ -191,11 +195,23 @@ def materializar_prestacao_orquestrador_persistente_shadow(
         canal_preferencial=canal_preferencial,
         instante=agora,
     )
-    acoes = repositorio_acoes.materializar_plano(
-        event_id=resultado.intencao.execucao.event_id,
-        plano=resultado.plano.plano,
-        autorizacao=resultado.autorizacao,
-        criado_em=agora,
+    registros = []
+    for acao in resultado.plano.plano.acoes:
+        registro = criar_registro_acao_plano(
+            event_id=resultado.intencao.execucao.event_id,
+            plano=resultado.plano.plano,
+            autorizacao=resultado.autorizacao,
+            acao=acao,
+            criado_em=agora,
+        )
+        envelope_sha256 = armazenar_acao_e_envelope_v1(
+            armazenamento=armazenamento, registro=registro, acao=acao,
+        )
+        registros.append(dataclasses.replace(
+            registro, envelope_sha256=envelope_sha256,
+        ))
+    acoes = repositorio_acoes.materializar_registros(
+        registros=tuple(registros), autorizacao=resultado.autorizacao,
     )
     return ResultadoPrestacaoOrquestradorPersistenteShadow(
         intencao=resultado.intencao,

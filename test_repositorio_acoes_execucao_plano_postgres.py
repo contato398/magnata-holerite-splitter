@@ -39,17 +39,21 @@ def _plano(*, preview='preview-1', destinatario='dest:sintetico', conteudo=b'mid
 
 
 def _registro(**kwargs):
+    com_envelope = kwargs.pop('com_envelope', True)
     plano = kwargs.pop('plano', _plano())
-    return criar_registro_acao_plano(
+    registro = criar_registro_acao_plano(
         event_id='evento-1', plano=plano,
         autorizacao=kwargs.pop('autorizacao', _autorizacao()),
         acao=plano.acoes[0], criado_em=kwargs.pop('criado_em', AGORA),
+    )
+    return dataclass_replace(
+        registro, envelope_sha256=('e' * 64 if com_envelope else None),
     )
 
 
 def _linha(registro):
     valores = list(registro.__dict__.values())
-    valores[10] = registro.estado.value
+    valores[11] = registro.estado.value
     return tuple(valores)
 
 
@@ -126,7 +130,7 @@ def test_materializacao_exige_autorizacao_persistida_exata():
 
 
 def test_materializacao_repetida_e_idempotente():
-    registro = _registro()
+    registro = _registro(com_envelope=False)
     conexao = _Conexao(respostas=(None, _linha(registro)))
     repo = RepositorioAcoesExecucaoPlanoPostgres(conexao)
     resultado = repo.materializar_plano(
@@ -152,6 +156,26 @@ def test_claim_e_cas_atomico_incrementam_attempt():
     assert 'FOR UPDATE SKIP LOCKED LIMIT 1' in sql
     assert 'attempt = attempt + 1' in sql
     assert 'estado IN (%s, %s)' in sql
+    assert 'candidata.envelope_sha256 IS NOT NULL' in sql
+
+
+def test_descoberta_sem_claim_e_claim_exato_excluem_legado_sem_envelope():
+    conexao = _Conexao(respostas=(None, None))
+    repo = RepositorioAcoesExecucaoPlanoPostgres(conexao)
+    assert repo.buscar_proxima_elegivel(
+        event_id='evento-1', preview_id='preview-1', instante=AGORA,
+    ) is None
+    assert repo.reivindicar_acao_exata(
+        acao_execucao_id='a' * 64, claim_referencia='worker:sintetico',
+        reivindicado_em=AGORA,
+    ) is None
+    busca_sql = conexao.executados[0][0]
+    claim_sql = conexao.executados[1][0]
+    assert 'envelope_sha256 IS NOT NULL' in busca_sql
+    assert 'candidata.acao_execucao_id = %s' in claim_sql
+    assert 'a.acao_execucao_id = %s' in claim_sql
+    assert 'a.envelope_sha256 IS NOT NULL' in claim_sql
+    assert 'FOR UPDATE SKIP LOCKED' in claim_sql
 
 
 def test_claim_exige_todas_as_anteriores_do_destinatario_succeeded():
