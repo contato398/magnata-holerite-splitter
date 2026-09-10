@@ -284,7 +284,7 @@ class TestMigrationsInerte:
         import os
         migration_path = os.path.join(
             os.path.dirname(__file__),
-            "magnata_os/orquestrador/migrations/0004_execucoes_prestacao.sql"
+            "magnata_os/orquestrador/migrations/0005_execucoes_prestacao.sql"
         )
 
         assert os.path.exists(migration_path), f"Migration 0004 não encontrada em {migration_path}"
@@ -303,7 +303,7 @@ class TestMigrationsInerte:
         import os
         rollback_path = os.path.join(
             os.path.dirname(__file__),
-            "magnata_os/orquestrador/migrations/0004_execucoes_prestacao_rollback.sql"
+            "magnata_os/orquestrador/migrations/0005_execucoes_prestacao_rollback.sql"
         )
 
         assert os.path.exists(rollback_path), f"Rollback 0004 não encontrado em {rollback_path}"
