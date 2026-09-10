@@ -1019,8 +1019,8 @@ ALLOWED_PATHS=(
   "^RELATORIO_EXECUCAO_PRESTACAO_V1\.md$"
   "^magnata_os/classificacao/execucao_prestacao\.py$"
   "^magnata_os/classificacao/adapters/postgres_execucoes_prestacao\.py$"
-  "^magnata_os/orquestrador/migrations/0004_execucoes_prestacao\.sql$"
-  "^magnata_os/orquestrador/migrations/0004_execucoes_prestacao_rollback\.sql$"
+  "^magnata_os/orquestrador/migrations/0005_execucoes_prestacao\.sql$"
+  "^magnata_os/orquestrador/migrations/0005_execucoes_prestacao_rollback\.sql$"
   "^test_execucao_ciclo_prestacao\.py$"
   "^test_execucao_prestacao_postgres_real\.py$"
 )

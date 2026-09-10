@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional
 
-from magnata_os.classificacao.execucao_ciclo_prestacao import (
+from magnata_os.classificacao.execucao_prestacao import (
     ExecucaoPrestacao,
     RepositorioExecucoesPrestacao,
 )

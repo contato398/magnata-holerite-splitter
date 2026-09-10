@@ -2,7 +2,7 @@
 contra PostgreSQL de verdade (complementa test_execucao_ciclo_prestacao.py
 que prova lógica via memória).
 
-Prova a MIGRATION `0004_execucoes_prestacao.sql` e o adapter
+Prova a MIGRATION `0005_execucoes_prestacao.sql` e o adapter
 `RepositorioExecucoesPrestacaoPostgres` contra um banco real.
 
 Roda SÓ quando `MAGNATA_TEST_POSTGRES_REAL` está definida -- nunca por
@@ -24,6 +24,8 @@ psycopg = pytest.importorskip('psycopg', reason='driver psycopg (v3) não instal
 from magnata_os.classificacao.execucao_prestacao import (
     ExecucaoPrestacao,
     criar_execucao_prestacao,
+)
+from magnata_os.classificacao.adapters.postgres_execucoes_prestacao import (
     RepositorioExecucoesPrestacaoPostgres,
 )
 
@@ -36,8 +38,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 _MIGRATIONS_DIR = Path(__file__).parent / 'magnata_os' / 'orquestrador' / 'migrations'
-_MIGRATION_SQL = (_MIGRATIONS_DIR / '0004_execucoes_prestacao.sql').read_text(encoding='utf-8')
-_ROLLBACK_SQL = (_MIGRATIONS_DIR / '0004_execucoes_prestacao_rollback.sql').read_text(encoding='utf-8')
+_MIGRATION_SQL = (_MIGRATIONS_DIR / '0005_execucoes_prestacao.sql').read_text(encoding='utf-8')
+_ROLLBACK_SQL = (_MIGRATIONS_DIR / '0005_execucoes_prestacao_rollback.sql').read_text(encoding='utf-8')
 
 
 def _executar_script_sql(conn, sql_texto: str) -> None:
