@@ -1,0 +1,19 @@
+# Autorização humana específica — consulta read-only da obrigação de
+# assinatura (Wiring WhatsApp + Assinatura V1, Bloqueio 2).
+# Base: b65cfd9f5d1c8e1d31723c99f1d321f3453e2f9e (origin/main, PR #147
+# mesclado) + PR #150 reconciliado localmente (token/link reservado).
+# Branch: claude/magnata-whatsapp-disparos-ythk48 (missão macro local)
+# Data: 2026-09-10
+#
+# Escopo nominal autorizado: rota nova GET /assinatura/consulta,
+# estritamente somente leitura -- reaproveita _buscar_por_campo já
+# existente, nunca cria registro, nunca chama _criar_registro, nunca
+# chama _evolution_enviar_*, nunca aceita POST. Resposta sem CPF, sem URL
+# assinada de anexo, sem campo bruto do Airtable.
+#
+# O blob abaixo autoriza somente esta versão exata de app.py (que também
+# inclui, sem alteração adicional, o conteúdo já autorizado do PR #150 —
+# token/link reservado). Qualquer mudança posterior, inclusive comentário,
+# invalida esta autorização. Não autoriza migration, deploy, credencial,
+# webhook, envio real ou merge.
+f03b2f43076fc345e9a155d355578ff0b00f41d5  app.py

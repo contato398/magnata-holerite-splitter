@@ -468,6 +468,8 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_conclusao_obrigacao_assinatura_postgres.py"
   "test_wiring_assinatura_comunicacao_shadow.py"
   "test_assinatura_consulta_read_only.py"
+  "test_adapter_obrigacao_assinatura_legado_http.py"
+  "test_observador_assinatura.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

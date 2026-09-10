@@ -445,5 +445,113 @@ class RepositorioAcoesExecucaoPlanoPostgres:
             self._conexao.rollback()
             raise
 
+    def _finalizar_por_claim_sha256_atual(
+        self, *, acao_execucao_id: str, claim_sha256_atual: str,
+        estado: EstadoAcaoExecucaoPlano, atualizado_em: datetime,
+        erro_classe: Optional[str] = None,
+        proxima_tentativa_em: Optional[datetime] = None,
+        resultado_referencia: Optional[str] = None,
+        evidencia: Optional[bytes] = None,
+    ) -> Optional[RegistroAcaoExecucaoPlano]:
+        """Mesma forma de `_finalizar`, mas o CAS compara diretamente o
+        `claim_sha256` já persistido na linha (lido antes por `buscar()`),
+        em vez de recalcular a partir de uma `claim_referencia` em claro.
+
+        Uso exclusivo de reconciliação humana (Bloqueio EXECUTING órfão,
+        Casos A/C): quem está reconciliando não é o executor original e
+        não tem, nem deveria ter, a `claim_referencia` efêmera do worker
+        morto -- só a evidência já persistida na própria linha.
+        """
+        terminal = estado in {
+            EstadoAcaoExecucaoPlano.SUCCEEDED,
+            EstadoAcaoExecucaoPlano.FAILED_FINAL,
+        }
+        evidencia_sha256 = (
+            hash_conteudo_comunicacao(evidencia) if evidencia is not None else None
+        )
+        try:
+            with self._conexao.cursor() as cursor:
+                cursor.execute(
+                    f'''UPDATE {_TABELA}
+                           SET estado = %s, proxima_tentativa_em = %s,
+                               ultimo_erro_classe = %s,
+                               resultado_referencia = %s,
+                               evidencia_sha256 = %s, atualizado_em = %s,
+                               concluido_em = %s
+                         WHERE acao_execucao_id = %s AND estado = %s
+                           AND claim_sha256 = %s
+                     RETURNING {_COLUNAS_SQL}''',
+                    (
+                        estado.value, proxima_tentativa_em, erro_classe,
+                        resultado_referencia, evidencia_sha256, atualizado_em,
+                        atualizado_em if terminal else None,
+                        acao_execucao_id,
+                        EstadoAcaoExecucaoPlano.EXECUTING.value,
+                        claim_sha256_atual,
+                    ),
+                )
+                linha = cursor.fetchone()
+            self._conexao.commit()
+            return _linha_para_registro(linha) if linha else None
+        except Exception:
+            self._conexao.rollback()
+            raise
+
+    def liberar_apos_confirmacao_ausencia_envio(
+        self, *, acao_execucao_id: str, claim_sha256_atual: str,
+        atualizado_em: datetime,
+    ) -> Optional[RegistroAcaoExecucaoPlano]:
+        """Caso A do bloqueio EXECUTING órfão: um humano já confirmou, fora
+        de banda, que esta ação presa em EXECUTING não teve side effect
+        externo. Libera para retry (FAILED_RETRYABLE), nunca para SUCCEEDED
+        -- retry continua passando pelas mesmas regras de elegibilidade e
+        MAX_TENTATIVAS de sempre. `ator_referencia`/`motivo` não moram
+        nesta tabela: são responsabilidade do chamador registrar via
+        `RepositorioExecucoesPostgres.registrar_recuperacao` (ver
+        `reconciliacao_execucao_orfa.py`) -- nunca esta função sozinha,
+        que por isso nunca deve ser chamada isoladamente por automação."""
+        return self._finalizar_por_claim_sha256_atual(
+            acao_execucao_id=acao_execucao_id,
+            claim_sha256_atual=claim_sha256_atual,
+            estado=EstadoAcaoExecucaoPlano.FAILED_RETRYABLE,
+            atualizado_em=atualizado_em,
+            erro_classe='ORFAO_SEM_ENVIO_CONFIRMADO',
+        )
+
+    def reconciliar_envio_confirmado(
+        self, *, acao_execucao_id: str, claim_sha256_atual: str,
+        atualizado_em: datetime, resultado_referencia: str, evidencia: bytes,
+    ) -> Optional[RegistroAcaoExecucaoPlano]:
+        """Caso C do bloqueio EXECUTING órfão: evidência externa (ex.: log
+        da Evolution) confirma que a mensagem foi entregue. Reconcilia o
+        estado interno para SUCCEEDED com o ID externo confirmado -- nunca
+        reenvia."""
+        return self._finalizar_por_claim_sha256_atual(
+            acao_execucao_id=acao_execucao_id,
+            claim_sha256_atual=claim_sha256_atual,
+            estado=EstadoAcaoExecucaoPlano.SUCCEEDED,
+            atualizado_em=atualizado_em,
+            resultado_referencia=resultado_referencia,
+            evidencia=evidencia,
+        )
+
+    def listar_em_execucao_reivindicadas_antes_de(
+        self, *, instante_limite: datetime,
+    ) -> Tuple[RegistroAcaoExecucaoPlano, ...]:
+        """Visão somente leitura (Caso B): lista ações em EXECUTING cujo
+        `reivindicado_em` é anterior ao limite informado -- candidatas a
+        inspeção humana, nunca a ação automática. Não altera nenhum
+        estado; mesmo padrão de `VisaoFilaDesistenciaPersistente`
+        (visão derivada, sem tabela nem fonte de verdade paralela)."""
+        with self._conexao.cursor() as cursor:
+            cursor.execute(
+                f'''SELECT {_COLUNAS_SQL} FROM {_TABELA}
+                     WHERE estado = %s AND reivindicado_em < %s
+                     ORDER BY reivindicado_em ASC''',
+                (EstadoAcaoExecucaoPlano.EXECUTING.value, instante_limite),
+            )
+            linhas = cursor.fetchall()
+        return tuple(_linha_para_registro(linha) for linha in linhas)
+
     def fechar(self) -> None:
         self._conexao.close()

@@ -11802,6 +11802,79 @@ def _pdf_original_do_pacote(fields, idx):
         return None, str(exc)
 
 
+@app.route('/assinatura/consulta', methods=['GET', 'OPTIONS'])
+def assinatura_consulta():
+    """Consulta SOMENTE LEITURA da obrigação de assinatura, por
+    `acao_execucao_id` (correlação opaca do Orquestrador) ou por
+    `token_reservado` -- nunca cria, nunca altera status, nunca dispara
+    WhatsApp, nunca chama a Evolution. Existe especificamente para que
+    `PortaObrigacaoAssinatura.consultar_por_correlacao` (Orquestrador)
+    nunca precise reutilizar `/assinatura/gerar` como consulta -- aquela
+    rota pode criar estado se a obrigação não existir.
+
+    Reaproveita `_buscar_por_campo`, o mesmo helper de leitura já usado
+    por `assinatura_documento_proxy` e por `_buscar_assinatura_por_token_
+    reservado` (PR #150) -- nenhuma query nova.
+
+    GET /assinatura/consulta?acao_execucao_id=<sha256>
+    GET /assinatura/consulta?token_reservado=<base64url>
+
+    Resposta (sempre 200 se a consulta em si funcionou, existindo ou não
+    a obrigação): {existe, status, assinatura_id, link,
+    comprovante_existe, evidencia_hash}. Nunca CPF, nunca URL de anexo,
+    nunca campo bruto do Airtable.
+    """
+    if request.method == 'OPTIONS':
+        return '', 204
+
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or not secrets.compare_digest(api_key, EMAIL_WEBHOOK_KEY):
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+    if not _airtable_api_key_atual():
+        return jsonify({'status': 'erro', 'erro': 'Serviço indisponível.'}), 503
+
+    acao_execucao_id = (request.args.get('acao_execucao_id') or '').strip()
+    token_reservado = (request.args.get('token_reservado') or '').strip()
+    if bool(acao_execucao_id) == bool(token_reservado):
+        return jsonify({
+            'status': 'erro',
+            'erro': 'informe exatamente um entre acao_execucao_id e token_reservado',
+        }), 400
+
+    campo = F_ASS_REQUEST_ID if acao_execucao_id else F_ASS_HASH
+    valor = acao_execucao_id or token_reservado
+    try:
+        registro = _buscar_por_campo(TABLE_ASSINATURAS, campo, valor)
+    except Exception as exc:
+        logger.warning(f'[ASSINATURA] Falha na consulta read-only: {type(exc).__name__}')
+        return jsonify({'status': 'erro', 'erro': 'falha_consulta'}), 503
+
+    if not registro:
+        return jsonify({
+            'existe': False, 'status': None, 'assinatura_id': None,
+            'link': None, 'comprovante_existe': False, 'evidencia_hash': None,
+        }), 200
+
+    fields = registro.get('fields', {})
+    hash_token = fields.get(F_ASS_HASH)
+    anexos = fields.get(F_ASS_DOCUMENTO_PDF) or []
+    comprovante = next(
+        (a for a in anexos if a.get('filename', '').startswith('Comprovante Assinatura')),
+        None,
+    )
+    return jsonify({
+        'existe': True,
+        'status': fields.get(F_ASS_STATUS),
+        'assinatura_id': registro.get('id'),
+        'link': f'{RECIBO_BASE_URL}/assinatura/{hash_token}' if hash_token else None,
+        'comprovante_existe': comprovante is not None,
+        # Identificador opaco e estável do anexo (id interno do Airtable),
+        # nunca a URL assinada (rotativa, e vazaria acesso direto ao PDF)
+        # nem o conteúdo do comprovante.
+        'evidencia_hash': comprovante.get('id') if comprovante else None,
+    }), 200
+
+
 @app.route('/assinatura/<hash_token>/doc/<int:idx>/pagina/<int:num>', methods=['GET'])
 def assinatura_documento_pagina_png(hash_token, idx, num):
     """
