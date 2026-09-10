@@ -33,13 +33,14 @@
   - Idempotente: `ON CONFLICT DO NOTHING` equivalente em lógica local
 
 ### 2.3 Migrations Inerte (Não Aplicadas)
-- **`magnata_os/orquestrador/migrations/0004_execucoes_prestacao.sql`**
+- **`magnata_os/orquestrador/migrations/0005_execucoes_prestacao.sql`**
   - Tabela: `magnata_orquestrador.execucoes_prestacao`
   - Padrão: `DO $$ IF NOT EXISTS` (idempotente)
   - Índices: competencia_base, estado, criado_em DESC
   - Constraint: `CHECK (estado IN ('INICIADA', 'CONCLUIDA', 'FALHA'))`
+  - Nota: Renumerado de 0004 → 0005 para evitar colisão com 0004_envelope_execucao_autorizada (Backend Durável)
 
-- **`magnata_os/orquestrador/migrations/0004_execucoes_prestacao_rollback.sql`**
+- **`magnata_os/orquestrador/migrations/0005_execucoes_prestacao_rollback.sql`**
   - `DROP TABLE IF EXISTS` sem CASCADE (explícito/seguro)
 
 ### 2.4 Testes Completos (21 Casos)
@@ -116,11 +117,13 @@
 - **Migration inerte:** `DO $$ IF NOT EXISTS` — nunca aplicada automaticamente
 
 ### 5.2 Governança
-- **ALLOWED_PATHS em `.magnata/patterns.sh`:** 4 paths exatos adicionados
-  - `^magnata_os/classificacao/execucao_ciclo_prestacao\.py$`
+- **ALLOWED_PATHS em `.magnata/patterns.sh`:** 6 paths exatos adicionados
+  - `^magnata_os/classificacao/execucao_prestacao\.py$`
   - `^magnata_os/classificacao/adapters/postgres_execucoes_prestacao\.py$`
-  - `^magnata_os/orquestrador/migrations/0004_execucoes_prestacao\.sql$`
-  - `^magnata_os/orquestrador/migrations/0004_execucoes_prestacao_rollback\.sql$`
+  - `^magnata_os/orquestrador/migrations/0005_execucoes_prestacao\.sql$` (renumerado de 0004)
+  - `^magnata_os/orquestrador/migrations/0005_execucoes_prestacao_rollback\.sql$` (renumerado de 0004)
+  - `^test_execucao_ciclo_prestacao\.py$`
+  - `^test_execucao_prestacao_postgres_real\.py$`
 - **Pre-commit hook (`.githooks/pre-commit`):** Teste nominal autorizado
   - `^test_execucao_ciclo_prestacao\.py$`
 - **Classificação:** Não libera paths amplos — apenas estes exatos
