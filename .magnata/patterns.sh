@@ -1023,6 +1023,13 @@ ALLOWED_PATHS=(
   "^test_repositorio_acoes_execucao_plano_postgres_real\.py$"
   "^test_wiring_prestacao_orquestrador_persistente_shadow\.py$"
   "^test_wiring_prestacao_orquestrador_persistente_shadow_real\.py$"
+  # ExecutacaoPrestacao (PR #147): rastreamento persistente de ciclos de Prestação de Contas
+  "^magnata_os/classificacao/execucao_prestacao\.py$"
+  "^magnata_os/classificacao/adapters/postgres_execucoes_prestacao\.py$"
+  "^magnata_os/orquestrador/migrations/0005_execucoes_prestacao\.sql$"
+  "^magnata_os/orquestrador/migrations/0005_execucoes_prestacao_rollback\.sql$"
+  "^test_execucao_ciclo_prestacao\.py$"
+  "^test_execucao_prestacao_postgres_real\.py$"
 )
 
 # ============================================================================
