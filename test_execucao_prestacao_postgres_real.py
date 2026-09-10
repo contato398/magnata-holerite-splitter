@@ -180,6 +180,9 @@ def test_criar_execucao_e_recuperar_por_id(repo):
 
 def test_nova_conexao_recupera_dados_persistidos(pg_conn):
     """Dados persistem entre conexões (nova instância de repositório)."""
+    # Aplicar migration (pg_conn não a aplica automaticamente, como faz repo fixture)
+    _aplicar_migration(pg_conn)
+
     # Primeira conexão: criar
     repo1 = RepositorioExecucoesPrestacaoPostgres(pg_conn)
     execucao = criar_execucao_prestacao(competencia_base="2026-09")

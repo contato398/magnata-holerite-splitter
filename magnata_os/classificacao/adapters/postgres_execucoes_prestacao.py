@@ -94,7 +94,7 @@ class RepositorioExecucoesPrestacaoPostgres:
                criado_em, atualizado_em, concluido_em
         FROM magnata_orquestrador.execucoes_prestacao
         WHERE competencia_base = %s
-        ORDER BY criado_em DESC
+        ORDER BY criado_em ASC, execucao_prestacao_id ASC
         """
         cur = self._conexao.cursor()
         cur.execute(sql, (competencia_base,))
@@ -118,7 +118,7 @@ class RepositorioExecucoesPrestacaoPostgres:
         SELECT execucao_prestacao_id, competencia_base, estado, origem,
                criado_em, atualizado_em, concluido_em
         FROM magnata_orquestrador.execucoes_prestacao
-        ORDER BY criado_em DESC
+        ORDER BY criado_em ASC, execucao_prestacao_id ASC
         """
         cur = self._conexao.cursor()
         cur.execute(sql)
