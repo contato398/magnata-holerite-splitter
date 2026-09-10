@@ -20,6 +20,9 @@ from magnata_os.classificacao.pacote_prestacao import (
     PacotePrestacaoCliente,
 )
 from magnata_os.classificacao.prestacao_readiness import ItemInventarioPrestacao
+from magnata_os.documental.modulo01.armazenamento import (
+    ArmazenamentoArquivosEmMemoria,
+)
 from magnata_os.orquestrador.plano_comunicacao import ConteudoItem
 from magnata_os.orquestrador.politica_comunicacao import (
     ItemComunicacao,
@@ -46,6 +49,7 @@ _MIGRATIONS = tuple(
         '0001_repositorio_execucoes.sql',
         '0002_autorizacoes_gate.sql',
         '0003_acoes_execucao_plano.sql',
+        '0004_envelope_execucao_autorizada.sql',
     )
 )
 _INSTANTE = datetime(2099, 3, 1, 12, 0, tzinfo=timezone.utc)
@@ -58,7 +62,7 @@ def _aplicar_migrations_se_ausentes(conn):
     with conn.cursor() as cursor:
         for nome_tabela, migration in zip(
             ('execucoes', 'autorizacoes_gate', 'acoes_execucao_plano'),
-            _MIGRATIONS,
+            _MIGRATIONS[:3],
         ):
             cursor.execute(
                 "SELECT to_regclass(%s)",
@@ -66,6 +70,14 @@ def _aplicar_migrations_se_ausentes(conn):
             )
             if cursor.fetchone()[0] is None:
                 cursor.execute(migration)
+        cursor.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema='magnata_orquestrador' "
+            "AND table_name='acoes_execucao_plano' "
+            "AND column_name='envelope_sha256'"
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(_MIGRATIONS[3])
     conn.commit()
 
 
@@ -112,19 +124,21 @@ def _kwargs():
 
 def test_e2e_persistencia_real_idempotente_e_sem_transporte():
     conn = psycopg.connect(cursor_factory=psycopg.ClientCursor)
+    armazenamento = ArmazenamentoArquivosEmMemoria()
     try:
         _aplicar_migrations_se_ausentes(conn)
 
         primeiro = materializar_prestacao_orquestrador_persistente_postgres_shadow(
-            conexao_postgres=conn, **_kwargs(),
+            conexao_postgres=conn, armazenamento=armazenamento, **_kwargs(),
         )
         segundo = materializar_prestacao_orquestrador_persistente_postgres_shadow(
-            conexao_postgres=conn, **_kwargs(),
+            conexao_postgres=conn, armazenamento=armazenamento, **_kwargs(),
         )
 
         assert len(primeiro.acoes) == 1
         assert primeiro.acoes[0].acao_execucao_id == segundo.acoes[0].acao_execucao_id
         assert primeiro.acoes[0].estado == EstadoAcaoExecucaoPlano.PENDING
+        assert armazenamento.existe(primeiro.acoes[0].envelope_sha256)
 
         with conn.cursor() as cursor:
             cursor.execute(

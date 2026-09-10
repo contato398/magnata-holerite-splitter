@@ -1006,17 +1006,24 @@ ALLOWED_PATHS=(
   "^test_configuracao_identidade_colaborador\.py$"
   "^test_postgres_identidade_colaborador\.py$"
   "^test_bootstrap_identidade_colaborador_airtable\.py$"
-  # Exceção exata e restrita (FUNDAÇÃO PERSISTENTE DE EXECUÇÃO DE PRESTAÇÃO
-  # V1, branch fix/execucao-prestacao-persistente-v1, 2026-09-08 —
-  # autorização humana explícita). Fundação para ações filhas (Busca
-  # Complementar, conferência, etc.) referenciar execução pai via
-  # Evento.correlation_id. ExecucaoPrestacao (dataclass frozen), Protocol
-  # RepositorioExecucoesPrestacao, implementações (Memória/Postgres via
-  # DB-API 2.0), migrations inerte (0004, nunca aplicada), testes (19 casos).
-  # Não libera magnata_os/classificacao/ ampla; apenas estes 4 caminhos
-  # exatos. Não libera magnata_os/orquestrador/migrations/ ampla;
-  # apenas a migration 0004 desta fundação (nunca aplicada a produção).
-  "^RELATORIO_EXECUCAO_PRESTACAO_V1\.md$"
+  # Excecao nominal exata — Envelope Executavel Persistente V1. Somente
+  # contrato, migration inerte, composicao, executor fake e testes desta
+  # missao; nao libera diretorios, storage real ou transporte.
+  "^magnata_os/orquestrador/envelope_execucao_autorizada\.py$"
+  "^magnata_os/orquestrador/executor_persistente_fake\.py$"
+  "^magnata_os/orquestrador/repositorio_acoes_execucao_plano_postgres\.py$"
+  "^magnata_os/orquestrador/wiring_prestacao_orquestrador_postgres_shadow\.py$"
+  "^magnata_os/orquestrador/migrations/0004_envelope_execucao_autorizada\.sql$"
+  "^magnata_os/orquestrador/migrations/0004_envelope_execucao_autorizada_rollback\.sql$"
+  "^docs/decisoes/envelope-executavel-persistente-v1\.md$"
+  "^test_envelope_execucao_autorizada\.py$"
+  "^test_executor_persistente_fake\.py$"
+  "^test_executor_persistente_fake_postgres_real\.py$"
+  "^test_repositorio_acoes_execucao_plano_postgres\.py$"
+  "^test_repositorio_acoes_execucao_plano_postgres_real\.py$"
+  "^test_wiring_prestacao_orquestrador_persistente_shadow\.py$"
+  "^test_wiring_prestacao_orquestrador_persistente_shadow_real\.py$"
+  # ExecutacaoPrestacao (PR #147): rastreamento persistente de ciclos de Prestação de Contas
   "^magnata_os/classificacao/execucao_prestacao\.py$"
   "^magnata_os/classificacao/adapters/postgres_execucoes_prestacao\.py$"
   "^magnata_os/orquestrador/migrations/0005_execucoes_prestacao\.sql$"
