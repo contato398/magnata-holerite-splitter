@@ -1030,6 +1030,38 @@ ALLOWED_PATHS=(
   "^magnata_os/orquestrador/migrations/0005_execucoes_prestacao_rollback\.sql$"
   "^test_execucao_ciclo_prestacao\.py$"
   "^test_execucao_prestacao_postgres_real\.py$"
+  # Exceção nominal exata — Token/Link Reservado para Assinatura V1.
+  # Não libera outro teste, app.py (autorizado separadamente por blob),
+  # migration, integração externa ou caminho genérico.
+  "^test_assinatura_token_reservado\.py$"
+  # Wiring WhatsApp + Assinatura V1 (missão macro local, PROD NÃO
+  # autorizada) — domínio puro/adapters/migration inerte 0006.
+  # Extensão mínima e nominal a arquivos já existentes (missão macro local
+  # do wiring WhatsApp + Assinatura V1): novo membro de enum fechado em
+  # cada um, sem refatoração, sem alteração de comportamento existente.
+  "^magnata_os/orquestrador/classificador_falha\.py$"
+  "^magnata_os/orquestrador/autorrecuperacao\.py$"
+  "^magnata_os/orquestrador/obrigacao_assinatura\.py$"
+  "^magnata_os/orquestrador/adapters/__init__\.py$"
+  "^magnata_os/orquestrador/adapters/transporte_evolution_legado\.py$"
+  "^magnata_os/orquestrador/adapters/executor_evolution_legado\.py$"
+  "^magnata_os/orquestrador/adapters/obrigacao_assinatura_legado_http\.py$"
+  "^magnata_os/orquestrador/reconciliacao_execucao_orfa\.py$"
+  "^magnata_os/orquestrador/observador_assinatura\.py$"
+  "^magnata_os/orquestrador/adapters/postgres_conclusao_obrigacao_assinatura\.py$"
+  "^magnata_os/orquestrador/wiring_assinatura_comunicacao_shadow\.py$"
+  "^magnata_os/orquestrador/migrations/0006_conclusao_obrigacao_assinatura\.sql$"
+  "^magnata_os/orquestrador/migrations/0006_conclusao_obrigacao_assinatura_rollback\.sql$"
+  "^test_classificador_falha_envio_incerto\.py$"
+  "^test_obrigacao_assinatura\.py$"
+  "^test_transporte_evolution_legado\.py$"
+  "^test_executor_evolution_legado\.py$"
+  "^test_repositorio_acoes_execucao_plano_postgres_orfao\.py$"
+  "^test_conclusao_obrigacao_assinatura_postgres\.py$"
+  "^test_wiring_assinatura_comunicacao_shadow\.py$"
+  "^test_assinatura_consulta_read_only\.py$"
+  "^test_adapter_obrigacao_assinatura_legado_http\.py$"
+  "^test_observador_assinatura\.py$"
 )
 
 # ============================================================================

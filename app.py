@@ -9364,6 +9364,98 @@ def _gerar_hash_assinatura() -> str:
     return secrets.token_urlsafe(24)
 
 
+def _validar_reserva_assinatura(token_reservado=None, acao_execucao_id=None):
+    """Valida a reserva opaca criada pelo Orquestrador, sem ativá-la.
+
+    O token reservado usa 32 bytes (256 bits) em Base64 URL-safe canônico,
+    sem padding. A checagem de diversidade é defesa contra valores humanos
+    obviamente previsíveis; a origem criptográfica continua sendo obrigação
+    do chamador. A correlação é o SHA-256 opaco já usado pelo Orquestrador.
+    """
+    if token_reservado is None and acao_execucao_id is None:
+        return None
+    if not isinstance(token_reservado, str) or not isinstance(acao_execucao_id, str):
+        return 'token_reservado e acao_execucao_id devem ser informados juntos'
+    if not re.fullmatch(r'[A-Za-z0-9_-]{43}', token_reservado):
+        return 'token_reservado inválido: esperado Base64 URL-safe canônico de 32 bytes'
+    try:
+        token_bytes = base64.urlsafe_b64decode(token_reservado + '=')
+    except Exception:
+        return 'token_reservado inválido: Base64 URL-safe malformado'
+    if (len(token_bytes) != 32 or
+            base64.urlsafe_b64encode(token_bytes).rstrip(b'=').decode('ascii') != token_reservado):
+        return 'token_reservado inválido: representação não canônica'
+    frequencias = Counter(token_bytes)
+    if len(frequencias) < 16 or max(frequencias.values()) > 4:
+        return 'token_reservado inválido: diversidade insuficiente'
+    if not re.fullmatch(r'[0-9a-f]{64}', acao_execucao_id):
+        return 'acao_execucao_id inválido: esperado SHA-256 hexadecimal minúsculo'
+    return None
+
+
+def _buscar_assinatura_por_token_reservado(token_reservado):
+    """Busca conflito de token na tabela legada; não cria nem altera nada."""
+    _at_throttle()
+    return requests.get(
+        f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_ASSINATURAS}',
+        headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
+        params={
+            'filterByFormula': f'{{{F_ASS_HASH}}}="{token_reservado}"',
+            'maxRecords': 1,
+            'returnFieldsByFieldId': 'true',
+        },
+        timeout=30,
+    )
+
+
+def _resolver_obrigacao_reservada_existente(rec_existente, token_reservado,
+                                             acao_execucao_id, request_id):
+    """Compara identidade, token e correlação de uma obrigação já existente."""
+    token_existente = rec_existente['fields'].get(F_ASS_HASH)
+    correlacao_existente = rec_existente['fields'].get(F_ASS_REQUEST_ID)
+    assinatura_id = rec_existente['id']
+    if token_existente != token_reservado:
+        return {
+            'status': 'erro', 'erro': 'conflito_token_mesma_obrigacao',
+            'assinatura_id': assinatura_id, 'request_id': request_id,
+        }, 409
+    if correlacao_existente != acao_execucao_id:
+        return {
+            'status': 'erro', 'erro': 'conflito_correlacao_mesma_obrigacao',
+            'assinatura_id': assinatura_id, 'request_id': request_id,
+        }, 409
+    return {
+        'status': 'ok', 'assinatura_id': assinatura_id,
+        'link': f'{RECIBO_BASE_URL}/assinatura/{token_existente}',
+        'motivo': 'retornando_obrigacao_reservada_existente',
+        'request_id': request_id,
+    }, 200
+
+
+def _verificar_token_reservado_disponivel(token_reservado, request_id):
+    """Falha fechada se não puder provar que o token reservado está livre."""
+    try:
+        resposta = _buscar_assinatura_por_token_reservado(token_reservado)
+    except Exception as exc:
+        logger.warning(f'[ASSINATURA] Falha ao verificar token reservado: {type(exc).__name__}')
+        return {
+            'status': 'erro', 'erro': 'falha_verificacao_token_reservado',
+            'request_id': request_id,
+        }, 503
+    if not resposta.ok:
+        return {
+            'status': 'erro', 'erro': 'falha_verificacao_token_reservado',
+            'request_id': request_id,
+        }, 503
+    registros = resposta.json().get('records') or []
+    if registros:
+        return {
+            'status': 'erro', 'erro': 'token_reservado_ja_utilizado',
+            'assinatura_id': registros[0].get('id'), 'request_id': request_id,
+        }, 409
+    return None
+
+
 def _ip_real_da_requisicao() -> str:
     """Render fica atrás de proxy — o IP real do cliente vem em X-Forwarded-For
     (primeiro IP da lista); fallback para remote_addr se o header não vier."""
@@ -9999,6 +10091,8 @@ def assinatura_gerar():
         "nome_documento": "Rescisão - João Silva",  [opcional — se ausente, usa nome canônico]
         "mensagem_extra": "texto",               [opcional — texto adicional no WhatsApp]
         "disparar_whatsapp": false,              [opcional — default FALSE]
+        "token_reservado": "...",               [opcional — exige acao_execucao_id]
+        "acao_execucao_id": "sha256...",        [opcional — exige token_reservado]
         "dry_run": false                         [opcional]
       }
 
@@ -10044,6 +10138,20 @@ def assinatura_gerar():
     tipo_documento = data.get('tipo_documento')
     arquivo_record_id = data.get('arquivo_record_id')
     kit_arquivo_record_ids = data.get('kit_arquivo_record_ids')
+    token_reservado = data.get('token_reservado')
+    acao_execucao_id = data.get('acao_execucao_id')
+
+    erro_reserva = _validar_reserva_assinatura(token_reservado, acao_execucao_id)
+    if erro_reserva:
+        return jsonify({'status': 'erro', 'erro': erro_reserva, 'request_id': request_id}), 400
+
+    disparar_whatsapp = str(data.get('disparar_whatsapp', False)).strip().lower() in ('1', 'true', 'yes', 'sim')
+    if token_reservado is not None and disparar_whatsapp:
+        return jsonify({
+            'status': 'erro',
+            'erro': 'token_reservado exige disparar_whatsapp=false',
+            'request_id': request_id,
+        }), 400
 
     # ✅ Validações obrigatórias
     if not funcionario_id or not tipo_documento:
@@ -10071,9 +10179,11 @@ def assinatura_gerar():
             arquivo_holerite_id=arquivo_holerite_id,
             arquivo_ponto_id=arquivo_ponto_id,
             mensagem_extra=data.get('mensagem_extra') or '',
-            disparar_whatsapp=str(data.get('disparar_whatsapp', False)).strip().lower() in ('1', 'true', 'yes', 'sim'),
+            disparar_whatsapp=disparar_whatsapp,
             dry_run=str(data.get('dry_run', False)).strip().lower() in ('1', 'true', 'yes', 'sim'),
             request_id=request_id,
+            token_reservado=token_reservado,
+            acao_execucao_id=acao_execucao_id,
         )
         return jsonify(resultado), status_code
 
@@ -10094,9 +10204,11 @@ def assinatura_gerar():
         processar_id=data.get('processar_id', '') or '',
         nome_documento=data.get('nome_documento'),  # None = usar canônico
         mensagem_extra=data.get('mensagem_extra') or '',
-        disparar_whatsapp=str(data.get('disparar_whatsapp', False)).strip().lower() in ('1', 'true', 'yes', 'sim'),
+        disparar_whatsapp=disparar_whatsapp,
         dry_run=str(data.get('dry_run', False)).strip().lower() in ('1', 'true', 'yes', 'sim'),
         request_id=request_id,
+        token_reservado=token_reservado,
+        acao_execucao_id=acao_execucao_id,
     )
     return jsonify(resultado), status_code
 
@@ -10141,7 +10253,8 @@ def _carregar_documento_url(url: str) -> bytes:
 
 def _gerar_assinatura_core(funcionario_id, tipo_documento, arquivo_record_id=None, processar_id='',
                             nome_documento=None, mensagem_extra='', disparar_whatsapp=False, dry_run=False,
-                            request_id=None, kit_arquivo_record_ids=None):
+                            request_id=None, kit_arquivo_record_ids=None, token_reservado=None,
+                            acao_execucao_id=None):
     """
     ✅ v3.6: Núcleo de /assinatura/gerar com identidade documental obrigatória.
 
@@ -10157,6 +10270,15 @@ def _gerar_assinatura_core(funcionario_id, tipo_documento, arquivo_record_id=Non
     """
 
     request_id = request_id or f"req{secrets.token_hex(8)}"
+
+    erro_reserva = _validar_reserva_assinatura(token_reservado, acao_execucao_id)
+    if erro_reserva:
+        return {'status': 'erro', 'erro': erro_reserva, 'request_id': request_id}, 400
+    if token_reservado is not None and disparar_whatsapp:
+        return {
+            'status': 'erro', 'erro': 'token_reservado exige disparar_whatsapp=false',
+            'request_id': request_id,
+        }, 400
 
     # ✅ DEFESA PROFUNDA: Validar configuração de Field IDs (aplicável a TODOS os caminhos)
     config_ok, config_msg = _validar_configuracao_assinatura_v36()
@@ -10296,10 +10418,21 @@ def _gerar_assinatura_core(funcionario_id, tipo_documento, arquivo_record_id=Non
                 timeout=30,
             )
 
+            if token_reservado is not None and not r_existente.ok:
+                return {
+                    'status': 'erro', 'erro': 'falha_verificacao_obrigacao_reservada',
+                    'request_id': request_id,
+                }, 503
+
             if r_existente.ok and r_existente.json().get('records'):
                 rec_existente = r_existente.json()['records'][0]
                 status_existente = rec_existente['fields'].get(F_ASS_STATUS)
                 existente_id = rec_existente['id']
+
+                if token_reservado is not None:
+                    return _resolver_obrigacao_reservada_existente(
+                        rec_existente, token_reservado, acao_execucao_id, request_id,
+                    )
 
                 logger.info(f'[ASSINATURA] Idempotência: {existente_id} (status: {status_existente})')
 
@@ -10329,10 +10462,20 @@ def _gerar_assinatura_core(funcionario_id, tipo_documento, arquivo_record_id=Non
                     }, 409
         except Exception as exc:
             logger.warning(f'[ASSINATURA] Erro ao verificar idempotência: {exc}')
+            if token_reservado is not None:
+                return {
+                    'status': 'erro', 'erro': 'falha_verificacao_obrigacao_reservada',
+                    'request_id': request_id,
+                }, 503
     else:
         idempotency_key = None
 
-    hash_token = _gerar_hash_assinatura()
+    if token_reservado is not None:
+        conflito_token = _verificar_token_reservado_disponivel(token_reservado, request_id)
+        if conflito_token:
+            return conflito_token
+
+    hash_token = token_reservado or _gerar_hash_assinatura()
     link = f'{RECIBO_BASE_URL}/assinatura/{hash_token}'
 
     if dry_run:
@@ -10357,7 +10500,7 @@ def _gerar_assinatura_core(funcionario_id, tipo_documento, arquivo_record_id=Non
         F_ASS_DATA_GERACAO:     datetime.now().isoformat(),
         F_ASS_TENTATIVAS:       0,
         F_ASS_ARQUIVO_RECORD_ID: arquivo_record_id,  # ✅ Novo: rastrear arquivo
-        F_ASS_REQUEST_ID:       request_id,  # ✅ Novo: logging
+        F_ASS_REQUEST_ID:       acao_execucao_id or request_id,
     }
 
     if pdf_sha256:
@@ -10414,7 +10557,8 @@ def _gerar_assinatura_core(funcionario_id, tipo_documento, arquivo_record_id=Non
 
 def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id, arquivo_ponto_id,
                                              mensagem_extra='', disparar_whatsapp=False, dry_run=False,
-                                             request_id=None):
+                                             request_id=None, token_reservado=None,
+                                             acao_execucao_id=None):
     """
     Pacote atômico de assinatura: Holerite + Folha de Ponto da MESMA
     competência, em UMA solicitação, UM token, UM comprovante.
@@ -10462,6 +10606,15 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
     residual no relatório final, não como bug corrigido.
     """
     request_id = request_id or f"req{secrets.token_hex(8)}"
+
+    erro_reserva = _validar_reserva_assinatura(token_reservado, acao_execucao_id)
+    if erro_reserva:
+        return {'status': 'erro', 'erro': erro_reserva, 'request_id': request_id}, 400
+    if token_reservado is not None and disparar_whatsapp:
+        return {
+            'status': 'erro', 'erro': 'token_reservado exige disparar_whatsapp=false',
+            'request_id': request_id,
+        }, 400
 
     config_ok, config_msg = _validar_configuracao_assinatura_v36()
     if not config_ok:
@@ -10594,10 +10747,20 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
             },
             timeout=30,
         )
+        if token_reservado is not None and not r_existente.ok:
+            return {
+                'status': 'erro', 'erro': 'falha_verificacao_obrigacao_reservada',
+                'request_id': request_id,
+            }, 503
         if r_existente.ok and r_existente.json().get('records'):
             rec_existente = r_existente.json()['records'][0]
             status_existente = rec_existente['fields'].get(F_ASS_STATUS)
             existente_id = rec_existente['id']
+
+            if token_reservado is not None:
+                return _resolver_obrigacao_reservada_existente(
+                    rec_existente, token_reservado, acao_execucao_id, request_id,
+                )
             logger.info(f'[PACOTE HOL+PONTO] Idempotência: {existente_id} (status: {status_existente})')
 
             # Casing real (não o nome ALL-CAPS aspiracional de ESTADOS_ASSINATURA):
@@ -10645,8 +10808,18 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
                 }, 409
     except Exception as exc:
         logger.warning(f'[PACOTE HOL+PONTO] Erro ao verificar idempotência: {exc}')
+        if token_reservado is not None:
+            return {
+                'status': 'erro', 'erro': 'falha_verificacao_obrigacao_reservada',
+                'request_id': request_id,
+            }, 503
 
-    hash_token = _gerar_hash_assinatura()
+    if token_reservado is not None:
+        conflito_token = _verificar_token_reservado_disponivel(token_reservado, request_id)
+        if conflito_token:
+            return conflito_token
+
+    hash_token = token_reservado or _gerar_hash_assinatura()
     link = f'{RECIBO_BASE_URL}/assinatura/{hash_token}'
 
     if dry_run:
@@ -10674,7 +10847,7 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
         F_ASS_ARQUIVO_RECORD_ID: f'{arquivo_holerite_id}{_SEPARADOR_PACOTE}{arquivo_ponto_id}',
         F_ASS_PDF_SHA256: f'{holerite["sha256"]}{_SEPARADOR_PACOTE}{ponto["sha256"]}',
         F_ASS_CHAVE_IDEMPOTENCIA: idempotency_key,
-        F_ASS_REQUEST_ID: request_id,
+        F_ASS_REQUEST_ID: acao_execucao_id or request_id,
     }
 
     assinatura_id = _criar_registro(TABLE_ASSINATURAS, campos)
@@ -11627,6 +11800,79 @@ def _pdf_original_do_pacote(fields, idx):
         return _pdf_de_anexo_com_cache(anexos_originais[idx]['url']), None
     except Exception as exc:
         return None, str(exc)
+
+
+@app.route('/assinatura/consulta', methods=['GET', 'OPTIONS'])
+def assinatura_consulta():
+    """Consulta SOMENTE LEITURA da obrigação de assinatura, por
+    `acao_execucao_id` (correlação opaca do Orquestrador) ou por
+    `token_reservado` -- nunca cria, nunca altera status, nunca dispara
+    WhatsApp, nunca chama a Evolution. Existe especificamente para que
+    `PortaObrigacaoAssinatura.consultar_por_correlacao` (Orquestrador)
+    nunca precise reutilizar `/assinatura/gerar` como consulta -- aquela
+    rota pode criar estado se a obrigação não existir.
+
+    Reaproveita `_buscar_por_campo`, o mesmo helper de leitura já usado
+    por `assinatura_documento_proxy` e por `_buscar_assinatura_por_token_
+    reservado` (PR #150) -- nenhuma query nova.
+
+    GET /assinatura/consulta?acao_execucao_id=<sha256>
+    GET /assinatura/consulta?token_reservado=<base64url>
+
+    Resposta (sempre 200 se a consulta em si funcionou, existindo ou não
+    a obrigação): {existe, status, assinatura_id, link,
+    comprovante_existe, evidencia_hash}. Nunca CPF, nunca URL de anexo,
+    nunca campo bruto do Airtable.
+    """
+    if request.method == 'OPTIONS':
+        return '', 204
+
+    api_key = request.headers.get('X-API-KEY', '')
+    if not EMAIL_WEBHOOK_KEY or not secrets.compare_digest(api_key, EMAIL_WEBHOOK_KEY):
+        return jsonify({'status': 'erro', 'erro': 'X-API-KEY inválida ou ausente'}), 401
+    if not _airtable_api_key_atual():
+        return jsonify({'status': 'erro', 'erro': 'Serviço indisponível.'}), 503
+
+    acao_execucao_id = (request.args.get('acao_execucao_id') or '').strip()
+    token_reservado = (request.args.get('token_reservado') or '').strip()
+    if bool(acao_execucao_id) == bool(token_reservado):
+        return jsonify({
+            'status': 'erro',
+            'erro': 'informe exatamente um entre acao_execucao_id e token_reservado',
+        }), 400
+
+    campo = F_ASS_REQUEST_ID if acao_execucao_id else F_ASS_HASH
+    valor = acao_execucao_id or token_reservado
+    try:
+        registro = _buscar_por_campo(TABLE_ASSINATURAS, campo, valor)
+    except Exception as exc:
+        logger.warning(f'[ASSINATURA] Falha na consulta read-only: {type(exc).__name__}')
+        return jsonify({'status': 'erro', 'erro': 'falha_consulta'}), 503
+
+    if not registro:
+        return jsonify({
+            'existe': False, 'status': None, 'assinatura_id': None,
+            'link': None, 'comprovante_existe': False, 'evidencia_hash': None,
+        }), 200
+
+    fields = registro.get('fields', {})
+    hash_token = fields.get(F_ASS_HASH)
+    anexos = fields.get(F_ASS_DOCUMENTO_PDF) or []
+    comprovante = next(
+        (a for a in anexos if a.get('filename', '').startswith('Comprovante Assinatura')),
+        None,
+    )
+    return jsonify({
+        'existe': True,
+        'status': fields.get(F_ASS_STATUS),
+        'assinatura_id': registro.get('id'),
+        'link': f'{RECIBO_BASE_URL}/assinatura/{hash_token}' if hash_token else None,
+        'comprovante_existe': comprovante is not None,
+        # Identificador opaco e estável do anexo (id interno do Airtable),
+        # nunca a URL assinada (rotativa, e vazaria acesso direto ao PDF)
+        # nem o conteúdo do comprovante.
+        'evidencia_hash': comprovante.get('id') if comprovante else None,
+    }), 200
 
 
 @app.route('/assinatura/<hash_token>/doc/<int:idx>/pagina/<int:num>', methods=['GET'])

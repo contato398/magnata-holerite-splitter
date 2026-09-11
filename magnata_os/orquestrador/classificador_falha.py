@@ -18,6 +18,13 @@ class ClasseFalha(str, Enum):
     PERMANENT = 'PERMANENT'          # bug/dado invalido -- nunca retry
     HUMAN_GATE = 'HUMAN_GATE'        # cruzou CLAUDE.md paragrafo 12-I -- para, sempre
     INVALID_INPUT = 'INVALID_INPUT'  # evento malformado -- nunca retry
+    # Extensao minima (Wiring WhatsApp + Assinatura V1): a excecao ocorreu
+    # depois de a requisicao ja ter sido transmitida ao provedor externo
+    # (ou o cliente HTTP nao expoe informacao suficiente para provar o
+    # contrario) -- nunca retry automatico, sempre reconciliacao humana.
+    # Distinta de HUMAN_GATE generico para nao misturar, no mesmo valor,
+    # "politica exige humano" com "nao sabemos se houve side effect".
+    ENVIO_EXTERNO_INCERTO = 'ENVIO_EXTERNO_INCERTO'
 
 
 class FalhaGateHumano(Exception):
@@ -26,12 +33,26 @@ class FalhaGateHumano(Exception):
     a partir do texto do erro."""
 
 
+class FalhaEnvioIncerto(FalhaGateHumano):
+    """Uma Acao de transporte externo levanta isto quando a excecao ocorreu
+    depois de a requisicao ja ter saido para o provedor (ou o cliente HTTP
+    nao distingue "antes" de "depois" do envio) -- side effect real
+    desconhecido. Subclasse de FalhaGateHumano: herda o mesmo tratamento de
+    "nunca retry, sempre escalar", mas com classe propria e consultavel
+    (ClasseFalha.ENVIO_EXTERNO_INCERTO), nunca confundida com HUMAN_GATE de
+    outra natureza."""
+
+
 class FalhaTransitoria(Exception):
     """Uma Acao levanta isto para sinalizar falha que vale a pena tentar
     de novo (timeout, erro de rede transitorio)."""
 
 
 _MAPA: dict = {
+    # FalhaEnvioIncerto precisa ser verificada ANTES de FalhaGateHumano
+    # (sua superclasse) -- isinstance() bateria na mais generica primeiro
+    # se a ordem fosse invertida, mascarando a classe especifica.
+    FalhaEnvioIncerto: ClasseFalha.ENVIO_EXTERNO_INCERTO,
     FalhaGateHumano: ClasseFalha.HUMAN_GATE,
     FalhaTransitoria: ClasseFalha.TRANSIENT,
     ValueError: ClasseFalha.INVALID_INPUT,

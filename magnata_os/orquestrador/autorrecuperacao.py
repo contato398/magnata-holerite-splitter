@@ -35,6 +35,13 @@ class DecisaoRecuperacao(str, Enum):
     CIRCUITO_ABERTO = 'CIRCUITO_ABERTO'
     ESCALAR_HUMANO = 'ESCALAR_HUMANO'
     IGNORADO_CONCORRENCIA = 'IGNORADO_CONCORRENCIA'
+    # Extensao minima (Wiring WhatsApp + Assinatura V1, Bloqueio EXECUTING
+    # orfao, Caso A): um operador humano confirmou, fora de banda, que uma
+    # acao de transporte (magnata_orquestrador.acoes_execucao_plano) presa
+    # em EXECUTING nao teve side effect externo, e liberou explicitamente
+    # para retry. Nunca escrita por processo automatico -- so por chamada
+    # humana com ator_referencia e motivo obrigatorios.
+    LIBERACAO_MANUAL_ACAO_SEM_ENVIO = 'LIBERACAO_MANUAL_ACAO_SEM_ENVIO'
 
 
 @dataclasses.dataclass(frozen=True)
