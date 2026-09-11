@@ -261,6 +261,47 @@ class RepositorioAcoesExecucaoPlanoPostgres:
             linha = cursor.fetchone()
         return _linha_para_registro(linha) if linha else None
 
+    def listar_pares_elegiveis(
+        self, *, instante: datetime, limite: int = 200,
+    ) -> Tuple[Tuple[str, str], ...]:
+        """Descoberta somente leitura, sem claim: pares (event_id,
+        preview_id) distintos com ao menos uma ação elegível agora.
+        Existe porque `buscar_proxima_elegivel`/`reivindicar_proxima`
+        exigem event_id/preview_id já conhecidos -- o ciclo de produção
+        precisa descobrir quais existem antes de poder chamá-los. Reusa
+        o mesmo predicado de elegibilidade já usado no claim, nunca uma
+        regra paralela."""
+        with self._conexao.cursor() as cursor:
+            cursor.execute(
+                f'''SELECT DISTINCT candidata.event_id, candidata.preview_id
+                      FROM {_TABELA} AS candidata
+                     WHERE {self._predicado_elegibilidade('candidata')}
+                     ORDER BY candidata.event_id, candidata.preview_id
+                     LIMIT %s''',
+                self._parametros_elegibilidade(instante) + (limite,),
+            )
+            linhas = cursor.fetchall()
+        return tuple((linha[0], linha[1]) for linha in linhas)
+
+    def listar_succeeded_recentes(
+        self, *, limite: int = 200,
+    ) -> Tuple[RegistroAcaoExecucaoPlano, ...]:
+        """Somente leitura: ações já `SUCCEEDED`, mais recentes primeiro
+        -- candidatas a observação de assinatura. O observador do ciclo
+        de produção cruza isto com `conclusao_obrigacao_assinatura` (em
+        outro repositório) para saber quais ainda faltam concluir; esta
+        consulta nunca sabe nada sobre assinatura."""
+        with self._conexao.cursor() as cursor:
+            cursor.execute(
+                f'''SELECT {_COLUNAS_SQL} FROM {_TABELA}
+                     WHERE estado = %s AND tipo = %s
+                     ORDER BY atualizado_em DESC
+                     LIMIT %s''',
+                (EstadoAcaoExecucaoPlano.SUCCEEDED.value, 'texto', limite),
+            )
+            linhas = cursor.fetchall()
+        return tuple(_linha_para_registro(linha) for linha in linhas)
+
     def reivindicar_acao_exata(
         self, *, acao_execucao_id: str, claim_referencia: str,
         reivindicado_em: datetime,

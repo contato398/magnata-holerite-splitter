@@ -1062,6 +1062,19 @@ ALLOWED_PATHS=(
   "^test_assinatura_consulta_read_only\.py$"
   "^test_adapter_obrigacao_assinatura_legado_http\.py$"
   "^test_observador_assinatura\.py$"
+  # ATIVAÇÃO CONTROLADA DO WIRING WHATSAPP + ASSINATURA V1 (implementação
+  # LOCAL da fase de ativação, PROD NÃO autorizada) — gate fail-closed de
+  # transporte real, composição de produção de um único ciclo (nem motor,
+  # nem fila, nem scheduler novo) e seus testes nominais. `requirements.txt`
+  # liberado apenas para a adição mínima e comentada de `boto3` (composição/
+  # infra, nunca domínio).
+  "^magnata_os/orquestrador/autorizacao_transporte_real\.py$"
+  "^magnata_os/orquestrador/ciclo_producao_v1\.py$"
+  "^requirements\.txt$"
+  "^test_autorizacao_transporte_real\.py$"
+  "^test_repositorio_acoes_execucao_plano_postgres_descoberta\.py$"
+  "^test_ciclo_producao_v1\.py$"
+  "^test_s3_armazenamento_moto\.py$"
 )
 
 # ============================================================================

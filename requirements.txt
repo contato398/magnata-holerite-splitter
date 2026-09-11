@@ -15,3 +15,12 @@ psycopg[binary]==3.2.*
 # funcoes do recurso real; testes e Captura Shadow V1 usam duplos sem rede.
 google-api-python-client==2.149.0
 google-auth==2.35.0
+
+# Cliente S3 real para a composicao de producao do Orquestrador
+# (magnata_os/orquestrador/ciclo_producao_v1.py). O adapter de storage
+# (magnata_os/documental/modulo01/adapters/s3_armazenamento.py) e' duck-
+# typed e nunca importa boto3 diretamente -- so a camada de composicao/
+# infra (fora do dominio) instancia boto3.client('s3', ...) e injeta.
+# Ainda nao usado em producao real nesta fase (bucket real, credencial
+# real e ativacao continuam fora do escopo desta implementacao local).
+boto3==1.43.92
