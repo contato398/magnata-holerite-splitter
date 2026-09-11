@@ -29,6 +29,43 @@ services:
           name: magnata-os-db
           property: connectionString
 
+  # Serviço DECLARATIVO, NÃO provisionado nesta fase -- nenhum Blueprint
+  # foi rodado com este bloco. Cron Job dedicado (nunca Celery Beat: o
+  # worker acima continua só PDF, sem `-B`, para não virar um scheduler
+  # improvisado nem correr risco de singleton/escala do beat) para
+  # repetir `ciclo_producao_v1.executar_um_ciclo_producao` -- um disparo
+  # síncrono que sempre termina; quem evita overlap entre disparos é o
+  # advisory lock de sessão dentro do próprio ciclo (defesa primária),
+  # com CAS por ação como defesa final. Ativar isto exige, na ordem: (1)
+  # rodar este Blueprint (gate humano de produção); (2) configurar
+  # ORQUESTRADOR_S3_BUCKET/PREFIXO, ORQUESTRADOR_ASSINATURA_BASE_URL/
+  # API_KEY reais (gate humano, escrita externa não abrangida por esta
+  # fase); (3), só then/depois e como decisão separada, considerar
+  # ORQUESTRADOR_TRANSPORTE_REAL_AUTORIZADO -- nunca antes das duas
+  # barreiras anteriores e nunca por este arquivo (é variável de
+  # ambiente, não de Blueprint versionado). Schedule de exemplo: a cada
+  # 5 minutos -- ajustar de acordo com o volume real observado.
+  - type: cron
+    name: magnata-orquestrador-ciclo-producao
+    runtime: python
+    schedule: "*/5 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m magnata_os.orquestrador.ciclo_producao_v1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: magnata-os-db
+          property: connectionString
+      # ORQUESTRADOR_S3_BUCKET, ORQUESTRADOR_S3_PREFIXO,
+      # ORQUESTRADOR_ASSINATURA_BASE_URL, ORQUESTRADOR_ASSINATURA_API_KEY
+      # e credenciais AWS/S3 (via variável de ambiente padrão do
+      # boto3, nunca hardcoded aqui) são deliberadamente OMITIDOS deste
+      # Blueprint -- configuração real de produção é gate humano
+      # separado, fora do escopo desta fase. Sem eles, o ciclo falha
+      # alto e explícito (RuntimeError), nunca silenciosamente.
+
 # databases: bloco DECLARATIVO, preparado para o gate humano de
 # provisionamento real -- NAO executado/aplicado nesta fase (nenhum
 # Blueprint foi rodado). `plan: free` e um placeholder seguro (nao
