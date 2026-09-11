@@ -63,6 +63,12 @@ jobs:
           # pytest não está (e não deve estar) em requirements.txt: é
           # ferramenta de teste, não dependência de execução em produção.
           pip install pytest
+          # moto[s3] idem: só simula S3 localmente (sem Docker, sem rede)
+          # para test_s3_armazenamento_moto.py provar compatibilidade do
+          # adapter contra um cliente boto3 real -- nunca é dependência de
+          # execução em produção (o adapter em si é duck-typed, sem
+          # import de boto3/moto).
+          pip install 'moto[s3]'
 
       - name: Conferir que as dependências de coleta existem
         # Falha cedo e com mensagem clara, em vez de deixar a suíte
@@ -75,7 +81,8 @@ jobs:
           import importlib.util
           import sys
           faltando = [m for m in ('flask', 'celery', 'redis', 'pdfplumber',
-                                  'pypdf', 'fpdf', 'reportlab', 'openpyxl')
+                                  'pypdf', 'fpdf', 'reportlab', 'openpyxl',
+                                  'moto')
                       if not importlib.util.find_spec(m)]
           if faltando:
               print('FALTANDO (dependência de coleta ausente):', ', '.join(faltando))
