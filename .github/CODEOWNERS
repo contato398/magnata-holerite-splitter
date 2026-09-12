@@ -1,0 +1,26 @@
+# Magnata OS — CODEOWNERS
+#
+# Finalidade nesta fase: SOMENTE auditabilidade e notificação
+# automática de review -- este arquivo, por si só, NÃO ativa nenhum
+# bloqueio técnico de merge. "Require review from Code Owners"
+# permanece deliberadamente DESLIGADO no ruleset `Protect main`
+# enquanto houver um único mantenedor real no repositório (hoje:
+# @contato398) -- o GitHub proíbe um usuário de aprovar a própria
+# Pull Request, então ligar essa regra agora causaria lockout total
+# exatamente sobre os caminhos mais críticos. A autorização humana
+# externa ao diff, para estes caminhos, vem do Environment
+# `governance-approval` (ver .github/workflows/governance-gate.yml e
+# docs/decisoes/endurecimento-governanca-gates-v1.md), não deste
+# arquivo.
+#
+# Caminhos que controlam a própria governança do repositório -- mesma
+# lista de intenção do detector em governance-gate.yml (mantida aqui
+# como uma segunda fonte independente, não uma referência circular a
+# ela).
+
+/.magnata/patterns.sh               @contato398
+/.githooks/                         @contato398
+/.github/workflows/                 @contato398
+/.github/CODEOWNERS                 @contato398
+/scripts/ci/                        @contato398
+/.magnata/migration-authorizations/ @contato398
