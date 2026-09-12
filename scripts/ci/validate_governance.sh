@@ -220,7 +220,11 @@ gate_protected_migrations() {
 
   while IFS=$'\t' read -r status file; do
     if [[ -z "$file" ]]; then continue; fi
-    if [[ "$file" == *"magnata_os/documental/modulo01/migrations/"* ]]; then
+    # Diretórios de migration protegidos: Módulo 01 documental e
+    # Orquestrador (0004/0005/0006 inertes) -- mesma checagem, só com
+    # mais um padrão de caminho reconhecido, nunca um gate novo.
+    if [[ "$file" == *"magnata_os/documental/modulo01/migrations/"* \
+       || "$file" == *"magnata_os/orquestrador/migrations/"* ]]; then
       if is_claude_hierarchy_path "$file"; then
         continue
       fi

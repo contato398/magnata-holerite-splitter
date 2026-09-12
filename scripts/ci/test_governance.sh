@@ -2287,6 +2287,54 @@ test_93_root_agents_exact_path_only() {
   rmdir subdir 2>/dev/null || true
 }
 
+# ============================================================================
+# TESTES 94-95 — gate_protected_migrations (CI) cobre também
+# magnata_os/orquestrador/migrations/ (implementação local, migrations
+# 0004/0005/0006 continuam inertes -- nada aplicado). Mesmo padrão dos
+# testes 77/78 (Módulo 01), só trocando o diretório -- prova que a
+# extensão do gate cobre o Orquestrador com a mesma disciplina, sem
+# reimplementar a lógica.
+# ============================================================================
+
+# TEST 94: migration nova do Orquestrador, com manifesto novo e hash
+# exato no mesmo diff, é aprovada -- espelha o teste 77 para o Módulo 01.
+test_94_orchestrator_migration_with_exact_authorization() {
+  run_test 94 "Migration nova do Orquestrador com autorização SHA-256 exata é aprovada" "PASS"
+  cd "$TEST_REPO"
+  mkdir -p magnata_os/orquestrador/migrations .magnata/migration-authorizations
+  local migration="magnata_os/orquestrador/migrations/0999_authorized.sql"
+  local authorization=".magnata/migration-authorizations/pr-test.gitblob"
+  echo "SELECT 1;" > "$migration"
+  printf '%s  %s\n' "$(git hash-object --filters --path="$migration" "$migration")" "$migration" > "$authorization"
+  git add "$migration" "$authorization"
+  if bash scripts/ci/validate_governance.sh protected_migrations "" "" "$authorization" >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+  git reset -q HEAD "$migration" "$authorization" 2>/dev/null || true
+  rm -rf magnata_os .magnata/migration-authorizations
+}
+
+# TEST 95: migration nova do Orquestrador sem nenhuma autorização
+# continua bloqueada pelo gate de CI -- prova o caminho negativo que a
+# extensão do gate precisa manter, não só o positivo do teste 94.
+test_95_orchestrator_migration_without_authorization_blocked() {
+  run_test 95 "Migration nova do Orquestrador sem autorização é bloqueada" "FAIL"
+  cd "$TEST_REPO"
+  mkdir -p magnata_os/orquestrador/migrations
+  local migration="magnata_os/orquestrador/migrations/0999_unauthorized.sql"
+  echo "SELECT 1;" > "$migration"
+  git add "$migration"
+  if bash scripts/ci/validate_governance.sh protected_migrations >/dev/null 2>&1; then
+    test_result "PASS"
+  else
+    test_result "FAIL"
+  fi
+  git reset -q HEAD "$migration" 2>/dev/null || true
+  rm -rf magnata_os
+}
+
 main() {
   echo -e "${BLUE}===================================="
   echo "SUÍTE DE TESTES DE GOVERNANÇA"
@@ -2396,6 +2444,8 @@ main() {
   test_91_orchestrator_durable_persistence_exact_files_accepted || true
   test_92_other_orchestrator_migration_still_blocked || true
   test_93_root_agents_exact_path_only || true
+  test_94_orchestrator_migration_with_exact_authorization || true
+  test_95_orchestrator_migration_without_authorization_blocked || true
 
   # Report
   echo ""
