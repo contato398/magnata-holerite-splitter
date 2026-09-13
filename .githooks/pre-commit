@@ -479,6 +479,16 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_repositorio_acoes_execucao_plano_postgres_descoberta.py"
   "test_ciclo_producao_v1.py"
   "test_s3_armazenamento_moto.py"
+  # PRESTAÇÃO DE CONTAS V1 — CICLO PERSISTENTE E COMPOSIÇÃO DURÁVEL
+  # (implementação LOCAL da fundação de persistência de ciclos com rastreamento
+  # de execução + ingestão durável de documentos via AdaptadorEntradaDuravel +
+  # blob storage, branch fix/prestacao-composicao-persistente-v1, 2026-09-13 —
+  # autorização humana explícita). Testes de integração E2E: blob antes de
+  # Documento, handoff via corredor, ciclo persistente com inventário real.
+  # Mantém "^test_" bloqueado por padrão e libera somente estes 3 testes nominais.
+  "test_adaptador_entrada_duravel.py"
+  "test_composicao_ciclo_persistente_prestacao.py"
+  "test_handoff_documento_corredor.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
