@@ -2,6 +2,11 @@
 # Magnata OS — Padrões Canônicos de Governança
 # Fonte única de verdade para validação de regras
 # Importado por: .githooks/pre-commit, scripts/ci/validate_governance.sh
+#
+# Comentário de teste (PR de validação ponta a ponta do
+# governance-gate.yml) -- nenhuma mudança de comportamento, nenhum
+# array, regex ou lógica alterada neste arquivo. Ver
+# docs/decisoes/endurecimento-governanca-gates-v1.md.
 
 # ============================================================================
 # BRANCHES AUTORIZADAS — Trabalho de desenvolvimento do Magnata OS
