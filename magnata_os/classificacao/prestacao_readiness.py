@@ -86,7 +86,15 @@ class EntradaPrestacaoReadiness:
     competencia: ReferenciaCanonica
     requisitos: Tuple[RequisitoDocumentalPrestacao, ...]
     inventario: Tuple[ItemInventarioPrestacao, ...]
-    resolucao: ResultadoResolucaoSemantico
+    resolucao: Optional[ResultadoResolucaoSemantico]
+    """Evolução do contrato do ciclo de Prestação V1: `None` representa
+    EXPLICITAMENTE "nenhuma resolução semântica REAL disponível para
+    este cliente/competência" (ver `avaliar_candidatos_ancora`,
+    `composicao_ciclo_persistente_prestacao.py`) -- NUNCA um
+    `ResultadoResolucaoSemantico` fabricado como substituto. Continua
+    OBRIGATÓRIO passar o campo (sem default) -- só o TIPO foi ampliado,
+    nenhum chamador existente que já passa uma resolução real muda de
+    comportamento."""
 
     def __post_init__(self) -> None:
         tipos = [item.tipo_documental for item in self.requisitos]
@@ -162,6 +170,24 @@ def avaliar_prestacao_readiness(
     entrada: EntradaPrestacaoReadiness,
 ) -> ResultadoPrestacaoReadiness:
     """Classifica um cliente/competencia sem I/O e sem mutacao."""
+
+    if entrada.resolucao is None:
+        # Evolução do contrato do ciclo de Prestação V1: ausência
+        # EXPLÍCITA de resolução semântica real (nunca uma resolução
+        # fabricada como substituto) -- sempre REVISAR, com motivo
+        # próprio, distinto de qualquer outro motivo de revisão
+        # (dimensão ausente/ambígua DENTRO de uma resolução real que
+        # existe). As checagens cruzadas abaixo dependem de uma
+        # resolução real para fazer sentido -- sem isso, ficam
+        # tautológicas; por isso encerram aqui, antes de qualquer uma
+        # delas rodar.
+        return ResultadoPrestacaoReadiness(
+            cliente=entrada.cliente,
+            competencia=entrada.competencia,
+            estado=EstadoPrestacaoReadiness.REVISAR,
+            contagens_observadas=calcular_contagens_por_tipo(entrada.inventario),
+            motivos=("sem_evidencia_documental_real",),
+        )
 
     cliente_resolvido = _resolucao_da_dimensao(
         entrada.resolucao, DimensaoResolucao.CLIENTE

@@ -232,3 +232,54 @@ def test_equivalencia_readiness_usa_mesmas_funcoes_puras():
     resultado = avaliar_prestacao_readiness(entrada)
     assert resultado.contagens_observadas == calcular_contagens_por_tipo(itens)
     assert resultado.tipos_faltantes == calcular_tipos_faltantes(requisitos, itens)
+
+
+# ==== Incremento 6 (evolução do contrato do ciclo de Prestação V1) ====
+# `resolucao=None` -- ausência EXPLÍCITA de resolução semântica real,
+# nunca uma resolução fabricada como substituto. Sempre REVISAR, com
+# motivo próprio, sem tocar nenhuma checagem cruzada (que dependeria
+# de uma resolução real para não ser tautológica).
+
+
+def _entrada_sem_ancora(inventario=()):
+    """Constrói `EntradaPrestacaoReadiness` com `resolucao=None` de
+    verdade -- `_entrada()` (helper acima) usa `resolucao or
+    _resolucao()`, que NUNCA deixaria `None` passar adiante."""
+    return EntradaPrestacaoReadiness(
+        cliente=CLIENTE,
+        competencia=COMPETENCIA,
+        requisitos=(
+            RequisitoDocumentalPrestacao("HOLERITE"),
+            RequisitoDocumentalPrestacao("FGTS"),
+        ),
+        inventario=tuple(inventario),
+        resolucao=None,
+    )
+
+
+def test_resolucao_none_resulta_revisar_com_motivo_proprio():
+    resultado = avaliar_prestacao_readiness(_entrada_sem_ancora())
+    assert resultado.estado == EstadoPrestacaoReadiness.REVISAR
+    assert resultado.motivos == ("sem_evidencia_documental_real",)
+
+
+def test_resolucao_none_ainda_reporta_contagens_observadas_do_inventario_real():
+    """Inventário JÁ CONHECIDO continua sendo reportado normalmente --
+    só a AUSÊNCIA DE ÂNCORA muda o estado, nunca o que já foi
+    observado no inventário."""
+    itens = (_item("doc-1", "HOLERITE"),)
+    resultado = avaliar_prestacao_readiness(_entrada_sem_ancora(itens))
+    assert resultado.estado == EstadoPrestacaoReadiness.REVISAR
+    assert resultado.contagens_observadas == calcular_contagens_por_tipo(itens)
+
+
+def test_resolucao_none_nunca_e_confundido_com_dimensao_ausente_dentro_de_resolucao_real():
+    """O motivo de `resolucao=None` é distinto do motivo de uma
+    resolução REAL com dimensão ausente/ambígua -- dois problemas
+    diferentes, nunca reportados com o mesmo motivo."""
+    resultado_sem_resolucao = avaliar_prestacao_readiness(_entrada_sem_ancora())
+    resultado_dimensao_ausente = avaliar_prestacao_readiness(
+        _entrada((), resolucao=_resolucao(estado_cliente=EstadoResolucaoDimensao.NAO_ENCONTRADA))
+    )
+    assert resultado_sem_resolucao.motivos != resultado_dimensao_ausente.motivos
+    assert resultado_sem_resolucao.estado == resultado_dimensao_ausente.estado == EstadoPrestacaoReadiness.REVISAR

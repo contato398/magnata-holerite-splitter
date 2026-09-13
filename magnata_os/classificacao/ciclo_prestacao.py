@@ -163,7 +163,12 @@ def executar_ciclo_prestacao(
     `resolucoes_ancora`: para cada cliente, o `ResultadoResolucaoSemantico`
     que ancora a leitura de CLIENTE/COMPETENCIA no readiness (mesmo
     papel que já tinha em `avaliar_e_montar_pacote` -- este orquestrador
-    nunca recalcula resolução semântica, só a repassa).
+    nunca recalcula resolução semântica, só a repassa). Evolução do
+    contrato do ciclo de Prestação V1, Incremento 6: um cliente
+    ATIVO sem entrada aqui (`.get(cliente)` devolve `None`) NÃO é mais
+    descartado do resultado -- aparece com estado EM_REVISAO explícito
+    (`sem_evidencia_documental_real`), nunca com uma resolução
+    fabricada como substituto.
     `competencias_por_cliente`: competência EFETIVA já resolvida por
     cliente (via `PoliticaCompetenciaPrestacao`, ex.: SKY = base - 1
     mês) -- calculada fora deste módulo, na borda, nunca aqui (cláusula
@@ -192,14 +197,27 @@ def executar_ciclo_prestacao(
     resultados = []
     for cliente in fonte_clientes.listar_ativos(contexto):
         competencia = competencias_por_cliente.get(cliente)
-        resolucao_ancora = resolucoes_ancora.get(cliente)
-        if competencia is None or resolucao_ancora is None:
-            # Cliente ativo, mas sem contexto suficiente para avaliar
-            # este ciclo -- nunca inventa competência/resolução; fica
-            # de fora do resultado deste ciclo (NECESSITA REVISÃO fora
-            # de banda, não um pacote fictício).
+        if competencia is None:
+            # Cliente ativo, mas nem a competência deste ciclo foi
+            # determinada para ele -- gap de configuração
+            # (`competencias_por_cliente` não wired para este
+            # cliente), não ausência de evidência documental; sem
+            # competência não há sequer requisitos/inventário a
+            # consultar. Continua fora do escopo desta correção
+            # (Incremento 6 trata só de `resolucao_ancora` ausente,
+            # nunca de competência ausente); fica de fora do resultado
+            # deste ciclo, como antes.
             continue
-
+        resolucao_ancora = resolucoes_ancora.get(cliente)
+        # Evolução do contrato do ciclo de Prestação V1, Incremento 6:
+        # `resolucao_ancora` PODE ser `None` aqui (cliente sem âncora
+        # real -- ver `avaliar_candidatos_ancora`) e NÃO é mais
+        # silenciosamente descartado com `continue`. `avaliar_e_montar_
+        # pacote`/`avaliar_prestacao_readiness` já tratam `None` como
+        # EM_REVISAO explícito (`sem_evidencia_documental_real`) --
+        # nunca uma resolução fabricada aqui como substituto. O
+        # cliente aparece no resultado deste ciclo com esse estado
+        # explícito, em vez de desaparecer.
         politica, _resultados_normalizacao = _politica_efetiva_para_cliente(
             cliente, contexto, requisitos_base, fonte_requisitos)
         pacote = avaliar_e_montar_pacote(cliente, competencia, resolucao_ancora, fonte_inventario, politica)

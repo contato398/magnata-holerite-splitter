@@ -23,6 +23,7 @@ from magnata_os.classificacao.contratos import (
     RegraAplicabilidadeDimensao,
     ResolucaoDimensao,
 )
+from magnata_os.classificacao.pacote_prestacao import EstadoPacotePrestacao
 from magnata_os.classificacao.prestacao_readiness import RequisitoDocumentalPrestacao
 from magnata_os.classificacao.resolucao_semantica import compor_resolucao_semantica
 
@@ -84,6 +85,58 @@ def test_cliente_ativo_sem_competencia_ou_ancora_nunca_vira_pacote_ficticio():
     clientes_no_resultado = {r.cliente for r in resultado.resultados_por_cliente}
     assert clientes_no_resultado == {_CLIENTE_COM_CONTEXTO}
     assert _CLIENTE_SEM_CONTEXTO not in clientes_no_resultado
+
+
+# ==== Incremento 6 (evolução do contrato do ciclo de Prestação V1) ====
+# Cliente com COMPETÊNCIA conhecida mas SEM âncora real (chave ausente
+# em `resolucoes_ancora`) NÃO é mais descartado silenciosamente --
+# aparece no resultado com estado EM_REVISAO explícito. Distinto do
+# teste acima: lá, `_CLIENTE_SEM_CONTEXTO` também não tem competência
+# (gap de configuração, fora do escopo deste incremento); aqui, SÓ a
+# âncora está ausente.
+
+
+def test_cliente_com_competencia_mas_sem_ancora_aparece_em_revisao_explicita():
+    resultado = executar_ciclo_prestacao(
+        contexto=_CONTEXTO,
+        fonte_clientes=_FonteClientesDoisAtivos(),
+        fonte_requisitos=_FonteRequisitosVazia(),
+        fonte_inventario=_FonteInventarioVazia(),
+        requisitos_base=(),
+        resolucoes_ancora={},  # nenhum cliente tem âncora
+        competencias_por_cliente={
+            _CLIENTE_COM_CONTEXTO: _COMPETENCIA,
+            _CLIENTE_SEM_CONTEXTO: _COMPETENCIA,
+        },
+    )
+    clientes_no_resultado = {r.cliente for r in resultado.resultados_por_cliente}
+    # Os DOIS aparecem agora -- nenhum descartado, os dois têm competência.
+    assert clientes_no_resultado == {_CLIENTE_COM_CONTEXTO, _CLIENTE_SEM_CONTEXTO}
+    for resultado_cliente in resultado.resultados_por_cliente:
+        assert resultado_cliente.pacote.estado == EstadoPacotePrestacao.EM_REVISAO
+        assert 'sem_evidencia_documental_real' in resultado_cliente.pacote.motivos
+
+
+def test_cliente_com_ancora_real_nao_e_afetado_por_cliente_irmao_sem_ancora():
+    """1 cliente com âncora real, outro sem -- cada um reflete seu
+    PRÓPRIO estado, nunca contaminado pelo outro."""
+    resultado = executar_ciclo_prestacao(
+        contexto=_CONTEXTO,
+        fonte_clientes=_FonteClientesDoisAtivos(),
+        fonte_requisitos=_FonteRequisitosVazia(),
+        fonte_inventario=_FonteInventarioVazia(),
+        requisitos_base=(),
+        resolucoes_ancora={_CLIENTE_COM_CONTEXTO: _resolucao_ancora(_CLIENTE_COM_CONTEXTO)},
+        competencias_por_cliente={
+            _CLIENTE_COM_CONTEXTO: _COMPETENCIA,
+            _CLIENTE_SEM_CONTEXTO: _COMPETENCIA,
+        },
+    )
+    por_cliente = {r.cliente: r for r in resultado.resultados_por_cliente}
+    assert set(por_cliente) == {_CLIENTE_COM_CONTEXTO, _CLIENTE_SEM_CONTEXTO}
+    assert por_cliente[_CLIENTE_COM_CONTEXTO].pacote.estado != EstadoPacotePrestacao.EM_REVISAO
+    assert por_cliente[_CLIENTE_SEM_CONTEXTO].pacote.estado == EstadoPacotePrestacao.EM_REVISAO
+    assert 'sem_evidencia_documental_real' in por_cliente[_CLIENTE_SEM_CONTEXTO].pacote.motivos
 
 
 def test_necessidade_documento_exige_texto_nao_vazio():

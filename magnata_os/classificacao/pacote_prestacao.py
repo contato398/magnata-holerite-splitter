@@ -101,7 +101,7 @@ def montar_pacote_logico(
 def avaliar_e_montar_pacote(
     cliente: ReferenciaCanonica,
     competencia: ReferenciaCanonica,
-    resolucao: ResultadoResolucaoSemantico,
+    resolucao: Optional[ResultadoResolucaoSemantico],
     fonte_inventario: FonteInventarioPrestacao,
     politica: PoliticaRequisitosPrestacao,
 ) -> PacotePrestacaoCliente:
@@ -110,7 +110,13 @@ def avaliar_e_montar_pacote(
     lógico. Mesma composição de `prestacao_shadow.avaliar_prestacao_
     shadow`, só que devolvendo o pacote em vez do readiness cru --
     NUNCA duplica a lógica daquela função, monta a MESMA entrada uma
-    única vez."""
+    única vez.
+
+    `resolucao=None` (evolução do contrato do ciclo de Prestação V1):
+    repassado como está para `EntradaPrestacaoReadiness` -- vira
+    EM_REVISAO (`sem_evidencia_documental_real`) via
+    `avaliar_prestacao_readiness`, nunca uma resolução fabricada aqui
+    como substituto."""
     requisitos = politica.requisitos_para(cliente, competencia)
     inventario = fonte_inventario.listar(cliente, competencia)
     readiness = avaliar_prestacao_readiness(
