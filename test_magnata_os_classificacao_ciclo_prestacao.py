@@ -7,8 +7,11 @@ from magnata_os.classificacao import ciclo_prestacao as modulo
 from magnata_os.classificacao.ciclo_prestacao import (
     NecessidadeDocumentoPrestacao,
     executar_ciclo_prestacao,
+    executar_ciclo_prestacao_descoberta,
 )
 from magnata_os.classificacao.competencia_esperada_prestacao import ContextoCicloPrestacao
+from magnata_os.classificacao.holerite_obrigatorio_prestacao import TIPO_HOLERITE
+from magnata_os.classificacao.prestacao_readiness import ItemInventarioPrestacao
 from magnata_os.classificacao.contratos import (
     AplicabilidadeDimensao,
     Cardinalidade,
@@ -129,3 +132,144 @@ def test_ciclo_prestacao_nunca_hardcoda_nome_de_cliente():
     for termo in proibidos:
         achados = {s for s in literais if termo in s}
         assert not achados, f'termo proibido em literal de código: {termo!r} em {achados!r}'
+
+
+# ==== EVOLUÇÃO DO CONTRATO DO CICLO V1 — DESCOBERTA SEM ÂNCORA (Incremento 2) ====
+
+
+class _FonteInventarioComItens:
+    def __init__(self, itens):
+        self._itens = itens
+
+    def listar(self, cliente, competencia):
+        return tuple(
+            item for item in self._itens
+            if item.cliente == cliente and item.competencia == competencia
+        )
+
+
+class _FonteColaboradoresEsperadosFake:
+    def __init__(self, colaboradores):
+        self._colaboradores = colaboradores
+
+    def colaboradores_esperados_para(self, cliente, contexto):
+        return self._colaboradores
+
+
+def test_descoberta_gera_necessidades_sem_nenhuma_ancora():
+    """A âncora nunca é exigida por `executar_ciclo_prestacao_descoberta`
+    -- mesmos 2 clientes de `_FonteClientesDoisAtivos`, sem
+    `resolucoes_ancora` em lugar nenhum da chamada (o parâmetro nem
+    existe nesta função)."""
+    resultado = executar_ciclo_prestacao_descoberta(
+        contexto=_CONTEXTO,
+        fonte_clientes=_FonteClientesDoisAtivos(),
+        fonte_requisitos=_FonteRequisitosVazia(),
+        fonte_inventario=_FonteInventarioVazia(),
+        requisitos_base=(RequisitoDocumentalPrestacao('Extrato'),),
+        competencias_por_cliente={
+            _CLIENTE_COM_CONTEXTO: _COMPETENCIA,
+            _CLIENTE_SEM_CONTEXTO: _COMPETENCIA,
+        },
+    )
+    # Sem competência: nenhum cliente ficou de fora aqui (ambos têm
+    # competência, diferente do teste de readiness que só dá competência
+    # a 1 deles) -- os dois devem aparecer com a necessidade de Extrato.
+    clientes_no_resultado = {r.cliente for r in resultado.resultados_por_cliente}
+    assert clientes_no_resultado == {_CLIENTE_COM_CONTEXTO, _CLIENTE_SEM_CONTEXTO}
+    for resultado_cliente in resultado.resultados_por_cliente:
+        assert resultado_cliente.necessidades == (
+            NecessidadeDocumentoPrestacao(
+                cliente=resultado_cliente.cliente, competencia=_COMPETENCIA,
+                tipo_documental='Extrato', motivo_exigencia='requisito_documental_da_politica_efetiva',
+                fontes_ainda_nao_consultadas=('gmail', 'airtable', 'armazenamento_documental'),
+            ),
+        )
+
+
+def test_descoberta_sem_competencia_conhecida_fica_de_fora_nunca_inventa():
+    """Mesma disciplina de `executar_ciclo_prestacao`: cliente ativo sem
+    competência conhecida nunca aparece no resultado -- nunca inventa."""
+    resultado = executar_ciclo_prestacao_descoberta(
+        contexto=_CONTEXTO,
+        fonte_clientes=_FonteClientesDoisAtivos(),
+        fonte_requisitos=_FonteRequisitosVazia(),
+        fonte_inventario=_FonteInventarioVazia(),
+        requisitos_base=(RequisitoDocumentalPrestacao('Extrato'),),
+        competencias_por_cliente={_CLIENTE_COM_CONTEXTO: _COMPETENCIA},
+    )
+    clientes_no_resultado = {r.cliente for r in resultado.resultados_por_cliente}
+    assert clientes_no_resultado == {_CLIENTE_COM_CONTEXTO}
+
+
+def test_descoberta_inventario_parcial_reduz_necessidades_corretamente():
+    """Inventário já contendo 1 dos 2 tipos exigidos reduz a necessidade
+    só ao tipo realmente ausente -- reaproveita `calcular_tipos_faltantes`
+    (mesma função usada pelo readiness real, Incremento 1)."""
+    item_presente = ItemInventarioPrestacao(
+        documento_id='doc-extrato-1', tipo_documental='Extrato',
+        cliente=_CLIENTE_COM_CONTEXTO, competencia=_COMPETENCIA,
+    )
+    resultado = executar_ciclo_prestacao_descoberta(
+        contexto=_CONTEXTO,
+        fonte_clientes=_FonteClientesDoisAtivos(),
+        fonte_requisitos=_FonteRequisitosVazia(),
+        fonte_inventario=_FonteInventarioComItens((item_presente,)),
+        requisitos_base=(
+            RequisitoDocumentalPrestacao('Extrato'),
+            RequisitoDocumentalPrestacao('FGTS'),
+        ),
+        competencias_por_cliente={_CLIENTE_COM_CONTEXTO: _COMPETENCIA},
+    )
+    (resultado_cliente,) = resultado.resultados_por_cliente
+    tipos_pedidos = {n.tipo_documental for n in resultado_cliente.necessidades}
+    assert tipos_pedidos == {'FGTS'}
+
+
+def test_descoberta_holerite_por_colaborador_continua_coerente():
+    """Holerite obrigatório por CARDINALIDADE colaborador (nunca por
+    contagem simples) continua coerente na descoberta -- mesma função
+    `avaliar_obrigatoriedade_por_tipo_documental` usada pelo readiness
+    real, mesmo motivo de exigência, nunca um segundo mecanismo."""
+    colaborador_com_holerite = ReferenciaCanonica('COLABORADOR', 'colab-1')
+    colaborador_sem_holerite = ReferenciaCanonica('COLABORADOR', 'colab-2')
+    item_holerite = ItemInventarioPrestacao(
+        documento_id='doc-holerite-1', tipo_documental=TIPO_HOLERITE,
+        cliente=_CLIENTE_COM_CONTEXTO, competencia=_COMPETENCIA,
+        colaborador=colaborador_com_holerite,
+    )
+    resultado = executar_ciclo_prestacao_descoberta(
+        contexto=_CONTEXTO,
+        fonte_clientes=_FonteClientesDoisAtivos(),
+        fonte_requisitos=_FonteRequisitosVazia(),
+        fonte_inventario=_FonteInventarioComItens((item_holerite,)),
+        requisitos_base=(RequisitoDocumentalPrestacao(TIPO_HOLERITE),),
+        competencias_por_cliente={_CLIENTE_COM_CONTEXTO: _COMPETENCIA},
+        fonte_colaboradores_esperados=_FonteColaboradoresEsperadosFake(
+            (colaborador_com_holerite, colaborador_sem_holerite),
+        ),
+    )
+    (resultado_cliente,) = resultado.resultados_por_cliente
+    # Holerite tratado por cardinalidade colaborador -- necessidade
+    # genérica de "Holerite" nunca aparece (excluída propositalmente),
+    # só a necessidade específica do colaborador faltante.
+    assert all(n.tipo_documental == TIPO_HOLERITE for n in resultado_cliente.necessidades)
+    assert len(resultado_cliente.necessidades) == 1
+    necessidade = resultado_cliente.necessidades[0]
+    assert necessidade.colaborador == colaborador_sem_holerite
+    assert necessidade.motivo_exigencia == 'holerite_obrigatorio_por_colaborador_esperado'
+
+
+def test_descoberta_nunca_monta_pacote():
+    """`ResultadoDescobertaCliente` nunca tem campo `pacote` -- não
+    existe pacote sem readiness real avaliada."""
+    resultado = executar_ciclo_prestacao_descoberta(
+        contexto=_CONTEXTO,
+        fonte_clientes=_FonteClientesDoisAtivos(),
+        fonte_requisitos=_FonteRequisitosVazia(),
+        fonte_inventario=_FonteInventarioVazia(),
+        requisitos_base=(),
+        competencias_por_cliente={_CLIENTE_COM_CONTEXTO: _COMPETENCIA},
+    )
+    (resultado_cliente,) = resultado.resultados_por_cliente
+    assert not hasattr(resultado_cliente, 'pacote')

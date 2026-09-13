@@ -44,7 +44,7 @@ from .pacote_prestacao import (
     combinar_pacote_com_obrigatoriedade_documental,
 )
 from .politica_requisitos_prestacao import OverrideRequisitosPrestacao, PoliticaRequisitosPrestacao
-from .prestacao_readiness import RequisitoDocumentalPrestacao
+from .prestacao_readiness import RequisitoDocumentalPrestacao, calcular_tipos_faltantes
 
 
 @dataclasses.dataclass(frozen=True)
@@ -271,3 +271,144 @@ def executar_ciclo_prestacao(
         ))
 
     return ResultadoCicloPrestacao(contexto=contexto, resultados_por_cliente=tuple(resultados))
+
+
+# ==== EVOLUÇÃO DO CONTRATO DO CICLO V1 — DESCOBERTA SEM ÂNCORA ====
+#
+# Achado da auditoria (Ultraplan "Evolução do Contrato do Ciclo de
+# Prestação V1"): dentro de `executar_ciclo_prestacao`, acima, a
+# dependência de `resolucao_ancora` está concentrada em UMA única
+# chamada (`avaliar_e_montar_pacote`, que monta `EntradaPrestacaoReadiness`
+# — campo `resolucao` obrigatório, sem default). Todo o resto da função
+# -- política efetiva do cliente, obrigatoriedade por colaborador,
+# cálculo de necessidades -- NUNCA usa a âncora. A função abaixo isola
+# exatamente esse "resto": descobre `NecessidadeDocumentoPrestacao` a
+# partir de clientes/competência/requisitos/inventário JÁ CONHECIDOS,
+# sem exigir nenhuma resolução semântica real -- porque no início de um
+# ciclo real nenhum documento deste ciclo foi resolvido ainda (não dá
+# pra ter uma âncora real antes de adquirir os documentos que ela
+# deveria ancorar). `executar_ciclo_prestacao` (acima) continua sendo,
+# sem nenhuma alteração de comportamento, a etapa de READINESS (só
+# roda depois da aquisição, quando âncoras reais podem existir).
+#
+# Nunca fabrica pacote, nunca fabrica resolução, nunca duplica a regra
+# de "o que falta" (reaproveita `calcular_tipos_faltantes`, extraída de
+# `prestacao_readiness.py` no incremento anterior desta mesma missão).
+
+
+@dataclasses.dataclass(frozen=True)
+class ResultadoDescobertaCliente:
+    """Saída da descoberta para 1 cliente -- deliberadamente mais
+    estreita que `ResultadoClientePrestacao`: nunca carrega `pacote`
+    (não existe pacote sem readiness real), só o que é necessário para
+    orientar a aquisição documental."""
+
+    cliente: ReferenciaCanonica
+    competencia: ReferenciaCanonica
+    necessidades: Tuple[NecessidadeDocumentoPrestacao, ...] = ()
+    requisitos_nao_configurados: Tuple[str, ...] = ()
+
+
+@dataclasses.dataclass(frozen=True)
+class ResultadoDescobertaCiclo:
+    contexto: ContextoCicloPrestacao
+    resultados_por_cliente: Tuple[ResultadoDescobertaCliente, ...]
+
+
+def executar_ciclo_prestacao_descoberta(
+    contexto: ContextoCicloPrestacao,
+    fonte_clientes: FonteClientesPrestacao,
+    fonte_requisitos: FonteRequisitosPrestacao,
+    fonte_inventario: FonteInventarioPrestacao,
+    requisitos_base: Tuple[RequisitoDocumentalPrestacao, ...],
+    competencias_por_cliente: Mapping[ReferenciaCanonica, ReferenciaCanonica],
+    tipos_condicionais_para_auditoria: Tuple[str, ...] = (),
+    fonte_colaboradores_esperados: Optional[FonteColaboradoresEsperadosPrestacao] = None,
+    tipos_obrigatorios_por_colaborador: Tuple[str, ...] = (TIPO_HOLERITE,),
+) -> ResultadoDescobertaCiclo:
+    """Descobre necessidades documentais SEM exigir `resolucoes_ancora`
+    -- fase que roda ANTES de qualquer aquisição/resolução real neste
+    ciclo. Mesma composição de dependências de `executar_ciclo_prestacao`
+    (propositalmente, para que a política efetiva/obrigatoriedade por
+    colaborador nunca divirjam entre descoberta e readiness), menos
+    `resolucoes_ancora` -- que aqui simplesmente não existe ainda.
+
+    `competencias_por_cliente`: mesma competência geral por cliente já
+    usada no passe de readiness (ver `competencia_esperada_prestacao.py`
+    -- V1 suporta só 1 competência geral por cliente; ver
+    `verificar_politica_sem_override_por_tipo`, chamada por quem monta
+    esse mapa, nunca aqui).
+
+    Nunca monta `PacotePrestacaoCliente` (não existe pacote sem
+    readiness real avaliada). Nunca duplica a regra de "o que falta" --
+    reaproveita `calcular_tipos_faltantes` (`prestacao_readiness.py`),
+    a MESMA função que `avaliar_prestacao_readiness` usa no passe 2,
+    garantindo que descoberta e readiness nunca divirjam sobre o que
+    conta como faltante para o MESMO inventário."""
+    resultados = []
+    for cliente in fonte_clientes.listar_ativos(contexto):
+        competencia = competencias_por_cliente.get(cliente)
+        if competencia is None:
+            # Cliente ativo, mas sem competência conhecida ainda --
+            # nada a descobrir para ele nesta execução (nunca inventa
+            # competência; mesma disciplina de `executar_ciclo_prestacao`).
+            continue
+
+        politica, _resultados_normalizacao = _politica_efetiva_para_cliente(
+            cliente, contexto, requisitos_base, fonte_requisitos)
+        requisitos = politica.requisitos_para(cliente, competencia)
+        inventario = fonte_inventario.listar(cliente, competencia)
+
+        tipos_faltantes = calcular_tipos_faltantes(requisitos, inventario)
+
+        # Mesma lógica de obrigatoriedade por colaborador de
+        # `executar_ciclo_prestacao` -- nunca duplicada, nunca
+        # recalculada de outro jeito; `avaliar_obrigatoriedade_por_tipo_
+        # documental` já não dependia de âncora antes desta missão.
+        resultados_obrigatoriedade = {}
+        if fonte_colaboradores_esperados is not None:
+            colaboradores_esperados = fonte_colaboradores_esperados.colaboradores_esperados_para(cliente, contexto)
+            for tipo_obrigatorio in tipos_obrigatorios_por_colaborador:
+                resultados_obrigatoriedade[tipo_obrigatorio] = avaliar_obrigatoriedade_por_tipo_documental(
+                    cliente, competencia, tipo_obrigatorio, colaboradores_esperados, inventario
+                )
+
+        tipos_excluir_necessidade_generica = (
+            set(tipos_obrigatorios_por_colaborador) if fonte_colaboradores_esperados is not None else set()
+        )
+        tipos_para_necessidade_generica = tuple(
+            tipo for tipo in tipos_faltantes if tipo not in tipos_excluir_necessidade_generica
+        )
+        necessidades = tuple(
+            NecessidadeDocumentoPrestacao(
+                cliente=cliente, competencia=competencia, tipo_documental=tipo,
+                motivo_exigencia='requisito_documental_da_politica_efetiva',
+                fontes_ainda_nao_consultadas=('gmail', 'airtable', 'armazenamento_documental'),
+            )
+            for tipo in tipos_para_necessidade_generica
+        )
+        for tipo_obrigatorio, resultado_obrigatoriedade in resultados_obrigatoriedade.items():
+            if resultado_obrigatoriedade.colaboradores_faltantes:
+                necessidades = necessidades + tuple(
+                    NecessidadeDocumentoPrestacao(
+                        cliente=cliente, competencia=competencia, tipo_documental=tipo_obrigatorio,
+                        motivo_exigencia=f'{tipo_obrigatorio.lower()}_obrigatorio_por_colaborador_esperado',
+                        fontes_ainda_nao_consultadas=('gmail', 'airtable', 'armazenamento_documental'),
+                        colaborador=colaborador_faltante,
+                    )
+                    for colaborador_faltante in resultado_obrigatoriedade.colaboradores_faltantes
+                )
+
+        requisitos_nao_configurados = ()
+        if tipos_condicionais_para_auditoria:
+            obter_nao_configurados = getattr(fonte_requisitos, 'requisitos_nao_configurados_para', None)
+            if obter_nao_configurados is not None:
+                requisitos_nao_configurados = obter_nao_configurados(
+                    cliente, contexto, tipos_condicionais_para_auditoria)
+
+        resultados.append(ResultadoDescobertaCliente(
+            cliente=cliente, competencia=competencia, necessidades=necessidades,
+            requisitos_nao_configurados=requisitos_nao_configurados,
+        ))
+
+    return ResultadoDescobertaCiclo(contexto=contexto, resultados_por_cliente=tuple(resultados))
