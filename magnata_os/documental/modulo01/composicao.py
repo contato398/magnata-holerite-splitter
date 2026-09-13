@@ -72,7 +72,12 @@ import dataclasses
 from datetime import datetime
 from typing import Callable, Optional
 
+from .adaptador_entrada_duravel import AdaptadorEntradaDuravel
 from .adapters.email_captura import AdapterCapturaEmail, FonteMensagensEmail
+from .armazenamento import (
+    ArmazenamentoArquivos,
+    ArmazenamentoArquivosEmMemoria,
+)
 from .repositorio import RepositorioDocumentos, RepositorioHistorico
 from .repositorio_esteira import RepositorioEstadosEsteira, RepositorioLotes
 from .servico_avanco_esteira import ServicoAvancoEsteira
@@ -103,14 +108,16 @@ def construir_pipeline_modulo01(
     fonte_mensagens: FonteMensagensEmail,
     fonte_candidatos_funcionario: Optional[FonteCandidatosFuncionario] = None,
     relogio: Optional[Callable[[], datetime]] = None,
+    armazenamento_arquivos: Optional[ArmazenamentoArquivos] = None,
 ) -> PipelineModulo01:
     """Monta o pipeline completo do Módulo 01 a partir de dependências
     já construídas -- nunca decide backend, nunca lê configuração,
     nunca abre conexão/rede. Todas as dependências obrigatórias são
     keyword-only e sem default (exceto `fonte_candidatos_funcionario`,
     que preserva o default seguro `None` já existente em
-    `ServicoCriacaoLote`, e `relogio`, opcional para testes
-    determinísticos) -- nenhum fallback silencioso, mesmo espírito de
+    `ServicoCriacaoLote`, `relogio`, opcional para testes
+    determinísticos, e `armazenamento_arquivos`, que default para
+    em memória) -- nenhum fallback silencioso, mesmo espírito de
     `orquestrador/fabrica_repositorio_execucoes.py`.
 
     `relogio`, quando fornecido, é repassado aos três serviços que o
@@ -119,11 +126,19 @@ def construir_pipeline_modulo01(
     o "agora" do pipeline inteiro com um único relógio fake, nunca três
     relógios divergentes. Quando `None`, cada serviço usa seu próprio
     default (`datetime.now(timezone.utc)`).
+
+    `armazenamento_arquivos`, quando fornecido, é injetado no
+    `AdaptadorEntradaDuravel` para persistência de blobs. Quando `None`,
+    usa `ArmazenamentoArquivosEmMemoria()` (padrão para testes).
     """
     kwargs_relogio = {'relogio': relogio} if relogio is not None else {}
+    armazenamento_arquivos = armazenamento_arquivos or ArmazenamentoArquivosEmMemoria()
 
-    servico_entrada = ServicoEntradaDocumental(
-        repositorio_documentos, repositorio_historico, **kwargs_relogio,
+    servico_entrada = AdaptadorEntradaDuravel(
+        repositorio_documentos=repositorio_documentos,
+        repositorio_historico=repositorio_historico,
+        armazenamento=armazenamento_arquivos,
+        **kwargs_relogio,
     )
     servico_avanco = ServicoAvancoEsteira(
         repositorio_estados_esteira, repositorio_historico, **kwargs_relogio,
