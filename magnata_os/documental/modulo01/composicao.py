@@ -74,10 +74,7 @@ from typing import Callable, Optional
 
 from .adaptador_entrada_duravel import AdaptadorEntradaDuravel
 from .adapters.email_captura import AdapterCapturaEmail, FonteMensagensEmail
-from .armazenamento import (
-    ArmazenamentoArquivos,
-    ArmazenamentoArquivosEmMemoria,
-)
+from .armazenamento import ArmazenamentoArquivos
 from .repositorio import RepositorioDocumentos, RepositorioHistorico
 from .repositorio_esteira import RepositorioEstadosEsteira, RepositorioLotes
 from .servico_avanco_esteira import ServicoAvancoEsteira
@@ -106,18 +103,17 @@ def construir_pipeline_modulo01(
     repositorio_lotes: RepositorioLotes,
     repositorio_estados_esteira: RepositorioEstadosEsteira,
     fonte_mensagens: FonteMensagensEmail,
+    armazenamento_arquivos: ArmazenamentoArquivos,
     fonte_candidatos_funcionario: Optional[FonteCandidatosFuncionario] = None,
     relogio: Optional[Callable[[], datetime]] = None,
-    armazenamento_arquivos: Optional[ArmazenamentoArquivos] = None,
 ) -> PipelineModulo01:
     """Monta o pipeline completo do Módulo 01 a partir de dependências
     já construídas -- nunca decide backend, nunca lê configuração,
     nunca abre conexão/rede. Todas as dependências obrigatórias são
     keyword-only e sem default (exceto `fonte_candidatos_funcionario`,
     que preserva o default seguro `None` já existente em
-    `ServicoCriacaoLote`, `relogio`, opcional para testes
-    determinísticos, e `armazenamento_arquivos`, que default para
-    em memória) -- nenhum fallback silencioso, mesmo espírito de
+    `ServicoCriacaoLote`, e `relogio`, opcional para testes
+    determinísticos) -- nenhum fallback silencioso, mesmo espírito de
     `orquestrador/fabrica_repositorio_execucoes.py`.
 
     `relogio`, quando fornecido, é repassado aos três serviços que o
@@ -127,12 +123,34 @@ def construir_pipeline_modulo01(
     relógios divergentes. Quando `None`, cada serviço usa seu próprio
     default (`datetime.now(timezone.utc)`).
 
-    `armazenamento_arquivos`, quando fornecido, é injetado no
-    `AdaptadorEntradaDuravel` para persistência de blobs. Quando `None`,
-    usa `ArmazenamentoArquivosEmMemoria()` (padrão para testes).
-    """
+    ROLLBACK DE REGRESSÃO (correção pós-merge PR #158): esta função
+    chegou a aceitar `armazenamento_arquivos: Optional[...] = None` com
+    fallback silencioso para `ArmazenamentoArquivosEmMemoria()` quando
+    omitido -- exatamente o "fallback silencioso" que esta docstring
+    sempre disse nunca fazer (mesmo espírito de
+    `fabrica_repositorio_execucoes.py`, citado acima). Um caminho
+    descrito como durável não pode decidir sozinho, em silêncio, por um
+    backend efêmero -- isso mascararia perda de dado real como
+    sucesso. `armazenamento_arquivos` é agora OBRIGATÓRIO, sem default:
+    quem monta o pipeline decide o backend sempre, explicitamente --
+    para teste/uso efêmero, `armazenamento_arquivos=
+    ArmazenamentoArquivosEmMemoria()` (`.armazenamento`, já existente,
+    nenhuma classe nova); para ingestão durável real, o adapter físico
+    correspondente (ex.: S3), quando autorizado. A guarda abaixo cobre
+    também o caso de alguém passar `armazenamento_arquivos=None`
+    explicitamente -- Python não impede isso só por remover o default
+    da assinatura, então a rejeição é feita em runtime, não apenas por
+    tipagem. Nenhum backend novo criado por esta correção."""
+    if armazenamento_arquivos is None:
+        raise ValueError(
+            'armazenamento_arquivos é obrigatório e não pode ser None -- '
+            'construir_pipeline_modulo01 nunca decide backend sozinho. '
+            'Para uso efêmero/teste, passe explicitamente '
+            'ArmazenamentoArquivosEmMemoria() (magnata_os.documental.'
+            'modulo01.armazenamento); para ingestão durável real, o '
+            'adapter físico correspondente já autorizado.'
+        )
     kwargs_relogio = {'relogio': relogio} if relogio is not None else {}
-    armazenamento_arquivos = armazenamento_arquivos or ArmazenamentoArquivosEmMemoria()
 
     servico_entrada = AdaptadorEntradaDuravel(
         repositorio_documentos=repositorio_documentos,
