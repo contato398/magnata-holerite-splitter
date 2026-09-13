@@ -1,14 +1,19 @@
 """Composição persistente REAL de ciclos de Prestação de Contas — V1.
 
-FLUXO COMPLETO:
+FLUXO COMPLETO (evolução do contrato do ciclo de Prestação V1,
+Incremento 7 -- ver docstring de `executar_ciclo_prestacao_persistente`
+para o detalhe de cada passo):
 
-1. Criar ou retomar ExecucaoPrestacao (rastreamento UUID opaco)
-2. Executar ciclo_prestacao primeira vez (necessidades documentais)
-3. Aquisição readonly por NecessidadeDocumentoPrestacao (porta injetável)
-4. Resolução semântica segura
-5. Inventário em memória + deduplicação
+1. Validar política de competência V1 (fail-closed por tipo_documental)
+2. Criar ou retomar ExecucaoPrestacao (rastreamento UUID opaco)
+3. Descoberta de necessidades documentais SEM exigir nenhuma âncora
+   (`executar_ciclo_prestacao_descoberta`)
+4. Aquisição readonly (documentos brutos → corredor → inventário +
+   resoluções semânticas REAIS retidas por documento)
+5. Seleção/validação de âncora real por cliente
+   (`avaliar_candidatos_ancora`) -- nunca uma resolução fabricada
 6. FonteInventarioPrestacaoComposta (base + adquirido)
-7. Executar ciclo_prestacao segunda vez (com inventário recomposto)
+7. Executar ciclo_prestacao com a âncora real (ou ausência explícita)
 8. Readiness e pacote lógico
 9. Atualizar ExecucaoPrestacao com estado final
 
@@ -47,8 +52,12 @@ from .ciclo_prestacao import (
     NecessidadeDocumentoPrestacao,
     ResultadoCicloPrestacao,
     executar_ciclo_prestacao,
+    executar_ciclo_prestacao_descoberta,
 )
-from .competencia_esperada_prestacao import PoliticaCompetenciaPrestacao
+from .competencia_esperada_prestacao import (
+    PoliticaCompetenciaPrestacao,
+    verificar_politica_sem_override_por_tipo,
+)
 from .contratos import (
     DimensaoResolucao,
     EstadoResolucaoDimensao,
@@ -565,19 +574,61 @@ def avaliar_candidatos_ancora(
     return ResultadoAvaliacaoCandidatosAncora(ancora=escolhido)
 
 
+def _candidatos_reais_para_cliente(
+    todos_candidatos: Tuple[ResultadoResolucaoSemantico, ...],
+    cliente: ReferenciaCanonica,
+) -> Tuple[ResultadoResolucaoSemantico, ...]:
+    """Particiona o conjunto GLOBAL de resoluções reais desta aquisição
+    (Incremento 7): já que o corredor resolve CLIENTE a partir do
+    CONTEÚDO de cada documento (`cliente_do_ciclo=None`, "deixar
+    corredor decidir" -- nunca há um cliente esperado no momento da
+    aquisição, ver `_adquirir_inventario_via_corredor`), a ÚNICA chave
+    de associação real disponível entre um documento e um cliente é a
+    própria dimensão CLIENTE já resolvida por ele -- nunca uma
+    suposição de "para qual necessidade este documento foi buscado"
+    (isso nem existe hoje: a aquisição é em bloco, não por
+    necessidade).
+
+    Um candidato cuja dimensão CLIENTE não está RESOLVIDA com
+    exatamente 1 valor (ambíguo/conflito/não encontrado/etc.) nunca é
+    atribuído a NENHUM cliente aqui -- não sai deste filtro para
+    nenhuma chamada de `avaliar_candidatos_ancora`, em nenhum cliente;
+    ele só entraria no cômputo de outro cliente por engano se
+    coincidisse por acidente, o que esta função evita ao exigir
+    igualdade estrita com o cliente pedido."""
+    return tuple(
+        candidato for candidato in todos_candidatos
+        if _dimensao_resolvida_com_valor_unico(candidato, DimensaoResolucao.CLIENTE) == cliente
+    )
+
+
 def executar_ciclo_prestacao_persistente(
     contexto: ContextoComposicaoPrestacao,
     execucao_id: Optional[str] = None,
 ) -> ExecucaoPrestacao:
     """Executa ciclo persistente COMPLETO de Prestação de Contas.
 
-    Fluxo:
+    Fluxo (evolução do contrato do ciclo de Prestação V1, Incremento
+    7): descoberta sem âncora -> aquisição documental -> retenção das
+    resoluções reais -> avaliação/seleção de âncoras reais -> readiness
+    com âncora real ou ausência explícita -> atualização da execução.
+
     1. Criar ou retomar ExecucaoPrestacao
-    2. Executar ciclo_prestacao primeira vez (necessidades)
-    3. Aquisição readonly per necessidade
-    4. Inventário recomposto
-    5. Executar ciclo_prestacao segunda vez (readiness)
-    6. Atualizar estado final
+    2. Validar política de competência V1 (fail-closed: nenhum
+       deslocamento por tipo_documental suportado nesta V1)
+    3. Descoberta de necessidades SEM exigir nenhuma âncora
+       (`executar_ciclo_prestacao_descoberta`)
+    4. Aquisição readonly (documentos brutos → corredor → inventário +
+       resoluções semânticas REAIS retidas por documento)
+    5. Seleção/validação de âncora real por cliente
+       (`avaliar_candidatos_ancora`, nunca fabricada) -- cai de volta
+       para `contexto.resolucoes_ancora` só quando NENHUMA evidência
+       real foi adquirida nesta execução para aquele cliente
+       (compatibilidade com wiring que já injeta a âncora pronta e
+       nunca aciona aquisição via corredor)
+    6. Segunda execução do ciclo (readiness com âncora real, ou
+       ausência explícita -- nunca uma resolução fabricada)
+    7. Atualizar estado final da ExecucaoPrestacao
 
     Args:
         contexto: ContextoComposicaoPrestacao com todas dependências
@@ -588,8 +639,24 @@ def executar_ciclo_prestacao_persistente(
 
     Raises:
         ValueError: Se execução não encontrada, estado inválido, etc.
+        PoliticaCompetenciaPorTipoNaoSuportadaError: Se
+            `contexto.politica_competencia` tiver deslocamento de
+            competência específico por tipo_documental -- contrato V1
+            só suporta 1 competência geral por cliente (levantada ANTES
+            de criar/retomar a ExecucaoPrestacao -- config inválida
+            nunca chega a virar uma execução rastreada).
     """
-    # ==== PASSO 1: Criar ou retomar ExecucaoPrestacao ====
+    # ==== PASSO 1: Validar política de competência V1 ====
+    # Fail-closed (evolução do contrato do ciclo de Prestação V1,
+    # Incremento 3): levantada aqui, ANTES de criar/retomar a
+    # ExecucaoPrestacao -- mesmo padrão de `criar_e_persistir_execucao`
+    # (valida `competencia_base` antes de persistir). `None` (política
+    # não informada) nunca é avaliado -- comportamento anterior
+    # preservado para quem não usa `PoliticaCompetenciaPrestacao`.
+    if contexto.politica_competencia is not None:
+        verificar_politica_sem_override_por_tipo(contexto.politica_competencia)
+
+    # ==== PASSO 2: Criar ou retomar ExecucaoPrestacao ====
     if execucao_id:
         execucao = retomar_execucao_por_id(execucao_id, contexto.repositorio_execucoes)
     else:
@@ -599,31 +666,35 @@ def executar_ciclo_prestacao_persistente(
         )
 
     try:
-        # ==== PASSO 2: Primeira execução do ciclo (sem inventário) ====
         ano_str, mes_str = contexto.competencia_base.split('-')
         ciclo_contexto = ContextoCicloPrestacao(
             competencia_base=(int(ano_str), int(mes_str))
         )
 
-        # Inventário vazio (primeiro pass)
+        # ==== PASSO 3: Descoberta de necessidades SEM âncora ====
+        # `executar_ciclo_prestacao_descoberta` (Incremento 2) nunca
+        # exige `resolucoes_ancora` -- usa só política+inventário já
+        # conhecido para saber o que falta. Substitui a antiga
+        # "primeira execução do ciclo" (que precisava de uma âncora já
+        # pronta em `contexto.resolucoes_ancora`, mesmo sem nenhum
+        # documento ainda adquirido -- ordem invertida em relação ao
+        # que esta missão pede).
         inventario_vazio = InventarioPrestacaoEmMemoria()
-
-        resultado_ciclo_1 = executar_ciclo_prestacao(
+        resultado_descoberta = executar_ciclo_prestacao_descoberta(
             contexto=ciclo_contexto,
             fonte_clientes=contexto.fonte_clientes,
             fonte_requisitos=contexto.fonte_requisitos,
             fonte_inventario=inventario_vazio,
             requisitos_base=contexto.requisitos_base,
-            resolucoes_ancora=contexto.resolucoes_ancora,
             competencias_por_cliente=contexto.competencias_por_cliente,
             fonte_colaboradores_esperados=contexto.fonte_colaboradores_esperados,
             tipos_obrigatorios_por_colaborador=contexto.tipos_obrigatorios_por_colaborador,
         )
 
-        # ==== PASSO 3: Aquisição canônica (documentos brutos → corredor → inventário) ====
-        # Coletar todas as necessidades do resultado do ciclo 1
+        # ==== PASSO 4: Aquisição canônica (documentos brutos → corredor → inventário) ====
+        # Coletar todas as necessidades da descoberta.
         necessidades: list = []
-        for resultado_cliente in resultado_ciclo_1.resultados_por_cliente:
+        for resultado_cliente in resultado_descoberta.resultados_por_cliente:
             necessidades.extend(resultado_cliente.necessidades)
 
         # Aquisição canônica: documentos brutos → corredor → inventário em
@@ -633,27 +704,43 @@ def executar_ciclo_prestacao_persistente(
         # necessidade real; inventário vazio (sem custo de I/O) quando
         # não há nada a adquirir.
         if contexto.repositorio_documentos and contexto.armazenamento_arquivos and necessidades:
-            ano_str, mes_str = contexto.competencia_base.split('-')
-            ciclo_para_corredor = ContextoCicloPrestacao(
-                competencia_base=(int(ano_str), int(mes_str))
-            )
             inventario_adquirido, resultados_aquisicao = _adquirir_inventario_via_corredor(
-                contexto, ciclo_para_corredor
+                contexto, ciclo_contexto
             )
         else:
             inventario_adquirido = InventarioPrestacaoEmMemoria()
             resultados_aquisicao = ()
 
-        # `resultados_aquisicao` (Incremento 4) retém a resolução REAL
-        # de cada documento processado com sucesso -- ainda não
-        # consumida aqui (rewiring completo do fluxo para usar âncoras
-        # reais é Incremento 7 desta mesma missão; esta função por ora
-        # continua produzindo o mesmo `inventario_adquirido`/resultado
-        # final de antes). Mantido como variável nomeada (não
-        # descartado em `_`) para deixar explícito que existe e será
-        # consumido, nunca perdido silenciosamente de novo.
+        # ==== PASSO 5: Retenção + seleção/validação de âncora real ====
+        # Flatten de TODAS as resoluções semânticas REAIS produzidas
+        # nesta aquisição (nunca fabricadas) -- Incremento 4.
+        candidatos_reais_globais = tuple(
+            resultado_execucao.resultado_corredor.resolucao_semantica
+            for resultado_aquisicao in resultados_aquisicao
+            for resultado_execucao in resultado_aquisicao.resultados_corredor
+            if resultado_execucao.resultado_corredor.resolucao_semantica is not None
+        )
 
-        # ==== PASSO 4: Compor fonte de inventário ====
+        resolucoes_ancora_efetivas: dict = {}
+        for resultado_cliente in resultado_descoberta.resultados_por_cliente:
+            cliente = resultado_cliente.cliente
+            competencia = resultado_cliente.competencia
+            candidatos_do_cliente = _candidatos_reais_para_cliente(
+                candidatos_reais_globais, cliente
+            )
+            avaliacao = avaliar_candidatos_ancora(candidatos_do_cliente, cliente, competencia)
+            # Evidência REAL desta execução tem prioridade; só cai de
+            # volta para uma âncora pré-informada em
+            # `contexto.resolucoes_ancora` quando NADA foi adquirido
+            # para este cliente nesta execução (compatibilidade com
+            # wiring que injeta a âncora pronta e nunca aciona
+            # aquisição via corredor -- nunca o inverso, nunca uma
+            # âncora pré-informada sobrepõe evidência real mais nova).
+            ancora_efetiva = avaliacao.ancora or contexto.resolucoes_ancora.get(cliente)
+            if ancora_efetiva is not None:
+                resolucoes_ancora_efetivas[cliente] = ancora_efetiva
+
+        # ==== PASSO 6: Compor fonte de inventário ====
         # Usar FonteInventarioPrestacaoComposta para unir:
         # 1. Inventário base pré-existente (se fornecido)
         # 2. Inventário adquirido neste ciclo (documentos processados via corredor)
@@ -670,20 +757,20 @@ def executar_ciclo_prestacao_persistente(
             fontes=tuple(fontes_para_composicao)
         )
 
-        # ==== PASSO 4: Segunda execução do ciclo (com inventário) ====
+        # ==== PASSO 7: Segunda execução do ciclo (readiness com âncora real ou ausência explícita) ====
         resultado_ciclo_2 = executar_ciclo_prestacao(
             contexto=ciclo_contexto,
             fonte_clientes=contexto.fonte_clientes,
             fonte_requisitos=contexto.fonte_requisitos,
             fonte_inventario=fonte_composta,
             requisitos_base=contexto.requisitos_base,
-            resolucoes_ancora=contexto.resolucoes_ancora,
+            resolucoes_ancora=resolucoes_ancora_efetivas,
             competencias_por_cliente=contexto.competencias_por_cliente,
             fonte_colaboradores_esperados=contexto.fonte_colaboradores_esperados,
             tipos_obrigatorios_por_colaborador=contexto.tipos_obrigatorios_por_colaborador,
         )
 
-        # ==== PASSO 5: Determinar estado final ====
+        # ==== PASSO 8: Determinar estado final ====
         # Encontrar o "pior" estado entre todos os clientes
         estado_pior_pacote = EstadoPacotePrestacao.PRONTO
         for resultado_cliente in resultado_ciclo_2.resultados_por_cliente:
@@ -696,7 +783,7 @@ def executar_ciclo_prestacao_persistente(
                 if estado_pior_pacote in (EstadoPacotePrestacao.PRONTO, EstadoPacotePrestacao.EM_REVISAO):
                     estado_pior_pacote = EstadoPacotePrestacao.BLOQUEADO
 
-        # ==== PASSO 6: Atualizar ExecucaoPrestacao ====
+        # ==== PASSO 9: Atualizar ExecucaoPrestacao ====
         execucao_final = atualizar_execucao_por_estado_pacote(
             execucao_prestacao_id=execucao.execucao_prestacao_id,
             estado_pacote=estado_pior_pacote,

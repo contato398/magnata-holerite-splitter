@@ -38,7 +38,10 @@ from magnata_os.classificacao.execucao_prestacao import (
 from magnata_os.classificacao.fonte_clientes_prestacao import FonteClientesPrestacao
 from magnata_os.classificacao.fonte_requisitos_prestacao import FonteRequisitosPrestacao
 from magnata_os.classificacao.pacote_prestacao import EstadoPacotePrestacao
-from magnata_os.classificacao.prestacao_readiness import ItemInventarioPrestacao
+from magnata_os.classificacao.prestacao_readiness import (
+    ItemInventarioPrestacao,
+    RequisitoDocumentalPrestacao,
+)
 from magnata_os.documental.modulo01.armazenamento import (
     ArmazenamentoArquivosEmMemoria,
     ArquivoNaoEncontrado,
@@ -1301,6 +1304,275 @@ def test_ancora_candidato_em_revisao_misturado_com_candidato_valido_usa_o_valido
     )
     assert resultado.motivo_ausencia is None
     assert resultado.ancora is candidato_valido
+
+
+# ==== TESTES: evolução do contrato do ciclo de Prestação V1, Incremento 7 ====
+# Rewiring completo de `executar_ciclo_prestacao_persistente`: política
+# de competência V1 validada antes de criar a execução; descoberta sem
+# âncora; aquisição; retenção + seleção de âncora REAL; readiness com
+# âncora real ou ausência explícita; fallback para
+# `contexto.resolucoes_ancora` só quando NENHUMA evidência real foi
+# adquirida para o cliente.
+
+from magnata_os.classificacao.competencia_esperada_prestacao import (
+    DeslocamentoCompetenciaCliente,
+    PoliticaCompetenciaPorTipoNaoSuportadaError,
+)
+from magnata_os.classificacao.orquestrador_corredor_readonly import (
+    ResultadoExecucaoCorredorPrestacao as _ResultadoExecucaoCorredorPrestacaoV7,
+)
+from magnata_os.classificacao.resolucao_documento_prestacao import (
+    EstadoCorredorDocumentoPrestacao as _EstadoCorredorV7,
+    ResultadoProcessamentoDocumentoPrestacao as _ResultadoProcessamentoV7,
+)
+
+_CLIENTE_V7 = ReferenciaCanonica('CLIENTE', 'cliente-v7')
+_COMPETENCIA_V7 = ReferenciaCanonica('COMPETENCIA', '2026-09')
+
+
+class _FonteRequisitosVaziaV7:
+    def registros_para(self, cliente, contexto):
+        return ()
+
+
+class _FonteClientesV7:
+    def listar_ativos(self, contexto=None):
+        return (_CLIENTE_V7,)
+
+
+def _documento_bruto_v7(documento_id, hash_sha256):
+    agora = datetime.now(timezone.utc)
+    return Documento(
+        documento_id=documento_id,
+        arquivo_original=f'{documento_id}.pdf',
+        nome_original=f'{documento_id}.pdf',
+        mime_type='application/pdf',
+        tamanho=10,
+        hash_sha256=hash_sha256,
+        origem='teste',
+        recebido_em=agora,
+        lote_id=None,
+        status='RECEBIDO',
+        correlation_id=f'corr-{documento_id}',
+        criado_em=agora,
+        atualizado_em=agora,
+    )
+
+
+def _contexto_v7(repositorio_execucoes, **kwargs):
+    defaults = dict(
+        competencia_base='2026-09',
+        fonte_clientes=_FonteClientesV7(),
+        fonte_requisitos=_FonteRequisitosVaziaV7(),
+        repositorio_execucoes=repositorio_execucoes,
+        requisitos_base=(RequisitoDocumentalPrestacao('HOLERITE'),),
+        competencias_por_cliente={_CLIENTE_V7: _COMPETENCIA_V7},
+    )
+    defaults.update(kwargs)
+    return ContextoComposicaoPrestacao(**defaults)
+
+
+def test_politica_v1_fail_closed_nunca_cria_execucao():
+    """Política com deslocamento por tipo_documental -- fail-closed
+    ANTES de criar/retomar a ExecucaoPrestacao (mesmo padrão de
+    `criar_e_persistir_execucao`: config inválida nunca vira execução
+    rastreada)."""
+    from magnata_os.classificacao.competencia_esperada_prestacao import (
+        PoliticaCompetenciaPrestacao,
+    )
+
+    politica_invalida = PoliticaCompetenciaPrestacao(
+        version='teste-v7',
+        deslocamentos=(
+            DeslocamentoCompetenciaCliente(
+                cliente=_CLIENTE_V7, offset_meses=-1, tipo_documental='EXTRATO',
+            ),
+        )
+    )
+    repositorio = RepositorioExecucoesPrestacaoMemoria()
+    contexto = _contexto_v7(repositorio, politica_competencia=politica_invalida)
+
+    with pytest.raises(PoliticaCompetenciaPorTipoNaoSuportadaError):
+        executar_ciclo_prestacao_persistente(contexto)
+
+    assert repositorio.listar_todas() == ()
+
+
+def test_evidencia_real_concordante_ancora_readiness_ate_pronto(monkeypatch):
+    """Documento real adquirido resolve CLIENTE/COMPETENCIA EXATAMENTE
+    como esperado e satisfaz o requisito -- a âncora REAL (nunca
+    fabricada) flui até o readiness e o pacote fecha PRONTO, refletido
+    no estado final CONCLUIDA."""
+    import magnata_os.classificacao.composicao_ciclo_persistente_prestacao as modulo
+    from magnata_os.documental.modulo01.repositorio import RepositorioDocumentosEmMemoria
+    from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivosEmMemoria
+
+    repositorio_execucoes = RepositorioExecucoesPrestacaoMemoria()
+    repositorio_docs = RepositorioDocumentosEmMemoria()
+    armazenamento = ArmazenamentoArquivosEmMemoria()
+
+    conteudo = b'holerite qualquer'
+    hash_sha256 = hashlib.sha256(conteudo).hexdigest()
+    armazenamento.armazenar(
+        hash_sha256=hash_sha256, conteudo=conteudo, mime_type='application/pdf',
+        nome_original='holerite.pdf', tamanho=len(conteudo),
+    )
+    repositorio_docs.salvar(_documento_bruto_v7('doc-v7-real', hash_sha256))
+
+    monkeypatch.setattr(modulo, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer')
+
+    resolucao_real = _candidato_ancora(
+        'doc-v7-real', cliente=_CLIENTE_V7, competencia=_COMPETENCIA_V7,
+    )
+
+    def _executar_documento_readonly_fake(contexto_corredor, sink):
+        sink.adicionar(
+            ItemInventarioPrestacao(
+                documento_id=contexto_corredor.documento_id,
+                tipo_documental='HOLERITE',
+                cliente=_CLIENTE_V7,
+                competencia=_COMPETENCIA_V7,
+            )
+        )
+        resultado_processamento = _ResultadoProcessamentoV7(
+            documento_id=contexto_corredor.documento_id,
+            estado=_EstadoCorredorV7.RESOLVIDO_E_AVANCOU,
+            tipo_documental='HOLERITE',
+            resolucao_semantica=resolucao_real,
+        )
+        return (_ResultadoExecucaoCorredorPrestacaoV7(resultado_corredor=resultado_processamento),)
+
+    monkeypatch.setattr(modulo, 'executar_documento_readonly', _executar_documento_readonly_fake)
+
+    contexto = _contexto_v7(
+        repositorio_execucoes,
+        repositorio_documentos=repositorio_docs,
+        armazenamento_arquivos=armazenamento,
+    )
+    execucao = executar_ciclo_prestacao_persistente(contexto)
+
+    assert execucao.estado == 'CONCLUIDA'
+
+
+def test_sem_evidencia_real_e_sem_ancora_pre_informada_fica_em_revisao_nunca_pronto(monkeypatch):
+    """Mesmo cenário de aquisição, mas o corredor NUNCA resolve
+    CLIENTE/COMPETENCIA (simulando a limitação real de hoje: sem
+    `fonte_cliente_direto`/`fonte_vinculos` wired) -- nenhuma âncora
+    real, nenhuma pré-informada: cliente fica EM_REVISAO explícito,
+    NUNCA PRONTO por acidente."""
+    import magnata_os.classificacao.composicao_ciclo_persistente_prestacao as modulo
+    from magnata_os.documental.modulo01.repositorio import RepositorioDocumentosEmMemoria
+    from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivosEmMemoria
+
+    repositorio_execucoes = RepositorioExecucoesPrestacaoMemoria()
+    repositorio_docs = RepositorioDocumentosEmMemoria()
+    armazenamento = ArmazenamentoArquivosEmMemoria()
+
+    conteudo = b'holerite sem cliente identificavel'
+    hash_sha256 = hashlib.sha256(conteudo).hexdigest()
+    armazenamento.armazenar(
+        hash_sha256=hash_sha256, conteudo=conteudo, mime_type='application/pdf',
+        nome_original='holerite.pdf', tamanho=len(conteudo),
+    )
+    repositorio_docs.salvar(_documento_bruto_v7('doc-v7-sem-cliente', hash_sha256))
+
+    monkeypatch.setattr(modulo, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer')
+    # `executar_documento_readonly` REAL (nunca monkeypatched aqui) --
+    # sem fonte_cliente_direto/fonte_vinculos, CLIENTE nunca resolve.
+
+    contexto = _contexto_v7(
+        repositorio_execucoes,
+        repositorio_documentos=repositorio_docs,
+        armazenamento_arquivos=armazenamento,
+    )
+    execucao = executar_ciclo_prestacao_persistente(contexto)
+
+    # Nunca CONCLUIDA por acidente -- sem evidência real, fica retomável.
+    assert execucao.estado == 'INICIADA'
+
+
+def test_ancora_pre_informada_e_usada_quando_nenhuma_evidencia_real_foi_adquirida():
+    """Sem `repositorio_documentos`/`armazenamento_arquivos` wired,
+    aquisição nunca roda -- `contexto.resolucoes_ancora` pré-informada
+    (responsabilidade de quem chama, já uma resolução real, nunca
+    fabricada por este módulo) continua sendo usada como estava antes
+    desta correção -- compatibilidade plena com wiring que não usa
+    aquisição via corredor."""
+    item_base = ItemInventarioPrestacao(
+        documento_id='doc-base-v7',
+        tipo_documental='HOLERITE',
+        cliente=_CLIENTE_V7,
+        competencia=_COMPETENCIA_V7,
+    )
+    from magnata_os.classificacao.inventario_prestacao_memoria import (
+        InventarioPrestacaoEmMemoria as _InventarioV7,
+    )
+    fonte_base = _InventarioV7()
+    fonte_base.adicionar(item_base)
+
+    resolucao_pre_informada = _candidato_ancora(
+        'doc-pre-informado', cliente=_CLIENTE_V7, competencia=_COMPETENCIA_V7,
+    )
+
+    repositorio_execucoes = RepositorioExecucoesPrestacaoMemoria()
+    contexto = _contexto_v7(
+        repositorio_execucoes,
+        fonte_inventario_base=fonte_base,
+        resolucoes_ancora={_CLIENTE_V7: resolucao_pre_informada},
+    )
+    execucao = executar_ciclo_prestacao_persistente(contexto)
+
+    assert execucao.estado == 'CONCLUIDA'
+
+
+def test_dois_documentos_reais_divergentes_nunca_escolhem_lado_fica_em_revisao(monkeypatch):
+    """2 documentos reais adquiridos nesta execução resolvem CLIENTE
+    igual ao esperado, mas COMPETÊNCIA diferente entre si -- divergência
+    real, nunca uma escolha de lado: cliente fica EM_REVISAO, nunca
+    PRONTO."""
+    import magnata_os.classificacao.composicao_ciclo_persistente_prestacao as modulo
+    from magnata_os.documental.modulo01.repositorio import RepositorioDocumentosEmMemoria
+    from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivosEmMemoria
+
+    repositorio_execucoes = RepositorioExecucoesPrestacaoMemoria()
+    repositorio_docs = RepositorioDocumentosEmMemoria()
+    armazenamento = ArmazenamentoArquivosEmMemoria()
+
+    for documento_id, texto in (('doc-v7-a', 'A'), ('doc-v7-b', 'B')):
+        conteudo = texto.encode('utf-8')
+        hash_sha256 = hashlib.sha256(conteudo).hexdigest()
+        armazenamento.armazenar(
+            hash_sha256=hash_sha256, conteudo=conteudo, mime_type='application/pdf',
+            nome_original=f'{documento_id}.pdf', tamanho=len(conteudo),
+        )
+        repositorio_docs.salvar(_documento_bruto_v7(documento_id, hash_sha256))
+
+    monkeypatch.setattr(modulo, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer')
+
+    _OUTRA_COMPETENCIA_V7 = ReferenciaCanonica('COMPETENCIA', '2026-08')
+    resolucao_a = _candidato_ancora('doc-v7-a', cliente=_CLIENTE_V7, competencia=_COMPETENCIA_V7)
+    resolucao_b = _candidato_ancora('doc-v7-b', cliente=_CLIENTE_V7, competencia=_OUTRA_COMPETENCIA_V7)
+    resolucoes_por_documento = {'doc-v7-a': resolucao_a, 'doc-v7-b': resolucao_b}
+
+    def _executar_documento_readonly_fake(contexto_corredor, sink):
+        resultado_processamento = _ResultadoProcessamentoV7(
+            documento_id=contexto_corredor.documento_id,
+            estado=_EstadoCorredorV7.RESOLVIDO_E_AVANCOU,
+            tipo_documental='HOLERITE',
+            resolucao_semantica=resolucoes_por_documento[contexto_corredor.documento_id],
+        )
+        return (_ResultadoExecucaoCorredorPrestacaoV7(resultado_corredor=resultado_processamento),)
+
+    monkeypatch.setattr(modulo, 'executar_documento_readonly', _executar_documento_readonly_fake)
+
+    contexto = _contexto_v7(
+        repositorio_execucoes,
+        repositorio_documentos=repositorio_docs,
+        armazenamento_arquivos=armazenamento,
+    )
+    execucao = executar_ciclo_prestacao_persistente(contexto)
+
+    assert execucao.estado == 'INICIADA'  # nunca CONCLUIDA -- divergência nunca escolhe lado
 
 
 if __name__ == '__main__':
