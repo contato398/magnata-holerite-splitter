@@ -15,10 +15,30 @@ FLUXO COMPLETO:
 Nenhum componente é alterado, todos reutilizados em estado puro.
 Dependências injetadas; zero Airtable/psycopg/S3 no domínio.
 SEM efeitos colaterais em aquisição; RepositorioExecucoesPrestacao injetado.
-"""
+
+CORREÇÃO PÓS-MERGE PR #158 (branch fix/prestacao-pos-pr158-v1): a
+versão mesclada em `main` (commit 5da729f) corrigiu parcialmente o
+placeholder de extração original, mas manteve 3 problemas fechados
+aqui:
+  (a) extração usava `extrair_texto_pdf` cru, sem decisão de MIME --
+      agora `extrair_texto_seguro` (`roteamento_documental.py`, já
+      existente) + checagem explícita de `mime_type`;
+  (b) o dict `erros_aquisicao` era escrito e nunca lido em lugar
+      nenhum -- observabilidade inexistente apesar do nome; substituído
+      por `logging` real, eventos estáveis, nunca `str(exc)` cru;
+  (c) uma heurística nova classificava exceção terminal por substring
+      de mensagem (`'execucao_prestacao' in str(exc).lower()`) --
+      revertida; ver docstring de `executar_ciclo_prestacao_persistente`
+      para o rollback completo.
+Ver também `_adquirir_inventario_via_corredor`, extraída para tornar o
+caminho documento->blob->extração->corredor testável isoladamente
+(nenhum teste anterior populava `resolucoes_ancora`/
+`competencias_por_cliente`, então esse laço nunca era exercitado de
+verdade)."""
 from __future__ import annotations
 
 import dataclasses
+import logging
 from datetime import datetime, timezone
 from typing import Mapping, Optional, Protocol, Sequence, Tuple
 
@@ -35,8 +55,8 @@ from .execucao_prestacao import (
     RepositorioExecucoesPrestacao,
     criar_execucao_prestacao,
 )
+from magnata_os.documental.modulo01.armazenamento import ArquivoNaoEncontrado
 from magnata_os.documental.modulo01.dominio import Documento
-from magnata_os.documental.extracao_texto import extrair_texto_pdf
 from .fonte_clientes_prestacao import FonteClientesPrestacao
 from .fonte_colaboradores_esperados_prestacao import (
     FonteColaboradoresEsperadosPrestacao,
@@ -58,6 +78,24 @@ from .prestacao_readiness import (
     ItemInventarioPrestacao,
     RequisitoDocumentalPrestacao,
 )
+from .roteamento_documental import extrair_texto_seguro
+
+_logger = logging.getLogger(__name__)
+
+# Nomes de evento ESTÁVEIS para observabilidade da aquisição (correção
+# pós-merge PR #158, Incremento 3) -- campo próprio no registro de log
+# (`extra={'evento': ...}`), nunca embutidos só em frase livre. Isso
+# permite filtrar/agregar por evento sem depender de parsing de texto
+# humano, preparando o caminho para observabilidade futura (ex.:
+# métricas, alertas) sem reescrever quem loga. Mesmo idioma já adotado
+# em `magnata_os/orquestrador/observabilidade.py`: só campos seguros
+# (identificadores, nome de tipo de exceção), nunca `str(exc)` cru,
+# nunca conteúdo do documento.
+EVENTO_BLOB_NAO_ENCONTRADO = 'blob_nao_encontrado'
+EVENTO_BLOB_FALHA_LEITURA = 'blob_falha_leitura'
+EVENTO_MIME_NAO_SUPORTADO = 'mime_nao_suportado'
+EVENTO_PDF_ILEGIVEL = 'pdf_ilegivel'
+EVENTO_CORREDOR_FALHOU = 'corredor_falhou'
 
 
 # ==== AQUISIÇÃO CANÔNICA (COM CORREDOR) ====
@@ -195,6 +233,174 @@ def atualizar_execucao_por_estado_pacote(
 # ==== INCREMENTO 3: FLUXO REAL COMPLETO ====
 
 
+def _adquirir_inventario_via_corredor(
+    contexto: 'ContextoComposicaoPrestacao',
+    ciclo_para_corredor: ContextoCicloPrestacao,
+) -> InventarioPrestacaoEmMemoria:
+    """Aquisição canônica: para cada Documento bruto já persistido
+    (`contexto.repositorio_documentos`), recupera o blob
+    (`contexto.armazenamento_arquivos`), extrai o texto pelo extrator
+    canônico já existente e executa o corredor, escrevendo no
+    inventário em memória devolvido.
+
+    Extraída de `executar_ciclo_prestacao_persistente` (correção
+    pós-merge PR #158, Incremento 2) para ser testável isoladamente:
+    nenhum teste hoje popula `contexto.resolucoes_ancora`/
+    `contexto.competencias_por_cliente`, o que faz `executar_ciclo_
+    prestacao` descartar todo cliente antes de gerar `necessidades` --
+    sem essa extração, o corpo deste laço nunca é exercitado por
+    nenhum teste (confirmado empiricamente na auditoria pós-merge:
+    `executar_documento_readonly` chamado 0 vezes mesmo com
+    `requisitos_base` preenchido). Mesmo comportamento observável de
+    antes; `executar_ciclo_prestacao_persistente` só passou a chamar
+    esta função no lugar do laço inline.
+
+    Observabilidade (Incremento 3): cada ponto de falha loga um evento
+    ESTÁVEL (`EVENTO_*`, campo próprio, nunca só texto livre) com
+    `documento_id`/`hash_sha256` e, quando aplicável,
+    `type(exc).__name__` -- NUNCA `str(exc)` cru, nunca conteúdo do
+    documento ou PII. Substitui o dict `erros_aquisicao` de `5da729f`,
+    que era escrito e nunca lido em lugar nenhum -- observabilidade
+    inexistente apesar do nome. 1 documento com problema nunca impede o
+    processamento dos demais (mesma política de isolamento já
+    existente antes desta correção)."""
+    inventario_adquirido = InventarioPrestacaoEmMemoria()
+    if not (contexto.repositorio_documentos and contexto.armazenamento_arquivos):
+        return inventario_adquirido
+
+    documentos_disponiveis = contexto.repositorio_documentos.listar_todos()
+
+    for documento_bruto in documentos_disponiveis:
+        # Recuperar conteúdo do blob pelo hash. Distinguir
+        # explicitamente "não encontrado" (`ArquivoNaoEncontrado`, já
+        # existente em `armazenamento.py`) de "encontrado mas falhou ao
+        # ler" (qualquer outra exceção do backend) -- os dois eram o
+        # mesmo `continue` silencioso antes desta correção.
+        try:
+            with contexto.armazenamento_arquivos.abrir_leitura(
+                documento_bruto.hash_sha256
+            ) as arquivo:
+                conteudo_bytes = arquivo.read()
+        except ArquivoNaoEncontrado:
+            _logger.warning(
+                '%s documento_id=%s hash_sha256=%s',
+                EVENTO_BLOB_NAO_ENCONTRADO,
+                documento_bruto.documento_id, documento_bruto.hash_sha256,
+                extra={
+                    'evento': EVENTO_BLOB_NAO_ENCONTRADO,
+                    'documento_id': documento_bruto.documento_id,
+                    'hash_sha256': documento_bruto.hash_sha256,
+                },
+            )
+            continue
+        except Exception as exc:
+            # Encontrado mas falhou ao ler -- nunca confundir com
+            # "documento ausente". Só o TIPO da exceção é logado, nunca
+            # a mensagem crua (pode ecoar conteúdo do backend de
+            # armazenamento).
+            _logger.error(
+                '%s documento_id=%s hash_sha256=%s exception_type=%s',
+                EVENTO_BLOB_FALHA_LEITURA,
+                documento_bruto.documento_id, documento_bruto.hash_sha256,
+                type(exc).__name__,
+                extra={
+                    'evento': EVENTO_BLOB_FALHA_LEITURA,
+                    'documento_id': documento_bruto.documento_id,
+                    'hash_sha256': documento_bruto.hash_sha256,
+                    'exception_type': type(exc).__name__,
+                },
+            )
+            continue
+
+        # Extração canônica segura, com decisão explícita de MIME
+        # (correção pós-merge PR #158, Incremento 2): reutiliza
+        # `extrair_texto_seguro` (`classificacao/roteamento_documental.py`,
+        # já existente), que por sua vez reaproveita `extrair_texto_pdf`
+        # (`documental/extracao_texto.py`) -- mesma extração usada por
+        # `processar_holerite`/`processar_extrato` e pelo roteamento
+        # avulso. Nenhum parser novo. Só `application/pdf` tem extrator
+        # canônico no repositório hoje -- mime não suportado nunca entra
+        # no extrator, vira um caminho próprio, distinto de "PDF
+        # ilegível".
+        if documento_bruto.mime_type != 'application/pdf':
+            _logger.warning(
+                '%s documento_id=%s hash_sha256=%s mime_type=%s',
+                EVENTO_MIME_NAO_SUPORTADO,
+                documento_bruto.documento_id, documento_bruto.hash_sha256,
+                documento_bruto.mime_type,
+                extra={
+                    'evento': EVENTO_MIME_NAO_SUPORTADO,
+                    'documento_id': documento_bruto.documento_id,
+                    'hash_sha256': documento_bruto.hash_sha256,
+                    'mime_type': documento_bruto.mime_type,
+                },
+            )
+            continue
+
+        texto_documento = extrair_texto_seguro(conteudo_bytes)
+        if texto_documento is None:
+            # PDF corrompido/ilegível (ex.: escaneado sem OCR) -- mesma
+            # distinção honesta já feita por `extrair_texto_seguro`:
+            # nunca uma string vazia tratada como classificável.
+            _logger.warning(
+                '%s documento_id=%s hash_sha256=%s',
+                EVENTO_PDF_ILEGIVEL,
+                documento_bruto.documento_id, documento_bruto.hash_sha256,
+                extra={
+                    'evento': EVENTO_PDF_ILEGIVEL,
+                    'documento_id': documento_bruto.documento_id,
+                    'hash_sha256': documento_bruto.hash_sha256,
+                },
+            )
+            continue
+
+        # Construir contexto para o corredor (todas as dependências são opcionais)
+        contexto_corredor = ContextoExecucaoCorredorPrestacao(
+            documento_id=documento_bruto.documento_id,
+            hash_sha256=documento_bruto.hash_sha256,
+            paginas=(texto_documento,),  # 1 "página" = conteúdo completo extraído
+            ciclo=ciclo_para_corredor,
+            cliente_do_ciclo=None,  # Deixar corredor decidir
+            politica_competencia=contexto.politica_competencia if hasattr(contexto, 'politica_competencia') else None,
+            candidatos_colaborador=contexto.tipos_obrigatorios_por_colaborador,
+            fonte_vinculos=None,
+            fonte_cliente_direto=None,
+            fonte_unidade_posto=None,
+            fonte_candidatos_relacao=None,
+            clientes_broadcast=(),
+            identificar_pagina=None,
+            personalizar_contexto_do_grupo=None,
+            registrar_dados_correlacao=False,
+            fonte_inventario_pacote=None,
+            politica_requisitos=None,
+        )
+
+        # Executar corredor: resolve semanticamente, escreve no
+        # inventário. `executar_documento_readonly` é uma função pura
+        # sem caminho de falha de negócio desenhado (nunca levanta
+        # exceção própria) -- qualquer exceção aqui é inesperada, nunca
+        # uma decisão de negócio a mascarar. Logada com evidência
+        # mínima antes de seguir para o próximo documento.
+        try:
+            executar_documento_readonly(contexto_corredor, inventario_adquirido)
+        except Exception as exc:
+            _logger.error(
+                '%s documento_id=%s hash_sha256=%s exception_type=%s',
+                EVENTO_CORREDOR_FALHOU,
+                documento_bruto.documento_id, documento_bruto.hash_sha256,
+                type(exc).__name__,
+                extra={
+                    'evento': EVENTO_CORREDOR_FALHOU,
+                    'documento_id': documento_bruto.documento_id,
+                    'hash_sha256': documento_bruto.hash_sha256,
+                    'exception_type': type(exc).__name__,
+                },
+            )
+            continue
+
+    return inventario_adquirido
+
+
 def executar_ciclo_prestacao_persistente(
     contexto: ContextoComposicaoPrestacao,
     execucao_id: Optional[str] = None,
@@ -251,95 +457,25 @@ def executar_ciclo_prestacao_persistente(
         )
 
         # ==== PASSO 3: Aquisição canônica (documentos brutos → corredor → inventário) ====
-        # Inventário que será preenchido com resultados do corredor
-        inventario_adquirido = InventarioPrestacaoEmMemoria()
-
-        # Se há repositório de documentos e armazenamento, tentar aquisição:
         # Coletar todas as necessidades do resultado do ciclo 1
         necessidades: list = []
         for resultado_cliente in resultado_ciclo_1.resultados_por_cliente:
             necessidades.extend(resultado_cliente.necessidades)
 
-        # Aquisição canônica: documentos brutos → corredor → inventário em memória
+        # Aquisição canônica: documentos brutos → corredor → inventário em
+        # memória (extraída para `_adquirir_inventario_via_corredor`,
+        # testável isoladamente -- mesmo comportamento observável de
+        # antes). Só roda quando há repositório+armazenamento E
+        # necessidade real; inventário vazio (sem custo de I/O) quando
+        # não há nada a adquirir.
         if contexto.repositorio_documentos and contexto.armazenamento_arquivos and necessidades:
-            # Listar todos os documentos disponíveis (reutiliza RepositorioDocumentos)
-            documentos_disponiveis = contexto.repositorio_documentos.listar_todos()
-
-            # Preparar contexto do ciclo para passar ao corredor
             ano_str, mes_str = contexto.competencia_base.split('-')
             ciclo_para_corredor = ContextoCicloPrestacao(
                 competencia_base=(int(ano_str), int(mes_str))
             )
-
-            # Para cada documento disponível, processar via corredor
-            erros_aquisicao = {}  # Mapear documento_id → motivo do erro
-            for documento_bruto in documentos_disponiveis:
-                # Recuperar conteúdo do blob pelo hash
-                conteudo_bytes = None
-                motivo_blob = None
-                try:
-                    with contexto.armazenamento_arquivos.abrir_leitura(
-                        documento_bruto.hash_sha256
-                    ) as arquivo:
-                        conteudo_bytes = arquivo.read()
-                except FileNotFoundError as e:
-                    motivo_blob = f'blob_nao_encontrado: {documento_bruto.hash_sha256}'
-                    erros_aquisicao[documento_bruto.documento_id] = motivo_blob
-                    continue
-                except IOError as e:
-                    motivo_blob = f'blob_io_error: {str(e)}'
-                    erros_aquisicao[documento_bruto.documento_id] = motivo_blob
-                    continue
-                except Exception as e:
-                    motivo_blob = f'blob_erro_desconhecido: {type(e).__name__}: {str(e)}'
-                    erros_aquisicao[documento_bruto.documento_id] = motivo_blob
-                    continue
-
-                # Extrair texto usando extracao_texto canônica
-                texto_documento = None
-                motivo_extracao = None
-                try:
-                    texto_documento = extrair_texto_pdf(conteudo_bytes)
-                except Exception as e:
-                    motivo_extracao = f'extracao_texto_erro: {type(e).__name__}: {str(e)}'
-                    erros_aquisicao[documento_bruto.documento_id] = motivo_extracao
-                    continue
-
-                # Construir contexto para o corredor (todas as dependências são opcionais)
-                contexto_corredor = ContextoExecucaoCorredorPrestacao(
-                    documento_id=documento_bruto.documento_id,
-                    hash_sha256=documento_bruto.hash_sha256,
-                    paginas=(texto_documento,),  # 1 "página" = conteúdo completo extraído
-                    ciclo=ciclo_para_corredor,
-                    cliente_do_ciclo=None,  # Deixar corredor decidir
-                    politica_competencia=contexto.politica_competencia if hasattr(contexto, 'politica_competencia') else None,
-                    candidatos_colaborador=contexto.tipos_obrigatorios_por_colaborador,
-                    fonte_vinculos=None,
-                    fonte_cliente_direto=None,
-                    fonte_unidade_posto=None,
-                    fonte_candidatos_relacao=None,
-                    clientes_broadcast=(),
-                    identificar_pagina=None,
-                    personalizar_contexto_do_grupo=None,
-                    registrar_dados_correlacao=False,
-                    fonte_inventario_pacote=None,
-                    politica_requisitos=None,
-                )
-
-                # Executar corredor: resolve semanticamente, escreve no inventário
-                motivo_corredor = None
-                try:
-                    executar_documento_readonly(contexto_corredor, inventario_adquirido)
-                except ValueError as e:
-                    # Erro documental/ambiguidade — não é terminal
-                    motivo_corredor = f'corredor_documental: {str(e)}'
-                    erros_aquisicao[documento_bruto.documento_id] = motivo_corredor
-                    continue
-                except Exception as e:
-                    # Erro de corredor (resolução semântica, etc.) — não é terminal
-                    motivo_corredor = f'corredor_erro: {type(e).__name__}: {str(e)}'
-                    erros_aquisicao[documento_bruto.documento_id] = motivo_corredor
-                    continue
+            inventario_adquirido = _adquirir_inventario_via_corredor(contexto, ciclo_para_corredor)
+        else:
+            inventario_adquirido = InventarioPrestacaoEmMemoria()
 
         # ==== PASSO 4: Compor fonte de inventário ====
         # Usar FonteInventarioPrestacaoComposta para unir:
@@ -393,35 +529,34 @@ def executar_ciclo_prestacao_persistente(
 
         return execucao_final
 
-    except Exception as exc:
-        # Classificar exceção antes de marcar FALHA
-        # FALHA terminal: erro de persistência ou contrato quebrado
-        # NÃO terminal: erro documental, ambiguidade, validação, etc.
-
-        eh_falha_terminal = False
-        tipo_exc = type(exc).__name__
-
-        # Erros de persistência/contrato SÃO terminais
-        if isinstance(exc, (ValueError, KeyError, TypeError, AttributeError)):
-            # ValueError/KeyError/TypeError podem ser erros de contrato
-            # Se vem de ciclo_prestacao ou execucao_prestacao, é terminal
-            if 'execucao_prestacao' in str(exc).lower() or 'repositorio' in str(exc).lower():
-                eh_falha_terminal = True
-        elif isinstance(exc, (IOError, OSError, RuntimeError)):
-            # Erros de I/O (arquivo, conexão) são terminais
-            eh_falha_terminal = True
-
-        # Se não conseguiu determinar, não marcar como terminal
-        # (preferir INICIADA retomável a FALHA incorreta)
-
-        if eh_falha_terminal:
-            try:
-                contexto.repositorio_execucoes.atualizar_estado(
-                    execucao_prestacao_id=execucao.execucao_prestacao_id,
-                    novo_estado='FALHA',
-                    concluido_em=datetime.now(timezone.utc),
-                )
-            except Exception:
-                pass  # Já falhou, não mascarar exceção de persistência
+    except Exception:
+        # ROLLBACK DE REGRESSÃO (correção pós-merge PR #158, Incremento
+        # 4): `5da729f` introduziu aqui uma heurística que classificava
+        # a exceção como "terminal" (marca FALHA) ou "não terminal"
+        # (deixa como estava) usando `isinstance` combinado com
+        # correspondência de SUBSTRING no texto da mensagem da exceção
+        # (`'execucao_prestacao' in str(exc).lower() or 'repositorio'
+        # in str(exc).lower()`). Isso é frágil: uma exceção genuinamente
+        # terminal cuja mensagem não contivesse essas palavras deixava
+        # de marcar FALHA, e a ExecucaoPrestacao ficava presa em
+        # INICIADA indefinidamente, sem nenhum mecanismo que a resuma
+        # ou feche -- uma regressão silenciosa do comportamento
+        # anterior à PR #158.
+        #
+        # Este `except` volta a marcar FALHA para QUALQUER exceção não
+        # tratada dentro do `try` acima -- comportamento anterior à
+        # regressão, restaurado tal como estava. Isso é um ROLLBACK,
+        # não uma decisão arquitetural definitiva de que toda exceção
+        # deva ser terminal: a classificação terminal x retomável
+        # continua sendo uma questão em aberto, fora do escopo desta
+        # missão -- exigirá seu próprio Ultraplan/ADR se for retomada.
+        try:
+            contexto.repositorio_execucoes.atualizar_estado(
+                execucao_prestacao_id=execucao.execucao_prestacao_id,
+                novo_estado='FALHA',
+                concluido_em=datetime.now(timezone.utc),
+            )
+        except Exception:
+            pass  # Já falhou, não mascarar a exceção original
 
         raise

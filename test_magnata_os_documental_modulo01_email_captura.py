@@ -15,6 +15,7 @@ from magnata_os.documental.modulo01.adapters.email_captura import (
     AnexoEmailRecebido,
     MensagemEmailRecebida,
 )
+from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivosEmMemoria
 from magnata_os.documental.modulo01.composicao import construir_pipeline_modulo01
 from magnata_os.documental.modulo01.repositorio import (
     RepositorioDocumentosEmMemoria,
@@ -58,6 +59,7 @@ def _montar_adapter(mensagens=None, fonte_candidatos_funcionario=None):
         repositorio_lotes=repo_lotes,
         repositorio_estados_esteira=repo_estados,
         fonte_mensagens=fonte,
+        armazenamento_arquivos=ArmazenamentoArquivosEmMemoria(),
         fonte_candidatos_funcionario=fonte_candidatos_funcionario,
     )
     return pipeline.adapter_captura_email, fonte, repo_docs
@@ -276,6 +278,7 @@ def test_falha_na_busca_de_mensagens_propaga_sem_ser_engolida():
         repositorio_lotes=RepositorioLotesEmMemoria(),
         repositorio_estados_esteira=RepositorioEstadosEsteiraEmMemoria(),
         fonte_mensagens=_FonteQueFalha(),
+        armazenamento_arquivos=ArmazenamentoArquivosEmMemoria(),
     )
 
     with pytest.raises(ConnectionError):
@@ -325,6 +328,7 @@ def test_adapter_capturado_e_servico_lote_sao_o_mesmo_objeto():
         repositorio_lotes=RepositorioLotesEmMemoria(),
         repositorio_estados_esteira=RepositorioEstadosEsteiraEmMemoria(),
         fonte_mensagens=FonteMensagensEmailFalsa(),
+        armazenamento_arquivos=ArmazenamentoArquivosEmMemoria(),
     )
 
     assert pipeline.adapter_captura_email._servico_lote is pipeline.servico_lote
@@ -340,6 +344,7 @@ def test_fonte_candidatos_funcionario_chega_ao_servico_lote():
         repositorio_lotes=RepositorioLotesEmMemoria(),
         repositorio_estados_esteira=RepositorioEstadosEsteiraEmMemoria(),
         fonte_mensagens=FonteMensagensEmailFalsa(),
+        armazenamento_arquivos=ArmazenamentoArquivosEmMemoria(),
         fonte_candidatos_funcionario=fonte_candidatos,
     )
 
@@ -357,6 +362,7 @@ def test_sem_fonte_candidatos_o_default_seguro_none_e_preservado():
         repositorio_lotes=RepositorioLotesEmMemoria(),
         repositorio_estados_esteira=RepositorioEstadosEsteiraEmMemoria(),
         fonte_mensagens=FonteMensagensEmailFalsa(),
+        armazenamento_arquivos=ArmazenamentoArquivosEmMemoria(),
     )
 
     assert pipeline.servico_lote._fonte_candidatos_funcionario is None
@@ -418,6 +424,7 @@ def test_holerite_elegivel_alcanca_identificacao_via_pipeline_completo(monkeypat
         fonte_mensagens=FonteMensagensEmailFalsa([
             _mensagem(anexos=[_anexo()]),
         ]),
+        armazenamento_arquivos=ArmazenamentoArquivosEmMemoria(),
         fonte_candidatos_funcionario=fonte_candidatos,
     )
 
@@ -457,3 +464,38 @@ def test_nenhum_acesso_externo_durante_construcao_ou_captura(monkeypatch):
     }
     proibidos = {'requests', 'psycopg', 'psycopg2', 'googleapiclient', 'google', 'boto3'}
     assert not (modulos_importados & proibidos)
+
+
+def test_armazenamento_arquivos_omitido_falha_explicitamente_sem_fallback_para_memoria():
+    """Correção pós-merge PR #158 (rollback da regressão do fallback
+    silencioso): omitir `armazenamento_arquivos` nunca decide, em
+    silêncio, por `ArmazenamentoArquivosEmMemoria()` -- é um `TypeError`
+    de argumento obrigatório ausente, o mais cedo possível (nem chega a
+    entrar no corpo da função)."""
+    with pytest.raises(TypeError):
+        construir_pipeline_modulo01(
+            repositorio_documentos=RepositorioDocumentosEmMemoria(),
+            repositorio_historico=RepositorioHistoricoEmMemoria(),
+            repositorio_lotes=RepositorioLotesEmMemoria(),
+            repositorio_estados_esteira=RepositorioEstadosEsteiraEmMemoria(),
+            fonte_mensagens=FonteMensagensEmailFalsa(),
+            # armazenamento_arquivos omitido de propósito
+        )
+
+
+def test_armazenamento_arquivos_none_explicito_tambem_falha_sem_fallback_para_memoria():
+    """Correção pós-merge PR #158: Python não impede um caller de passar
+    `armazenamento_arquivos=None` explicitamente mesmo sem default na
+    assinatura -- por isso a guarda precisa existir em runtime, dentro
+    do corpo de `construir_pipeline_modulo01`, não só na assinatura.
+    `None` explícito falha com `ValueError` -- nunca degrada
+    silenciosamente para `ArmazenamentoArquivosEmMemoria()`."""
+    with pytest.raises(ValueError, match='armazenamento_arquivos'):
+        construir_pipeline_modulo01(
+            repositorio_documentos=RepositorioDocumentosEmMemoria(),
+            repositorio_historico=RepositorioHistoricoEmMemoria(),
+            repositorio_lotes=RepositorioLotesEmMemoria(),
+            repositorio_estados_esteira=RepositorioEstadosEsteiraEmMemoria(),
+            fonte_mensagens=FonteMensagensEmailFalsa(),
+            armazenamento_arquivos=None,
+        )

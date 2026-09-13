@@ -82,6 +82,7 @@ from magnata_os.documental.modulo01.adapters.email_captura import (
     AnexoEmailRecebido,
     MensagemEmailRecebida,
 )
+from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivosEmMemoria
 from magnata_os.documental.modulo01.composicao import construir_pipeline_modulo01
 from magnata_os.documental.modulo01.ponte_prestacao_holerite import (
     confirmar_holerite_para_inventario,
@@ -324,6 +325,7 @@ def _processar_lote_holerite(
         fonte_mensagens=FonteMensagensEmailFalsa([
             _mensagem(anexos or [_anexo()]),
         ]),
+        armazenamento_arquivos=ArmazenamentoArquivosEmMemoria(),
         fonte_candidatos_funcionario=_FonteCandidatosFuncionarioFake(),
     )
     resumo = pipeline.adapter_captura_email.capturar_novas_mensagens()
@@ -669,6 +671,7 @@ def test_caso9_multiplos_clientes_no_mesmo_lote_cada_um_com_sua_competencia(monk
                 _anexo('holerite_deslocado.pdf', b'texto-colab-deslocado'),
             ]),
         ]),
+        armazenamento_arquivos=ArmazenamentoArquivosEmMemoria(),
         fonte_candidatos_funcionario=_FonteCandidatosFuncionarioFake(),
     )
     resumo = pipeline.adapter_captura_email.capturar_novas_mensagens()
