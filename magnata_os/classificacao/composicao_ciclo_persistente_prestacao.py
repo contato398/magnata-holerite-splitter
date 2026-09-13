@@ -49,7 +49,12 @@ from .ciclo_prestacao import (
     executar_ciclo_prestacao,
 )
 from .competencia_esperada_prestacao import PoliticaCompetenciaPrestacao
-from .contratos import ReferenciaCanonica, ResultadoResolucaoSemantico
+from .contratos import (
+    DimensaoResolucao,
+    EstadoResolucaoDimensao,
+    ReferenciaCanonica,
+    ResultadoResolucaoSemantico,
+)
 from .execucao_prestacao import (
     ExecucaoPrestacao,
     RepositorioExecucoesPrestacao,
@@ -444,6 +449,120 @@ def _adquirir_inventario_via_corredor(
         )
 
     return inventario_adquirido, tuple(resultados_aquisicao)
+
+
+# ==== EVOLUÇÃO DO CONTRATO DO CICLO DE PRESTAÇÃO V1 -- INCREMENTO 5 ====
+# Seleção/validação de âncora real. NUNCA cria um novo
+# `ResultadoResolucaoSemantico` -- só examina candidatos já reais (ver
+# Incremento 4: vêm de `resultado_corredor.resolucao_semantica`, nunca
+# fabricados a partir de cliente+competência). Distinção deliberada de
+# `avaliar_prestacao_readiness` (`prestacao_readiness.py`): aquela
+# função faz as checagens cruzadas finais assumindo que UMA âncora já
+# foi escolhida; esta função é quem decide, entre 0..N evidências
+# reais concorrentes para o MESMO cliente/competência esperado, se
+# existe uma âncora e qual é -- sem isso, as checagens cruzadas de
+# `avaliar_prestacao_readiness` seriam tautológicas.
+
+
+def _dimensao_resolvida_com_valor_unico(
+    resultado: ResultadoResolucaoSemantico, dimensao: DimensaoResolucao,
+) -> Optional[ReferenciaCanonica]:
+    """Devolve o único valor confirmado de `dimensao` em `resultado` só
+    quando a dimensão está presente, no estado RESOLVIDA e com
+    EXATAMENTE 1 valor confirmado -- qualquer outra forma (dimensão
+    ausente, AMBIGUA/CONFLITO/NAO_ENCONTRADA/etc., 0 ou 2+ valores)
+    devolve `None`, tratada pelo chamador como candidato não-validável
+    (nunca uma escolha arbitrária entre valores)."""
+    resolucao_dimensao = next(
+        (item for item in resultado.resolucoes if item.dimensao == dimensao), None,
+    )
+    if resolucao_dimensao is None:
+        return None
+    if resolucao_dimensao.estado != EstadoResolucaoDimensao.RESOLVIDA:
+        return None
+    if len(resolucao_dimensao.valores_confirmados) != 1:
+        return None
+    return resolucao_dimensao.valores_confirmados[0]
+
+
+@dataclasses.dataclass(frozen=True)
+class ResultadoAvaliacaoCandidatosAncora:
+    """Saída de `avaliar_candidatos_ancora` -- exatamente 1 dos 2 campos
+    é significativo por vez: `ancora` presente (motivo_ausencia=None)
+    OU `motivo_ausencia` presente (ancora=None). Nunca os dois juntos,
+    nunca os dois ausentes."""
+
+    ancora: Optional[ResultadoResolucaoSemantico] = None
+    motivo_ausencia: Optional[str] = None
+
+
+MOTIVO_SEM_EVIDENCIA_DOCUMENTAL_REAL = 'sem_evidencia_documental_real'
+MOTIVO_RESOLUCOES_ANCORA_DIVERGENTES = 'resolucoes_ancora_divergentes'
+
+
+def avaliar_candidatos_ancora(
+    candidatos: Tuple[ResultadoResolucaoSemantico, ...],
+    cliente_esperado: ReferenciaCanonica,
+    competencia_esperada: ReferenciaCanonica,
+) -> ResultadoAvaliacaoCandidatosAncora:
+    """Avalia 0..N resoluções semânticas REAIS (nunca fabricadas) já
+    produzidas por documentos desta aquisição e decide se existe uma
+    âncora válida para `cliente_esperado`/`competencia_esperada`.
+
+    Um candidato é VALIDÁVEL só quando: `necessita_revisao_humana` é
+    False E as dimensões CLIENTE e COMPETÊNCIA estão, cada uma,
+    RESOLVIDA com exatamente 1 valor confirmado. Um candidato em
+    revisão (ambíguo, em conflito, não encontrado, técnica ou
+    humanamente pendente) NUNCA vira autoridade de âncora -- ele só
+    contribui para um resultado "sem âncora válida" (mesmo motivo de 0
+    candidatos: não há, hoje, uma distinção de negócio pedida entre
+    "nenhum documento" e "documentos só com evidência inconclusiva").
+
+    Entre os candidatos validáveis:
+    - se qualquer um resolve para um cliente/competência DIFERENTE do
+      esperado -- inclusive quando outros concordam com o esperado --
+      o resultado é DIVERGÊNCIA explícita
+      (`resolucoes_ancora_divergentes`), nunca um agrupamento
+      silencioso sob outro cliente e nunca uma escolha de lado, mesmo
+      que exista um candidato "certo" na mistura;
+    - senão, entre os que concordam com o esperado ("concordantes"): 1
+      é usado diretamente; N é resolvido por um desempate
+      DETERMINÍSTICO por `semantic_result_id` (ordem alfabética do
+      hash) -- isto NUNCA decide validade nem resolve conflito
+      nenhum, todos os N já foram provados equivalentes/concordantes
+      acima; só escolhe um representante determinístico entre
+      evidências reais e concordantes.
+
+    Determinístico e independente da ordem de `candidatos` -- o
+    desempate usa `min()` por uma chave estável, nunca "o primeiro da
+    lista"."""
+    candidatos_validaveis: list = []
+    for candidato in candidatos:
+        if candidato.necessita_revisao_humana:
+            continue
+        cliente_real = _dimensao_resolvida_com_valor_unico(candidato, DimensaoResolucao.CLIENTE)
+        competencia_real = _dimensao_resolvida_com_valor_unico(candidato, DimensaoResolucao.COMPETENCIA)
+        if cliente_real is None or competencia_real is None:
+            continue
+        candidatos_validaveis.append((candidato, cliente_real, competencia_real))
+
+    if not candidatos_validaveis:
+        return ResultadoAvaliacaoCandidatosAncora(
+            motivo_ausencia=MOTIVO_SEM_EVIDENCIA_DOCUMENTAL_REAL
+        )
+
+    divergentes = [
+        candidato for candidato, cliente_real, competencia_real in candidatos_validaveis
+        if cliente_real != cliente_esperado or competencia_real != competencia_esperada
+    ]
+    if divergentes:
+        return ResultadoAvaliacaoCandidatosAncora(
+            motivo_ausencia=MOTIVO_RESOLUCOES_ANCORA_DIVERGENTES
+        )
+
+    concordantes = tuple(candidato for candidato, _, _ in candidatos_validaveis)
+    escolhido = min(concordantes, key=lambda candidato: candidato.semantic_result_id)
+    return ResultadoAvaliacaoCandidatosAncora(ancora=escolhido)
 
 
 def executar_ciclo_prestacao_persistente(

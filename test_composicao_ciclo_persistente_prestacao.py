@@ -1098,5 +1098,210 @@ def test_falha_no_corredor_nunca_gera_entrada_em_resultados_aquisicao_mas_nao_im
     assert [r.documento_id for r in resultados_aquisicao] == ['doc-b']
 
 
+# ==== TESTES: evolução do contrato do ciclo de Prestação V1, Incremento 5 ====
+# `avaliar_candidatos_ancora` -- os 5 cenários obrigatórios (0
+# candidatos; 1 candidato; N concordantes; N divergentes; candidato em
+# revisão) + independência de ordem. NUNCA cria um novo
+# `ResultadoResolucaoSemantico` -- só monta candidatos sintéticos de
+# teste com os MESMOS contratos já usados por
+# `test_magnata_os_classificacao_prestacao_readiness.py`.
+
+from magnata_os.classificacao.composicao_ciclo_persistente_prestacao import (
+    MOTIVO_RESOLUCOES_ANCORA_DIVERGENTES,
+    MOTIVO_SEM_EVIDENCIA_DOCUMENTAL_REAL,
+    avaliar_candidatos_ancora,
+)
+from magnata_os.classificacao.contratos import (
+    AplicabilidadeDimensao,
+    Cardinalidade,
+    ConfiancaResolucao,
+    DimensaoResolucao,
+    EstadoResolucaoDimensao,
+    EstadoResultadoSemantico,
+    NivelConfianca,
+    PerfilAplicabilidadeResolucao,
+    RegraAplicabilidadeDimensao,
+    ResolucaoDimensao,
+    ResultadoResolucaoSemantico,
+)
+
+_CLIENTE_ESPERADO = ReferenciaCanonica('CLIENTE', 'cliente-ancora-1')
+_COMPETENCIA_ESPERADA = ReferenciaCanonica('COMPETENCIA', '2026-09')
+_OUTRO_CLIENTE = ReferenciaCanonica('CLIENTE', 'cliente-ancora-2')
+_OUTRA_COMPETENCIA = ReferenciaCanonica('COMPETENCIA', '2026-08')
+
+
+def _regra_ancora(dimensao):
+    return RegraAplicabilidadeDimensao(
+        dimensao=dimensao,
+        aplicabilidade=AplicabilidadeDimensao.OBRIGATORIA,
+        cardinalidade=Cardinalidade(1, 1),
+    )
+
+
+def _dimensao_ancora(dimensao, referencia=None, estado=EstadoResolucaoDimensao.RESOLVIDA):
+    return ResolucaoDimensao(
+        dimensao=dimensao,
+        estado=estado,
+        valores_confirmados=(referencia,) if referencia is not None else (),
+        confianca=ConfiancaResolucao(NivelConfianca.FORTE),
+    )
+
+
+def _candidato_ancora(
+    documento_id,
+    cliente=_CLIENTE_ESPERADO,
+    competencia=_COMPETENCIA_ESPERADA,
+    estado_cliente=EstadoResolucaoDimensao.RESOLVIDA,
+    estado_competencia=EstadoResolucaoDimensao.RESOLVIDA,
+    necessita_revisao_humana=False,
+):
+    perfil = PerfilAplicabilidadeResolucao(
+        perfil_id='prestacao-ancora-teste',
+        version='1',
+        escopo_documental='prestacao-contas',
+        regras=(
+            _regra_ancora(DimensaoResolucao.CLIENTE),
+            _regra_ancora(DimensaoResolucao.COMPETENCIA),
+        ),
+    )
+    return ResultadoResolucaoSemantico(
+        documento_id=documento_id,
+        resolver_id='resolver-teste-ancora',
+        resolver_version='1',
+        politica_id='prestacao-ancora',
+        politica_version='1',
+        perfil=perfil,
+        resolucoes=(
+            _dimensao_ancora(
+                DimensaoResolucao.CLIENTE,
+                cliente if estado_cliente == EstadoResolucaoDimensao.RESOLVIDA else None,
+                estado_cliente,
+            ),
+            _dimensao_ancora(
+                DimensaoResolucao.COMPETENCIA,
+                competencia if estado_competencia == EstadoResolucaoDimensao.RESOLVIDA else None,
+                estado_competencia,
+            ),
+        ),
+        estado_consolidado=(
+            EstadoResultadoSemantico.RESOLVIDA
+            if estado_cliente == EstadoResolucaoDimensao.RESOLVIDA
+            and estado_competencia == EstadoResolucaoDimensao.RESOLVIDA
+            else EstadoResultadoSemantico.INCONCLUSIVA
+        ),
+        necessita_revisao_humana=necessita_revisao_humana,
+    )
+
+
+def test_ancora_zero_candidatos_sem_evidencia_documental_real():
+    resultado = avaliar_candidatos_ancora((), _CLIENTE_ESPERADO, _COMPETENCIA_ESPERADA)
+    assert resultado.ancora is None
+    assert resultado.motivo_ausencia == MOTIVO_SEM_EVIDENCIA_DOCUMENTAL_REAL
+
+
+def test_ancora_um_candidato_valido_e_usado_diretamente():
+    candidato = _candidato_ancora('doc-1')
+    resultado = avaliar_candidatos_ancora((candidato,), _CLIENTE_ESPERADO, _COMPETENCIA_ESPERADA)
+    assert resultado.motivo_ausencia is None
+    assert resultado.ancora is candidato
+
+
+def test_ancora_n_candidatos_concordantes_escolhe_representante_deterministico():
+    candidato_a = _candidato_ancora('doc-a')
+    candidato_b = _candidato_ancora('doc-b')
+    candidato_c = _candidato_ancora('doc-c')
+    esperado = min(
+        (candidato_a, candidato_b, candidato_c), key=lambda c: c.semantic_result_id
+    )
+
+    for ordem in (
+        (candidato_a, candidato_b, candidato_c),
+        (candidato_c, candidato_b, candidato_a),
+        (candidato_b, candidato_c, candidato_a),
+    ):
+        resultado = avaliar_candidatos_ancora(ordem, _CLIENTE_ESPERADO, _COMPETENCIA_ESPERADA)
+        assert resultado.motivo_ausencia is None
+        assert resultado.ancora is esperado  # independente da ordem de entrada
+
+
+def test_ancora_candidatos_divergentes_nunca_escolhe_um_lado():
+    """Um candidato concorda com o esperado, outro resolve para OUTRO
+    cliente -- nunca agrupado silenciosamente, nunca escolhido o
+    'certo': resultado é divergência explícita, sem âncora nenhuma."""
+    candidato_certo = _candidato_ancora('doc-certo')
+    candidato_outro_cliente = _candidato_ancora('doc-errado', cliente=_OUTRO_CLIENTE)
+
+    resultado = avaliar_candidatos_ancora(
+        (candidato_certo, candidato_outro_cliente), _CLIENTE_ESPERADO, _COMPETENCIA_ESPERADA,
+    )
+    assert resultado.ancora is None
+    assert resultado.motivo_ausencia == MOTIVO_RESOLUCOES_ANCORA_DIVERGENTES
+
+    # Independência de ordem também na divergência.
+    resultado_invertido = avaliar_candidatos_ancora(
+        (candidato_outro_cliente, candidato_certo), _CLIENTE_ESPERADO, _COMPETENCIA_ESPERADA,
+    )
+    assert resultado_invertido.motivo_ausencia == MOTIVO_RESOLUCOES_ANCORA_DIVERGENTES
+
+
+def test_ancora_candidatos_divergentes_por_competencia_tambem_nunca_escolhe_lado():
+    candidato_certo = _candidato_ancora('doc-certo')
+    candidato_outra_competencia = _candidato_ancora(
+        'doc-outra-competencia', competencia=_OUTRA_COMPETENCIA
+    )
+    resultado = avaliar_candidatos_ancora(
+        (candidato_certo, candidato_outra_competencia), _CLIENTE_ESPERADO, _COMPETENCIA_ESPERADA,
+    )
+    assert resultado.ancora is None
+    assert resultado.motivo_ausencia == MOTIVO_RESOLUCOES_ANCORA_DIVERGENTES
+
+
+@pytest.mark.parametrize(
+    'estado_cliente,estado_competencia,necessita_revisao',
+    [
+        (EstadoResolucaoDimensao.AMBIGUA, EstadoResolucaoDimensao.RESOLVIDA, False),
+        (EstadoResolucaoDimensao.CONFLITO, EstadoResolucaoDimensao.RESOLVIDA, False),
+        (EstadoResolucaoDimensao.NAO_ENCONTRADA, EstadoResolucaoDimensao.RESOLVIDA, False),
+        (EstadoResolucaoDimensao.RESOLVIDA, EstadoResolucaoDimensao.RESOLVIDA, True),
+    ],
+)
+def test_ancora_candidato_em_revisao_nunca_vira_autoridade(
+    estado_cliente, estado_competencia, necessita_revisao,
+):
+    """Candidato ambíguo/em conflito/não encontrado/com revisão humana
+    pendente NUNCA vira âncora sozinho -- contribui para 'sem âncora
+    válida' (mesmo motivo de 0 candidatos: não há distinção de negócio
+    pedida hoje entre 'nenhum documento' e 'só evidência
+    inconclusiva')."""
+    candidato_em_revisao = _candidato_ancora(
+        'doc-revisao',
+        estado_cliente=estado_cliente,
+        estado_competencia=estado_competencia,
+        necessita_revisao_humana=necessita_revisao,
+    )
+    resultado = avaliar_candidatos_ancora(
+        (candidato_em_revisao,), _CLIENTE_ESPERADO, _COMPETENCIA_ESPERADA,
+    )
+    assert resultado.ancora is None
+    assert resultado.motivo_ausencia == MOTIVO_SEM_EVIDENCIA_DOCUMENTAL_REAL
+
+
+def test_ancora_candidato_em_revisao_misturado_com_candidato_valido_usa_o_valido():
+    """1 candidato em revisão + 1 candidato válido e concordante -- o
+    de revisão nunca vira autoridade, mas também nunca contamina o
+    válido: a âncora real é escolhida normalmente."""
+    candidato_em_revisao = _candidato_ancora(
+        'doc-revisao', estado_cliente=EstadoResolucaoDimensao.AMBIGUA,
+    )
+    candidato_valido = _candidato_ancora('doc-valido')
+
+    resultado = avaliar_candidatos_ancora(
+        (candidato_em_revisao, candidato_valido), _CLIENTE_ESPERADO, _COMPETENCIA_ESPERADA,
+    )
+    assert resultado.motivo_ausencia is None
+    assert resultado.ancora is candidato_valido
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
