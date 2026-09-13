@@ -642,136 +642,62 @@ def test_ciclo_persistente_via_adaptador_entrada_duravel():
     assert execucao.estado in ('INICIADA', 'CONCLUIDA', 'FALHA')
 
 
-# ==== BLOCKER A: EXTRAÇÃO PDF REAL ====
-
-
-def test_blocker_a_extracao_pdf_real():
-    """BLOCKER A: Validar que extrair_texto_pdf real é chamado, não placeholder UTF-8."""
-    from magnata_os.documental.extracao_texto import extrair_texto_pdf
-    import io
-
-    # PDF mínimo válido (texto: "Teste PDF")
-    pdf_bytes = b"""%PDF-1.1
-1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj
-2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj
-3 0 obj<</Type/Page/Parent 2 0 R/Resources<</Font<</F1 4 0 R>>>>/MediaBox[0 0 612 792]/Contents 5 0 R>>endobj
-4 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj
-5 0 obj<</Length 44>>stream
-BT /F1 12 Tf 100 700 Td (Teste PDF) Tj ET
-endstream endobj
-xref
-0 6
-0000000000 65535 f
-0000000009 00000 n
-0000000058 00000 n
-0000000115 00000 n
-0000000214 00000 n
-0000000281 00000 n
-trailer<</Size 6/Root 1 0 R>>
-startxref
-375
-%%EOF"""
-
-    # Extrair usando função canônica
-    texto = extrair_texto_pdf(pdf_bytes)
-
-    # Validar que texto foi extraído (não é vazio, não é placeholder UTF-8)
-    assert texto is not None
-    assert len(texto) > 0
-    # Não deve ser "não-decodificável" (o que seria o placeholder UTF-8 com errors='replace')
-    assert 'Teste PDF' in texto or 'PDF' in texto  # Encontrar conteúdo do PDF
-
-
-def test_blocker_a_pdf_corrompido_nao_silencioso():
-    """BLOCKER A: Validar que erro de PDF corrompido é explícito, não silencioso."""
-    from magnata_os.documental.extracao_texto import extrair_texto_pdf
-
-    # PDF corrompido (não é PDF válido)
-    pdf_corrompido = b"Not a PDF, just random bytes"
-
-    # Deve lançar exceção, não retornar string vazia silenciosamente
-    with pytest.raises(Exception):  # pdfplumber.PDFException ou similar
-        extrair_texto_pdf(pdf_corrompido)
-
-
-# ==== BLOCKER B: FALHAS NÃO-SILENCIOSAS ====
-
-
-def test_blocker_b_blob_nao_encontrado_auditavel():
-    """BLOCKER B: Validar que erro de blob não-encontrado é auditável."""
-    from magnata_os.documental.modulo01.dominio import Documento
-
-    # Simular repositório de documentos com blob faltante
-    class RepositorioComBlobFaltante:
-        def listar_todos(self):
-            # Documento com hash que não existe em armazenamento
-            return [
-                type('obj', (), {
-                    'documento_id': 'doc1',
-                    'hash_sha256': 'hash_inexistente_12345',
-                })()
-            ]
-
-    class ArmazenamentoBlobNaoEncontra:
-        def abrir_leitura(self, hash_sha256):
-            raise FileNotFoundError(f"Blob não encontrado: {hash_sha256}")
-
-    # Validar que composição continua (não crash) mas registra erro
-    contexto = ContextoComposicaoPrestacao(
-        competencia_base='2026-09',
-        fonte_clientes=FonteClientesPrestacaoMock(),
-        fonte_requisitos=FonteRequisitosPrestacaoMock(),
-        repositorio_execucoes=RepositorioExecucoesPrestacaoMemoria(),
-        repositorio_documentos=RepositorioComBlobFaltante(),
-        armazenamento_arquivos=ArmazenamentoBlobNaoEncontra(),
-    )
-
-    # Deve completar (não crash), estado INICIADA ou CONCLUIDA
-    # (CONCLUIDA se ciclo com inventário vazio for válido)
-    execucao = executar_ciclo_prestacao_persistente(contexto)
-    assert execucao.estado in ('INICIADA', 'CONCLUIDA')  # Não terminal
-    assert execucao.estado != 'FALHA'  # Nunca deve ser terminal por erro de blob
-
-
-# ==== BLOCKER C: FALHA TERMINAL CLASSIFICADA ====
-
-
-def test_blocker_c_falha_terminal_vs_documental():
-    """BLOCKER C: Validar que erro documental NÃO vira FALHA terminal automaticamente."""
-    # Erro de tipo ValueError (documental) durante corredor
-    # Não deve marcar FALHA, apenas deixar INICIADA
-
-    class RepositorioDocumentosComErroDocumental:
-        def listar_todos(self):
-            # Documento que causará erro documental no corredor
-            return [
-                type('obj', (), {
-                    'documento_id': 'doc_ambiguo',
-                    'hash_sha256': 'hash_ambiguo_xyz',
-                })()
-            ]
-
-    class ArmazenamentoComConteudo:
-        def abrir_leitura(self, hash_sha256):
-            # Retornar bytes simulados (vazio)
-            import io
-            return io.BytesIO(b"conteudo vazio")
-
-    contexto = ContextoComposicaoPrestacao(
-        competencia_base='2026-09',
-        fonte_clientes=FonteClientesPrestacaoMock(),
-        fonte_requisitos=FonteRequisitosPrestacaoMock(),
-        repositorio_execucoes=RepositorioExecucoesPrestacaoMemoria(),
-        repositorio_documentos=RepositorioDocumentosComErroDocumental(),
-        armazenamento_arquivos=ArmazenamentoComConteudo(),
-    )
-
-    # Deve completar com estado INICIADA (retomável), não FALHA
-    execucao = executar_ciclo_prestacao_persistente(contexto)
-    assert execucao.estado in ('INICIADA', 'CONCLUIDA')
-
-
-# ==== BLOCKER D: WIRING MORTO REMOVIDO ====
+# ==== BLOCKER D (5da729f): WIRING MORTO REMOVIDO ====
+#
+# BLOCKERs A, B, C de 5da729f foram REMOVIDOS daqui após mapeamento
+# individual (correção pós-merge PR #158) -- cobertura nova, mais
+# rigorosa, comprovadamente equivalente ou superior para cada um:
+#
+# - test_blocker_a_extracao_pdf_real (chamava extrair_texto_pdf
+#   diretamente, com PDF hand-rolled, e afirmava 'Teste PDF' ou 'PDF'
+#   no texto extraído): a correção do EXTRATOR em si (que produz texto
+#   legível de um PDF real) já é coberta por
+#   test_roteamento_documental_shadow.py::TestFluxoCompletoComPdfReal::
+#   test_holerite_via_pdf_real (pré-existente, não desta missão). A
+#   INTEGRAÇÃO deste módulo com o extrator -- o que este arquivo
+#   deveria testar -- passa a ser coberta por
+#   test_pdf_real_e_extraido_pelo_extrator_canonico_sem_erro (acima),
+#   que exercita _adquirir_inventario_via_corredor de ponta a ponta e
+#   confirma, via caplog, que nenhum evento de falha foi emitido.
+#
+# - test_blocker_a_pdf_corrompido_nao_silencioso (chamava
+#   extrair_texto_pdf diretamente, esperava `pytest.raises(Exception)`):
+#   o comportamento do extrator cru ao receber bytes inválidos é
+#   legado, não tocado por esta missão, e já coberto indiretamente por
+#   test_roteamento_documental_shadow.py::test_pdf_invalido_tem_motivo_
+#   proprio_diferente. O comportamento que ESTE arquivo precisa provar
+#   -- o que a composição faz com um PDF corrompido -- passa a ser
+#   test_pdf_corrompido_e_pulado_via_extrator_canonico (acima): usa
+#   extrair_texto_seguro (nunca deixa a exceção escapar até aqui) e
+#   confirma o evento `pdf_ilegivel` via caplog.
+#
+# - test_blocker_b_blob_nao_encontrado_auditavel (usava objetos
+#   fake via type('obj', (), {...})() SEM mime_type, chamado por
+#   executar_ciclo_prestacao_persistente sem popular resolucoes_ancora/
+#   competencias_por_cliente -- o laço de aquisição NUNCA executava;
+#   comprovado empiricamente na auditoria pós-merge, spy em
+#   executar_documento_readonly chamado 0 vezes mesmo com
+#   requisitos_base preenchido. Testava, sem saber, um caminho morto):
+#   substituído por
+#   test_blob_nao_encontrado_e_logado_e_documento_pulado_sem_derrubar_
+#   execucao (acima), que chama _adquirir_inventario_via_corredor
+#   DIRETAMENTE com um Documento real (com mime_type) e afirma
+#   positivamente que o evento blob_nao_encontrado foi logado --
+#   cobertura estritamente superior: exercita o código de verdade e
+#   faz uma afirmação positiva, não só "não quebrou".
+#
+# - test_blocker_c_falha_terminal_vs_documental (mesmo problema de
+#   caminho morto do anterior; além disso, testava o comportamento da
+#   heurística de classificação terminal/substring que o Incremento 4
+#   desta mesma correção REVERTEU -- o alvo do teste deixou de existir
+#   por desenho): substituído por
+#   test_excecao_generica_sem_palavras_magicas_ainda_marca_falha
+#   (acima), que prova o comportamento restaurado (qualquer exceção
+#   marca FALHA) de forma direta e inequívoca.
+#
+# BLOCKER D é mantido tal como estava -- nenhuma cobertura nova o
+# substitui, continua registrando uma intenção útil (guarda contra
+# reintrodução do campo morto) sem equivalente em outro lugar.
 
 
 def test_blocker_d_estrategia_aquisicao_removida():
