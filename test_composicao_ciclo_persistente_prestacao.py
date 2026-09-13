@@ -813,10 +813,10 @@ def _contexto_minimo(repositorio_documentos, armazenamento_arquivos):
     )
 
 
-def test_mime_nao_pdf_e_pulado_sem_decodificar_como_texto():
-    """Incremento 2: mime_type que não seja PDF nunca é decodificado
-    como texto arbitrário -- é pulado, sem parser novo. Nenhum item
-    chega ao inventário adquirido a partir desse documento."""
+def test_mime_nao_pdf_e_pulado_sem_decodificar_como_texto(caplog):
+    """Incremento 2/3: mime_type que não seja PDF nunca é decodificado
+    como texto arbitrário -- é pulado, sem parser novo, e loga o evento
+    ESTÁVEL `mime_nao_suportado`."""
     repositorio_docs = RepositorioDocumentosEmMemoria()
     armazenamento = ArmazenamentoArquivosEmMemoria()
     conteudo = b'nao e pdf'
@@ -827,19 +827,25 @@ def test_mime_nao_pdf_e_pulado_sem_decodificar_como_texto():
     )
     repositorio_docs.salvar(_documento_bruto('doc-texto', hash_sha256, mime_type='text/plain'))
 
-    inventario = _adquirir_inventario_via_corredor(
-        _contexto_minimo(repositorio_docs, armazenamento), _CICLO_TESTE,
-    )
+    with caplog.at_level('WARNING'):
+        inventario = _adquirir_inventario_via_corredor(
+            _contexto_minimo(repositorio_docs, armazenamento), _CICLO_TESTE,
+        )
     assert inventario is not None  # nunca lança
+    eventos = [getattr(r, 'evento', None) for r in caplog.records]
+    assert 'mime_nao_suportado' in eventos
+    registro = next(r for r in caplog.records if getattr(r, 'evento', None) == 'mime_nao_suportado')
+    assert registro.documento_id == 'doc-texto'
+    assert registro.mime_type == 'text/plain'
 
 
 @pytest.mark.skipif(not _PDFPLUMBER_FUNCIONAL, reason=_MOTIVO_SKIP_PDFPLUMBER)
-def test_pdf_corrompido_e_pulado_via_extrator_canonico():
-    """Incremento 2: PDF (mime correto) mas bytes inválidos -- o
+def test_pdf_corrompido_e_pulado_via_extrator_canonico(caplog):
+    """Incremento 2/3: PDF (mime correto) mas bytes inválidos -- o
     extrator canônico (`extrair_texto_seguro` ->
     `extrair_texto_pdf`/pdfplumber) retorna None (nunca lança para fora
-    daqui) -- documento é pulado, distinto do caso de mime não
-    suportado."""
+    daqui) -- documento é pulado, evento `pdf_ilegivel`, distinto do
+    caso de mime não suportado."""
     repositorio_docs = RepositorioDocumentosEmMemoria()
     armazenamento = ArmazenamentoArquivosEmMemoria()
     conteudo = b'isto-nao-e-um-pdf-valido'
@@ -850,22 +856,26 @@ def test_pdf_corrompido_e_pulado_via_extrator_canonico():
     )
     repositorio_docs.salvar(_documento_bruto('doc-pdf-invalido', hash_sha256))
 
-    inventario = _adquirir_inventario_via_corredor(
-        _contexto_minimo(repositorio_docs, armazenamento), _CICLO_TESTE,
-    )
+    with caplog.at_level('WARNING'):
+        inventario = _adquirir_inventario_via_corredor(
+            _contexto_minimo(repositorio_docs, armazenamento), _CICLO_TESTE,
+        )
     assert inventario is not None
+    eventos = [getattr(r, 'evento', None) for r in caplog.records]
+    assert 'pdf_ilegivel' in eventos
+    assert 'mime_nao_suportado' not in eventos
 
 
 @pytest.mark.skipif(not _PDFPLUMBER_FUNCIONAL, reason=_MOTIVO_SKIP_PDFPLUMBER)
-def test_pdf_real_e_extraido_pelo_extrator_canonico_sem_erro():
-    """Incremento 2: PDF real (fabricado com reportlab, mesmo helper já
-    usado em test_roteamento_documental_shadow.py) é extraído pelo
+def test_pdf_real_e_extraido_pelo_extrator_canonico_sem_erro(caplog):
+    """Incremento 2/3: PDF real (fabricado com reportlab, mesmo helper
+    já usado em test_roteamento_documental_shadow.py) é extraído pelo
     MESMO extrator canônico usado por processar_holerite/
     processar_extrato -- chega ao corredor sem cair em nenhum dos
-    caminhos de falha (mime não suportado, PDF ilegível). Prova a
-    correção do placeholder original (`decode('utf-8')` na v1 da PR
-    #158) e do uso cru de `extrair_texto_pdf` sem guarda de mime (na
-    versão mesclada, `5da729f`)."""
+    caminhos de falha (mime não suportado, PDF ilegível, corredor).
+    Prova a correção do placeholder original (`decode('utf-8')` na v1
+    da PR #158) e do uso cru de `extrair_texto_pdf` sem guarda de mime
+    (na versão mesclada, `5da729f`)."""
     repositorio_docs = RepositorioDocumentosEmMemoria()
     armazenamento = ArmazenamentoArquivosEmMemoria()
     pdf_bytes = _pdf_minimo_com_texto('Extrato da Folha de Pagamento - Setembro 2026')
@@ -876,10 +886,119 @@ def test_pdf_real_e_extraido_pelo_extrator_canonico_sem_erro():
     )
     repositorio_docs.salvar(_documento_bruto('doc-pdf-real', hash_sha256, tamanho=len(pdf_bytes)))
 
-    inventario = _adquirir_inventario_via_corredor(
-        _contexto_minimo(repositorio_docs, armazenamento), _CICLO_TESTE,
-    )
+    with caplog.at_level('WARNING'):
+        inventario = _adquirir_inventario_via_corredor(
+            _contexto_minimo(repositorio_docs, armazenamento), _CICLO_TESTE,
+        )
     assert inventario is not None
+    eventos = [getattr(r, 'evento', None) for r in caplog.records]
+    assert not eventos  # nenhuma falha logada -- caminho feliz
+
+
+def test_blob_nao_encontrado_e_logado_e_documento_pulado_sem_derrubar_execucao(caplog):
+    """Incremento 3: Documento aponta para um hash que nunca foi
+    armazenado -- `ArquivoNaoEncontrado` (já existente em
+    armazenamento.py) gera o evento ESTÁVEL `blob_nao_encontrado`,
+    nunca uma exceção não tratada, nunca confundida com falha de
+    leitura."""
+    repositorio_docs = RepositorioDocumentosEmMemoria()
+    armazenamento = ArmazenamentoArquivosEmMemoria()
+    repositorio_docs.salvar(_documento_bruto('doc-ausente', 'hash-nunca-armazenado'))
+
+    with caplog.at_level('WARNING'):
+        inventario = _adquirir_inventario_via_corredor(
+            _contexto_minimo(repositorio_docs, armazenamento), _CICLO_TESTE,
+        )
+
+    assert inventario is not None  # nunca lança, nunca derruba a execução
+    eventos = [getattr(r, 'evento', None) for r in caplog.records]
+    assert eventos == ['blob_nao_encontrado']
+    registro = caplog.records[0]
+    assert registro.documento_id == 'doc-ausente'
+    assert registro.hash_sha256 == 'hash-nunca-armazenado'
+
+
+def test_falha_leitura_blob_diferente_de_nao_encontrado_e_logada_distintamente(caplog):
+    """Incremento 3: 'encontrado mas falhou ao ler' (qualquer exceção
+    que não seja `ArquivoNaoEncontrado`) precisa de um evento DIFERENTE
+    de 'não encontrado' -- os dois eram o mesmo `continue` silencioso
+    antes desta correção. Nunca a mensagem crua da exceção no log."""
+    class _ArmazenamentoQuebrado:
+        def abrir_leitura(self, hash_sha256):
+            raise RuntimeError('disco corrompido -- detalhe interno sensível')
+
+    repositorio_docs = RepositorioDocumentosEmMemoria()
+    repositorio_docs.salvar(_documento_bruto('doc-corrompido', 'hash-x'))
+
+    with caplog.at_level('ERROR'):
+        inventario = _adquirir_inventario_via_corredor(
+            _contexto_minimo(repositorio_docs, _ArmazenamentoQuebrado()), _CICLO_TESTE,
+        )
+
+    assert inventario is not None
+    eventos = [getattr(r, 'evento', None) for r in caplog.records]
+    assert eventos == ['blob_falha_leitura']
+    registro = caplog.records[0]
+    assert registro.documento_id == 'doc-corrompido'
+    assert registro.exception_type == 'RuntimeError'
+    # nunca a mensagem crua da exceção -- não vaza detalhe do backend
+    for r in caplog.records:
+        assert 'disco corrompido' not in r.getMessage()
+
+
+def test_falha_no_corredor_e_logada_e_nao_impede_processamento_dos_demais(caplog, monkeypatch):
+    """Incremento 3: uma falha inesperada dentro de
+    `executar_documento_readonly` (nunca uma falha de negócio desenhada
+    -- ver docstring) é logada com evento `corredor_falhou` e o tipo da
+    exceção, nunca propagada para fora do laço, e NUNCA impede que os
+    demais documentos do mesmo lote sejam processados."""
+    import magnata_os.classificacao.composicao_ciclo_persistente_prestacao as modulo
+
+    repositorio_docs = RepositorioDocumentosEmMemoria()
+    armazenamento = ArmazenamentoArquivosEmMemoria()
+
+    for documento_id, texto in (('doc-a', 'Holerite A'), ('doc-b', 'Holerite B')):
+        conteudo = texto.encode('utf-8')
+        hash_sha256 = hashlib.sha256(conteudo).hexdigest()
+        armazenamento.armazenar(
+            hash_sha256=hash_sha256, conteudo=conteudo, mime_type='application/pdf',
+            nome_original=f'{documento_id}.pdf', tamanho=len(conteudo),
+        )
+        repositorio_docs.salvar(_documento_bruto(documento_id, hash_sha256))
+
+    # extrair_texto_seguro sempre devolve texto não-None (não estamos
+    # testando extração real de PDF aqui, só isolamento de falha do
+    # corredor) -- monkeypatch só desta função, corredor real abaixo.
+    monkeypatch.setattr(modulo, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer')
+
+    chamadas = []
+
+    def _executar_com_falha_para_doc_a(contexto_corredor, sink):
+        chamadas.append(contexto_corredor.documento_id)
+        if contexto_corredor.documento_id == 'doc-a':
+            raise ValueError('falha inesperada no corredor')
+        return ()
+
+    monkeypatch.setattr(modulo, 'executar_documento_readonly', _executar_com_falha_para_doc_a)
+
+    with caplog.at_level('WARNING'):
+        inventario = _adquirir_inventario_via_corredor(
+            _contexto_minimo(repositorio_docs, armazenamento), _CICLO_TESTE,
+        )
+
+    assert inventario is not None
+    # AMBOS os documentos foram tentados -- doc-a falhando não impediu doc-b
+    assert set(chamadas) == {'doc-a', 'doc-b'}
+    eventos_doc_a = [
+        r for r in caplog.records
+        if getattr(r, 'evento', None) == 'corredor_falhou' and r.documento_id == 'doc-a'
+    ]
+    assert len(eventos_doc_a) == 1
+    assert eventos_doc_a[0].exception_type == 'ValueError'
+    assert not any(
+        getattr(r, 'evento', None) == 'corredor_falhou' and r.documento_id == 'doc-b'
+        for r in caplog.records
+    )
 
 
 def test_sem_repositorio_documentos_ou_armazenamento_retorna_inventario_vazio_sem_erro():

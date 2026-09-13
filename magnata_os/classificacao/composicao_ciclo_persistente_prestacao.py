@@ -38,6 +38,7 @@ verdade)."""
 from __future__ import annotations
 
 import dataclasses
+import logging
 from datetime import datetime, timezone
 from typing import Mapping, Optional, Protocol, Sequence, Tuple
 
@@ -54,6 +55,7 @@ from .execucao_prestacao import (
     RepositorioExecucoesPrestacao,
     criar_execucao_prestacao,
 )
+from magnata_os.documental.modulo01.armazenamento import ArquivoNaoEncontrado
 from magnata_os.documental.modulo01.dominio import Documento
 from .fonte_clientes_prestacao import FonteClientesPrestacao
 from .fonte_colaboradores_esperados_prestacao import (
@@ -77,6 +79,23 @@ from .prestacao_readiness import (
     RequisitoDocumentalPrestacao,
 )
 from .roteamento_documental import extrair_texto_seguro
+
+_logger = logging.getLogger(__name__)
+
+# Nomes de evento ESTÁVEIS para observabilidade da aquisição (correção
+# pós-merge PR #158, Incremento 3) -- campo próprio no registro de log
+# (`extra={'evento': ...}`), nunca embutidos só em frase livre. Isso
+# permite filtrar/agregar por evento sem depender de parsing de texto
+# humano, preparando o caminho para observabilidade futura (ex.:
+# métricas, alertas) sem reescrever quem loga. Mesmo idioma já adotado
+# em `magnata_os/orquestrador/observabilidade.py`: só campos seguros
+# (identificadores, nome de tipo de exceção), nunca `str(exc)` cru,
+# nunca conteúdo do documento.
+EVENTO_BLOB_NAO_ENCONTRADO = 'blob_nao_encontrado'
+EVENTO_BLOB_FALHA_LEITURA = 'blob_falha_leitura'
+EVENTO_MIME_NAO_SUPORTADO = 'mime_nao_suportado'
+EVENTO_PDF_ILEGIVEL = 'pdf_ilegivel'
+EVENTO_CORREDOR_FALHOU = 'corredor_falhou'
 
 
 # ==== AQUISIÇÃO CANÔNICA (COM CORREDOR) ====
@@ -234,7 +253,17 @@ def _adquirir_inventario_via_corredor(
     `executar_documento_readonly` chamado 0 vezes mesmo com
     `requisitos_base` preenchido). Mesmo comportamento observável de
     antes; `executar_ciclo_prestacao_persistente` só passou a chamar
-    esta função no lugar do laço inline."""
+    esta função no lugar do laço inline.
+
+    Observabilidade (Incremento 3): cada ponto de falha loga um evento
+    ESTÁVEL (`EVENTO_*`, campo próprio, nunca só texto livre) com
+    `documento_id`/`hash_sha256` e, quando aplicável,
+    `type(exc).__name__` -- NUNCA `str(exc)` cru, nunca conteúdo do
+    documento ou PII. Substitui o dict `erros_aquisicao` de `5da729f`,
+    que era escrito e nunca lido em lugar nenhum -- observabilidade
+    inexistente apesar do nome. 1 documento com problema nunca impede o
+    processamento dos demais (mesma política de isolamento já
+    existente antes desta correção)."""
     inventario_adquirido = InventarioPrestacaoEmMemoria()
     if not (contexto.repositorio_documentos and contexto.armazenamento_arquivos):
         return inventario_adquirido
@@ -242,15 +271,45 @@ def _adquirir_inventario_via_corredor(
     documentos_disponiveis = contexto.repositorio_documentos.listar_todos()
 
     for documento_bruto in documentos_disponiveis:
-        # Recuperar conteúdo do blob pelo hash.
+        # Recuperar conteúdo do blob pelo hash. Distinguir
+        # explicitamente "não encontrado" (`ArquivoNaoEncontrado`, já
+        # existente em `armazenamento.py`) de "encontrado mas falhou ao
+        # ler" (qualquer outra exceção do backend) -- os dois eram o
+        # mesmo `continue` silencioso antes desta correção.
         try:
             with contexto.armazenamento_arquivos.abrir_leitura(
                 documento_bruto.hash_sha256
             ) as arquivo:
                 conteudo_bytes = arquivo.read()
-        except Exception:
-            # Falha em recuperar blob -- pular documento. (Observabilidade
-            # real desta falha: Incremento 3 desta mesma correção.)
+        except ArquivoNaoEncontrado:
+            _logger.warning(
+                '%s documento_id=%s hash_sha256=%s',
+                EVENTO_BLOB_NAO_ENCONTRADO,
+                documento_bruto.documento_id, documento_bruto.hash_sha256,
+                extra={
+                    'evento': EVENTO_BLOB_NAO_ENCONTRADO,
+                    'documento_id': documento_bruto.documento_id,
+                    'hash_sha256': documento_bruto.hash_sha256,
+                },
+            )
+            continue
+        except Exception as exc:
+            # Encontrado mas falhou ao ler -- nunca confundir com
+            # "documento ausente". Só o TIPO da exceção é logado, nunca
+            # a mensagem crua (pode ecoar conteúdo do backend de
+            # armazenamento).
+            _logger.error(
+                '%s documento_id=%s hash_sha256=%s exception_type=%s',
+                EVENTO_BLOB_FALHA_LEITURA,
+                documento_bruto.documento_id, documento_bruto.hash_sha256,
+                type(exc).__name__,
+                extra={
+                    'evento': EVENTO_BLOB_FALHA_LEITURA,
+                    'documento_id': documento_bruto.documento_id,
+                    'hash_sha256': documento_bruto.hash_sha256,
+                    'exception_type': type(exc).__name__,
+                },
+            )
             continue
 
         # Extração canônica segura, com decisão explícita de MIME
@@ -264,8 +323,18 @@ def _adquirir_inventario_via_corredor(
         # no extrator, vira um caminho próprio, distinto de "PDF
         # ilegível".
         if documento_bruto.mime_type != 'application/pdf':
-            # Mime não suportado -- pular documento. (Observabilidade
-            # real: Incremento 3.)
+            _logger.warning(
+                '%s documento_id=%s hash_sha256=%s mime_type=%s',
+                EVENTO_MIME_NAO_SUPORTADO,
+                documento_bruto.documento_id, documento_bruto.hash_sha256,
+                documento_bruto.mime_type,
+                extra={
+                    'evento': EVENTO_MIME_NAO_SUPORTADO,
+                    'documento_id': documento_bruto.documento_id,
+                    'hash_sha256': documento_bruto.hash_sha256,
+                    'mime_type': documento_bruto.mime_type,
+                },
+            )
             continue
 
         texto_documento = extrair_texto_seguro(conteudo_bytes)
@@ -273,7 +342,16 @@ def _adquirir_inventario_via_corredor(
             # PDF corrompido/ilegível (ex.: escaneado sem OCR) -- mesma
             # distinção honesta já feita por `extrair_texto_seguro`:
             # nunca uma string vazia tratada como classificável.
-            # (Observabilidade real: Incremento 3.)
+            _logger.warning(
+                '%s documento_id=%s hash_sha256=%s',
+                EVENTO_PDF_ILEGIVEL,
+                documento_bruto.documento_id, documento_bruto.hash_sha256,
+                extra={
+                    'evento': EVENTO_PDF_ILEGIVEL,
+                    'documento_id': documento_bruto.documento_id,
+                    'hash_sha256': documento_bruto.hash_sha256,
+                },
+            )
             continue
 
         # Construir contexto para o corredor (todas as dependências são opcionais)
@@ -297,12 +375,27 @@ def _adquirir_inventario_via_corredor(
             politica_requisitos=None,
         )
 
-        # Executar corredor: resolve semanticamente, escreve no inventário
+        # Executar corredor: resolve semanticamente, escreve no
+        # inventário. `executar_documento_readonly` é uma função pura
+        # sem caminho de falha de negócio desenhado (nunca levanta
+        # exceção própria) -- qualquer exceção aqui é inesperada, nunca
+        # uma decisão de negócio a mascarar. Logada com evidência
+        # mínima antes de seguir para o próximo documento.
         try:
             executar_documento_readonly(contexto_corredor, inventario_adquirido)
-        except Exception:
-            # Falha em processar documento -- continuar com próximo.
-            # (Observabilidade real desta falha: Incremento 3.)
+        except Exception as exc:
+            _logger.error(
+                '%s documento_id=%s hash_sha256=%s exception_type=%s',
+                EVENTO_CORREDOR_FALHOU,
+                documento_bruto.documento_id, documento_bruto.hash_sha256,
+                type(exc).__name__,
+                extra={
+                    'evento': EVENTO_CORREDOR_FALHOU,
+                    'documento_id': documento_bruto.documento_id,
+                    'hash_sha256': documento_bruto.hash_sha256,
+                    'exception_type': type(exc).__name__,
+                },
+            )
             continue
 
     return inventario_adquirido
