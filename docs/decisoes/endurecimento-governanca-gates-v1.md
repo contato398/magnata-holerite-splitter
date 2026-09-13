@@ -7,13 +7,14 @@
 **Estado:** código publicado em PR (#155), aguardando revisão humana —
 nenhum required status check adicionado ao ruleset, nenhuma configuração de
 GitHub alterada, nenhum merge realizado por esta sessão. A criação e
-proteção do Environment `governance-approval` (required reviewer,
-`Prevent self-review` desligado, ausência de secret) **não foi verificada
-por esta sessão** — nenhuma ferramenta de leitura de Environments/Settings
-do GitHub esteve disponível para confirmá-la. Essa etapa deve ser
-confirmada por um humano com acesso ao painel do GitHub antes de qualquer
-merge, e é pré-condição da sequência de ativação (seção 9) — nunca
-presumida como concluída só porque o código já existe.
+proteção do Environment `governance-approval` (required reviewer
+`@contato398`, `Prevent self-review` desligado, ausência de secret) foi
+**confirmada humanamente no Chat Projeto** — essa confirmação **não foi
+verificada pela sessão automatizada** (nenhuma ferramenta de leitura de
+Environments/Settings do GitHub esteve disponível nela); é registrada
+aqui como confirmação humana, não como checagem técnica desta sessão. O
+ruleset `Protect main` continua sem o novo check — isso só acontece depois
+da PR de teste real (seção 9, passos 6-12).
 
 ## 1. Problema
 
@@ -68,7 +69,12 @@ O detector:
 
 - nunca faz checkout do `head` da PR;
 - só compara **nomes de arquivo** entre `base` e `head`, via `git diff
-  --name-only` — dado textual, nunca código executado;
+  --no-renames --name-only` — dado textual, nunca código executado
+  (`--no-renames` é obrigatório: sem essa flag, um rename de alta
+  similaridade colapsaria a saída numa única linha só com o caminho
+  novo, deixando o caminho crítico antigo de aparecer como alterado —
+  achado de uma Ultrareview posterior a esta decisão, corrigido
+  diretamente no workflow);
 - usa uma lista de caminhos críticos **hardcoded no próprio arquivo**
   (garantido vir da base pelo mecanismo do `pull_request_target`), nunca
   lida de `.magnata/patterns.sh` do `head` — isso resolve especificamente o
@@ -245,11 +251,16 @@ Esta fase não modifica nem conecta:
 - **Cenário de pane** (Environment mal configurado, reviewer errado): não é
   lockout permanente — corrigível a qualquer momento nas Settings do
   GitHub, sem depender de nenhum PR ou commit.
-- **Antes de o Environment existir**: o job `governance-approval` falha
-  (ambiente inexistente) sempre que uma PR real tocar caminho crítico —
-  fail-closed deliberado, não um lockout: PRs comuns continuam fluindo
-  normalmente; só PRs de governança ficam bloqueadas até a seção 9 ser
-  executada, o que é o comportamento desejado até a ativação estar completa.
+- **Estado da criação/proteção do Environment**: confirmado humanamente no
+  Chat Projeto que o Environment `governance-approval` foi criado e
+  protegido (required reviewer `@contato398`, `Prevent self-review`
+  desligado, sem secret) — **esta confirmação não foi verificada pela
+  sessão automatizada** (nenhuma ferramenta de leitura de
+  Environments/Settings do GitHub esteve disponível nela); é uma
+  confirmação humana, registrada aqui como tal, não uma checagem técnica
+  desta sessão. O ruleset `Protect main` **ainda não foi alterado** — o
+  novo check só passa a ser required depois da PR de teste real (seção 9,
+  passos 6-12).
 
 ## 13. Rollback
 

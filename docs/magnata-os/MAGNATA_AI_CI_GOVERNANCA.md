@@ -256,13 +256,17 @@ Ver `MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6.md` §10.
 ## 9. Governança não autocontornável — `governance-gate.yml`
 
 **Status:** código publicado em PR (#155), aguardando revisão humana; check
-ainda não adicionado ao ruleset `Protect main`. A criação/proteção do
-Environment `governance-approval` **não foi verificada por esta sessão**
-(sem ferramenta de leitura de Settings/Environments do GitHub disponível)
-— tratar como pendência a confirmar por um humano, nunca como concluída
-por presunção. Ver `docs/decisoes/endurecimento-governanca-gates-v1.md`
-para a decisão completa — esta seção resume só o que muda na arquitetura
-de CI descrita acima.
+ainda não adicionado ao ruleset `Protect main` — isso só acontece depois
+da PR de teste real (ver §9.6). A criação/proteção do Environment
+`governance-approval` (required reviewer `@contato398`, `Prevent
+self-review` desligado, sem secret) foi **confirmada humanamente no Chat
+Projeto** — essa confirmação **não foi verificada pela sessão
+automatizada** (sem ferramenta de leitura de Settings/Environments do
+GitHub disponível nela); é registrada aqui como confirmação humana, não
+como checagem técnica desta sessão. Ver
+`docs/decisoes/endurecimento-governanca-gates-v1.md` para a decisão
+completa — esta seção resume só o que muda na arquitetura de CI descrita
+acima.
 
 ### 9.1 O problema que os 16 gates (seção 3) não resolvem sozinhos
 
@@ -280,7 +284,7 @@ pela sua própria versão alterada. Nenhum dos 16 gates existentes, nem
 |---|---|---|
 | Evento | `pull_request` | `pull_request_target` |
 | Workflow executado vem de | `head` da PR | **base** (`main`), sempre — garantia da própria plataforma para este evento |
-| O que faz | Roda os 16 gates de fato — executa `validate_governance.sh` do `head` como parte legítima de testar o código da PR | Só compara **nomes de arquivo** entre `base` e `head` (`git diff --name-only`) — nunca executa nada do `head` |
+| O que faz | Roda os 16 gates de fato — executa `validate_governance.sh` do `head` como parte legítima de testar o código da PR | Só compara **nomes de arquivo** entre `base` e `head` (`git diff --no-renames --name-only` — `--no-renames` evita que um rename de alta similaridade esconda o caminho crítico antigo) — nunca executa nada do `head` |
 | Permissões | `contents: read`, `pull-requests: read` | `contents: read` |
 | Substitui o outro? | Não | Não — são complementares, nenhum duplica o outro |
 
