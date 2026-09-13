@@ -15,7 +15,26 @@ FLUXO COMPLETO:
 Nenhum componente é alterado, todos reutilizados em estado puro.
 Dependências injetadas; zero Airtable/psycopg/S3 no domínio.
 SEM efeitos colaterais em aquisição; RepositorioExecucoesPrestacao injetado.
-"""
+
+CORREÇÃO PÓS-MERGE PR #158 (branch fix/prestacao-pos-pr158-v1): a
+versão mesclada em `main` (commit 5da729f) corrigiu parcialmente o
+placeholder de extração original, mas manteve 3 problemas fechados
+aqui:
+  (a) extração usava `extrair_texto_pdf` cru, sem decisão de MIME --
+      agora `extrair_texto_seguro` (`roteamento_documental.py`, já
+      existente) + checagem explícita de `mime_type`;
+  (b) o dict `erros_aquisicao` era escrito e nunca lido em lugar
+      nenhum -- observabilidade inexistente apesar do nome; substituído
+      por `logging` real, eventos estáveis, nunca `str(exc)` cru;
+  (c) uma heurística nova classificava exceção terminal por substring
+      de mensagem (`'execucao_prestacao' in str(exc).lower()`) --
+      revertida; ver docstring de `executar_ciclo_prestacao_persistente`
+      para o rollback completo.
+Ver também `_adquirir_inventario_via_corredor`, extraída para tornar o
+caminho documento->blob->extração->corredor testável isoladamente
+(nenhum teste anterior populava `resolucoes_ancora`/
+`competencias_por_cliente`, então esse laço nunca era exercitado de
+verdade)."""
 from __future__ import annotations
 
 import dataclasses
@@ -36,7 +55,6 @@ from .execucao_prestacao import (
     criar_execucao_prestacao,
 )
 from magnata_os.documental.modulo01.dominio import Documento
-from magnata_os.documental.extracao_texto import extrair_texto_pdf
 from .fonte_clientes_prestacao import FonteClientesPrestacao
 from .fonte_colaboradores_esperados_prestacao import (
     FonteColaboradoresEsperadosPrestacao,
@@ -58,6 +76,7 @@ from .prestacao_readiness import (
     ItemInventarioPrestacao,
     RequisitoDocumentalPrestacao,
 )
+from .roteamento_documental import extrair_texto_seguro
 
 
 # ==== AQUISIÇÃO CANÔNICA (COM CORREDOR) ====
@@ -195,6 +214,100 @@ def atualizar_execucao_por_estado_pacote(
 # ==== INCREMENTO 3: FLUXO REAL COMPLETO ====
 
 
+def _adquirir_inventario_via_corredor(
+    contexto: 'ContextoComposicaoPrestacao',
+    ciclo_para_corredor: ContextoCicloPrestacao,
+) -> InventarioPrestacaoEmMemoria:
+    """Aquisição canônica: para cada Documento bruto já persistido
+    (`contexto.repositorio_documentos`), recupera o blob
+    (`contexto.armazenamento_arquivos`), extrai o texto pelo extrator
+    canônico já existente e executa o corredor, escrevendo no
+    inventário em memória devolvido.
+
+    Extraída de `executar_ciclo_prestacao_persistente` (correção
+    pós-merge PR #158, Incremento 2) para ser testável isoladamente:
+    nenhum teste hoje popula `contexto.resolucoes_ancora`/
+    `contexto.competencias_por_cliente`, o que faz `executar_ciclo_
+    prestacao` descartar todo cliente antes de gerar `necessidades` --
+    sem essa extração, o corpo deste laço nunca é exercitado por
+    nenhum teste (confirmado empiricamente na auditoria pós-merge:
+    `executar_documento_readonly` chamado 0 vezes mesmo com
+    `requisitos_base` preenchido). Mesmo comportamento observável de
+    antes; `executar_ciclo_prestacao_persistente` só passou a chamar
+    esta função no lugar do laço inline."""
+    inventario_adquirido = InventarioPrestacaoEmMemoria()
+    if not (contexto.repositorio_documentos and contexto.armazenamento_arquivos):
+        return inventario_adquirido
+
+    documentos_disponiveis = contexto.repositorio_documentos.listar_todos()
+
+    for documento_bruto in documentos_disponiveis:
+        # Recuperar conteúdo do blob pelo hash.
+        try:
+            with contexto.armazenamento_arquivos.abrir_leitura(
+                documento_bruto.hash_sha256
+            ) as arquivo:
+                conteudo_bytes = arquivo.read()
+        except Exception:
+            # Falha em recuperar blob -- pular documento. (Observabilidade
+            # real desta falha: Incremento 3 desta mesma correção.)
+            continue
+
+        # Extração canônica segura, com decisão explícita de MIME
+        # (correção pós-merge PR #158, Incremento 2): reutiliza
+        # `extrair_texto_seguro` (`classificacao/roteamento_documental.py`,
+        # já existente), que por sua vez reaproveita `extrair_texto_pdf`
+        # (`documental/extracao_texto.py`) -- mesma extração usada por
+        # `processar_holerite`/`processar_extrato` e pelo roteamento
+        # avulso. Nenhum parser novo. Só `application/pdf` tem extrator
+        # canônico no repositório hoje -- mime não suportado nunca entra
+        # no extrator, vira um caminho próprio, distinto de "PDF
+        # ilegível".
+        if documento_bruto.mime_type != 'application/pdf':
+            # Mime não suportado -- pular documento. (Observabilidade
+            # real: Incremento 3.)
+            continue
+
+        texto_documento = extrair_texto_seguro(conteudo_bytes)
+        if texto_documento is None:
+            # PDF corrompido/ilegível (ex.: escaneado sem OCR) -- mesma
+            # distinção honesta já feita por `extrair_texto_seguro`:
+            # nunca uma string vazia tratada como classificável.
+            # (Observabilidade real: Incremento 3.)
+            continue
+
+        # Construir contexto para o corredor (todas as dependências são opcionais)
+        contexto_corredor = ContextoExecucaoCorredorPrestacao(
+            documento_id=documento_bruto.documento_id,
+            hash_sha256=documento_bruto.hash_sha256,
+            paginas=(texto_documento,),  # 1 "página" = conteúdo completo extraído
+            ciclo=ciclo_para_corredor,
+            cliente_do_ciclo=None,  # Deixar corredor decidir
+            politica_competencia=contexto.politica_competencia if hasattr(contexto, 'politica_competencia') else None,
+            candidatos_colaborador=contexto.tipos_obrigatorios_por_colaborador,
+            fonte_vinculos=None,
+            fonte_cliente_direto=None,
+            fonte_unidade_posto=None,
+            fonte_candidatos_relacao=None,
+            clientes_broadcast=(),
+            identificar_pagina=None,
+            personalizar_contexto_do_grupo=None,
+            registrar_dados_correlacao=False,
+            fonte_inventario_pacote=None,
+            politica_requisitos=None,
+        )
+
+        # Executar corredor: resolve semanticamente, escreve no inventário
+        try:
+            executar_documento_readonly(contexto_corredor, inventario_adquirido)
+        except Exception:
+            # Falha em processar documento -- continuar com próximo.
+            # (Observabilidade real desta falha: Incremento 3.)
+            continue
+
+    return inventario_adquirido
+
+
 def executar_ciclo_prestacao_persistente(
     contexto: ContextoComposicaoPrestacao,
     execucao_id: Optional[str] = None,
@@ -251,95 +364,25 @@ def executar_ciclo_prestacao_persistente(
         )
 
         # ==== PASSO 3: Aquisição canônica (documentos brutos → corredor → inventário) ====
-        # Inventário que será preenchido com resultados do corredor
-        inventario_adquirido = InventarioPrestacaoEmMemoria()
-
-        # Se há repositório de documentos e armazenamento, tentar aquisição:
         # Coletar todas as necessidades do resultado do ciclo 1
         necessidades: list = []
         for resultado_cliente in resultado_ciclo_1.resultados_por_cliente:
             necessidades.extend(resultado_cliente.necessidades)
 
-        # Aquisição canônica: documentos brutos → corredor → inventário em memória
+        # Aquisição canônica: documentos brutos → corredor → inventário em
+        # memória (extraída para `_adquirir_inventario_via_corredor`,
+        # testável isoladamente -- mesmo comportamento observável de
+        # antes). Só roda quando há repositório+armazenamento E
+        # necessidade real; inventário vazio (sem custo de I/O) quando
+        # não há nada a adquirir.
         if contexto.repositorio_documentos and contexto.armazenamento_arquivos and necessidades:
-            # Listar todos os documentos disponíveis (reutiliza RepositorioDocumentos)
-            documentos_disponiveis = contexto.repositorio_documentos.listar_todos()
-
-            # Preparar contexto do ciclo para passar ao corredor
             ano_str, mes_str = contexto.competencia_base.split('-')
             ciclo_para_corredor = ContextoCicloPrestacao(
                 competencia_base=(int(ano_str), int(mes_str))
             )
-
-            # Para cada documento disponível, processar via corredor
-            erros_aquisicao = {}  # Mapear documento_id → motivo do erro
-            for documento_bruto in documentos_disponiveis:
-                # Recuperar conteúdo do blob pelo hash
-                conteudo_bytes = None
-                motivo_blob = None
-                try:
-                    with contexto.armazenamento_arquivos.abrir_leitura(
-                        documento_bruto.hash_sha256
-                    ) as arquivo:
-                        conteudo_bytes = arquivo.read()
-                except FileNotFoundError as e:
-                    motivo_blob = f'blob_nao_encontrado: {documento_bruto.hash_sha256}'
-                    erros_aquisicao[documento_bruto.documento_id] = motivo_blob
-                    continue
-                except IOError as e:
-                    motivo_blob = f'blob_io_error: {str(e)}'
-                    erros_aquisicao[documento_bruto.documento_id] = motivo_blob
-                    continue
-                except Exception as e:
-                    motivo_blob = f'blob_erro_desconhecido: {type(e).__name__}: {str(e)}'
-                    erros_aquisicao[documento_bruto.documento_id] = motivo_blob
-                    continue
-
-                # Extrair texto usando extracao_texto canônica
-                texto_documento = None
-                motivo_extracao = None
-                try:
-                    texto_documento = extrair_texto_pdf(conteudo_bytes)
-                except Exception as e:
-                    motivo_extracao = f'extracao_texto_erro: {type(e).__name__}: {str(e)}'
-                    erros_aquisicao[documento_bruto.documento_id] = motivo_extracao
-                    continue
-
-                # Construir contexto para o corredor (todas as dependências são opcionais)
-                contexto_corredor = ContextoExecucaoCorredorPrestacao(
-                    documento_id=documento_bruto.documento_id,
-                    hash_sha256=documento_bruto.hash_sha256,
-                    paginas=(texto_documento,),  # 1 "página" = conteúdo completo extraído
-                    ciclo=ciclo_para_corredor,
-                    cliente_do_ciclo=None,  # Deixar corredor decidir
-                    politica_competencia=contexto.politica_competencia if hasattr(contexto, 'politica_competencia') else None,
-                    candidatos_colaborador=contexto.tipos_obrigatorios_por_colaborador,
-                    fonte_vinculos=None,
-                    fonte_cliente_direto=None,
-                    fonte_unidade_posto=None,
-                    fonte_candidatos_relacao=None,
-                    clientes_broadcast=(),
-                    identificar_pagina=None,
-                    personalizar_contexto_do_grupo=None,
-                    registrar_dados_correlacao=False,
-                    fonte_inventario_pacote=None,
-                    politica_requisitos=None,
-                )
-
-                # Executar corredor: resolve semanticamente, escreve no inventário
-                motivo_corredor = None
-                try:
-                    executar_documento_readonly(contexto_corredor, inventario_adquirido)
-                except ValueError as e:
-                    # Erro documental/ambiguidade — não é terminal
-                    motivo_corredor = f'corredor_documental: {str(e)}'
-                    erros_aquisicao[documento_bruto.documento_id] = motivo_corredor
-                    continue
-                except Exception as e:
-                    # Erro de corredor (resolução semântica, etc.) — não é terminal
-                    motivo_corredor = f'corredor_erro: {type(e).__name__}: {str(e)}'
-                    erros_aquisicao[documento_bruto.documento_id] = motivo_corredor
-                    continue
+            inventario_adquirido = _adquirir_inventario_via_corredor(contexto, ciclo_para_corredor)
+        else:
+            inventario_adquirido = InventarioPrestacaoEmMemoria()
 
         # ==== PASSO 4: Compor fonte de inventário ====
         # Usar FonteInventarioPrestacaoComposta para unir:
