@@ -66,6 +66,7 @@ from .fonte_requisitos_prestacao import FonteRequisitosPrestacao
 from .inventario_prestacao import FonteInventarioPrestacao
 from .orquestrador_corredor_readonly import (
     ContextoExecucaoCorredorPrestacao,
+    ResultadoExecucaoCorredorPrestacao,
     executar_documento_readonly,
 )
 from .inventario_prestacao_memoria import InventarioPrestacaoEmMemoria
@@ -233,10 +234,28 @@ def atualizar_execucao_por_estado_pacote(
 # ==== INCREMENTO 3: FLUXO REAL COMPLETO ====
 
 
+@dataclasses.dataclass(frozen=True)
+class _ResultadoAquisicaoDocumento:
+    """Transporte interno/privado (evolução do contrato do ciclo de
+    Prestação V1, Incremento 4): associa 1 documento bruto processado
+    nesta aquisição aos resultados REAIS produzidos pelo corredor --
+    antes desta correção, `executar_documento_readonly` já devolvia
+    esses resultados (incluindo `resolucao_semantica` real, com
+    proveniência: `resolver_id`/`resolver_version`) e
+    `_adquirir_inventario_via_corredor` os descartava completamente,
+    só escrevendo no `sink`. Não é um contrato público novo -- não sai
+    deste módulo; a fase seguinte (seleção de âncora real) consome
+    isto diretamente, nunca reconstrói ou fabrica uma resolução."""
+
+    documento_id: str
+    hash_sha256: str
+    resultados_corredor: Tuple[ResultadoExecucaoCorredorPrestacao, ...] = ()
+
+
 def _adquirir_inventario_via_corredor(
     contexto: 'ContextoComposicaoPrestacao',
     ciclo_para_corredor: ContextoCicloPrestacao,
-) -> InventarioPrestacaoEmMemoria:
+) -> Tuple[InventarioPrestacaoEmMemoria, Tuple[_ResultadoAquisicaoDocumento, ...]]:
     """Aquisição canônica: para cada Documento bruto já persistido
     (`contexto.repositorio_documentos`), recupera o blob
     (`contexto.armazenamento_arquivos`), extrai o texto pelo extrator
@@ -263,10 +282,22 @@ def _adquirir_inventario_via_corredor(
     que era escrito e nunca lido em lugar nenhum -- observabilidade
     inexistente apesar do nome. 1 documento com problema nunca impede o
     processamento dos demais (mesma política de isolamento já
-    existente antes desta correção)."""
+
+    Retenção da resolução real (evolução do contrato do ciclo de
+    Prestação V1, Incremento 4): além do inventário, devolve 1
+    `_ResultadoAquisicaoDocumento` por documento efetivamente
+    processado pelo corredor com sucesso (nunca para um documento que
+    caiu num `continue` de erro acima -- blob ausente, blob ilegível,
+    MIME não suportado, PDF ilegível ou o próprio corredor falhando).
+    Antes desta correção, o retorno de `executar_documento_readonly`
+    (que já carrega a resolução semântica REAL, com proveniência) era
+    completamente descartado; a fase de seleção de âncora (Incremento
+    5) depende de ter acesso a essa resolução real -- nunca de uma
+    fabricada a partir de cliente+competência."""
     inventario_adquirido = InventarioPrestacaoEmMemoria()
+    resultados_aquisicao: list = []
     if not (contexto.repositorio_documentos and contexto.armazenamento_arquivos):
-        return inventario_adquirido
+        return inventario_adquirido, tuple(resultados_aquisicao)
 
     documentos_disponiveis = contexto.repositorio_documentos.listar_todos()
 
@@ -381,8 +412,14 @@ def _adquirir_inventario_via_corredor(
         # exceção própria) -- qualquer exceção aqui é inesperada, nunca
         # uma decisão de negócio a mascarar. Logada com evidência
         # mínima antes de seguir para o próximo documento.
+        #
+        # Incremento 4: o retorno REAL (proveniência incluída) é
+        # retido em `resultados_aquisicao` -- antes desta correção era
+        # descartado aqui mesmo em caso de sucesso.
         try:
-            executar_documento_readonly(contexto_corredor, inventario_adquirido)
+            resultados_corredor = executar_documento_readonly(
+                contexto_corredor, inventario_adquirido
+            )
         except Exception as exc:
             _logger.error(
                 '%s documento_id=%s hash_sha256=%s exception_type=%s',
@@ -398,7 +435,15 @@ def _adquirir_inventario_via_corredor(
             )
             continue
 
-    return inventario_adquirido
+        resultados_aquisicao.append(
+            _ResultadoAquisicaoDocumento(
+                documento_id=documento_bruto.documento_id,
+                hash_sha256=documento_bruto.hash_sha256,
+                resultados_corredor=tuple(resultados_corredor),
+            )
+        )
+
+    return inventario_adquirido, tuple(resultados_aquisicao)
 
 
 def executar_ciclo_prestacao_persistente(
@@ -473,9 +518,21 @@ def executar_ciclo_prestacao_persistente(
             ciclo_para_corredor = ContextoCicloPrestacao(
                 competencia_base=(int(ano_str), int(mes_str))
             )
-            inventario_adquirido = _adquirir_inventario_via_corredor(contexto, ciclo_para_corredor)
+            inventario_adquirido, resultados_aquisicao = _adquirir_inventario_via_corredor(
+                contexto, ciclo_para_corredor
+            )
         else:
             inventario_adquirido = InventarioPrestacaoEmMemoria()
+            resultados_aquisicao = ()
+
+        # `resultados_aquisicao` (Incremento 4) retém a resolução REAL
+        # de cada documento processado com sucesso -- ainda não
+        # consumida aqui (rewiring completo do fluxo para usar âncoras
+        # reais é Incremento 7 desta mesma missão; esta função por ora
+        # continua produzindo o mesmo `inventario_adquirido`/resultado
+        # final de antes). Mantido como variável nomeada (não
+        # descartado em `_`) para deixar explícito que existe e será
+        # consumido, nunca perdido silenciosamente de novo.
 
         # ==== PASSO 4: Compor fonte de inventário ====
         # Usar FonteInventarioPrestacaoComposta para unir:

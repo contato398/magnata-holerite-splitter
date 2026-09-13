@@ -754,7 +754,7 @@ def test_mime_nao_pdf_e_pulado_sem_decodificar_como_texto(caplog):
     repositorio_docs.salvar(_documento_bruto('doc-texto', hash_sha256, mime_type='text/plain'))
 
     with caplog.at_level('WARNING'):
-        inventario = _adquirir_inventario_via_corredor(
+        inventario, _resultados_aquisicao = _adquirir_inventario_via_corredor(
             _contexto_minimo(repositorio_docs, armazenamento), _CICLO_TESTE,
         )
     assert inventario is not None  # nunca lança
@@ -783,7 +783,7 @@ def test_pdf_corrompido_e_pulado_via_extrator_canonico(caplog):
     repositorio_docs.salvar(_documento_bruto('doc-pdf-invalido', hash_sha256))
 
     with caplog.at_level('WARNING'):
-        inventario = _adquirir_inventario_via_corredor(
+        inventario, _resultados_aquisicao = _adquirir_inventario_via_corredor(
             _contexto_minimo(repositorio_docs, armazenamento), _CICLO_TESTE,
         )
     assert inventario is not None
@@ -813,7 +813,7 @@ def test_pdf_real_e_extraido_pelo_extrator_canonico_sem_erro(caplog):
     repositorio_docs.salvar(_documento_bruto('doc-pdf-real', hash_sha256, tamanho=len(pdf_bytes)))
 
     with caplog.at_level('WARNING'):
-        inventario = _adquirir_inventario_via_corredor(
+        inventario, _resultados_aquisicao = _adquirir_inventario_via_corredor(
             _contexto_minimo(repositorio_docs, armazenamento), _CICLO_TESTE,
         )
     assert inventario is not None
@@ -832,7 +832,7 @@ def test_blob_nao_encontrado_e_logado_e_documento_pulado_sem_derrubar_execucao(c
     repositorio_docs.salvar(_documento_bruto('doc-ausente', 'hash-nunca-armazenado'))
 
     with caplog.at_level('WARNING'):
-        inventario = _adquirir_inventario_via_corredor(
+        inventario, _resultados_aquisicao = _adquirir_inventario_via_corredor(
             _contexto_minimo(repositorio_docs, armazenamento), _CICLO_TESTE,
         )
 
@@ -857,7 +857,7 @@ def test_falha_leitura_blob_diferente_de_nao_encontrado_e_logada_distintamente(c
     repositorio_docs.salvar(_documento_bruto('doc-corrompido', 'hash-x'))
 
     with caplog.at_level('ERROR'):
-        inventario = _adquirir_inventario_via_corredor(
+        inventario, _resultados_aquisicao = _adquirir_inventario_via_corredor(
             _contexto_minimo(repositorio_docs, _ArmazenamentoQuebrado()), _CICLO_TESTE,
         )
 
@@ -908,7 +908,7 @@ def test_falha_no_corredor_e_logada_e_nao_impede_processamento_dos_demais(caplog
     monkeypatch.setattr(modulo, 'executar_documento_readonly', _executar_com_falha_para_doc_a)
 
     with caplog.at_level('WARNING'):
-        inventario = _adquirir_inventario_via_corredor(
+        inventario, _resultados_aquisicao = _adquirir_inventario_via_corredor(
             _contexto_minimo(repositorio_docs, armazenamento), _CICLO_TESTE,
         )
 
@@ -971,11 +971,131 @@ def test_sem_repositorio_documentos_ou_armazenamento_retorna_inventario_vazio_se
         fonte_requisitos=FonteRequisitosPrestacaoMock(),
         repositorio_execucoes=RepositorioExecucoesPrestacaoMemoria(),
     )
-    inventario = _adquirir_inventario_via_corredor(contexto, _CICLO_TESTE)
+    inventario, resultados_aquisicao = _adquirir_inventario_via_corredor(contexto, _CICLO_TESTE)
     assert inventario.listar(
         ReferenciaCanonica(tipo_entidade='CLIENTE', entidade_id='qualquer'),
         ReferenciaCanonica(tipo_entidade='COMPETENCIA', entidade_id='2026-09'),
     ) == ()
+    assert resultados_aquisicao == ()
+
+
+# ==== TESTES: evolução do contrato do ciclo de Prestação V1, Incremento 4 ====
+# Antes desta correção, o retorno de `executar_documento_readonly`
+# (resolução semântica REAL, com proveniência) era descartado por
+# `_adquirir_inventario_via_corredor` mesmo em caso de sucesso. Estes
+# testes provam que ele agora é retido, associado ao documento de
+# origem, e nunca aparece para um documento que falhou antes de
+# chegar ao corredor (mesma disciplina de isolamento por documento já
+# validada acima).
+
+
+def test_resolucao_real_do_corredor_e_retida_por_documento(monkeypatch):
+    """Caminho feliz: o resultado REAL devolvido por
+    `executar_documento_readonly` (nunca fabricado) é retido em
+    `resultados_aquisicao`, associado ao `documento_id`/`hash_sha256`
+    de origem -- não mais descartado."""
+    import magnata_os.classificacao.composicao_ciclo_persistente_prestacao as modulo
+    from magnata_os.classificacao.orquestrador_corredor_readonly import (
+        ResultadoExecucaoCorredorPrestacao,
+    )
+    from magnata_os.classificacao.resolucao_documento_prestacao import (
+        EstadoCorredorDocumentoPrestacao,
+        ResultadoProcessamentoDocumentoPrestacao,
+    )
+
+    repositorio_docs = RepositorioDocumentosEmMemoria()
+    armazenamento = ArmazenamentoArquivosEmMemoria()
+    conteudo = b'Holerite Setembro 2026'
+    hash_sha256 = hashlib.sha256(conteudo).hexdigest()
+    armazenamento.armazenar(
+        hash_sha256=hash_sha256, conteudo=conteudo, mime_type='application/pdf',
+        nome_original='holerite.pdf', tamanho=len(conteudo),
+    )
+    repositorio_docs.salvar(_documento_bruto('doc-real', hash_sha256))
+
+    monkeypatch.setattr(modulo, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer')
+
+    resultado_processamento = ResultadoProcessamentoDocumentoPrestacao(
+        documento_id='doc-real',
+        estado=EstadoCorredorDocumentoPrestacao.TIPO_DESCONHECIDO,
+        tipo_documental=None,
+    )
+    resultado_fake = ResultadoExecucaoCorredorPrestacao(
+        resultado_corredor=resultado_processamento,
+    )
+    monkeypatch.setattr(
+        modulo, 'executar_documento_readonly',
+        lambda contexto_corredor, sink: (resultado_fake,),
+    )
+
+    inventario, resultados_aquisicao = _adquirir_inventario_via_corredor(
+        _contexto_minimo(repositorio_docs, armazenamento), _CICLO_TESTE,
+    )
+
+    assert len(resultados_aquisicao) == 1
+    registro = resultados_aquisicao[0]
+    assert registro.documento_id == 'doc-real'
+    assert registro.hash_sha256 == hash_sha256
+    assert registro.resultados_corredor == (resultado_fake,)
+    # Nunca fabricado: é o MESMO objeto devolvido pelo corredor real.
+    assert registro.resultados_corredor[0] is resultado_fake
+
+
+def test_documento_que_falha_antes_do_corredor_nunca_aparece_em_resultados_aquisicao(caplog):
+    """Isolamento por documento (Incremento 3) continua valendo para a
+    retenção nova: um documento cujo blob nunca foi encontrado é
+    logado e pulado -- nunca gera uma entrada em
+    `resultados_aquisicao` (não há resultado real do corredor para
+    ele; jamais um placeholder fabricado no lugar)."""
+    repositorio_docs = RepositorioDocumentosEmMemoria()
+    armazenamento = ArmazenamentoArquivosEmMemoria()
+    repositorio_docs.salvar(_documento_bruto('doc-ausente', 'hash-nunca-armazenado'))
+
+    with caplog.at_level('WARNING'):
+        inventario, resultados_aquisicao = _adquirir_inventario_via_corredor(
+            _contexto_minimo(repositorio_docs, armazenamento), _CICLO_TESTE,
+        )
+
+    assert resultados_aquisicao == ()
+
+
+def test_falha_no_corredor_nunca_gera_entrada_em_resultados_aquisicao_mas_nao_impede_outros(
+    monkeypatch, caplog,
+):
+    """Documento cujo corredor lança exceção: não gera entrada em
+    `resultados_aquisicao` (não há resultado real a reter), mas o
+    documento seguinte, que teve sucesso, gera sua entrada normalmente
+    -- mesma política de isolamento por documento já validada para o
+    inventário/log, agora também para a retenção da resolução real."""
+    import magnata_os.classificacao.composicao_ciclo_persistente_prestacao as modulo
+
+    repositorio_docs = RepositorioDocumentosEmMemoria()
+    armazenamento = ArmazenamentoArquivosEmMemoria()
+
+    for documento_id, texto in (('doc-a', 'Holerite A'), ('doc-b', 'Holerite B')):
+        conteudo = texto.encode('utf-8')
+        hash_sha256 = hashlib.sha256(conteudo).hexdigest()
+        armazenamento.armazenar(
+            hash_sha256=hash_sha256, conteudo=conteudo, mime_type='application/pdf',
+            nome_original=f'{documento_id}.pdf', tamanho=len(conteudo),
+        )
+        repositorio_docs.salvar(_documento_bruto(documento_id, hash_sha256))
+
+    monkeypatch.setattr(modulo, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer')
+
+    def _executar_com_falha_para_doc_a(contexto_corredor, sink):
+        if contexto_corredor.documento_id == 'doc-a':
+            raise ValueError('falha inesperada no corredor')
+        return ()
+
+    monkeypatch.setattr(modulo, 'executar_documento_readonly', _executar_com_falha_para_doc_a)
+
+    with caplog.at_level('WARNING'):
+        inventario, resultados_aquisicao = _adquirir_inventario_via_corredor(
+            _contexto_minimo(repositorio_docs, armazenamento), _CICLO_TESTE,
+        )
+
+    assert [r.documento_id for r in resultados_aquisicao] == ['doc-b']
 
 
 if __name__ == '__main__':
