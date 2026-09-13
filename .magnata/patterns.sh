@@ -1075,6 +1075,19 @@ ALLOWED_PATHS=(
   "^test_repositorio_acoes_execucao_plano_postgres_descoberta\.py$"
   "^test_ciclo_producao_v1\.py$"
   "^test_s3_armazenamento_moto\.py$"
+  # PRESTAÇÃO DE CONTAS V1 — CICLO PERSISTENTE E COMPOSIÇÃO DURÁVEL
+  # (implementação LOCAL da fundação de persistência e ciclo de prestação
+  # com rastreamento de execução, integração de blob storage via
+  # AdaptadorEntradaDuravel). Suporta execução persistente (via
+  # ExecucaoPrestacao + migration 0005) + ingestão durável de documentos
+  # (Fase 2 de entrada documental com persistência de blobs) + composição
+  # pura do ciclo com inventário real. ZERO push, ZERO PR, ZERO deploy.
+  "^magnata_os/classificacao/composicao_ciclo_persistente_prestacao\.py$"
+  "^magnata_os/documental/modulo01/adaptador_entrada_duravel\.py$"
+  "^magnata_os/documental/modulo01/servico_entrada_persistente\.py$"
+  "^test_adaptador_entrada_duravel\.py$"
+  "^test_composicao_ciclo_persistente_prestacao\.py$"
+  "^test_handoff_documento_corredor\.py$"
 )
 
 # ============================================================================
