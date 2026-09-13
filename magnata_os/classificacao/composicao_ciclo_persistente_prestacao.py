@@ -137,7 +137,22 @@ class ContextoComposicaoPrestacao:
     """Política base de requisitos."""
 
     resolucoes_ancora: Mapping[ReferenciaCanonica, ResultadoResolucaoSemantico] = dataclasses.field(default_factory=dict)
-    """Resolução semântica por cliente."""
+    """NÃO CONSULTADO por `executar_ciclo_prestacao_persistente`
+    (correção pós-auditoria, evolução do contrato do ciclo de
+    Prestação V1): auditoria de todos os callers reais encontrou ZERO
+    caller de produção/wiring que popule este campo -- só testes, com
+    dados sintéticos -- e não há como provar, pelo contrato, que uma
+    entrada aqui é uma resolução real (documento/hash/proveniência
+    reais) aplicável ao cliente/competência atual. `executar_ciclo_
+    prestacao_persistente` decide a âncora de cada cliente SÓ a partir
+    de evidência REAL desta própria execução
+    (`avaliar_candidatos_ancora`); sem evidência real, o cliente fica
+    explicitamente sem âncora (REVISAR), nunca com uma entrada daqui
+    usada sem prova. Mantido só para não quebrar assinatura de quem já
+    constrói este dataclass; `executar_ciclo_prestacao` (função de
+    mais baixo nível, chamada por este módulo) continua aceitando
+    `resolucoes_ancora` como parâmetro explícito próprio, sem relação
+    com este campo."""
 
     competencias_por_cliente: Mapping[ReferenciaCanonica, ReferenciaCanonica] = dataclasses.field(default_factory=dict)
     """Competência efetiva já resolvida por cliente."""
@@ -574,34 +589,6 @@ def avaliar_candidatos_ancora(
     return ResultadoAvaliacaoCandidatosAncora(ancora=escolhido)
 
 
-def _candidatos_reais_para_cliente(
-    todos_candidatos: Tuple[ResultadoResolucaoSemantico, ...],
-    cliente: ReferenciaCanonica,
-) -> Tuple[ResultadoResolucaoSemantico, ...]:
-    """Particiona o conjunto GLOBAL de resoluções reais desta aquisição
-    (Incremento 7): já que o corredor resolve CLIENTE a partir do
-    CONTEÚDO de cada documento (`cliente_do_ciclo=None`, "deixar
-    corredor decidir" -- nunca há um cliente esperado no momento da
-    aquisição, ver `_adquirir_inventario_via_corredor`), a ÚNICA chave
-    de associação real disponível entre um documento e um cliente é a
-    própria dimensão CLIENTE já resolvida por ele -- nunca uma
-    suposição de "para qual necessidade este documento foi buscado"
-    (isso nem existe hoje: a aquisição é em bloco, não por
-    necessidade).
-
-    Um candidato cuja dimensão CLIENTE não está RESOLVIDA com
-    exatamente 1 valor (ambíguo/conflito/não encontrado/etc.) nunca é
-    atribuído a NENHUM cliente aqui -- não sai deste filtro para
-    nenhuma chamada de `avaliar_candidatos_ancora`, em nenhum cliente;
-    ele só entraria no cômputo de outro cliente por engano se
-    coincidisse por acidente, o que esta função evita ao exigir
-    igualdade estrita com o cliente pedido."""
-    return tuple(
-        candidato for candidato in todos_candidatos
-        if _dimensao_resolvida_com_valor_unico(candidato, DimensaoResolucao.CLIENTE) == cliente
-    )
-
-
 def executar_ciclo_prestacao_persistente(
     contexto: ContextoComposicaoPrestacao,
     execucao_id: Optional[str] = None,
@@ -621,11 +608,16 @@ def executar_ciclo_prestacao_persistente(
     4. Aquisição readonly (documentos brutos → corredor → inventário +
        resoluções semânticas REAIS retidas por documento)
     5. Seleção/validação de âncora real por cliente
-       (`avaliar_candidatos_ancora`, nunca fabricada) -- cai de volta
-       para `contexto.resolucoes_ancora` só quando NENHUMA evidência
-       real foi adquirida nesta execução para aquele cliente
-       (compatibilidade com wiring que já injeta a âncora pronta e
-       nunca aciona aquisição via corredor)
+       (`avaliar_candidatos_ancora`, nunca fabricada) -- avalia o pool
+       GLOBAL de resoluções reais desta execução contra CADA
+       cliente/competência esperado, sem nenhum filtro/agrupamento
+       prévio por cliente resolvido (auditoria pós-Incremento 7: um
+       filtro assim reclassificaria silenciosamente uma resolução
+       divergente como "candidata de outro cliente"). SEM fallback
+       para `contexto.resolucoes_ancora` -- nenhum caller real hoje
+       prova que essas entradas são resoluções reais aplicáveis; sem
+       evidência real desta execução, o cliente fica sem âncora
+       (REVISAR explícito, nunca uma pré-informada não verificável)
     6. Segunda execução do ciclo (readiness com âncora real, ou
        ausência explícita -- nunca uma resolução fabricada)
     7. Atualizar estado final da ExecucaoPrestacao
@@ -714,6 +706,43 @@ def executar_ciclo_prestacao_persistente(
         # ==== PASSO 5: Retenção + seleção/validação de âncora real ====
         # Flatten de TODAS as resoluções semânticas REAIS produzidas
         # nesta aquisição (nunca fabricadas) -- Incremento 4.
+        #
+        # CORREÇÃO (auditoria pós-Incremento 7): a versão anterior
+        # particionava este pool GLOBAL por cliente usando a própria
+        # dimensão CLIENTE já resolvida de cada candidato
+        # (`_candidatos_reais_para_cliente`, removida) -- ou seja,
+        # RECONSTRUÍA a associação documento->cliente a partir do que o
+        # PRÓPRIO documento resolveu. Isso reclassificava
+        # silenciosamente uma resolução divergente como "candidata
+        # legítima de outro cliente" em vez de reportá-la como
+        # divergência do cliente ESPERADO -- exatamente o que a
+        # aquisição não pode fazer (`_adquirir_inventario_via_corredor`
+        # roda em BLOCO, com `cliente_do_ciclo=None`, "deixar corredor
+        # decidir" -- não existe, hoje, nenhum sinal real e independente
+        # de "para qual cliente/competência este documento foi
+        # adquirido" além do que ele próprio resolveu).
+        #
+        # Sem esse sinal independente, a única postura honesta é NÃO
+        # inventar nenhuma associação: o MESMO pool global (sem
+        # filtro nenhum) é avaliado contra CADA cliente/competência
+        # esperado desta descoberta. `avaliar_candidatos_ancora` já
+        # implementa a tabela-verdade exigida a partir disso, sem
+        # nenhum filtro adicional:
+        #   esperado A/X, candidato resolve A/X -> concordante
+        #   esperado A/X, candidato resolve B/X -> divergência de A/X
+        #   esperado A/X, candidato resolve A/Y -> divergência de A/X
+        # (e, simetricamente, o MESMO candidato B/X seria concordante
+        # na avaliação do cliente B, se B também estiver ativo --
+        # nunca "escolhido" para nenhum dos dois lados por este trecho,
+        # cada avaliação é independente e usa sempre o pool inteiro).
+        #
+        # Consequência DELIBERADA e aceita: enquanto a aquisição
+        # continuar em bloco (sem busca complementar por necessidade),
+        # múltiplos clientes com evidência real na MESMA execução
+        # tendem a produzir divergência uns para os outros -- isso é
+        # honesto (baixa confiança real na associação), nunca uma
+        # regressão a esconder. Registrar para Chat Projeto quando uma
+        # aquisição escopada por necessidade existir.
         candidatos_reais_globais = tuple(
             resultado_execucao.resultado_corredor.resolucao_semantica
             for resultado_aquisicao in resultados_aquisicao
@@ -725,20 +754,25 @@ def executar_ciclo_prestacao_persistente(
         for resultado_cliente in resultado_descoberta.resultados_por_cliente:
             cliente = resultado_cliente.cliente
             competencia = resultado_cliente.competencia
-            candidatos_do_cliente = _candidatos_reais_para_cliente(
-                candidatos_reais_globais, cliente
-            )
-            avaliacao = avaliar_candidatos_ancora(candidatos_do_cliente, cliente, competencia)
-            # Evidência REAL desta execução tem prioridade; só cai de
-            # volta para uma âncora pré-informada em
-            # `contexto.resolucoes_ancora` quando NADA foi adquirido
-            # para este cliente nesta execução (compatibilidade com
-            # wiring que injeta a âncora pronta e nunca aciona
-            # aquisição via corredor -- nunca o inverso, nunca uma
-            # âncora pré-informada sobrepõe evidência real mais nova).
-            ancora_efetiva = avaliacao.ancora or contexto.resolucoes_ancora.get(cliente)
-            if ancora_efetiva is not None:
-                resolucoes_ancora_efetivas[cliente] = ancora_efetiva
+            avaliacao = avaliar_candidatos_ancora(candidatos_reais_globais, cliente, competencia)
+            # CORREÇÃO (auditoria pós-Incremento 7): fallback para
+            # `contexto.resolucoes_ancora` REMOVIDO -- auditoria de
+            # todos os callers reais (produção/wiring) confirmou ZERO
+            # caller real que popule este campo hoje (só testes, com
+            # dados sintéticos); não há como provar, pelo contrato ou
+            # por um caller real, que uma entrada ali é uma resolução
+            # real (documento_id/hash/proveniência reais, resolvedor e
+            # política reais, semanticamente aplicável a este
+            # cliente/competência). Sem essa prova, preservar o
+            # fallback custaria a independência do cross-check --
+            # proibido explicitamente. Sem evidência REAL desta
+            # execução, o cliente fica sem âncora (`None`) e a
+            # ausência é tratada explicitamente adiante (Incremento 6:
+            # REVISAR / `sem_evidencia_documental_real`), nunca uma
+            # resolução fabricada nem uma pré-informada não
+            # verificável.
+            if avaliacao.ancora is not None:
+                resolucoes_ancora_efetivas[cliente] = avaliacao.ancora
 
         # ==== PASSO 6: Compor fonte de inventário ====
         # Usar FonteInventarioPrestacaoComposta para unir:

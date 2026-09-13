@@ -28,7 +28,10 @@ from magnata_os.classificacao.composicao_ciclo_persistente_prestacao import (
     retomar_execucao_por_id,
 )
 from magnata_os.documental.modulo01.dominio import Documento
-from magnata_os.classificacao.ciclo_prestacao import NecessidadeDocumentoPrestacao
+from magnata_os.classificacao.ciclo_prestacao import (
+    NecessidadeDocumentoPrestacao,
+    executar_ciclo_prestacao,
+)
 from magnata_os.classificacao.competencia_esperada_prestacao import ContextoCicloPrestacao
 from magnata_os.classificacao.contratos import ReferenciaCanonica
 from magnata_os.classificacao.execucao_prestacao import (
@@ -1340,6 +1343,17 @@ class _FonteClientesV7:
         return (_CLIENTE_V7,)
 
 
+class _RepositorioComUmDocumento:
+    """Fake mínimo -- só `listar_todos()`, único método que
+    `_adquirir_inventario_via_corredor` consulta."""
+
+    def __init__(self, documento):
+        self._documento = documento
+
+    def listar_todos(self):
+        return (self._documento,)
+
+
 def _documento_bruto_v7(documento_id, hash_sha256):
     agora = datetime.now(timezone.utc)
     return Documento(
@@ -1491,13 +1505,17 @@ def test_sem_evidencia_real_e_sem_ancora_pre_informada_fica_em_revisao_nunca_pro
     assert execucao.estado == 'INICIADA'
 
 
-def test_ancora_pre_informada_e_usada_quando_nenhuma_evidencia_real_foi_adquirida():
-    """Sem `repositorio_documentos`/`armazenamento_arquivos` wired,
-    aquisição nunca roda -- `contexto.resolucoes_ancora` pré-informada
-    (responsabilidade de quem chama, já uma resolução real, nunca
-    fabricada por este módulo) continua sendo usada como estava antes
-    desta correção -- compatibilidade plena com wiring que não usa
-    aquisição via corredor."""
+def test_ancora_pre_informada_e_ignorada_sem_evidencia_real_desta_execucao():
+    """CORREÇÃO (auditoria pós-Incremento 7): `contexto.resolucoes_
+    ancora` pré-informada NÃO É MAIS usada como fallback -- auditoria
+    de todos os callers reais (produção/wiring) não encontrou NENHUM
+    que popule este campo hoje, só testes com dados sintéticos; sem
+    prova de que é uma resolução real aplicável, preservá-la custaria a
+    independência do cross-check (proibido). Mesmo com uma entrada
+    'bonita' pré-informada e um item de inventário base já satisfazendo
+    o requisito, SEM nenhuma evidência real adquirida NESTA execução o
+    cliente fica EM_REVISAO -- nunca CONCLUIDA por uma pré-informada
+    não verificável."""
     item_base = ItemInventarioPrestacao(
         documento_id='doc-base-v7',
         tipo_documental='HOLERITE',
@@ -1522,7 +1540,7 @@ def test_ancora_pre_informada_e_usada_quando_nenhuma_evidencia_real_foi_adquirid
     )
     execucao = executar_ciclo_prestacao_persistente(contexto)
 
-    assert execucao.estado == 'CONCLUIDA'
+    assert execucao.estado == 'INICIADA'  # nunca CONCLUIDA -- fallback removido
 
 
 def test_dois_documentos_reais_divergentes_nunca_escolhem_lado_fica_em_revisao(monkeypatch):
@@ -1573,6 +1591,198 @@ def test_dois_documentos_reais_divergentes_nunca_escolhem_lado_fica_em_revisao(m
     execucao = executar_ciclo_prestacao_persistente(contexto)
 
     assert execucao.estado == 'INICIADA'  # nunca CONCLUIDA -- divergência nunca escolhe lado
+
+
+# ==== TESTES: correção pós-auditoria (evolução do contrato do ciclo de
+# Prestação V1) -- contexto esperado é obrigatório; nenhum
+# reagrupamento por cliente/competência RESOLVIDO pode mascarar
+# divergência do cliente/competência ESPERADO. ====
+
+
+def test_critico_dois_documentos_reais_cliente_diferente_nunca_vira_segundo_grupo(monkeypatch):
+    """TESTE CRÍTICO OBRIGATÓRIO: esperado=A/X (único cliente ATIVO
+    nesta descoberta). Documento 1 (real, adquirido nesta execução)
+    resolve A/X. Documento 2 (real, adquirido na MESMA execução)
+    resolve B/X -- cliente DIFERENTE do esperado, mesma competência.
+
+    Resultado esperado: A/X = divergente/revisão.
+    NUNCA: "A/X válido (usando só doc-1) + B/X criado como segundo
+    grupo" -- B não é sequer um cliente ativo nesta descoberta; se a
+    composição reclassificasse doc-2 como "evidência de B" (em vez de
+    tratá-lo como sinal de divergência contra A, que é o único cliente
+    realmente esperado), essa reclassificação desapareceria
+    silenciosamente do resultado E A ficaria PRONTO/CONCLUIDA por
+    engano, ignorando que o mesmo lote de aquisição continha uma
+    resolução real conflitante."""
+    import magnata_os.classificacao.composicao_ciclo_persistente_prestacao as modulo
+    from magnata_os.documental.modulo01.repositorio import RepositorioDocumentosEmMemoria
+    from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivosEmMemoria
+
+    repositorio_execucoes = RepositorioExecucoesPrestacaoMemoria()
+    repositorio_docs = RepositorioDocumentosEmMemoria()
+    armazenamento = ArmazenamentoArquivosEmMemoria()
+
+    for documento_id, texto in (('doc-critico-a', 'A'), ('doc-critico-b', 'B')):
+        conteudo = texto.encode('utf-8')
+        hash_sha256 = hashlib.sha256(conteudo).hexdigest()
+        armazenamento.armazenar(
+            hash_sha256=hash_sha256, conteudo=conteudo, mime_type='application/pdf',
+            nome_original=f'{documento_id}.pdf', tamanho=len(conteudo),
+        )
+        repositorio_docs.salvar(_documento_bruto_v7(documento_id, hash_sha256))
+
+    monkeypatch.setattr(modulo, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer')
+
+    _CLIENTE_B_NAO_ATIVO = ReferenciaCanonica('CLIENTE', 'cliente-b-nao-ativo-neste-ciclo')
+    resolucao_a_x = _candidato_ancora(
+        'doc-critico-a', cliente=_CLIENTE_V7, competencia=_COMPETENCIA_V7,
+    )
+    resolucao_b_x = _candidato_ancora(
+        'doc-critico-b', cliente=_CLIENTE_B_NAO_ATIVO, competencia=_COMPETENCIA_V7,
+    )
+    resolucoes_por_documento = {'doc-critico-a': resolucao_a_x, 'doc-critico-b': resolucao_b_x}
+
+    def _executar_documento_readonly_fake(contexto_corredor, sink):
+        # doc-critico-a também escreve no inventário -- prova que,
+        # MESMO com o requisito HOLERITE fisicamente satisfeito, a
+        # divergência real ainda impede PRONTO.
+        if contexto_corredor.documento_id == 'doc-critico-a':
+            sink.adicionar(
+                ItemInventarioPrestacao(
+                    documento_id=contexto_corredor.documento_id,
+                    tipo_documental='HOLERITE',
+                    cliente=_CLIENTE_V7,
+                    competencia=_COMPETENCIA_V7,
+                )
+            )
+        resultado_processamento = _ResultadoProcessamentoV7(
+            documento_id=contexto_corredor.documento_id,
+            estado=_EstadoCorredorV7.RESOLVIDO_E_AVANCOU,
+            tipo_documental='HOLERITE',
+            resolucao_semantica=resolucoes_por_documento[contexto_corredor.documento_id],
+        )
+        return (_ResultadoExecucaoCorredorPrestacaoV7(resultado_corredor=resultado_processamento),)
+
+    monkeypatch.setattr(modulo, 'executar_documento_readonly', _executar_documento_readonly_fake)
+
+    contexto = _contexto_v7(
+        repositorio_execucoes,
+        repositorio_documentos=repositorio_docs,
+        armazenamento_arquivos=armazenamento,
+        # `_CLIENTE_B_NAO_ATIVO` propositalmente NÃO entra em
+        # `fonte_clientes`/`competencias_por_cliente` -- só A está
+        # ativo. A divergência precisa ser detectada mesmo assim.
+    )
+    execucao = executar_ciclo_prestacao_persistente(contexto)
+
+    # Nunca CONCLUIDA: a resolução real conflitante de B/X (mesmo
+    # sendo de um cliente sequer ativo nesta descoberta) precisa
+    # impedir que A/X seja confirmado só com a evidência de doc-1.
+    assert execucao.estado == 'INICIADA'
+
+
+def test_critico_direto_avaliar_candidatos_ancora_nunca_reclassifica_cliente_divergente():
+    """Mesmo cenário, no nível mais direto possível (sem aquisição,
+    sem corredor) -- chamada direta a `avaliar_candidatos_ancora` com
+    o pool GLOBAL (nunca pré-filtrado por cliente resolvido)."""
+    candidato_a_x = _candidato_ancora('doc-a', cliente=_CLIENTE_V7, competencia=_COMPETENCIA_V7)
+    _outro_cliente = ReferenciaCanonica('CLIENTE', 'outro-cliente-critico')
+    candidato_b_x = _candidato_ancora('doc-b', cliente=_outro_cliente, competencia=_COMPETENCIA_V7)
+
+    resultado = avaliar_candidatos_ancora(
+        (candidato_a_x, candidato_b_x), _CLIENTE_V7, _COMPETENCIA_V7,
+    )
+    assert resultado.ancora is None
+    assert resultado.motivo_ausencia == MOTIVO_RESOLUCOES_ANCORA_DIVERGENTES
+
+
+def test_critico_direto_avaliar_candidatos_ancora_nunca_reclassifica_competencia_divergente():
+    """Equivalente para divergência de competência (nível direto)."""
+    candidato_a_x = _candidato_ancora('doc-a', cliente=_CLIENTE_V7, competencia=_COMPETENCIA_V7)
+    _outra_competencia = ReferenciaCanonica('COMPETENCIA', '2026-01')
+    candidato_a_y = _candidato_ancora('doc-b', cliente=_CLIENTE_V7, competencia=_outra_competencia)
+
+    resultado = avaliar_candidatos_ancora(
+        (candidato_a_x, candidato_a_y), _CLIENTE_V7, _COMPETENCIA_V7,
+    )
+    assert resultado.ancora is None
+    assert resultado.motivo_ausencia == MOTIVO_RESOLUCOES_ANCORA_DIVERGENTES
+
+
+def test_sem_cliente_resolvido_nunca_vira_ancora_cliente_esperado_permanece_em_revisao(monkeypatch):
+    """Ponto 3 da correção: caminho SEM resolução de cliente (wiring
+    atual ainda não fornece `fonte_cliente_direto`/`fonte_vinculos` --
+    ver `_adquirir_inventario_via_corredor`). Prova, com o CORREDOR
+    REAL (nenhum monkeypatch de `executar_documento_readonly`, nenhum
+    fallback sintético):
+    - documento processado sem CLIENTE resolvido nunca vira âncora;
+    - nunca é convertido em certeza;
+    - o cliente ESPERADO permanece no resultado do ciclo (nunca some);
+    - o pacote fica EM_REVISAO;
+    - o motivo é `sem_evidencia_documental_real`."""
+    import magnata_os.classificacao.composicao_ciclo_persistente_prestacao as modulo
+    from magnata_os.documental.modulo01.repositorio import RepositorioDocumentosEmMemoria
+    from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivosEmMemoria
+
+    repositorio_docs = RepositorioDocumentosEmMemoria()
+    armazenamento = ArmazenamentoArquivosEmMemoria()
+    conteudo = b'documento sem cliente identificavel pelo wiring atual'
+    hash_sha256 = hashlib.sha256(conteudo).hexdigest()
+    armazenamento.armazenar(
+        hash_sha256=hash_sha256, conteudo=conteudo, mime_type='application/pdf',
+        nome_original='doc.pdf', tamanho=len(conteudo),
+    )
+    documento_bruto = _documento_bruto_v7('doc-sem-cliente', hash_sha256)
+
+    monkeypatch.setattr(modulo, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer')
+    # `executar_documento_readonly` REAL -- nenhum monkeypatch aqui.
+    # Sem `fonte_cliente_direto`/`fonte_vinculos` (nenhum informado em
+    # `_adquirir_inventario_via_corredor` hoje), CLIENTE nunca resolve.
+
+    contexto_composicao = _contexto_v7(
+        RepositorioExecucoesPrestacaoMemoria(),
+        repositorio_documentos=_RepositorioComUmDocumento(documento_bruto),
+        armazenamento_arquivos=armazenamento,
+    )
+    ciclo_para_corredor = ContextoCicloPrestacao(competencia_base=(2026, 9))
+
+    # Aquisição real -- confirma empiricamente que CLIENTE não resolve.
+    inventario_adquirido, resultados_aquisicao = modulo._adquirir_inventario_via_corredor(
+        contexto_composicao, ciclo_para_corredor,
+    )
+    candidatos_reais = tuple(
+        resultado_execucao.resultado_corredor.resolucao_semantica
+        for resultado_aquisicao in resultados_aquisicao
+        for resultado_execucao in resultado_aquisicao.resultados_corredor
+        if resultado_execucao.resultado_corredor.resolucao_semantica is not None
+    )
+    for candidato in candidatos_reais:
+        cliente_resolvido = modulo._dimensao_resolvida_com_valor_unico(candidato, DimensaoResolucao.CLIENTE)
+        assert cliente_resolvido is None  # nunca resolvido -- confirma a premissa do teste
+
+    # Seleção de âncora: nunca vira âncora, nunca certeza fabricada.
+    avaliacao = avaliar_candidatos_ancora(candidatos_reais, _CLIENTE_V7, _COMPETENCIA_V7)
+    assert avaliacao.ancora is None
+    assert avaliacao.motivo_ausencia == MOTIVO_SEM_EVIDENCIA_DOCUMENTAL_REAL
+
+    # Ciclo completo (nível de `executar_ciclo_prestacao`, com
+    # visibilidade total do resultado -- nunca só o estado opaco da
+    # ExecucaoPrestacao): cliente esperado PERMANECE no resultado,
+    # nunca descartado, com EM_REVISAO e motivo explícito.
+    resultado_ciclo = executar_ciclo_prestacao(
+        contexto=ciclo_para_corredor,
+        fonte_clientes=_FonteClientesV7(),
+        fonte_requisitos=_FonteRequisitosVaziaV7(),
+        fonte_inventario=inventario_adquirido,
+        requisitos_base=(RequisitoDocumentalPrestacao('HOLERITE'),),
+        resolucoes_ancora={},  # nenhuma âncora real, nenhuma pré-informada
+        competencias_por_cliente={_CLIENTE_V7: _COMPETENCIA_V7},
+    )
+    clientes_no_resultado = {r.cliente for r in resultado_ciclo.resultados_por_cliente}
+    assert _CLIENTE_V7 in clientes_no_resultado  # nunca desaparece
+    resultado_cliente = next(r for r in resultado_ciclo.resultados_por_cliente if r.cliente == _CLIENTE_V7)
+    assert resultado_cliente.pacote.estado == EstadoPacotePrestacao.EM_REVISAO
+    assert 'sem_evidencia_documental_real' in resultado_cliente.pacote.motivos
 
 
 if __name__ == '__main__':
