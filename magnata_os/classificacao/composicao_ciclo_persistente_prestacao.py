@@ -30,13 +30,13 @@ from .ciclo_prestacao import (
 )
 from .competencia_esperada_prestacao import PoliticaCompetenciaPrestacao
 from .contratos import ReferenciaCanonica, ResultadoResolucaoSemantico
-from .estrategia_aquisicao_documental import proxima_fonte_a_consultar
 from .execucao_prestacao import (
     ExecucaoPrestacao,
     RepositorioExecucoesPrestacao,
     criar_execucao_prestacao,
 )
 from magnata_os.documental.modulo01.dominio import Documento
+from magnata_os.documental.extracao_texto import extrair_texto_pdf
 from .fonte_clientes_prestacao import FonteClientesPrestacao
 from .fonte_colaboradores_esperados_prestacao import (
     FonteColaboradoresEsperadosPrestacao,
@@ -111,9 +111,6 @@ class ContextoComposicaoPrestacao:
 
     tipos_obrigatorios_por_colaborador: Tuple[str, ...] = ('Holerite da Folha de Pagamento',)
     """Tipos obrigatórios por cardinalidade colaborador."""
-
-    ordem_fallback_fontes: Sequence[str] = ('airtable', 'gmail', 'armazenamento_documental')
-    """Ordem de fallback para aquisição."""
 
 
 # ==== FUNÇÕES PRIMITIVAS (INCREMENTO 1 — revisadas) ====
@@ -275,26 +272,44 @@ def executar_ciclo_prestacao_persistente(
             )
 
             # Para cada documento disponível, processar via corredor
+            erros_aquisicao = {}  # Mapear documento_id → motivo do erro
             for documento_bruto in documentos_disponiveis:
                 # Recuperar conteúdo do blob pelo hash
+                conteudo_bytes = None
+                motivo_blob = None
                 try:
                     with contexto.armazenamento_arquivos.abrir_leitura(
                         documento_bruto.hash_sha256
                     ) as arquivo:
                         conteudo_bytes = arquivo.read()
-                except Exception:
-                    # Falha em recuperar blob — pular documento
+                except FileNotFoundError as e:
+                    motivo_blob = f'blob_nao_encontrado: {documento_bruto.hash_sha256}'
+                    erros_aquisicao[documento_bruto.documento_id] = motivo_blob
+                    continue
+                except IOError as e:
+                    motivo_blob = f'blob_io_error: {str(e)}'
+                    erros_aquisicao[documento_bruto.documento_id] = motivo_blob
+                    continue
+                except Exception as e:
+                    motivo_blob = f'blob_erro_desconhecido: {type(e).__name__}: {str(e)}'
+                    erros_aquisicao[documento_bruto.documento_id] = motivo_blob
                     continue
 
-                # Extrair texto (placeholder: não implementa parser real nesta V1)
-                # V1 usa texto vazio para teste; V2 usará extracao_texto.extrair_texto_pdf()
-                texto_documento = conteudo_bytes.decode('utf-8', errors='replace')
+                # Extrair texto usando extracao_texto canônica
+                texto_documento = None
+                motivo_extracao = None
+                try:
+                    texto_documento = extrair_texto_pdf(conteudo_bytes)
+                except Exception as e:
+                    motivo_extracao = f'extracao_texto_erro: {type(e).__name__}: {str(e)}'
+                    erros_aquisicao[documento_bruto.documento_id] = motivo_extracao
+                    continue
 
                 # Construir contexto para o corredor (todas as dependências são opcionais)
                 contexto_corredor = ContextoExecucaoCorredorPrestacao(
                     documento_id=documento_bruto.documento_id,
                     hash_sha256=documento_bruto.hash_sha256,
-                    paginas=(texto_documento,),  # V1: 1 "página" = conteúdo completo
+                    paginas=(texto_documento,),  # 1 "página" = conteúdo completo extraído
                     ciclo=ciclo_para_corredor,
                     cliente_do_ciclo=None,  # Deixar corredor decidir
                     politica_competencia=contexto.politica_competencia if hasattr(contexto, 'politica_competencia') else None,
@@ -312,10 +327,18 @@ def executar_ciclo_prestacao_persistente(
                 )
 
                 # Executar corredor: resolve semanticamente, escreve no inventário
+                motivo_corredor = None
                 try:
                     executar_documento_readonly(contexto_corredor, inventario_adquirido)
-                except Exception:
-                    # Falha em processar documento — continuar com próximo
+                except ValueError as e:
+                    # Erro documental/ambiguidade — não é terminal
+                    motivo_corredor = f'corredor_documental: {str(e)}'
+                    erros_aquisicao[documento_bruto.documento_id] = motivo_corredor
+                    continue
+                except Exception as e:
+                    # Erro de corredor (resolução semântica, etc.) — não é terminal
+                    motivo_corredor = f'corredor_erro: {type(e).__name__}: {str(e)}'
+                    erros_aquisicao[documento_bruto.documento_id] = motivo_corredor
                     continue
 
         # ==== PASSO 4: Compor fonte de inventário ====
@@ -371,13 +394,34 @@ def executar_ciclo_prestacao_persistente(
         return execucao_final
 
     except Exception as exc:
-        # Marcar como FALHA em caso de erro terminal
-        try:
-            contexto.repositorio_execucoes.atualizar_estado(
-                execucao_prestacao_id=execucao.execucao_prestacao_id,
-                novo_estado='FALHA',
-                concluido_em=datetime.now(timezone.utc),
-            )
-        except Exception:
-            pass  # Já falhou, não mascarar
+        # Classificar exceção antes de marcar FALHA
+        # FALHA terminal: erro de persistência ou contrato quebrado
+        # NÃO terminal: erro documental, ambiguidade, validação, etc.
+
+        eh_falha_terminal = False
+        tipo_exc = type(exc).__name__
+
+        # Erros de persistência/contrato SÃO terminais
+        if isinstance(exc, (ValueError, KeyError, TypeError, AttributeError)):
+            # ValueError/KeyError/TypeError podem ser erros de contrato
+            # Se vem de ciclo_prestacao ou execucao_prestacao, é terminal
+            if 'execucao_prestacao' in str(exc).lower() or 'repositorio' in str(exc).lower():
+                eh_falha_terminal = True
+        elif isinstance(exc, (IOError, OSError, RuntimeError)):
+            # Erros de I/O (arquivo, conexão) são terminais
+            eh_falha_terminal = True
+
+        # Se não conseguiu determinar, não marcar como terminal
+        # (preferir INICIADA retomável a FALHA incorreta)
+
+        if eh_falha_terminal:
+            try:
+                contexto.repositorio_execucoes.atualizar_estado(
+                    execucao_prestacao_id=execucao.execucao_prestacao_id,
+                    novo_estado='FALHA',
+                    concluido_em=datetime.now(timezone.utc),
+                )
+            except Exception:
+                pass  # Já falhou, não mascarar exceção de persistência
+
         raise
