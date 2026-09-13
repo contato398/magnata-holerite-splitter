@@ -314,3 +314,9 @@ própria que: (1) liste toda referência cruzada existente (comando usado
 nesta etapa: buscar `MAGNATA_OS_[A-Z0-9_]*\.md` em todos os `.md` do
 repositório); (2) mova os arquivos; (3) reescreva cada referência
 encontrada; (4) confirme, por busca, que nenhum nome antigo restou.
+
+<!-- Comentário de teste (PR comum de validação do governance-gate.yml)
+     -- nenhuma mudança de conteúdo normativo, só uma linha de teste
+     inofensiva e reversível para provar que este caminho NÃO é
+     considerado crítico pelo detector. Ver
+     docs/decisoes/endurecimento-governanca-gates-v1.md. -->
