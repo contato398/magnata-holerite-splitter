@@ -529,35 +529,34 @@ def executar_ciclo_prestacao_persistente(
 
         return execucao_final
 
-    except Exception as exc:
-        # Classificar exceção antes de marcar FALHA
-        # FALHA terminal: erro de persistência ou contrato quebrado
-        # NÃO terminal: erro documental, ambiguidade, validação, etc.
-
-        eh_falha_terminal = False
-        tipo_exc = type(exc).__name__
-
-        # Erros de persistência/contrato SÃO terminais
-        if isinstance(exc, (ValueError, KeyError, TypeError, AttributeError)):
-            # ValueError/KeyError/TypeError podem ser erros de contrato
-            # Se vem de ciclo_prestacao ou execucao_prestacao, é terminal
-            if 'execucao_prestacao' in str(exc).lower() or 'repositorio' in str(exc).lower():
-                eh_falha_terminal = True
-        elif isinstance(exc, (IOError, OSError, RuntimeError)):
-            # Erros de I/O (arquivo, conexão) são terminais
-            eh_falha_terminal = True
-
-        # Se não conseguiu determinar, não marcar como terminal
-        # (preferir INICIADA retomável a FALHA incorreta)
-
-        if eh_falha_terminal:
-            try:
-                contexto.repositorio_execucoes.atualizar_estado(
-                    execucao_prestacao_id=execucao.execucao_prestacao_id,
-                    novo_estado='FALHA',
-                    concluido_em=datetime.now(timezone.utc),
-                )
-            except Exception:
-                pass  # Já falhou, não mascarar exceção de persistência
+    except Exception:
+        # ROLLBACK DE REGRESSÃO (correção pós-merge PR #158, Incremento
+        # 4): `5da729f` introduziu aqui uma heurística que classificava
+        # a exceção como "terminal" (marca FALHA) ou "não terminal"
+        # (deixa como estava) usando `isinstance` combinado com
+        # correspondência de SUBSTRING no texto da mensagem da exceção
+        # (`'execucao_prestacao' in str(exc).lower() or 'repositorio'
+        # in str(exc).lower()`). Isso é frágil: uma exceção genuinamente
+        # terminal cuja mensagem não contivesse essas palavras deixava
+        # de marcar FALHA, e a ExecucaoPrestacao ficava presa em
+        # INICIADA indefinidamente, sem nenhum mecanismo que a resuma
+        # ou feche -- uma regressão silenciosa do comportamento
+        # anterior à PR #158.
+        #
+        # Este `except` volta a marcar FALHA para QUALQUER exceção não
+        # tratada dentro do `try` acima -- comportamento anterior à
+        # regressão, restaurado tal como estava. Isso é um ROLLBACK,
+        # não uma decisão arquitetural definitiva de que toda exceção
+        # deva ser terminal: a classificação terminal x retomável
+        # continua sendo uma questão em aberto, fora do escopo desta
+        # missão -- exigirá seu próprio Ultraplan/ADR se for retomada.
+        try:
+            contexto.repositorio_execucoes.atualizar_estado(
+                execucao_prestacao_id=execucao.execucao_prestacao_id,
+                novo_estado='FALHA',
+                concluido_em=datetime.now(timezone.utc),
+            )
+        except Exception:
+            pass  # Já falhou, não mascarar a exceção original
 
         raise

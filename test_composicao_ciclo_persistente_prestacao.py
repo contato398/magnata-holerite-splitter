@@ -1001,6 +1001,41 @@ def test_falha_no_corredor_e_logada_e_nao_impede_processamento_dos_demais(caplog
     )
 
 
+def test_excecao_generica_sem_palavras_magicas_ainda_marca_falha(monkeypatch):
+    """Incremento 4 (rollback de regressão): uma exceção genérica,
+    levantada dentro do `try` externo de
+    `executar_ciclo_prestacao_persistente`, cuja mensagem NÃO contém
+    'execucao_prestacao' nem 'repositorio' (as "palavras mágicas" da
+    heurística de substring introduzida por `5da729f` e revertida
+    aqui), ainda assim marca a `ExecucaoPrestacao` como FALHA -- prova
+    de que a heurística foi removida e o comportamento anterior
+    (qualquer exceção não tratada marca FALHA) foi restaurado."""
+    import magnata_os.classificacao.composicao_ciclo_persistente_prestacao as modulo
+
+    def _levanta_erro_generico(**kwargs):
+        raise RuntimeError('algo genérico quebrou, sem palavras mágicas aqui')
+
+    monkeypatch.setattr(modulo, 'executar_ciclo_prestacao', _levanta_erro_generico)
+
+    repositorio = RepositorioExecucoesPrestacaoMemoria()
+    contexto = ContextoComposicaoPrestacao(
+        competencia_base='2026-09',
+        fonte_clientes=FonteClientesPrestacaoMock(),
+        fonte_requisitos=FonteRequisitosPrestacaoMock(),
+        repositorio_execucoes=repositorio,
+    )
+
+    with pytest.raises(RuntimeError):
+        executar_ciclo_prestacao_persistente(contexto)
+
+    # A exceção original propaga (nunca mascarada) E a execução foi
+    # marcada FALHA -- as duas coisas, não uma ou outra.
+    execucoes = repositorio.listar_todas()
+    assert len(execucoes) == 1
+    assert execucoes[0].estado == 'FALHA'
+    assert execucoes[0].concluido_em is not None
+
+
 def test_sem_repositorio_documentos_ou_armazenamento_retorna_inventario_vazio_sem_erro():
     """Guarda de borda preservada: sem repositório+armazenamento, a
     função devolve inventário vazio, nunca lança."""
