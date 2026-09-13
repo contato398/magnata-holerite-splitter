@@ -253,12 +253,109 @@ Ver `MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6.md` §10.
 
 ---
 
-## 8. Referências
+## 9. Governança não autocontornável — `governance-gate.yml`
+
+**Status:** código publicado em PR (#155), aguardando revisão humana; check
+ainda não adicionado ao ruleset `Protect main` — isso só acontece depois
+da PR de teste real (ver §9.6). A criação/proteção do Environment
+`governance-approval` (required reviewer `@contato398`, `Prevent
+self-review` desligado, sem secret) foi **confirmada humanamente no Chat
+Projeto** — essa confirmação **não foi verificada pela sessão
+automatizada** (sem ferramenta de leitura de Settings/Environments do
+GitHub disponível nela); é registrada aqui como confirmação humana, não
+como checagem técnica desta sessão. Ver
+`docs/decisoes/endurecimento-governanca-gates-v1.md` para a decisão
+completa — esta seção resume só o que muda na arquitetura de CI descrita
+acima.
+
+### 9.1 O problema que os 16 gates (seção 3) não resolvem sozinhos
+
+`magnata-governance.yml` dispara por `pull_request` simples. Para esse
+evento, numa PR da mesma repositório, o GitHub executa a versão do
+workflow (e de tudo que ele chama) **presente no `head` da própria PR** —
+não a de `main`. Uma PR que altere `validate_governance.sh`,
+`.magnata/patterns.sh` ou o próprio `magnata-governance.yml` seria avaliada
+pela sua própria versão alterada. Nenhum dos 16 gates existentes, nem
+`PROTECTED_FILES`, protege os arquivos que os implementam.
+
+### 9.2 CI tradicional (`pull_request`) vs. detector confiável (`pull_request_target`)
+
+| | `magnata-governance.yml` | `governance-gate.yml` |
+|---|---|---|
+| Evento | `pull_request` | `pull_request_target` |
+| Workflow executado vem de | `head` da PR | **base** (`main`), sempre — garantia da própria plataforma para este evento |
+| O que faz | Roda os 16 gates de fato — executa `validate_governance.sh` do `head` como parte legítima de testar o código da PR | Só compara **nomes de arquivo** entre `base` e `head` (`git diff --no-renames --name-only` — `--no-renames` evita que um rename de alta similaridade esconda o caminho crítico antigo) — nunca executa nada do `head` |
+| Permissões | `contents: read`, `pull-requests: read` | `contents: read` |
+| Substitui o outro? | Não | Não — são complementares, nenhum duplica o outro |
+
+**Proibição absoluta no `governance-gate.yml`**: checkout do `head`, `run:`
+de qualquer script/Python/Makefile/Action local do `head`, `source`/`eval`,
+uso de `secrets.*`. O conteúdo do `head` só é tratado como dado (nome de
+arquivo, hash de commit) — nunca como comando.
+
+### 9.3 Caminhos críticos monitorados
+
+Lista fechada, hardcoded em `governance-gate.yml` (nunca lida de
+`.magnata/patterns.sh` do `head`, que é um dos caminhos protegidos):
+
+- `.magnata/patterns.sh`
+- `.githooks/**`
+- `.github/workflows/**`
+- `.github/CODEOWNERS`
+- `scripts/ci/**`
+- `.magnata/migration-authorizations/**`
+
+`requirements.txt` (supply-chain) e `docs/magnata-os/*.md` (documentação,
+sem enforcement executável) foram avaliados e deliberadamente deixados de
+fora — ver ADR §11.
+
+### 9.4 CODEOWNERS — auditabilidade, não bloqueio
+
+`.github/CODEOWNERS` cobre os mesmos caminhos, apontando para
+`@contato398`. Nesta fase, isso só habilita notificação automática de
+review e o selo "Code Owner" na PR — **"Require review from Code Owners"
+permanece desligado** no ruleset. Com um único mantenedor real, essa flag
+causaria lockout total (o GitHub proíbe autoaprovação de PR) — só deve ser
+ligada quando existir um segundo revisor real e distinto.
+
+### 9.5 Environment `governance-approval` — autorização externa ao diff
+
+PRs que tocam um caminho crítico exigem aprovação de um GitHub Environment
+(`governance-approval`, required reviewer `@contato398`,
+`prevent_self_review = false`). Diferente de CODEOWNERS, o GitHub **não**
+bloqueia autoaprovação de Environment — por isso este é o mecanismo que
+resolve autorização externa sem exigir um segundo humano inexistente. PRs
+sem caminho crítico tocado não acionam esse job — zero fricção adicional.
+
+### 9.6 Sequência de ativação
+
+**Correção de ordem (revisão desta seção)**: o Environment precisa existir
+e já estar protegido **antes** de o workflow ser mesclado — se o código
+chegasse a `main` primeiro, a primeira execução real **autocriaria** o
+Environment `governance-approval` no GitHub sem nenhuma protection rule
+(sem required reviewer, aprovando sozinho), exatamente o oposto do que o
+mecanismo pretende garantir.
+
+Ver ADR §9 — resumo da ordem corrigida: (1) criar o Environment; (2)
+configurar o reviewer; (3) confirmar `prevent_self_review = false`; (4)
+confirmar ausência de secret; (5) **só então** mesclar o código; (6-9)
+validar com uma PR de teste real que o fluxo completo funciona (job em
+`Waiting`, aprovação manual, check só verde depois); (10-11) confirmar que
+PRs comuns continuam fluindo e que PRs de governança sem aprovação
+continuam bloqueadas; (12) só então marcar o check como required no
+ruleset. Nunca marcar como required antes de validar com uma PR real —
+evita lockout por um workflow mal configurado travar todo o repositório.
+
+---
+
+## 10. Referências
 
 - `MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6_PLANO.md` — plano original aprovado.
 - `MAGNATA_AI_ENGINEERING_POWERPACK_ETAPA6.md` — relatório desta implementação.
 - `MAGNATA_AI_HOOKS_LOCAIS.md` — hooks locais (Etapa 5).
 - `.githooks/README.md` — operação dos hooks locais.
+- `docs/decisoes/endurecimento-governanca-gates-v1.md` — decisão completa
+  da governança não autocontornável (seção 9 acima).
 
 ---
 

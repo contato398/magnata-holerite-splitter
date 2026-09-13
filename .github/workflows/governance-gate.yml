@@ -1,0 +1,155 @@
+name: Governança — Detector Confiável (Não Autocontornável)
+
+# Por que este workflow existe, separado de magnata-governance.yml: ver
+# docs/decisoes/endurecimento-governanca-gates-v1.md.
+#
+# Resumo do problema que ele resolve: magnata-governance.yml dispara
+# por `pull_request` simples -- nesse evento, o GitHub executa a
+# versão do próprio `head` da PR (quando a PR é da mesma repo, não de
+# fork). Isso significa que uma PR que altere validate_governance.sh,
+# .magnata/patterns.sh ou o próprio magnata-governance.yml poderia, em
+# tese, usar a própria versão alterada para se autoaprovar. Este
+# workflow é a defesa contra exatamente isso.
+#
+# REGRA PÉTREA: `pull_request_target` roda com o workflow definido na
+# BASE (branch padrão), nunca no `head` da PR -- é assim que o GitHub
+# executa este evento, por desenho. Por isso, é proibido, neste
+# arquivo, fazer checkout do `head` e executar qualquer coisa vinda
+# dele como código (script, Python, Makefile, Action local, `source`,
+# `eval`, dependência definida pelo head). O conteúdo do `head` é
+# tratado SOMENTE como dado: nomes de arquivo e hashes de commit,
+# nunca como comando. Nenhum `secrets.*` é usado em nenhum passo deste
+# arquivo.
+#
+# O CI tradicional (magnata-governance.yml, disparado por
+# `pull_request`) continua sendo o único responsável por executar e
+# testar o código da PR em contexto normal -- este workflow não o
+# substitui, não duplica seus 16 gates, e não roda nenhum teste do
+# repositório.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+# Permissões mínimas: só precisamos ler o conteúdo do repositório (para
+# um `git diff` puro, texto contra texto) -- nunca escrever, nunca
+# comentar ou rotular a PR, nunca tocar em Issues.
+permissions:
+  contents: read
+
+concurrency:
+  group: governance-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    name: Detectar alteração em caminho crítico de governança
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      critical: ${{ steps.diff.outputs.critical }}
+      matched: ${{ steps.diff.outputs.matched }}
+    steps:
+      # Checkout da BASE da PR -- nunca do head. `ref` explícito evita
+      # qualquer ambiguidade sobre qual commit vira o working tree
+      # deste runner.
+      - name: Checkout da base (nunca do head)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+
+      # Busca somente o OBJETO do commit head -- isso baixa dados Git
+      # (árvore/blobs) para o repositório local do runner, nunca
+      # executa nada. O `git diff` do passo seguinte só compara nomes
+      # de arquivo entre duas árvores, também sem executar nenhum
+      # conteúdo do head.
+      - name: Buscar objeto do commit head (dado, não execução)
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$HEAD_SHA"
+
+      - name: Comparar caminhos alterados contra a lista crítica (hardcoded aqui, nunca lida de .magnata/patterns.sh do head)
+        id: diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Lista fechada, mantida NESTE arquivo (que o pull_request_target
+          # garante vir da base, nunca do head) -- nunca derivada de
+          # .magnata/patterns.sh, que é justamente um dos caminhos que
+          # este detector protege. Motivo de cada entrada, e o que foi
+          # deliberadamente deixado de fora (ex.: requirements.txt,
+          # docs/magnata-os/*.md), está no ADR referenciado no topo
+          # deste arquivo.
+          CRITICAL_PATTERNS=(
+            '^\.magnata/patterns\.sh$'
+            '^\.githooks/'
+            '^\.github/workflows/'
+            '^\.github/CODEOWNERS$'
+            '^scripts/ci/'
+            '^\.magnata/migration-authorizations/'
+          )
+
+          # --no-renames é obrigatório aqui: por padrão, `git diff
+          # --name-only` colapsa um rename de alta similaridade numa
+          # única linha (só o caminho novo) -- um caminho crítico
+          # renomeado para fora da árvore protegida, mantendo conteúdo
+          # parecido, deixaria de aparecer como alterado/removido e
+          # escaparia da lista abaixo. Com --no-renames, todo rename
+          # vira sempre uma remoção do caminho antigo + adição do
+          # caminho novo, cada um comparado separadamente contra
+          # CRITICAL_PATTERNS -- exatamente o que garante detectar o
+          # caminho antigo mesmo quando o novo nome é inofensivo.
+          CHANGED=$(git diff --no-renames --name-only "$BASE_SHA" "$HEAD_SHA")
+          echo "Arquivos alterados nesta PR:"
+          echo "$CHANGED"
+          echo ""
+
+          MATCHED=()
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            for pattern in "${CRITICAL_PATTERNS[@]}"; do
+              if [[ "$file" =~ $pattern ]]; then
+                MATCHED+=("$file")
+                break
+              fi
+            done
+          done <<< "$CHANGED"
+
+          if [[ ${#MATCHED[@]} -eq 0 ]]; then
+            echo "critical=false" >> "$GITHUB_OUTPUT"
+            echo "matched=" >> "$GITHUB_OUTPUT"
+            echo "✓ Nenhum caminho crítico de governança foi tocado nesta PR."
+          else
+            printf -v MATCHED_JOINED '%s, ' "${MATCHED[@]}"
+            echo "critical=true" >> "$GITHUB_OUTPUT"
+            echo "matched=${MATCHED_JOINED%, }" >> "$GITHUB_OUTPUT"
+            echo "⚠ Caminho(s) crítico(s) de governança alterado(s):"
+            printf '  - %s\n' "${MATCHED[@]}"
+          fi
+
+  governance-approval:
+    name: Aprovação humana obrigatória (fora do diff)
+    needs: detect
+    if: needs.detect.outputs.critical == 'true'
+    runs-on: ubuntu-latest
+    # Este Environment ainda não existe no GitHub no momento desta
+    # implementação -- criá-lo e configurar o required reviewer é
+    # etapa externa posterior (ver ADR, seção "sequência de ativação").
+    # Até lá, referenciar um Environment inexistente faz este job
+    # falhar quando (e só quando) uma PR real tocar um caminho crítico
+    # -- comportamento fail-closed esperado, não um bug: sem o
+    # Environment configurado, nenhuma PR de governança consegue ficar
+    # verde, o que é a postura correta enquanto a aprovação humana
+    # externa ainda não está de fato disponível.
+    environment: governance-approval
+    steps:
+      - name: Confirmação
+        run: |
+          echo "Aprovado por revisor humano do Environment governance-approval."
+          echo "Caminhos que motivaram esta aprovação: ${{ needs.detect.outputs.matched }}"
