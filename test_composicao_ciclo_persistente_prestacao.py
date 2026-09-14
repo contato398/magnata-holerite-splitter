@@ -31,6 +31,7 @@ from magnata_os.documental.modulo01.dominio import Documento
 from magnata_os.classificacao.ciclo_prestacao import (
     NecessidadeDocumentoPrestacao,
     executar_ciclo_prestacao,
+    executar_ciclo_prestacao_descoberta,
 )
 from magnata_os.classificacao.competencia_esperada_prestacao import ContextoCicloPrestacao
 from magnata_os.classificacao.contratos import ReferenciaCanonica
@@ -1343,6 +1344,14 @@ class _FonteClientesV7:
         return (_CLIENTE_V7,)
 
 
+class _FonteClientesDoisAtivosV7:
+    def __init__(self, cliente_b):
+        self._cliente_b = cliente_b
+
+    def listar_ativos(self, contexto=None):
+        return (_CLIENTE_V7, self._cliente_b)
+
+
 class _RepositorioComUmDocumento:
     """Fake mínimo -- só `listar_todos()`, único método que
     `_adquirir_inventario_via_corredor` consulta."""
@@ -1371,6 +1380,21 @@ def _documento_bruto_v7(documento_id, hash_sha256):
         criado_em=agora,
         atualizado_em=agora,
     )
+
+
+class _FonteCandidatosPorNecessidadeFake:
+    """Fake determinístico para teste: associação REAL e independente
+    necessidade -> documentos candidatos, chaveada por (cliente,
+    competencia) -- suficiente para os cenários destes testes (1 tipo
+    documental por necessidade). O cliente/competência esperados vêm
+    SEMPRE da própria `necessidade` recebida em `candidatos_para`,
+    nunca de nada que o documento tenha resolvido."""
+
+    def __init__(self, mapa: dict):
+        self._mapa = mapa  # {(cliente, competencia): Tuple[Documento, ...]}
+
+    def candidatos_para(self, necessidade):
+        return self._mapa.get((necessidade.cliente, necessidade.competencia), ())
 
 
 def _contexto_v7(repositorio_execucoes, **kwargs):
@@ -1413,10 +1437,12 @@ def test_politica_v1_fail_closed_nunca_cria_execucao():
 
 
 def test_evidencia_real_concordante_ancora_readiness_ate_pronto(monkeypatch):
-    """Documento real adquirido resolve CLIENTE/COMPETENCIA EXATAMENTE
-    como esperado e satisfaz o requisito -- a âncora REAL (nunca
-    fabricada) flui até o readiness e o pacote fecha PRONTO, refletido
-    no estado final CONCLUIDA."""
+    """Necessidade A/X (único cliente ativo) tem, via `fonte_
+    candidatos_por_necessidade`, exatamente 1 candidato real (doc-v7-
+    real). Ele resolve CLIENTE/COMPETENCIA EXATAMENTE como a necessidade
+    esperava e satisfaz o requisito -- a âncora REAL (nunca fabricada)
+    flui até o readiness e o pacote fecha PRONTO, refletido no estado
+    final CONCLUIDA."""
     import magnata_os.classificacao.composicao_ciclo_persistente_prestacao as modulo
     from magnata_os.documental.modulo01.repositorio import RepositorioDocumentosEmMemoria
     from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivosEmMemoria
@@ -1431,7 +1457,8 @@ def test_evidencia_real_concordante_ancora_readiness_ate_pronto(monkeypatch):
         hash_sha256=hash_sha256, conteudo=conteudo, mime_type='application/pdf',
         nome_original='holerite.pdf', tamanho=len(conteudo),
     )
-    repositorio_docs.salvar(_documento_bruto_v7('doc-v7-real', hash_sha256))
+    documento_real = _documento_bruto_v7('doc-v7-real', hash_sha256)
+    repositorio_docs.salvar(documento_real)
 
     monkeypatch.setattr(modulo, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer')
 
@@ -1458,10 +1485,14 @@ def test_evidencia_real_concordante_ancora_readiness_ate_pronto(monkeypatch):
 
     monkeypatch.setattr(modulo, 'executar_documento_readonly', _executar_documento_readonly_fake)
 
+    fonte_candidatos = _FonteCandidatosPorNecessidadeFake({
+        (_CLIENTE_V7, _COMPETENCIA_V7): (documento_real,),
+    })
     contexto = _contexto_v7(
         repositorio_execucoes,
         repositorio_documentos=repositorio_docs,
         armazenamento_arquivos=armazenamento,
+        fonte_candidatos_por_necessidade=fonte_candidatos,
     )
     execucao = executar_ciclo_prestacao_persistente(contexto)
 
@@ -1469,10 +1500,11 @@ def test_evidencia_real_concordante_ancora_readiness_ate_pronto(monkeypatch):
 
 
 def test_sem_evidencia_real_e_sem_ancora_pre_informada_fica_em_revisao_nunca_pronto(monkeypatch):
-    """Mesmo cenário de aquisição, mas o corredor NUNCA resolve
-    CLIENTE/COMPETENCIA (simulando a limitação real de hoje: sem
-    `fonte_cliente_direto`/`fonte_vinculos` wired) -- nenhuma âncora
-    real, nenhuma pré-informada: cliente fica EM_REVISAO explícito,
+    """CORREÇÃO pós-Ultraplan: populamos os campos LEGADOS de aquisição
+    em bloco (`repositorio_documentos`/`armazenamento_arquivos`) mas
+    NUNCA `fonte_candidatos_por_necessidade` -- por si só, isso nunca é
+    suficiente para gerar uma âncora (aquisição em bloco não é mais
+    chamada pelo fluxo persistente). Cliente fica EM_REVISAO explícito,
     NUNCA PRONTO por acidente."""
     import magnata_os.classificacao.composicao_ciclo_persistente_prestacao as modulo
     from magnata_os.documental.modulo01.repositorio import RepositorioDocumentosEmMemoria
@@ -1492,12 +1524,14 @@ def test_sem_evidencia_real_e_sem_ancora_pre_informada_fica_em_revisao_nunca_pro
 
     monkeypatch.setattr(modulo, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer')
     # `executar_documento_readonly` REAL (nunca monkeypatched aqui) --
-    # sem fonte_cliente_direto/fonte_vinculos, CLIENTE nunca resolve.
+    # de qualquer forma, sem `fonte_candidatos_por_necessidade`, nunca
+    # chega a ser chamado pelo fluxo persistente.
 
     contexto = _contexto_v7(
         repositorio_execucoes,
         repositorio_documentos=repositorio_docs,
         armazenamento_arquivos=armazenamento,
+        # fonte_candidatos_por_necessidade NÃO informada (default None)
     )
     execucao = executar_ciclo_prestacao_persistente(contexto)
 
@@ -1544,10 +1578,11 @@ def test_ancora_pre_informada_e_ignorada_sem_evidencia_real_desta_execucao():
 
 
 def test_dois_documentos_reais_divergentes_nunca_escolhem_lado_fica_em_revisao(monkeypatch):
-    """2 documentos reais adquiridos nesta execução resolvem CLIENTE
-    igual ao esperado, mas COMPETÊNCIA diferente entre si -- divergência
-    real, nunca uma escolha de lado: cliente fica EM_REVISAO, nunca
-    PRONTO."""
+    """Necessidade A/X tem, via `fonte_candidatos_por_necessidade`, 2
+    candidatos reais: um resolve CLIENTE/COMPETENCIA igual ao esperado,
+    o outro resolve o MESMO cliente mas COMPETÊNCIA diferente --
+    divergência real DENTRO do vínculo necessidade->documento, nunca
+    uma escolha de lado: cliente fica EM_REVISAO, nunca PRONTO."""
     import magnata_os.classificacao.composicao_ciclo_persistente_prestacao as modulo
     from magnata_os.documental.modulo01.repositorio import RepositorioDocumentosEmMemoria
     from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivosEmMemoria
@@ -1556,6 +1591,7 @@ def test_dois_documentos_reais_divergentes_nunca_escolhem_lado_fica_em_revisao(m
     repositorio_docs = RepositorioDocumentosEmMemoria()
     armazenamento = ArmazenamentoArquivosEmMemoria()
 
+    documentos = {}
     for documento_id, texto in (('doc-v7-a', 'A'), ('doc-v7-b', 'B')):
         conteudo = texto.encode('utf-8')
         hash_sha256 = hashlib.sha256(conteudo).hexdigest()
@@ -1563,7 +1599,9 @@ def test_dois_documentos_reais_divergentes_nunca_escolhem_lado_fica_em_revisao(m
             hash_sha256=hash_sha256, conteudo=conteudo, mime_type='application/pdf',
             nome_original=f'{documento_id}.pdf', tamanho=len(conteudo),
         )
-        repositorio_docs.salvar(_documento_bruto_v7(documento_id, hash_sha256))
+        documento = _documento_bruto_v7(documento_id, hash_sha256)
+        repositorio_docs.salvar(documento)
+        documentos[documento_id] = documento
 
     monkeypatch.setattr(modulo, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer')
 
@@ -1583,10 +1621,14 @@ def test_dois_documentos_reais_divergentes_nunca_escolhem_lado_fica_em_revisao(m
 
     monkeypatch.setattr(modulo, 'executar_documento_readonly', _executar_documento_readonly_fake)
 
+    fonte_candidatos = _FonteCandidatosPorNecessidadeFake({
+        (_CLIENTE_V7, _COMPETENCIA_V7): (documentos['doc-v7-a'], documentos['doc-v7-b']),
+    })
     contexto = _contexto_v7(
         repositorio_execucoes,
         repositorio_documentos=repositorio_docs,
         armazenamento_arquivos=armazenamento,
+        fonte_candidatos_por_necessidade=fonte_candidatos,
     )
     execucao = executar_ciclo_prestacao_persistente(contexto)
 
@@ -1600,20 +1642,23 @@ def test_dois_documentos_reais_divergentes_nunca_escolhem_lado_fica_em_revisao(m
 
 
 def test_critico_dois_documentos_reais_cliente_diferente_nunca_vira_segundo_grupo(monkeypatch):
-    """TESTE CRÍTICO OBRIGATÓRIO: esperado=A/X (único cliente ATIVO
-    nesta descoberta). Documento 1 (real, adquirido nesta execução)
-    resolve A/X. Documento 2 (real, adquirido na MESMA execução)
-    resolve B/X -- cliente DIFERENTE do esperado, mesma competência.
+    """TESTE CRÍTICO OBRIGATÓRIO (correção pós-Ultraplan "Correlação
+    Necessidade → Aquisição → Resolução"): necessidade A/X (único
+    cliente ATIVO nesta descoberta) tem, via `fonte_candidatos_por_
+    necessidade`, 2 candidatos reais -- exatamente o vínculo legítimo
+    que a correção exige preservar. Documento 1 resolve A/X (como
+    esperado). Documento 2 -- também candidato da MESMA necessidade
+    A/X -- resolve B/X: cliente DIFERENTE do esperado, mesma
+    competência.
 
     Resultado esperado: A/X = divergente/revisão.
     NUNCA: "A/X válido (usando só doc-1) + B/X criado como segundo
     grupo" -- B não é sequer um cliente ativo nesta descoberta; se a
     composição reclassificasse doc-2 como "evidência de B" (em vez de
-    tratá-lo como sinal de divergência contra A, que é o único cliente
-    realmente esperado), essa reclassificação desapareceria
-    silenciosamente do resultado E A ficaria PRONTO/CONCLUIDA por
-    engano, ignorando que o mesmo lote de aquisição continha uma
-    resolução real conflitante."""
+    tratá-lo como sinal de divergência contra A, cuja necessidade foi
+    quem o trouxe), essa reclassificação desapareceria silenciosamente
+    do resultado E A ficaria PRONTO/CONCLUIDA por engano, ignorando que
+    o PRÓPRIO vínculo de A continha uma resolução real conflitante."""
     import magnata_os.classificacao.composicao_ciclo_persistente_prestacao as modulo
     from magnata_os.documental.modulo01.repositorio import RepositorioDocumentosEmMemoria
     from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivosEmMemoria
@@ -1622,6 +1667,7 @@ def test_critico_dois_documentos_reais_cliente_diferente_nunca_vira_segundo_grup
     repositorio_docs = RepositorioDocumentosEmMemoria()
     armazenamento = ArmazenamentoArquivosEmMemoria()
 
+    documentos = {}
     for documento_id, texto in (('doc-critico-a', 'A'), ('doc-critico-b', 'B')):
         conteudo = texto.encode('utf-8')
         hash_sha256 = hashlib.sha256(conteudo).hexdigest()
@@ -1629,7 +1675,9 @@ def test_critico_dois_documentos_reais_cliente_diferente_nunca_vira_segundo_grup
             hash_sha256=hash_sha256, conteudo=conteudo, mime_type='application/pdf',
             nome_original=f'{documento_id}.pdf', tamanho=len(conteudo),
         )
-        repositorio_docs.salvar(_documento_bruto_v7(documento_id, hash_sha256))
+        documento = _documento_bruto_v7(documento_id, hash_sha256)
+        repositorio_docs.salvar(documento)
+        documentos[documento_id] = documento
 
     monkeypatch.setattr(modulo, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer')
 
@@ -1665,20 +1713,300 @@ def test_critico_dois_documentos_reais_cliente_diferente_nunca_vira_segundo_grup
 
     monkeypatch.setattr(modulo, 'executar_documento_readonly', _executar_documento_readonly_fake)
 
+    # Os 2 documentos são candidatos da MESMA necessidade A/X -- o
+    # vínculo legítimo (nunca inferido do que cada um resolve).
+    fonte_candidatos = _FonteCandidatosPorNecessidadeFake({
+        (_CLIENTE_V7, _COMPETENCIA_V7): (documentos['doc-critico-a'], documentos['doc-critico-b']),
+    })
     contexto = _contexto_v7(
         repositorio_execucoes,
         repositorio_documentos=repositorio_docs,
         armazenamento_arquivos=armazenamento,
+        fonte_candidatos_por_necessidade=fonte_candidatos,
         # `_CLIENTE_B_NAO_ATIVO` propositalmente NÃO entra em
         # `fonte_clientes`/`competencias_por_cliente` -- só A está
-        # ativo. A divergência precisa ser detectada mesmo assim.
+        # ativo. A divergência precisa ser detectada mesmo assim,
+        # nenhum "grupo B" nasce no resultado.
     )
     execucao = executar_ciclo_prestacao_persistente(contexto)
 
-    # Nunca CONCLUIDA: a resolução real conflitante de B/X (mesmo
-    # sendo de um cliente sequer ativo nesta descoberta) precisa
-    # impedir que A/X seja confirmado só com a evidência de doc-1.
+    # Nunca CONCLUIDA: a resolução real conflitante de doc-critico-b
+    # (candidato da MESMA necessidade de A, mesmo resolvendo para um
+    # cliente sequer ativo nesta descoberta) precisa impedir que A/X
+    # seja confirmado só com a evidência de doc-critico-a.
     assert execucao.estado == 'INICIADA'
+
+
+# ==== TESTES OBRIGATÓRIOS -- Adendo Ultraplan aprovado "Correlação
+# Necessidade → Aquisição → Resolução" (implementação de
+# FonteCandidatosDocumentaisPorNecessidade) ====
+
+
+def test_obrigatorio_necessidades_de_clientes_distintos_cada_uma_valida_sem_conflito_cruzado():
+    """REQUERIDO: necessidade A/X → doc A → resolve A/X; necessidade
+    B/X → doc B → resolve B/X. Ambos os clientes estão ATIVOS nesta
+    descoberta, cada um com sua PRÓPRIA necessidade/candidato -- vínculo
+    legítimo preservado por `fonte_candidatos_por_necessidade`.
+    Resultado: A válido, B válido, NENHUM conflito cruzado (o candidato
+    de B nunca entra no vínculo de A, e vice-versa -- ao contrário do
+    pool global de `c234d22`, já superado por esta correção)."""
+    import magnata_os.classificacao.composicao_ciclo_persistente_prestacao as modulo
+    from magnata_os.documental.modulo01.repositorio import RepositorioDocumentosEmMemoria
+    from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivosEmMemoria
+
+    _CLIENTE_B = ReferenciaCanonica('CLIENTE', 'cliente-b-ativo-obrigatorio')
+
+    repositorio_execucoes = RepositorioExecucoesPrestacaoMemoria()
+    repositorio_docs = RepositorioDocumentosEmMemoria()
+    armazenamento = ArmazenamentoArquivosEmMemoria()
+
+    documentos = {}
+    for documento_id, texto in (('doc-a-valido', 'A'), ('doc-b-valido', 'B')):
+        conteudo = texto.encode('utf-8')
+        hash_sha256 = hashlib.sha256(conteudo).hexdigest()
+        armazenamento.armazenar(
+            hash_sha256=hash_sha256, conteudo=conteudo, mime_type='application/pdf',
+            nome_original=f'{documento_id}.pdf', tamanho=len(conteudo),
+        )
+        documento = _documento_bruto_v7(documento_id, hash_sha256)
+        repositorio_docs.salvar(documento)
+        documentos[documento_id] = documento
+
+    monkeypatch_alvo = modulo
+    resolucao_a = _candidato_ancora('doc-a-valido', cliente=_CLIENTE_V7, competencia=_COMPETENCIA_V7)
+    resolucao_b = _candidato_ancora('doc-b-valido', cliente=_CLIENTE_B, competencia=_COMPETENCIA_V7)
+    resolucoes_por_documento = {'doc-a-valido': resolucao_a, 'doc-b-valido': resolucao_b}
+
+    def _executar_documento_readonly_fake(contexto_corredor, sink):
+        cliente_do_doc = (
+            _CLIENTE_V7 if contexto_corredor.documento_id == 'doc-a-valido' else _CLIENTE_B
+        )
+        sink.adicionar(
+            ItemInventarioPrestacao(
+                documento_id=contexto_corredor.documento_id,
+                tipo_documental='HOLERITE',
+                cliente=cliente_do_doc,
+                competencia=_COMPETENCIA_V7,
+            )
+        )
+        resultado_processamento = _ResultadoProcessamentoV7(
+            documento_id=contexto_corredor.documento_id,
+            estado=_EstadoCorredorV7.RESOLVIDO_E_AVANCOU,
+            tipo_documental='HOLERITE',
+            resolucao_semantica=resolucoes_por_documento[contexto_corredor.documento_id],
+        )
+        return (_ResultadoExecucaoCorredorPrestacaoV7(resultado_corredor=resultado_processamento),)
+
+    from unittest.mock import patch
+
+    fonte_candidatos = _FonteCandidatosPorNecessidadeFake({
+        (_CLIENTE_V7, _COMPETENCIA_V7): (documentos['doc-a-valido'],),
+        (_CLIENTE_B, _COMPETENCIA_V7): (documentos['doc-b-valido'],),
+    })
+    contexto = _contexto_v7(
+        repositorio_execucoes,
+        fonte_clientes=_FonteClientesDoisAtivosV7(_CLIENTE_B),
+        competencias_por_cliente={_CLIENTE_V7: _COMPETENCIA_V7, _CLIENTE_B: _COMPETENCIA_V7},
+        repositorio_documentos=repositorio_docs,
+        armazenamento_arquivos=armazenamento,
+        fonte_candidatos_por_necessidade=fonte_candidatos,
+    )
+    with patch.object(monkeypatch_alvo, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer'), \
+         patch.object(monkeypatch_alvo, 'executar_documento_readonly', _executar_documento_readonly_fake):
+        execucao = executar_ciclo_prestacao_persistente(contexto)
+
+    # CONCLUIDA só é possível se TODOS os clientes ativos fecharam
+    # PRONTO -- prova, sem visibilidade adicional, que nem A nem B
+    # ficaram EM_REVISAO/divergente por causa um do outro.
+    assert execucao.estado == 'CONCLUIDA'
+
+
+def test_obrigatorio_necessidade_a_com_documento_que_resolve_outro_cliente_e_divergente_b_nao_nasce():
+    """REQUERIDO: necessidade A/X → doc A → resolve B/X. Resultado: A =
+    revisão por divergência; B não é criado por acidente. Visibilidade
+    completa (composição manual dos passos internos) para verificar o
+    motivo EXATO de `avaliar_candidatos_ancora` e que nenhum resultado
+    para B aparece em lugar nenhum."""
+    import magnata_os.classificacao.composicao_ciclo_persistente_prestacao as modulo
+    from magnata_os.documental.modulo01.repositorio import RepositorioDocumentosEmMemoria
+    from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivosEmMemoria
+
+    _CLIENTE_B_ACIDENTAL = ReferenciaCanonica('CLIENTE', 'cliente-b-nunca-deveria-nascer')
+
+    repositorio_docs = RepositorioDocumentosEmMemoria()
+    armazenamento = ArmazenamentoArquivosEmMemoria()
+    conteudo = b'documento unico'
+    hash_sha256 = hashlib.sha256(conteudo).hexdigest()
+    armazenamento.armazenar(
+        hash_sha256=hash_sha256, conteudo=conteudo, mime_type='application/pdf',
+        nome_original='doc.pdf', tamanho=len(conteudo),
+    )
+    documento_unico = _documento_bruto_v7('doc-unico-resolve-b', hash_sha256)
+    repositorio_docs.salvar(documento_unico)
+
+    resolucao_b_por_acidente = _candidato_ancora(
+        'doc-unico-resolve-b', cliente=_CLIENTE_B_ACIDENTAL, competencia=_COMPETENCIA_V7,
+    )
+
+    def _executar_documento_readonly_fake(contexto_corredor, sink):
+        resultado_processamento = _ResultadoProcessamentoV7(
+            documento_id=contexto_corredor.documento_id,
+            estado=_EstadoCorredorV7.RESOLVIDO_E_AVANCOU,
+            tipo_documental='HOLERITE',
+            resolucao_semantica=resolucao_b_por_acidente,
+        )
+        return (_ResultadoExecucaoCorredorPrestacaoV7(resultado_corredor=resultado_processamento),)
+
+    from unittest.mock import patch
+    from magnata_os.classificacao.inventario_prestacao_memoria import (
+        InventarioPrestacaoEmMemoria as _InventarioVazioV7,
+    )
+
+    fonte_candidatos = _FonteCandidatosPorNecessidadeFake({
+        (_CLIENTE_V7, _COMPETENCIA_V7): (documento_unico,),
+    })
+    ciclo_para_corredor = ContextoCicloPrestacao(competencia_base=(2026, 9))
+    contexto_composicao = _contexto_v7(
+        RepositorioExecucoesPrestacaoMemoria(),
+        repositorio_documentos=repositorio_docs,
+        armazenamento_arquivos=armazenamento,
+        fonte_candidatos_por_necessidade=fonte_candidatos,
+    )
+
+    with patch.object(modulo, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer'), \
+         patch.object(modulo, 'executar_documento_readonly', _executar_documento_readonly_fake):
+        resultado_descoberta = executar_ciclo_prestacao_descoberta(
+            contexto=ciclo_para_corredor,
+            fonte_clientes=_FonteClientesV7(),
+            fonte_requisitos=_FonteRequisitosVaziaV7(),
+            fonte_inventario=_InventarioVazioV7(),
+            requisitos_base=(RequisitoDocumentalPrestacao('HOLERITE'),),
+            competencias_por_cliente={_CLIENTE_V7: _COMPETENCIA_V7},
+        )
+        necessidades = tuple(
+            n for r in resultado_descoberta.resultados_por_cliente for n in r.necessidades
+        )
+        inventario_adquirido, resultados_aquisicao = modulo._adquirir_por_necessidades(
+            contexto_composicao, necessidades, ciclo_para_corredor,
+        )
+
+    candidatos_a = tuple(
+        resultado_execucao.resultado_corredor.resolucao_semantica
+        for resultado_aquisicao in resultados_aquisicao
+        for resultado_execucao in resultado_aquisicao.resultados_corredor
+        if resultado_aquisicao.necessidade.cliente == _CLIENTE_V7
+        and resultado_execucao.resultado_corredor.resolucao_semantica is not None
+    )
+    avaliacao = avaliar_candidatos_ancora(candidatos_a, _CLIENTE_V7, _COMPETENCIA_V7)
+    assert avaliacao.ancora is None
+    assert avaliacao.motivo_ausencia == MOTIVO_RESOLUCOES_ANCORA_DIVERGENTES
+
+    resultado_ciclo = executar_ciclo_prestacao(
+        contexto=ciclo_para_corredor,
+        fonte_clientes=_FonteClientesV7(),
+        fonte_requisitos=_FonteRequisitosVaziaV7(),
+        fonte_inventario=inventario_adquirido,
+        requisitos_base=(RequisitoDocumentalPrestacao('HOLERITE'),),
+        resolucoes_ancora={},  # A não tem âncora -- divergência, nunca fabricada
+        competencias_por_cliente={_CLIENTE_V7: _COMPETENCIA_V7},
+    )
+    clientes_no_resultado = {r.cliente for r in resultado_ciclo.resultados_por_cliente}
+    assert clientes_no_resultado == {_CLIENTE_V7}  # B NUNCA nasce por acidente
+    resultado_a = next(r for r in resultado_ciclo.resultados_por_cliente if r.cliente == _CLIENTE_V7)
+    assert resultado_a.pacote.estado == EstadoPacotePrestacao.EM_REVISAO
+
+
+def test_obrigatorio_sem_fonte_candidatos_por_necessidade_cliente_fica_em_revisao_explicita():
+    """REQUERIDO: A/X precisa de documento; `fonte_candidatos_por_
+    necessidade = None`. A continua no resultado; nenhuma âncora é
+    criada; A = EM_REVISAO / `sem_evidencia_documental_real`.
+
+    Deliberadamente populamos `repositorio_documentos`/`armazenamento_
+    arquivos` com um documento que RESOLVERIA perfeitamente (via
+    corredor monkeypatched) se a aquisição em bloco legada fosse usada
+    como fallback -- provando que a ausência da fonte por necessidade
+    é respeitada de verdade, nunca mascarada por uma aquisição em
+    bloco disponível nos bastidores."""
+    import magnata_os.classificacao.composicao_ciclo_persistente_prestacao as modulo
+    from magnata_os.classificacao.inventario_prestacao_memoria import (
+        InventarioPrestacaoEmMemoria as _InventarioVazioV7,
+    )
+    from magnata_os.documental.modulo01.repositorio import RepositorioDocumentosEmMemoria
+    from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivosEmMemoria
+
+    repositorio_docs = RepositorioDocumentosEmMemoria()
+    armazenamento = ArmazenamentoArquivosEmMemoria()
+    conteudo = b'holerite que resolveria perfeitamente se o fallback existisse'
+    hash_sha256 = hashlib.sha256(conteudo).hexdigest()
+    armazenamento.armazenar(
+        hash_sha256=hash_sha256, conteudo=conteudo, mime_type='application/pdf',
+        nome_original='doc.pdf', tamanho=len(conteudo),
+    )
+    repositorio_docs.salvar(_documento_bruto_v7('doc-tentador', hash_sha256))
+
+    resolucao_perfeita = _candidato_ancora(
+        'doc-tentador', cliente=_CLIENTE_V7, competencia=_COMPETENCIA_V7,
+    )
+
+    def _executar_documento_readonly_fake(contexto_corredor, sink):
+        sink.adicionar(
+            ItemInventarioPrestacao(
+                documento_id=contexto_corredor.documento_id,
+                tipo_documental='HOLERITE',
+                cliente=_CLIENTE_V7,
+                competencia=_COMPETENCIA_V7,
+            )
+        )
+        resultado_processamento = _ResultadoProcessamentoV7(
+            documento_id=contexto_corredor.documento_id,
+            estado=_EstadoCorredorV7.RESOLVIDO_E_AVANCOU,
+            tipo_documental='HOLERITE',
+            resolucao_semantica=resolucao_perfeita,
+        )
+        return (_ResultadoExecucaoCorredorPrestacaoV7(resultado_corredor=resultado_processamento),)
+
+    ciclo_para_corredor = ContextoCicloPrestacao(competencia_base=(2026, 9))
+    resultado_descoberta = executar_ciclo_prestacao_descoberta(
+        contexto=ciclo_para_corredor,
+        fonte_clientes=_FonteClientesV7(),
+        fonte_requisitos=_FonteRequisitosVaziaV7(),
+        fonte_inventario=_InventarioVazioV7(),
+        requisitos_base=(RequisitoDocumentalPrestacao('HOLERITE'),),
+        competencias_por_cliente={_CLIENTE_V7: _COMPETENCIA_V7},
+    )
+    necessidades = tuple(
+        n for r in resultado_descoberta.resultados_por_cliente for n in r.necessidades
+    )
+    assert necessidades  # A realmente precisa de documento (HOLERITE faltando)
+
+    contexto_composicao = _contexto_v7(
+        RepositorioExecucoesPrestacaoMemoria(),
+        repositorio_documentos=repositorio_docs,
+        armazenamento_arquivos=armazenamento,
+        # fonte_candidatos_por_necessidade NÃO informada (default None)
+    )
+    from unittest.mock import patch
+    with patch.object(modulo, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer'), \
+         patch.object(modulo, 'executar_documento_readonly', _executar_documento_readonly_fake):
+        inventario_adquirido, resultados_aquisicao = modulo._adquirir_por_necessidades(
+            contexto_composicao, necessidades, ciclo_para_corredor,
+        )
+    assert resultados_aquisicao == ()  # nenhuma aquisição rodou, mesmo com documento "perfeito" disponível
+
+    resultado_ciclo = executar_ciclo_prestacao(
+        contexto=ciclo_para_corredor,
+        fonte_clientes=_FonteClientesV7(),
+        fonte_requisitos=_FonteRequisitosVaziaV7(),
+        fonte_inventario=inventario_adquirido,
+        requisitos_base=(RequisitoDocumentalPrestacao('HOLERITE'),),
+        resolucoes_ancora={},  # nenhuma âncora real, nenhuma pré-informada
+        competencias_por_cliente={_CLIENTE_V7: _COMPETENCIA_V7},
+    )
+    clientes_no_resultado = {r.cliente for r in resultado_ciclo.resultados_por_cliente}
+    assert _CLIENTE_V7 in clientes_no_resultado  # nunca desaparece
+    resultado_a = next(r for r in resultado_ciclo.resultados_por_cliente if r.cliente == _CLIENTE_V7)
+    assert resultado_a.pacote.estado == EstadoPacotePrestacao.EM_REVISAO
+    assert 'sem_evidencia_documental_real' in resultado_a.pacote.motivos
 
 
 def test_critico_direto_avaliar_candidatos_ancora_nunca_reclassifica_cliente_divergente():
