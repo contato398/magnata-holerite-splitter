@@ -220,6 +220,62 @@ class PoliticaCompetenciaPrestacao:
         return contexto.competencia_base
 
 
+class PoliticaCompetenciaPorTipoNaoSuportadaError(ValueError):
+    """A política contém 1+ `DeslocamentoCompetenciaCliente` com
+    `tipo_documental` específico -- configuração que a V1 do contrato
+    do ciclo (`ciclo_prestacao.py`) não suporta.
+
+    Contexto (evolução do contrato do ciclo de Prestação V1): o ciclo
+    representa `competencias_por_cliente` como 1 ÚNICA competência
+    efetiva por cliente, usada para TODOS os tipos documentais desse
+    cliente na mesma execução (`ciclo_prestacao.py::executar_ciclo_
+    prestacao`/`executar_ciclo_prestacao_descoberta`, ambas consultam
+    `fonte_inventario.listar(cliente, competencia)` e `politica.
+    requisitos_para(cliente, competencia)` com um valor só). Esta
+    política, no entanto, já suporta e já testa deslocamento por
+    TIPO_DOCUMENTAL (`DeslocamentoCompetenciaCliente(tipo_documental=...)`)
+    -- ex.: mesmo cliente com offset -1 mês para Holerite e -2 meses
+    para Extrato. Se um override desses existisse de verdade e fosse
+    ignorado, `montar_competencias_por_cliente` (composição do ciclo)
+    aplicaria arbitrariamente 1 competência a TODOS os tipos, incluindo
+    o(s) que tem(êm) regra diferente -- um erro silencioso de
+    competência, exatamente o que este projeto nunca aceita mascarar.
+
+    Por isso: falha fechado, explícito, antes de montar o ciclo -- não
+    um sentinela, não uma escolha arbitrária de qual tipo usar."""
+
+
+def verificar_politica_sem_override_por_tipo(politica: PoliticaCompetenciaPrestacao) -> None:
+    """Guarda pura: aceita silenciosamente uma política que só tem
+    deslocamentos GERAIS (`tipo_documental=None`, aplicável a todos os
+    tipos de um cliente -- o único caso que
+    `POLITICA_COMPETENCIA_PRESTACAO_V1`, a política real de produção,
+    de fato configura hoje). Rejeita explicitamente, com
+    `PoliticaCompetenciaPorTipoNaoSuportadaError`, qualquer política com
+    1 ou mais deslocamentos restritos a um `tipo_documental` específico.
+
+    Chamar 1 vez, na composição/wiring do ciclo -- nunca dentro do laço
+    por cliente (falha cedo e visível, nunca por cliente individual
+    silenciosamente)."""
+    especificos_por_tipo = tuple(
+        item for item in politica.deslocamentos if item.tipo_documental is not None
+    )
+    if especificos_por_tipo:
+        clientes_tipos = ', '.join(
+            f'{item.cliente.entidade_id}/{item.tipo_documental}'
+            for item in especificos_por_tipo
+        )
+        raise PoliticaCompetenciaPorTipoNaoSuportadaError(
+            'configuração não suportada pela V1 do ciclo de Prestação: '
+            f'política contém deslocamento de competência específico por '
+            f'tipo_documental ({clientes_tipos}) -- o contrato atual de '
+            '`competencias_por_cliente` representa só 1 competência geral '
+            'por cliente para todos os tipos. Extensão do contrato para '
+            'chave (cliente, tipo_documental) é decisão de arquitetura '
+            'separada, fora desta V1.'
+        )
+
+
 # ============================================================================
 # Exceção operacional REAL confirmada -- SKY Tatuí
 # ============================================================================

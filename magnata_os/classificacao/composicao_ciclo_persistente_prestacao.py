@@ -1,14 +1,26 @@
 """Composição persistente REAL de ciclos de Prestação de Contas — V1.
 
-FLUXO COMPLETO:
+FLUXO COMPLETO (evolução do contrato do ciclo de Prestação V1,
+Incremento 7 -- ver docstring de `executar_ciclo_prestacao_persistente`
+para o detalhe de cada passo):
 
-1. Criar ou retomar ExecucaoPrestacao (rastreamento UUID opaco)
-2. Executar ciclo_prestacao primeira vez (necessidades documentais)
-3. Aquisição readonly por NecessidadeDocumentoPrestacao (porta injetável)
-4. Resolução semântica segura
-5. Inventário em memória + deduplicação
+1. Validar política de competência V1 (fail-closed por tipo_documental)
+2. Criar ou retomar ExecucaoPrestacao (rastreamento UUID opaco)
+3. Descoberta de necessidades documentais SEM exigir nenhuma âncora
+   (`executar_ciclo_prestacao_descoberta`)
+4. Aquisição ORIENTADA POR NECESSIDADE (`_adquirir_por_necessidades`,
+   correção pós-Ultraplan "Correlação Necessidade → Aquisição →
+   Resolução"): só candidatos de `contexto.fonte_candidatos_por_
+   necessidade` são processados -- cliente/competência esperados vêm
+   sempre da própria necessidade, nunca do que o documento resolve;
+   sem essa fonte, nenhuma aquisição roda (nunca cai de volta para a
+   aquisição em bloco legada, `_adquirir_inventario_via_corredor`,
+   mantida só como primitiva testável isoladamente)
+5. Seleção/validação de âncora real por cliente, avaliada só DENTRO do
+   vínculo necessidade->documento preservado no passo 4
+   (`avaliar_candidatos_ancora`) -- nunca uma resolução fabricada
 6. FonteInventarioPrestacaoComposta (base + adquirido)
-7. Executar ciclo_prestacao segunda vez (com inventário recomposto)
+7. Executar ciclo_prestacao com a âncora real (ou ausência explícita)
 8. Readiness e pacote lógico
 9. Atualizar ExecucaoPrestacao com estado final
 
@@ -47,9 +59,18 @@ from .ciclo_prestacao import (
     NecessidadeDocumentoPrestacao,
     ResultadoCicloPrestacao,
     executar_ciclo_prestacao,
+    executar_ciclo_prestacao_descoberta,
 )
-from .competencia_esperada_prestacao import PoliticaCompetenciaPrestacao
-from .contratos import ReferenciaCanonica, ResultadoResolucaoSemantico
+from .competencia_esperada_prestacao import (
+    PoliticaCompetenciaPrestacao,
+    verificar_politica_sem_override_por_tipo,
+)
+from .contratos import (
+    DimensaoResolucao,
+    EstadoResolucaoDimensao,
+    ReferenciaCanonica,
+    ResultadoResolucaoSemantico,
+)
 from .execucao_prestacao import (
     ExecucaoPrestacao,
     RepositorioExecucoesPrestacao,
@@ -57,6 +78,7 @@ from .execucao_prestacao import (
 )
 from magnata_os.documental.modulo01.armazenamento import ArquivoNaoEncontrado
 from magnata_os.documental.modulo01.dominio import Documento
+from .fonte_candidatos_por_necessidade import FonteCandidatosDocumentaisPorNecessidade
 from .fonte_clientes_prestacao import FonteClientesPrestacao
 from .fonte_colaboradores_esperados_prestacao import (
     FonteColaboradoresEsperadosPrestacao,
@@ -66,6 +88,7 @@ from .fonte_requisitos_prestacao import FonteRequisitosPrestacao
 from .inventario_prestacao import FonteInventarioPrestacao
 from .orquestrador_corredor_readonly import (
     ContextoExecucaoCorredorPrestacao,
+    ResultadoExecucaoCorredorPrestacao,
     executar_documento_readonly,
 )
 from .inventario_prestacao_memoria import InventarioPrestacaoEmMemoria
@@ -122,7 +145,22 @@ class ContextoComposicaoPrestacao:
     """Política base de requisitos."""
 
     resolucoes_ancora: Mapping[ReferenciaCanonica, ResultadoResolucaoSemantico] = dataclasses.field(default_factory=dict)
-    """Resolução semântica por cliente."""
+    """NÃO CONSULTADO por `executar_ciclo_prestacao_persistente`
+    (correção pós-auditoria, evolução do contrato do ciclo de
+    Prestação V1): auditoria de todos os callers reais encontrou ZERO
+    caller de produção/wiring que popule este campo -- só testes, com
+    dados sintéticos -- e não há como provar, pelo contrato, que uma
+    entrada aqui é uma resolução real (documento/hash/proveniência
+    reais) aplicável ao cliente/competência atual. `executar_ciclo_
+    prestacao_persistente` decide a âncora de cada cliente SÓ a partir
+    de evidência REAL desta própria execução
+    (`avaliar_candidatos_ancora`); sem evidência real, o cliente fica
+    explicitamente sem âncora (REVISAR), nunca com uma entrada daqui
+    usada sem prova. Mantido só para não quebrar assinatura de quem já
+    constrói este dataclass; `executar_ciclo_prestacao` (função de
+    mais baixo nível, chamada por este módulo) continua aceitando
+    `resolucoes_ancora` como parâmetro explícito próprio, sem relação
+    com este campo."""
 
     competencias_por_cliente: Mapping[ReferenciaCanonica, ReferenciaCanonica] = dataclasses.field(default_factory=dict)
     """Competência efetiva já resolvida por cliente."""
@@ -149,6 +187,21 @@ class ContextoComposicaoPrestacao:
 
     tipos_obrigatorios_por_colaborador: Tuple[str, ...] = ('Holerite da Folha de Pagamento',)
     """Tipos obrigatórios por cardinalidade colaborador."""
+
+    fonte_candidatos_por_necessidade: Optional[FonteCandidatosDocumentaisPorNecessidade] = None
+    """Correção pós-Ultraplan "Correlação Necessidade → Aquisição →
+    Resolução": única porta que preserva uma associação REAL e
+    independente entre necessidade (cliente/competência/tipo/
+    colaborador esperados) e documento candidato -- ver docstring
+    completa em `fonte_candidatos_por_necessidade.py`. `None`
+    (default, produção hoje): nenhuma aquisição orientada por
+    necessidade roda -- NUNCA cai de volta para aquisição em bloco
+    (`_adquirir_inventario_via_corredor` continua existindo como
+    primitiva testável isoladamente, mas não é mais chamada por
+    `executar_ciclo_prestacao_persistente`); ausência desta fonte é
+    ausência de evidência contextual, tratada como
+    `sem_evidencia_documental_real` → REVISAR, nunca um fallback
+    silencioso."""
 
 
 # ==== FUNÇÕES PRIMITIVAS (INCREMENTO 1 — revisadas) ====
@@ -233,10 +286,120 @@ def atualizar_execucao_por_estado_pacote(
 # ==== INCREMENTO 3: FLUXO REAL COMPLETO ====
 
 
+def _ler_e_extrair_texto(
+    contexto: 'ContextoComposicaoPrestacao',
+    documento_bruto: Documento,
+) -> Optional[str]:
+    """Blob -> checagem de MIME -> texto, com a MESMA observabilidade
+    de sempre (Incremento 3: evento ESTÁVEL por ponto de falha, nunca
+    `str(exc)` cru). Extraída de `_adquirir_inventario_via_corredor`
+    para ser reaproveitada também pela aquisição orientada por
+    necessidade (`_adquirir_por_necessidades`, correção pós-Ultraplan
+    "Correlação Necessidade → Aquisição → Resolução") -- mesmo
+    comportamento observável de antes, nenhuma duplicação de lógica.
+    `None` em qualquer falha (já logada aqui); quem chama só decide
+    pular o documento."""
+    try:
+        with contexto.armazenamento_arquivos.abrir_leitura(
+            documento_bruto.hash_sha256
+        ) as arquivo:
+            conteudo_bytes = arquivo.read()
+    except ArquivoNaoEncontrado:
+        _logger.warning(
+            '%s documento_id=%s hash_sha256=%s',
+            EVENTO_BLOB_NAO_ENCONTRADO,
+            documento_bruto.documento_id, documento_bruto.hash_sha256,
+            extra={
+                'evento': EVENTO_BLOB_NAO_ENCONTRADO,
+                'documento_id': documento_bruto.documento_id,
+                'hash_sha256': documento_bruto.hash_sha256,
+            },
+        )
+        return None
+    except Exception as exc:
+        # Encontrado mas falhou ao ler -- nunca confundir com
+        # "documento ausente". Só o TIPO da exceção é logado, nunca a
+        # mensagem crua (pode ecoar conteúdo do backend de
+        # armazenamento).
+        _logger.error(
+            '%s documento_id=%s hash_sha256=%s exception_type=%s',
+            EVENTO_BLOB_FALHA_LEITURA,
+            documento_bruto.documento_id, documento_bruto.hash_sha256,
+            type(exc).__name__,
+            extra={
+                'evento': EVENTO_BLOB_FALHA_LEITURA,
+                'documento_id': documento_bruto.documento_id,
+                'hash_sha256': documento_bruto.hash_sha256,
+                'exception_type': type(exc).__name__,
+            },
+        )
+        return None
+
+    # Extração canônica segura, com decisão explícita de MIME
+    # (correção pós-merge PR #158, Incremento 2): reutiliza
+    # `extrair_texto_seguro` (`classificacao/roteamento_documental.py`,
+    # já existente), que por sua vez reaproveita `extrair_texto_pdf`
+    # (`documental/extracao_texto.py`) -- mesma extração usada por
+    # `processar_holerite`/`processar_extrato` e pelo roteamento
+    # avulso. Nenhum parser novo. Só `application/pdf` tem extrator
+    # canônico no repositório hoje -- mime não suportado nunca entra
+    # no extrator, vira um caminho próprio, distinto de "PDF ilegível".
+    if documento_bruto.mime_type != 'application/pdf':
+        _logger.warning(
+            '%s documento_id=%s hash_sha256=%s mime_type=%s',
+            EVENTO_MIME_NAO_SUPORTADO,
+            documento_bruto.documento_id, documento_bruto.hash_sha256,
+            documento_bruto.mime_type,
+            extra={
+                'evento': EVENTO_MIME_NAO_SUPORTADO,
+                'documento_id': documento_bruto.documento_id,
+                'hash_sha256': documento_bruto.hash_sha256,
+                'mime_type': documento_bruto.mime_type,
+            },
+        )
+        return None
+
+    texto_documento = extrair_texto_seguro(conteudo_bytes)
+    if texto_documento is None:
+        # PDF corrompido/ilegível (ex.: escaneado sem OCR) -- mesma
+        # distinção honesta já feita por `extrair_texto_seguro`: nunca
+        # uma string vazia tratada como classificável.
+        _logger.warning(
+            '%s documento_id=%s hash_sha256=%s',
+            EVENTO_PDF_ILEGIVEL,
+            documento_bruto.documento_id, documento_bruto.hash_sha256,
+            extra={
+                'evento': EVENTO_PDF_ILEGIVEL,
+                'documento_id': documento_bruto.documento_id,
+                'hash_sha256': documento_bruto.hash_sha256,
+            },
+        )
+        return None
+    return texto_documento
+
+
+@dataclasses.dataclass(frozen=True)
+class _ResultadoAquisicaoDocumento:
+    """Transporte interno/privado (evolução do contrato do ciclo de
+    Prestação V1, Incremento 4): associa 1 documento bruto processado
+    nesta aquisição aos resultados REAIS produzidos pelo corredor --
+    antes desta correção, `executar_documento_readonly` já devolvia
+    esses resultados (incluindo `resolucao_semantica` real, com
+    proveniência: `resolver_id`/`resolver_version`) e
+    `_adquirir_inventario_via_corredor` os descartava completamente,
+    só escrevendo no `sink`. Não é um contrato público novo -- não sai
+    deste módulo; a fase seguinte (seleção de âncora real) consome
+    isto diretamente, nunca reconstrói ou fabrica uma resolução."""
+
+    documento_id: str
+    hash_sha256: str
+    resultados_corredor: Tuple[ResultadoExecucaoCorredorPrestacao, ...] = ()
+
+
 def _adquirir_inventario_via_corredor(
     contexto: 'ContextoComposicaoPrestacao',
     ciclo_para_corredor: ContextoCicloPrestacao,
-) -> InventarioPrestacaoEmMemoria:
+) -> Tuple[InventarioPrestacaoEmMemoria, Tuple[_ResultadoAquisicaoDocumento, ...]]:
     """Aquisição canônica: para cada Documento bruto já persistido
     (`contexto.repositorio_documentos`), recupera o blob
     (`contexto.armazenamento_arquivos`), extrai o texto pelo extrator
@@ -263,95 +426,41 @@ def _adquirir_inventario_via_corredor(
     que era escrito e nunca lido em lugar nenhum -- observabilidade
     inexistente apesar do nome. 1 documento com problema nunca impede o
     processamento dos demais (mesma política de isolamento já
-    existente antes desta correção)."""
+    existente antes desta correção).
+
+    Retenção da resolução real (evolução do contrato do ciclo de
+    Prestação V1, Incremento 4): além do inventário, devolve 1
+    `_ResultadoAquisicaoDocumento` por documento efetivamente
+    processado pelo corredor com sucesso (nunca para um documento que
+    caiu num `continue` de erro acima -- blob ausente, blob ilegível,
+    MIME não suportado, PDF ilegível ou o próprio corredor falhando).
+    Antes desta correção, o retorno de `executar_documento_readonly`
+    (que já carrega a resolução semântica REAL, com proveniência) era
+    completamente descartado; a fase de seleção de âncora (Incremento
+    5) depende de ter acesso a essa resolução real -- nunca de uma
+    fabricada a partir de cliente+competência.
+
+    NÃO É MAIS CHAMADA por `executar_ciclo_prestacao_persistente`
+    (correção pós-Ultraplan "Correlação Necessidade → Aquisição →
+    Resolução"): processa documentos em BLOCO
+    (`repositorio_documentos.listar_todos()`), sem nenhuma associação
+    real e independente entre documento e cliente/competência esperado
+    -- exatamente o que a correção elimina do caminho final (ver
+    `_adquirir_por_necessidades`, que a substitui). Mantida como
+    PRIMITIVA testável isoladamente (mesmo papel de sempre: blob ->
+    extração -> corredor -> inventário), reutilizada por `_adquirir_
+    por_necessidades` só na parte de extração (`_ler_e_extrair_
+    texto`)."""
     inventario_adquirido = InventarioPrestacaoEmMemoria()
+    resultados_aquisicao: list = []
     if not (contexto.repositorio_documentos and contexto.armazenamento_arquivos):
-        return inventario_adquirido
+        return inventario_adquirido, tuple(resultados_aquisicao)
 
     documentos_disponiveis = contexto.repositorio_documentos.listar_todos()
 
     for documento_bruto in documentos_disponiveis:
-        # Recuperar conteúdo do blob pelo hash. Distinguir
-        # explicitamente "não encontrado" (`ArquivoNaoEncontrado`, já
-        # existente em `armazenamento.py`) de "encontrado mas falhou ao
-        # ler" (qualquer outra exceção do backend) -- os dois eram o
-        # mesmo `continue` silencioso antes desta correção.
-        try:
-            with contexto.armazenamento_arquivos.abrir_leitura(
-                documento_bruto.hash_sha256
-            ) as arquivo:
-                conteudo_bytes = arquivo.read()
-        except ArquivoNaoEncontrado:
-            _logger.warning(
-                '%s documento_id=%s hash_sha256=%s',
-                EVENTO_BLOB_NAO_ENCONTRADO,
-                documento_bruto.documento_id, documento_bruto.hash_sha256,
-                extra={
-                    'evento': EVENTO_BLOB_NAO_ENCONTRADO,
-                    'documento_id': documento_bruto.documento_id,
-                    'hash_sha256': documento_bruto.hash_sha256,
-                },
-            )
-            continue
-        except Exception as exc:
-            # Encontrado mas falhou ao ler -- nunca confundir com
-            # "documento ausente". Só o TIPO da exceção é logado, nunca
-            # a mensagem crua (pode ecoar conteúdo do backend de
-            # armazenamento).
-            _logger.error(
-                '%s documento_id=%s hash_sha256=%s exception_type=%s',
-                EVENTO_BLOB_FALHA_LEITURA,
-                documento_bruto.documento_id, documento_bruto.hash_sha256,
-                type(exc).__name__,
-                extra={
-                    'evento': EVENTO_BLOB_FALHA_LEITURA,
-                    'documento_id': documento_bruto.documento_id,
-                    'hash_sha256': documento_bruto.hash_sha256,
-                    'exception_type': type(exc).__name__,
-                },
-            )
-            continue
-
-        # Extração canônica segura, com decisão explícita de MIME
-        # (correção pós-merge PR #158, Incremento 2): reutiliza
-        # `extrair_texto_seguro` (`classificacao/roteamento_documental.py`,
-        # já existente), que por sua vez reaproveita `extrair_texto_pdf`
-        # (`documental/extracao_texto.py`) -- mesma extração usada por
-        # `processar_holerite`/`processar_extrato` e pelo roteamento
-        # avulso. Nenhum parser novo. Só `application/pdf` tem extrator
-        # canônico no repositório hoje -- mime não suportado nunca entra
-        # no extrator, vira um caminho próprio, distinto de "PDF
-        # ilegível".
-        if documento_bruto.mime_type != 'application/pdf':
-            _logger.warning(
-                '%s documento_id=%s hash_sha256=%s mime_type=%s',
-                EVENTO_MIME_NAO_SUPORTADO,
-                documento_bruto.documento_id, documento_bruto.hash_sha256,
-                documento_bruto.mime_type,
-                extra={
-                    'evento': EVENTO_MIME_NAO_SUPORTADO,
-                    'documento_id': documento_bruto.documento_id,
-                    'hash_sha256': documento_bruto.hash_sha256,
-                    'mime_type': documento_bruto.mime_type,
-                },
-            )
-            continue
-
-        texto_documento = extrair_texto_seguro(conteudo_bytes)
+        texto_documento = _ler_e_extrair_texto(contexto, documento_bruto)
         if texto_documento is None:
-            # PDF corrompido/ilegível (ex.: escaneado sem OCR) -- mesma
-            # distinção honesta já feita por `extrair_texto_seguro`:
-            # nunca uma string vazia tratada como classificável.
-            _logger.warning(
-                '%s documento_id=%s hash_sha256=%s',
-                EVENTO_PDF_ILEGIVEL,
-                documento_bruto.documento_id, documento_bruto.hash_sha256,
-                extra={
-                    'evento': EVENTO_PDF_ILEGIVEL,
-                    'documento_id': documento_bruto.documento_id,
-                    'hash_sha256': documento_bruto.hash_sha256,
-                },
-            )
             continue
 
         # Construir contexto para o corredor (todas as dependências são opcionais)
@@ -361,7 +470,7 @@ def _adquirir_inventario_via_corredor(
             paginas=(texto_documento,),  # 1 "página" = conteúdo completo extraído
             ciclo=ciclo_para_corredor,
             cliente_do_ciclo=None,  # Deixar corredor decidir
-            politica_competencia=contexto.politica_competencia if hasattr(contexto, 'politica_competencia') else None,
+            politica_competencia=contexto.politica_competencia,
             candidatos_colaborador=contexto.tipos_obrigatorios_por_colaborador,
             fonte_vinculos=None,
             fonte_cliente_direto=None,
@@ -381,8 +490,14 @@ def _adquirir_inventario_via_corredor(
         # exceção própria) -- qualquer exceção aqui é inesperada, nunca
         # uma decisão de negócio a mascarar. Logada com evidência
         # mínima antes de seguir para o próximo documento.
+        #
+        # Incremento 4: o retorno REAL (proveniência incluída) é
+        # retido em `resultados_aquisicao` -- antes desta correção era
+        # descartado aqui mesmo em caso de sucesso.
         try:
-            executar_documento_readonly(contexto_corredor, inventario_adquirido)
+            resultados_corredor = executar_documento_readonly(
+                contexto_corredor, inventario_adquirido
+            )
         except Exception as exc:
             _logger.error(
                 '%s documento_id=%s hash_sha256=%s exception_type=%s',
@@ -398,7 +513,295 @@ def _adquirir_inventario_via_corredor(
             )
             continue
 
-    return inventario_adquirido
+        resultados_aquisicao.append(
+            _ResultadoAquisicaoDocumento(
+                documento_id=documento_bruto.documento_id,
+                hash_sha256=documento_bruto.hash_sha256,
+                resultados_corredor=tuple(resultados_corredor),
+            )
+        )
+
+    return inventario_adquirido, tuple(resultados_aquisicao)
+
+
+# ==== CORREÇÃO PÓS-ULTRAPLAN: "CORRELAÇÃO NECESSIDADE → AQUISIÇÃO →
+# RESOLUÇÃO" ====
+# Aquisição ORIENTADA POR NECESSIDADE -- substitui a aquisição em
+# bloco (`_adquirir_inventario_via_corredor`, acima) como caminho
+# usado por `executar_ciclo_prestacao_persistente`. Ver auditoria
+# completa (relatório da sessão) e docstring de
+# `fonte_candidatos_por_necessidade.py` para o raciocínio; resumo:
+# processar TODOS os documentos em bloco não preserva nenhuma
+# associação real entre documento e a necessidade/cliente/competência
+# que motivou buscá-lo -- qualquer tentativa de reconstruir essa
+# associação a partir do que o próprio documento resolve foi avaliada
+# e rejeitada. Esta função só processa candidatos devolvidos por
+# `contexto.fonte_candidatos_por_necessidade` -- o cliente/competência
+# esperados vêm SEMPRE da própria `NecessidadeDocumentoPrestacao`,
+# nunca inferidos do resolvido.
+
+
+@dataclasses.dataclass(frozen=True)
+class _ResultadoAquisicaoPorNecessidade:
+    """Associa 1 candidato processado à necessidade REAL que motivou
+    buscá-lo -- cliente/competência esperados vêm da PRÓPRIA
+    `necessidade` (contrato já completo, `ciclo_prestacao.py`), nunca
+    inferidos do que o documento resolveu. Transporte interno/privado,
+    não sai deste módulo."""
+
+    necessidade: NecessidadeDocumentoPrestacao
+    documento_id: str
+    hash_sha256: str
+    resultados_corredor: Tuple[ResultadoExecucaoCorredorPrestacao, ...] = ()
+
+
+def _adquirir_por_necessidades(
+    contexto: 'ContextoComposicaoPrestacao',
+    necessidades: Tuple[NecessidadeDocumentoPrestacao, ...],
+    ciclo_para_corredor: ContextoCicloPrestacao,
+) -> Tuple[InventarioPrestacaoEmMemoria, Tuple[_ResultadoAquisicaoPorNecessidade, ...]]:
+    """Para CADA necessidade, consulta `contexto.fonte_candidatos_por_
+    necessidade.candidatos_para(necessidade)` -- NUNCA `repositorio_
+    documentos.listar_todos()` em bloco. `cliente_do_ciclo` do
+    corredor é ajustado para `necessidade.cliente` -- o campo já existe
+    em `ContextoExecucaoCorredorPrestacao`, já documentado como "NUNCA
+    inferido do documento", usado até aqui só para escolher a política
+    de competência esperada; esta correção o usa também como o
+    transporte do contexto esperado desta necessidade. A dimensão
+    CLIENTE do documento continua resolvida 100% do conteúdo
+    (`fonte_cliente_direto`/`fonte_vinculos`), nunca enviesada por
+    `cliente_do_ciclo` -- por isso um candidato pode legitimamente
+    divergir do que a necessidade esperava, e essa divergência
+    permanece detectável.
+
+    SEM `contexto.fonte_candidatos_por_necessidade` (`None`, produção
+    hoje): devolve inventário vazio e nenhum resultado -- NUNCA cai de
+    volta para `_adquirir_inventario_via_corredor`/aquisição em bloco.
+    Ausência da fonte é ausência de evidência contextual; quem chama
+    trata isso como `sem_evidencia_documental_real` → REVISAR, nunca um
+    fallback silencioso.
+
+    Deduplicação física SEM perder a associação necessidade->documento
+    (requisito explícito desta correção): o texto extraído de um blob
+    é cacheado só por `hash_sha256` (extração é invariável ao
+    contexto -- é função pura do conteúdo, nunca de quem pediu). O
+    resultado do CORREDOR é cacheado por (`documento_id`,
+    `hash_sha256`, cliente, competência) da necessidade -- nunca só por
+    (hash, cliente, competência), porque o resultado do corredor
+    carrega IDENTIDADE/PROVENIÊNCIA amarrada a `documento_id`
+    (`ContextoExecucaoCorredorPrestacao.documento_id` propaga para
+    `resolucao_semantica.documento_id`); dois `Documento` distintos que
+    por acaso compartilhem o mesmo hash NUNCA podem reaproveitar o
+    resultado calculado para o outro -- isso misturaria a proveniência
+    de um documento com a identidade de outro (correção pós-
+    Ultrareview: a chave anterior, só por hash+cliente+competência,
+    permitia exatamente essa mistura). Também nunca só por hash porque
+    a resolução da dimensão COMPETÊNCIA depende de `competencia_
+    esperada` (`_resolver_competencia`, `resolucao_documento_
+    prestacao.py`): o MESMO documento avaliado sob expectativas
+    diferentes pode legitimamente resolver diferente. Um candidato
+    repetido para 2+ necessidades do MESMO documento/cliente/competência
+    (tipos documentais diferentes, ex.: HOLERITE e FGTS do mesmo
+    cliente/mês) reaproveita o resultado cacheado -- MESMO ASSIM, 1
+    `_ResultadoAquisicaoPorNecessidade` é registrado por (necessidade,
+    documento): o vínculo nunca desaparece, mesmo quando o
+    processamento físico é reaproveitado."""
+    inventario_adquirido = InventarioPrestacaoEmMemoria()
+    resultados: list = []
+    if contexto.fonte_candidatos_por_necessidade is None:
+        return inventario_adquirido, tuple(resultados)
+    if not (contexto.repositorio_documentos and contexto.armazenamento_arquivos):
+        # `candidatos_para` devolve `Documento`; ainda precisamos do
+        # armazenamento real para ler o blob -- sem os dois, nenhuma
+        # aquisição real é possível (mesma exigência de sempre).
+        return inventario_adquirido, tuple(resultados)
+
+    texto_por_hash: dict = {}
+    corredor_por_chave: dict = {}
+
+    for necessidade in necessidades:
+        candidatos = contexto.fonte_candidatos_por_necessidade.candidatos_para(necessidade)
+        for documento_bruto in candidatos:
+            if documento_bruto.hash_sha256 not in texto_por_hash:
+                texto_por_hash[documento_bruto.hash_sha256] = _ler_e_extrair_texto(
+                    contexto, documento_bruto
+                )
+            texto_documento = texto_por_hash[documento_bruto.hash_sha256]
+            if texto_documento is None:
+                continue
+
+            chave_cache = (
+                documento_bruto.documento_id, documento_bruto.hash_sha256,
+                necessidade.cliente, necessidade.competencia,
+            )
+            if chave_cache not in corredor_por_chave:
+                contexto_corredor = ContextoExecucaoCorredorPrestacao(
+                    documento_id=documento_bruto.documento_id,
+                    hash_sha256=documento_bruto.hash_sha256,
+                    paginas=(texto_documento,),
+                    ciclo=ciclo_para_corredor,
+                    cliente_do_ciclo=necessidade.cliente,  # ESPERADO, nunca inferido do documento
+                    politica_competencia=contexto.politica_competencia,
+                    candidatos_colaborador=contexto.tipos_obrigatorios_por_colaborador,
+                    fonte_vinculos=None,
+                    fonte_cliente_direto=None,
+                    fonte_unidade_posto=None,
+                    fonte_candidatos_relacao=None,
+                    clientes_broadcast=(),
+                    identificar_pagina=None,
+                    personalizar_contexto_do_grupo=None,
+                    registrar_dados_correlacao=False,
+                    fonte_inventario_pacote=None,
+                    politica_requisitos=None,
+                )
+                try:
+                    resultado_corredor_cru = executar_documento_readonly(
+                        contexto_corredor, inventario_adquirido
+                    )
+                except Exception as exc:
+                    _logger.error(
+                        '%s documento_id=%s hash_sha256=%s exception_type=%s',
+                        EVENTO_CORREDOR_FALHOU,
+                        documento_bruto.documento_id, documento_bruto.hash_sha256,
+                        type(exc).__name__,
+                        extra={
+                            'evento': EVENTO_CORREDOR_FALHOU,
+                            'documento_id': documento_bruto.documento_id,
+                            'hash_sha256': documento_bruto.hash_sha256,
+                            'exception_type': type(exc).__name__,
+                        },
+                    )
+                    resultado_corredor_cru = ()
+                corredor_por_chave[chave_cache] = tuple(resultado_corredor_cru)
+
+            resultados_corredor = corredor_por_chave[chave_cache]
+            if not resultados_corredor:
+                continue
+
+            resultados.append(
+                _ResultadoAquisicaoPorNecessidade(
+                    necessidade=necessidade,
+                    documento_id=documento_bruto.documento_id,
+                    hash_sha256=documento_bruto.hash_sha256,
+                    resultados_corredor=resultados_corredor,
+                )
+            )
+
+    return inventario_adquirido, tuple(resultados)
+
+
+# ==== EVOLUÇÃO DO CONTRATO DO CICLO DE PRESTAÇÃO V1 -- INCREMENTO 5 ====
+# Seleção/validação de âncora real. NUNCA cria um novo
+# `ResultadoResolucaoSemantico` -- só examina candidatos já reais (ver
+# Incremento 4: vêm de `resultado_corredor.resolucao_semantica`, nunca
+# fabricados a partir de cliente+competência). Distinção deliberada de
+# `avaliar_prestacao_readiness` (`prestacao_readiness.py`): aquela
+# função faz as checagens cruzadas finais assumindo que UMA âncora já
+# foi escolhida; esta função é quem decide, entre 0..N evidências
+# reais concorrentes para o MESMO cliente/competência esperado, se
+# existe uma âncora e qual é -- sem isso, as checagens cruzadas de
+# `avaliar_prestacao_readiness` seriam tautológicas.
+
+
+def _dimensao_resolvida_com_valor_unico(
+    resultado: ResultadoResolucaoSemantico, dimensao: DimensaoResolucao,
+) -> Optional[ReferenciaCanonica]:
+    """Devolve o único valor confirmado de `dimensao` em `resultado` só
+    quando a dimensão está presente, no estado RESOLVIDA e com
+    EXATAMENTE 1 valor confirmado -- qualquer outra forma (dimensão
+    ausente, AMBIGUA/CONFLITO/NAO_ENCONTRADA/etc., 0 ou 2+ valores)
+    devolve `None`, tratada pelo chamador como candidato não-validável
+    (nunca uma escolha arbitrária entre valores)."""
+    resolucao_dimensao = next(
+        (item for item in resultado.resolucoes if item.dimensao == dimensao), None,
+    )
+    if resolucao_dimensao is None:
+        return None
+    if resolucao_dimensao.estado != EstadoResolucaoDimensao.RESOLVIDA:
+        return None
+    if len(resolucao_dimensao.valores_confirmados) != 1:
+        return None
+    return resolucao_dimensao.valores_confirmados[0]
+
+
+@dataclasses.dataclass(frozen=True)
+class ResultadoAvaliacaoCandidatosAncora:
+    """Saída de `avaliar_candidatos_ancora` -- exatamente 1 dos 2 campos
+    é significativo por vez: `ancora` presente (motivo_ausencia=None)
+    OU `motivo_ausencia` presente (ancora=None). Nunca os dois juntos,
+    nunca os dois ausentes."""
+
+    ancora: Optional[ResultadoResolucaoSemantico] = None
+    motivo_ausencia: Optional[str] = None
+
+
+MOTIVO_SEM_EVIDENCIA_DOCUMENTAL_REAL = 'sem_evidencia_documental_real'
+MOTIVO_RESOLUCOES_ANCORA_DIVERGENTES = 'resolucoes_ancora_divergentes'
+
+
+def avaliar_candidatos_ancora(
+    candidatos: Tuple[ResultadoResolucaoSemantico, ...],
+    cliente_esperado: ReferenciaCanonica,
+    competencia_esperada: ReferenciaCanonica,
+) -> ResultadoAvaliacaoCandidatosAncora:
+    """Avalia 0..N resoluções semânticas REAIS (nunca fabricadas) já
+    produzidas por documentos desta aquisição e decide se existe uma
+    âncora válida para `cliente_esperado`/`competencia_esperada`.
+
+    Um candidato é VALIDÁVEL só quando: `necessita_revisao_humana` é
+    False E as dimensões CLIENTE e COMPETÊNCIA estão, cada uma,
+    RESOLVIDA com exatamente 1 valor confirmado. Um candidato em
+    revisão (ambíguo, em conflito, não encontrado, técnica ou
+    humanamente pendente) NUNCA vira autoridade de âncora -- ele só
+    contribui para um resultado "sem âncora válida" (mesmo motivo de 0
+    candidatos: não há, hoje, uma distinção de negócio pedida entre
+    "nenhum documento" e "documentos só com evidência inconclusiva").
+
+    Entre os candidatos validáveis:
+    - se qualquer um resolve para um cliente/competência DIFERENTE do
+      esperado -- inclusive quando outros concordam com o esperado --
+      o resultado é DIVERGÊNCIA explícita
+      (`resolucoes_ancora_divergentes`), nunca um agrupamento
+      silencioso sob outro cliente e nunca uma escolha de lado, mesmo
+      que exista um candidato "certo" na mistura;
+    - senão, entre os que concordam com o esperado ("concordantes"): 1
+      é usado diretamente; N é resolvido por um desempate
+      DETERMINÍSTICO por `semantic_result_id` (ordem alfabética do
+      hash) -- isto NUNCA decide validade nem resolve conflito
+      nenhum, todos os N já foram provados equivalentes/concordantes
+      acima; só escolhe um representante determinístico entre
+      evidências reais e concordantes.
+
+    Determinístico e independente da ordem de `candidatos` -- o
+    desempate usa `min()` por uma chave estável, nunca "o primeiro da
+    lista"."""
+    candidatos_validaveis: list = []
+    for candidato in candidatos:
+        if candidato.necessita_revisao_humana:
+            continue
+        cliente_real = _dimensao_resolvida_com_valor_unico(candidato, DimensaoResolucao.CLIENTE)
+        competencia_real = _dimensao_resolvida_com_valor_unico(candidato, DimensaoResolucao.COMPETENCIA)
+        if cliente_real is None or competencia_real is None:
+            continue
+        candidatos_validaveis.append((candidato, cliente_real, competencia_real))
+
+    if not candidatos_validaveis:
+        return ResultadoAvaliacaoCandidatosAncora(
+            motivo_ausencia=MOTIVO_SEM_EVIDENCIA_DOCUMENTAL_REAL
+        )
+
+    divergentes = [
+        candidato for candidato, cliente_real, competencia_real in candidatos_validaveis
+        if cliente_real != cliente_esperado or competencia_real != competencia_esperada
+    ]
+    if divergentes:
+        return ResultadoAvaliacaoCandidatosAncora(
+            motivo_ausencia=MOTIVO_RESOLUCOES_ANCORA_DIVERGENTES
+        )
+
+    concordantes = tuple(candidato for candidato, _, _ in candidatos_validaveis)
+    escolhido = min(concordantes, key=lambda candidato: candidato.semantic_result_id)
+    return ResultadoAvaliacaoCandidatosAncora(ancora=escolhido)
 
 
 def executar_ciclo_prestacao_persistente(
@@ -407,13 +810,41 @@ def executar_ciclo_prestacao_persistente(
 ) -> ExecucaoPrestacao:
     """Executa ciclo persistente COMPLETO de Prestação de Contas.
 
-    Fluxo:
+    Fluxo (correção pós-Ultraplan "Correlação Necessidade → Aquisição
+    → Resolução", sobre a evolução do contrato do ciclo de Prestação
+    V1, Incremento 7): descoberta sem âncora -> aquisição ORIENTADA POR
+    NECESSIDADE, com vínculo necessidade->documento preservado ->
+    avaliação/seleção de âncoras reais DENTRO desse vínculo -> readiness
+    com âncora real ou ausência explícita -> atualização da execução.
+
     1. Criar ou retomar ExecucaoPrestacao
-    2. Executar ciclo_prestacao primeira vez (necessidades)
-    3. Aquisição readonly per necessidade
-    4. Inventário recomposto
-    5. Executar ciclo_prestacao segunda vez (readiness)
-    6. Atualizar estado final
+    2. Validar política de competência V1 (fail-closed: nenhum
+       deslocamento por tipo_documental suportado nesta V1)
+    3. Descoberta de necessidades SEM exigir nenhuma âncora
+       (`executar_ciclo_prestacao_descoberta`)
+    4. Aquisição ORIENTADA POR NECESSIDADE (`_adquirir_por_
+       necessidades`): para cada `NecessidadeDocumentoPrestacao`,
+       consulta `contexto.fonte_candidatos_por_necessidade` (nunca
+       `repositorio_documentos.listar_todos()` em bloco) -- o
+       cliente/competência esperados vêm SEMPRE da própria necessidade,
+       nunca inferidos do que o documento resolve. SEM essa fonte
+       (`None`, produção hoje), nenhuma aquisição roda -- NUNCA cai de
+       volta para a aquisição em bloco legada.
+    5. Seleção/validação de âncora real por cliente
+       (`avaliar_candidatos_ancora`, INALTERADA, nunca fabricada) --
+       avaliada só entre candidatos do MESMO vínculo necessidade-
+       >documento (agrupados por cliente/competência esperado da
+       necessidade que os buscou), nunca o pool global de toda a
+       execução (auditoria pós-Incremento 7/pós-Ultraplan: um pool
+       global gera divergência cruzada entre clientes sem nenhuma
+       relação real entre si). SEM fallback para `contexto.
+       resolucoes_ancora` -- nenhum caller real hoje prova que essas
+       entradas são resoluções reais aplicáveis; sem evidência real
+       dentro do vínculo legítimo, o cliente fica sem âncora (REVISAR
+       explícito, nunca uma pré-informada não verificável)
+    6. Segunda execução do ciclo (readiness com âncora real, ou
+       ausência explícita -- nunca uma resolução fabricada)
+    7. Atualizar estado final da ExecucaoPrestacao
 
     Args:
         contexto: ContextoComposicaoPrestacao com todas dependências
@@ -424,8 +855,24 @@ def executar_ciclo_prestacao_persistente(
 
     Raises:
         ValueError: Se execução não encontrada, estado inválido, etc.
+        PoliticaCompetenciaPorTipoNaoSuportadaError: Se
+            `contexto.politica_competencia` tiver deslocamento de
+            competência específico por tipo_documental -- contrato V1
+            só suporta 1 competência geral por cliente (levantada ANTES
+            de criar/retomar a ExecucaoPrestacao -- config inválida
+            nunca chega a virar uma execução rastreada).
     """
-    # ==== PASSO 1: Criar ou retomar ExecucaoPrestacao ====
+    # ==== PASSO 1: Validar política de competência V1 ====
+    # Fail-closed (evolução do contrato do ciclo de Prestação V1,
+    # Incremento 3): levantada aqui, ANTES de criar/retomar a
+    # ExecucaoPrestacao -- mesmo padrão de `criar_e_persistir_execucao`
+    # (valida `competencia_base` antes de persistir). `None` (política
+    # não informada) nunca é avaliado -- comportamento anterior
+    # preservado para quem não usa `PoliticaCompetenciaPrestacao`.
+    if contexto.politica_competencia is not None:
+        verificar_politica_sem_override_por_tipo(contexto.politica_competencia)
+
+    # ==== PASSO 2: Criar ou retomar ExecucaoPrestacao ====
     if execucao_id:
         execucao = retomar_execucao_por_id(execucao_id, contexto.repositorio_execucoes)
     else:
@@ -435,49 +882,107 @@ def executar_ciclo_prestacao_persistente(
         )
 
     try:
-        # ==== PASSO 2: Primeira execução do ciclo (sem inventário) ====
         ano_str, mes_str = contexto.competencia_base.split('-')
         ciclo_contexto = ContextoCicloPrestacao(
             competencia_base=(int(ano_str), int(mes_str))
         )
 
-        # Inventário vazio (primeiro pass)
+        # ==== PASSO 3: Descoberta de necessidades SEM âncora ====
+        # `executar_ciclo_prestacao_descoberta` (Incremento 2) nunca
+        # exige `resolucoes_ancora` -- usa só política+inventário já
+        # conhecido para saber o que falta. Substitui a antiga
+        # "primeira execução do ciclo" (que precisava de uma âncora já
+        # pronta em `contexto.resolucoes_ancora`, mesmo sem nenhum
+        # documento ainda adquirido -- ordem invertida em relação ao
+        # que esta missão pede).
         inventario_vazio = InventarioPrestacaoEmMemoria()
-
-        resultado_ciclo_1 = executar_ciclo_prestacao(
+        resultado_descoberta = executar_ciclo_prestacao_descoberta(
             contexto=ciclo_contexto,
             fonte_clientes=contexto.fonte_clientes,
             fonte_requisitos=contexto.fonte_requisitos,
             fonte_inventario=inventario_vazio,
             requisitos_base=contexto.requisitos_base,
-            resolucoes_ancora=contexto.resolucoes_ancora,
             competencias_por_cliente=contexto.competencias_por_cliente,
             fonte_colaboradores_esperados=contexto.fonte_colaboradores_esperados,
             tipos_obrigatorios_por_colaborador=contexto.tipos_obrigatorios_por_colaborador,
         )
 
-        # ==== PASSO 3: Aquisição canônica (documentos brutos → corredor → inventário) ====
-        # Coletar todas as necessidades do resultado do ciclo 1
+        # ==== PASSO 4: Aquisição ORIENTADA POR NECESSIDADE ====
+        # Coletar todas as necessidades da descoberta.
         necessidades: list = []
-        for resultado_cliente in resultado_ciclo_1.resultados_por_cliente:
+        for resultado_cliente in resultado_descoberta.resultados_por_cliente:
             necessidades.extend(resultado_cliente.necessidades)
 
-        # Aquisição canônica: documentos brutos → corredor → inventário em
-        # memória (extraída para `_adquirir_inventario_via_corredor`,
-        # testável isoladamente -- mesmo comportamento observável de
-        # antes). Só roda quando há repositório+armazenamento E
-        # necessidade real; inventário vazio (sem custo de I/O) quando
-        # não há nada a adquirir.
-        if contexto.repositorio_documentos and contexto.armazenamento_arquivos and necessidades:
-            ano_str, mes_str = contexto.competencia_base.split('-')
-            ciclo_para_corredor = ContextoCicloPrestacao(
-                competencia_base=(int(ano_str), int(mes_str))
-            )
-            inventario_adquirido = _adquirir_inventario_via_corredor(contexto, ciclo_para_corredor)
-        else:
-            inventario_adquirido = InventarioPrestacaoEmMemoria()
+        # CORREÇÃO pós-Ultraplan "Correlação Necessidade → Aquisição →
+        # Resolução": `_adquirir_inventario_via_corredor` (aquisição em
+        # BLOCO, `repositorio_documentos.listar_todos()`) NÃO É MAIS
+        # chamada aqui -- não preserva nenhuma associação real entre
+        # documento e a necessidade/cliente/competência que motivou
+        # buscá-lo. `_adquirir_por_necessidades` só processa candidatos
+        # devolvidos por `contexto.fonte_candidatos_por_necessidade`
+        # para cada necessidade -- sem essa fonte (`None`, produção
+        # hoje), devolve vazio, NUNCA cai de volta para a aquisição em
+        # bloco.
+        inventario_adquirido, resultados_aquisicao = _adquirir_por_necessidades(
+            contexto, tuple(necessidades), ciclo_contexto,
+        )
 
-        # ==== PASSO 4: Compor fonte de inventário ====
+        # ==== PASSO 5: Seleção/validação de âncora real, por vínculo LEGÍTIMO ====
+        # CORREÇÃO pós-Ultraplan: divergência só é avaliada DENTRO do
+        # vínculo necessidade->documento preservado por `_adquirir_por_
+        # necessidades` -- nunca mais o pool GLOBAL de todas as
+        # resoluções desta execução confrontado contra cada cliente
+        # ativo (`c234d22`, também rejeitado pela mesma auditoria: gera
+        # divergência cruzada entre clientes que nunca tiveram nenhuma
+        # relação real entre si). O cliente/competência esperados de
+        # cada candidato vêm SEMPRE de `resultado_aquisicao.
+        # necessidade` (a própria necessidade que o buscou), nunca do
+        # que ele resolveu.
+        #
+        # Agrupamento por (cliente, competência): duas necessidades do
+        # MESMO cliente/competência (tipos documentais diferentes, ex.
+        # HOLERITE e FGTS) compartilham o mesmo "balde" de candidatos --
+        # a âncora é por cliente/competência, nunca por tipo. Dedup por
+        # `semantic_result_id` evita contar a MESMA resolução 2x quando
+        # o mesmo documento foi candidato de mais de 1 necessidade
+        # dessa dupla (reaproveitamento físico de `_adquirir_por_
+        # necessidades`, nunca perda da associação -- só evita inflar
+        # a contagem de "quantos candidatos concordam").
+        candidatos_por_bucket: dict = {}
+        for resultado_aquisicao in resultados_aquisicao:
+            chave_bucket = (
+                resultado_aquisicao.necessidade.cliente,
+                resultado_aquisicao.necessidade.competencia,
+            )
+            candidatos_vistos = candidatos_por_bucket.setdefault(chave_bucket, {})
+            for resultado_execucao in resultado_aquisicao.resultados_corredor:
+                resolucao = resultado_execucao.resultado_corredor.resolucao_semantica
+                if resolucao is not None:
+                    candidatos_vistos[resolucao.semantic_result_id] = resolucao
+
+        resolucoes_ancora_efetivas: dict = {}
+        for resultado_cliente in resultado_descoberta.resultados_por_cliente:
+            cliente = resultado_cliente.cliente
+            competencia = resultado_cliente.competencia
+            candidatos_do_vinculo = tuple(
+                candidatos_por_bucket.get((cliente, competencia), {}).values()
+            )
+            # `avaliar_candidatos_ancora` INALTERADA (Incremento 5) --
+            # `semantic_result_id` continua só desempate determinístico
+            # entre evidências já provadas equivalentes/concordantes,
+            # nunca decide validade nem resolve conflito.
+            avaliacao = avaliar_candidatos_ancora(candidatos_do_vinculo, cliente, competencia)
+            # SEM fallback para `contexto.resolucoes_ancora` (auditoria
+            # pós-Incremento 7: zero caller real popula esse campo
+            # hoje). Sem evidência real dentro do vínculo legítimo, o
+            # cliente fica sem âncora -- ausência tratada explicitamente
+            # adiante (Incremento 6: REVISAR / `sem_evidencia_
+            # documental_real`), nunca uma resolução fabricada nem uma
+            # pré-informada não verificável.
+            if avaliacao.ancora is not None:
+                resolucoes_ancora_efetivas[cliente] = avaliacao.ancora
+
+        # ==== PASSO 6: Compor fonte de inventário ====
         # Usar FonteInventarioPrestacaoComposta para unir:
         # 1. Inventário base pré-existente (se fornecido)
         # 2. Inventário adquirido neste ciclo (documentos processados via corredor)
@@ -494,20 +999,20 @@ def executar_ciclo_prestacao_persistente(
             fontes=tuple(fontes_para_composicao)
         )
 
-        # ==== PASSO 4: Segunda execução do ciclo (com inventário) ====
+        # ==== PASSO 7: Segunda execução do ciclo (readiness com âncora real ou ausência explícita) ====
         resultado_ciclo_2 = executar_ciclo_prestacao(
             contexto=ciclo_contexto,
             fonte_clientes=contexto.fonte_clientes,
             fonte_requisitos=contexto.fonte_requisitos,
             fonte_inventario=fonte_composta,
             requisitos_base=contexto.requisitos_base,
-            resolucoes_ancora=contexto.resolucoes_ancora,
+            resolucoes_ancora=resolucoes_ancora_efetivas,
             competencias_por_cliente=contexto.competencias_por_cliente,
             fonte_colaboradores_esperados=contexto.fonte_colaboradores_esperados,
             tipos_obrigatorios_por_colaborador=contexto.tipos_obrigatorios_por_colaborador,
         )
 
-        # ==== PASSO 5: Determinar estado final ====
+        # ==== PASSO 8: Determinar estado final ====
         # Encontrar o "pior" estado entre todos os clientes
         estado_pior_pacote = EstadoPacotePrestacao.PRONTO
         for resultado_cliente in resultado_ciclo_2.resultados_por_cliente:
@@ -520,7 +1025,7 @@ def executar_ciclo_prestacao_persistente(
                 if estado_pior_pacote in (EstadoPacotePrestacao.PRONTO, EstadoPacotePrestacao.EM_REVISAO):
                     estado_pior_pacote = EstadoPacotePrestacao.BLOQUEADO
 
-        # ==== PASSO 6: Atualizar ExecucaoPrestacao ====
+        # ==== PASSO 9: Atualizar ExecucaoPrestacao ====
         execucao_final = atualizar_execucao_por_estado_pacote(
             execucao_prestacao_id=execucao.execucao_prestacao_id,
             estado_pacote=estado_pior_pacote,

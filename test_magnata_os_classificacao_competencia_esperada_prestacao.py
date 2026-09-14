@@ -12,7 +12,9 @@ from magnata_os.classificacao.competencia_esperada_prestacao import (
     REFERENCIA_CLIENTE_SKY_TATUI,
     ContextoCicloPrestacao,
     DeslocamentoCompetenciaCliente,
+    PoliticaCompetenciaPorTipoNaoSuportadaError,
     PoliticaCompetenciaPrestacao,
+    verificar_politica_sem_override_por_tipo,
 )
 from magnata_os.classificacao.contratos import ReferenciaCanonica
 
@@ -297,3 +299,79 @@ def test_modulo_nunca_importa_relogio():
     }
     proibidos = {'datetime', 'time', 'calendar'}
     assert not (modulos_importados & proibidos)
+
+
+# ============================================================================
+# verificar_politica_sem_override_por_tipo (Incremento 3, evolução do
+# contrato do ciclo de Prestação V1 -- fail-closed de competência por tipo)
+# ============================================================================
+
+
+def test_politica_geral_sem_override_por_tipo_e_aceita():
+    """POLITICA_COMPETENCIA_PRESTACAO_V1 (a política real de produção,
+    só com o deslocamento geral do SKY Tatuí) nunca deve falhar aqui --
+    é exatamente o caso que a V1 do ciclo suporta hoje."""
+    verificar_politica_sem_override_por_tipo(POLITICA_COMPETENCIA_PRESTACAO_V1)
+
+
+def test_politica_vazia_e_aceita():
+    verificar_politica_sem_override_por_tipo(PoliticaCompetenciaPrestacao(version='1'))
+
+
+def test_politica_com_um_override_por_tipo_falha_fechado():
+    politica = PoliticaCompetenciaPrestacao(
+        version='1',
+        deslocamentos=(
+            DeslocamentoCompetenciaCliente(CLIENTE_A, tipo_documental='Holerite', offset_meses=-1),
+        ),
+    )
+    with pytest.raises(PoliticaCompetenciaPorTipoNaoSuportadaError):
+        verificar_politica_sem_override_por_tipo(politica)
+
+
+def test_politica_com_multiplos_overrides_por_tipo_falha_fechado():
+    politica = PoliticaCompetenciaPrestacao(
+        version='1',
+        deslocamentos=(
+            DeslocamentoCompetenciaCliente(CLIENTE_A, tipo_documental='Holerite', offset_meses=-1),
+            DeslocamentoCompetenciaCliente(CLIENTE_B, tipo_documental='Extrato', offset_meses=-2),
+        ),
+    )
+    with pytest.raises(PoliticaCompetenciaPorTipoNaoSuportadaError):
+        verificar_politica_sem_override_por_tipo(politica)
+
+
+def test_politica_com_geral_e_especifico_misturados_ainda_falha_fechado():
+    """O mesmo caso real testado em `test_deslocamento_geral_e_especifico_
+    coexistem_mesmo_cliente` (SKY geral + extrato_cliente específico) --
+    aqui provando que a guarda rejeita mesmo quando existe TAMBÉM um
+    deslocamento geral válido no meio."""
+    politica = PoliticaCompetenciaPrestacao(
+        version='1',
+        deslocamentos=(
+            DESLOCAMENTO_SKY_TATUI,  # geral: offset -1
+            DeslocamentoCompetenciaCliente(
+                REFERENCIA_CLIENTE_SKY_TATUI, tipo_documental='extrato_cliente', offset_meses=-2),
+        ),
+    )
+    with pytest.raises(PoliticaCompetenciaPorTipoNaoSuportadaError):
+        verificar_politica_sem_override_por_tipo(politica)
+
+
+def test_mensagem_de_erro_nunca_sugere_sentinela_ou_escolha_arbitraria():
+    """A mensagem de erro deve nomear o cliente/tipo em conflito -- nunca
+    sugerir contornar com um valor arbitrário (nenhuma menção a
+    'sentinela'/'default'/'primeiro tipo')."""
+    politica = PoliticaCompetenciaPrestacao(
+        version='1',
+        deslocamentos=(
+            DeslocamentoCompetenciaCliente(CLIENTE_A, tipo_documental='Holerite', offset_meses=-1),
+        ),
+    )
+    with pytest.raises(PoliticaCompetenciaPorTipoNaoSuportadaError) as excinfo:
+        verificar_politica_sem_override_por_tipo(politica)
+    mensagem = str(excinfo.value).lower()
+    assert 'cliente-a' in mensagem
+    assert 'holerite' in mensagem
+    for termo_proibido in ('sentinela', 'default', 'primeiro tipo', 'arbitrari'):
+        assert termo_proibido not in mensagem

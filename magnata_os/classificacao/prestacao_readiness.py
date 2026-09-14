@@ -86,7 +86,15 @@ class EntradaPrestacaoReadiness:
     competencia: ReferenciaCanonica
     requisitos: Tuple[RequisitoDocumentalPrestacao, ...]
     inventario: Tuple[ItemInventarioPrestacao, ...]
-    resolucao: ResultadoResolucaoSemantico
+    resolucao: Optional[ResultadoResolucaoSemantico]
+    """Evolução do contrato do ciclo de Prestação V1: `None` representa
+    EXPLICITAMENTE "nenhuma resolução semântica REAL disponível para
+    este cliente/competência" (ver `avaliar_candidatos_ancora`,
+    `composicao_ciclo_persistente_prestacao.py`) -- NUNCA um
+    `ResultadoResolucaoSemantico` fabricado como substituto. Continua
+    OBRIGATÓRIO passar o campo (sem default) -- só o TIPO foi ampliado,
+    nenhum chamador existente que já passa uma resolução real muda de
+    comportamento."""
 
     def __post_init__(self) -> None:
         tipos = [item.tipo_documental for item in self.requisitos]
@@ -117,10 +125,69 @@ def _resolucao_da_dimensao(
     )
 
 
+def calcular_contagens_por_tipo(
+    itens_inventario: Tuple[ItemInventarioPrestacao, ...],
+) -> Tuple[Tuple[str, int], ...]:
+    """Conta quantos itens de inventário existem por `tipo_documental` --
+    pura, sem I/O, sem depender de resolução semântica nenhuma. Extraída
+    de `avaliar_prestacao_readiness` (evolução do contrato do ciclo de
+    Prestação V1) para ser reaproveitada também pela fase de descoberta
+    de necessidades (`ciclo_prestacao.py`), que precisa saber "o que já
+    está no inventário" antes de qualquer âncora semântica existir.
+    Mesmo comportamento exato de antes: dict intermediário, ordenado por
+    tipo ao final, determinístico."""
+    contagens: dict[str, int] = {}
+    for item in itens_inventario:
+        contagens[item.tipo_documental] = contagens.get(item.tipo_documental, 0) + 1
+    return tuple(sorted(contagens.items()))
+
+
+def calcular_tipos_faltantes(
+    requisitos: Tuple[RequisitoDocumentalPrestacao, ...],
+    itens_inventario: Tuple[ItemInventarioPrestacao, ...],
+) -> Tuple[str, ...]:
+    """Compara requisitos exigidos contra o que já existe no inventário
+    e devolve os tipos documentais cuja contagem observada é menor que a
+    quantidade mínima exigida -- pura, zero efeitos colaterais, ZERO
+    dependência de `ResultadoResolucaoSemantico`/resolução/âncora.
+
+    Extraída de `avaliar_prestacao_readiness` (mesma regra, comportamento
+    idêntico -- nunca duplicada) para ser reaproveitada pela fase de
+    descoberta de necessidades, que precisa saber o que falta ANTES de
+    qualquer documento ter sido adquirido/resolvido nesta execução do
+    ciclo (`ciclo_prestacao.py::executar_ciclo_prestacao_descoberta`)."""
+    contagens = dict(calcular_contagens_por_tipo(itens_inventario))
+    return tuple(
+        sorted(
+            requisito.tipo_documental
+            for requisito in requisitos
+            if contagens.get(requisito.tipo_documental, 0) < requisito.quantidade_minima
+        )
+    )
+
+
 def avaliar_prestacao_readiness(
     entrada: EntradaPrestacaoReadiness,
 ) -> ResultadoPrestacaoReadiness:
     """Classifica um cliente/competencia sem I/O e sem mutacao."""
+
+    if entrada.resolucao is None:
+        # Evolução do contrato do ciclo de Prestação V1: ausência
+        # EXPLÍCITA de resolução semântica real (nunca uma resolução
+        # fabricada como substituto) -- sempre REVISAR, com motivo
+        # próprio, distinto de qualquer outro motivo de revisão
+        # (dimensão ausente/ambígua DENTRO de uma resolução real que
+        # existe). As checagens cruzadas abaixo dependem de uma
+        # resolução real para fazer sentido -- sem isso, ficam
+        # tautológicas; por isso encerram aqui, antes de qualquer uma
+        # delas rodar.
+        return ResultadoPrestacaoReadiness(
+            cliente=entrada.cliente,
+            competencia=entrada.competencia,
+            estado=EstadoPrestacaoReadiness.REVISAR,
+            contagens_observadas=calcular_contagens_por_tipo(entrada.inventario),
+            motivos=("sem_evidencia_documental_real",),
+        )
 
     cliente_resolvido = _resolucao_da_dimensao(
         entrada.resolucao, DimensaoResolucao.CLIENTE
@@ -154,10 +221,7 @@ def avaliar_prestacao_readiness(
     if any(item.cliente != entrada.cliente for item in entrada.inventario):
         motivos_revisao.append("inventario_de_outro_cliente")
 
-    contagens: dict[str, int] = {}
-    for item in entrada.inventario:
-        contagens[item.tipo_documental] = contagens.get(item.tipo_documental, 0) + 1
-    contagens_ordenadas = tuple(sorted(contagens.items()))
+    contagens_ordenadas = calcular_contagens_por_tipo(entrada.inventario)
 
     if motivos_revisao:
         return ResultadoPrestacaoReadiness(
@@ -180,14 +244,7 @@ def avaliar_prestacao_readiness(
             motivos=("competencia_incompativel",),
         )
 
-    faltantes = tuple(
-        sorted(
-            requisito.tipo_documental
-            for requisito in entrada.requisitos
-            if contagens.get(requisito.tipo_documental, 0)
-            < requisito.quantidade_minima
-        )
-    )
+    faltantes = calcular_tipos_faltantes(entrada.requisitos, entrada.inventario)
     if faltantes:
         return ResultadoPrestacaoReadiness(
             cliente=entrada.cliente,
