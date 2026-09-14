@@ -2009,6 +2009,99 @@ def test_obrigatorio_sem_fonte_candidatos_por_necessidade_cliente_fica_em_revisa
     assert 'sem_evidencia_documental_real' in resultado_a.pacote.motivos
 
 
+# ==== TESTE DE PROVENIÊNCIA -- correção pós-Ultrareview (cache do
+# corredor não pode misturar documento_id) ====
+
+
+def test_dois_documentos_mesmo_hash_documento_id_diferente_preservam_propria_provenencia(monkeypatch):
+    """Dois `Documento` DISTINTOS (documento_id diferente) que por
+    acaso compartilham o MESMO `hash_sha256`, candidatos da MESMA
+    necessidade/contexto (mesmo cliente/competência) -- cada
+    `_ResultadoAquisicaoPorNecessidade` retido precisa preservar a
+    PRÓPRIA proveniência: o `resolucao_semantica.documento_id` dentro
+    de `resultados_corredor` tem que bater com o `documento_id` daquele
+    MESMO registro, nunca com o de outro documento reaproveitado do
+    cache. Antes da correção, a chave de cache do corredor era só
+    (hash, cliente, competência) -- o segundo documento reaproveitaria
+    o resultado calculado (e a proveniência) do primeiro."""
+    import magnata_os.classificacao.composicao_ciclo_persistente_prestacao as modulo
+    from magnata_os.documental.modulo01.repositorio import RepositorioDocumentosEmMemoria
+    from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivosEmMemoria
+
+    conteudo = b'mesmo conteudo fisico, dois registros de documento distintos'
+    hash_sha256 = hashlib.sha256(conteudo).hexdigest()
+
+    armazenamento = ArmazenamentoArquivosEmMemoria()
+    armazenamento.armazenar(
+        hash_sha256=hash_sha256, conteudo=conteudo, mime_type='application/pdf',
+        nome_original='doc.pdf', tamanho=len(conteudo),
+    )
+    # `RepositorioDocumentosEmMemoria` não é consultado por
+    # `_adquirir_por_necessidades` (só via `fonte_candidatos_por_
+    # necessidade`) -- mantido só para simetria com os demais testes
+    # desta suíte, que sempre wireiam repositorio_documentos.
+    repositorio_docs = RepositorioDocumentosEmMemoria()
+    documento_x = _documento_bruto_v7('doc-id-x', hash_sha256)
+    documento_y = _documento_bruto_v7('doc-id-y', hash_sha256)
+    repositorio_docs.salvar(documento_x)
+    # `Documento.hash_sha256` não é chave única no repositório real
+    # (idempotência por hash é responsabilidade de quem ingere, ex.
+    # `salvar_se_ausente_por_hash`) -- aqui simulamos deliberadamente 2
+    # registros distintos com o MESMO hash, o cenário que o teste exige.
+
+    monkeypatch.setattr(modulo, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer')
+
+    def _executar_documento_readonly_fake(contexto_corredor, sink):
+        # Resolução REAL "própria" de cada chamada -- usa o
+        # documento_id que o CORREDOR recebeu nesta chamada (nunca um
+        # valor fixo), provando que cada chamada gera proveniência
+        # própria quando a chave de cache não mistura documentos.
+        resolucao_propria = _candidato_ancora(
+            contexto_corredor.documento_id, cliente=_CLIENTE_V7, competencia=_COMPETENCIA_V7,
+        )
+        resultado_processamento = _ResultadoProcessamentoV7(
+            documento_id=contexto_corredor.documento_id,
+            estado=_EstadoCorredorV7.RESOLVIDO_E_AVANCOU,
+            tipo_documental='HOLERITE',
+            resolucao_semantica=resolucao_propria,
+        )
+        return (_ResultadoExecucaoCorredorPrestacaoV7(resultado_corredor=resultado_processamento),)
+
+    monkeypatch.setattr(modulo, 'executar_documento_readonly', _executar_documento_readonly_fake)
+
+    fonte_candidatos = _FonteCandidatosPorNecessidadeFake({
+        (_CLIENTE_V7, _COMPETENCIA_V7): (documento_x, documento_y),
+    })
+    contexto_composicao = _contexto_v7(
+        RepositorioExecucoesPrestacaoMemoria(),
+        repositorio_documentos=repositorio_docs,
+        armazenamento_arquivos=armazenamento,
+        fonte_candidatos_por_necessidade=fonte_candidatos,
+    )
+    necessidade = NecessidadeDocumentoPrestacao(
+        cliente=_CLIENTE_V7, competencia=_COMPETENCIA_V7, tipo_documental='HOLERITE',
+        motivo_exigencia='teste_provenencia',
+    )
+    ciclo_para_corredor = ContextoCicloPrestacao(competencia_base=(2026, 9))
+
+    inventario_adquirido, resultados_aquisicao = modulo._adquirir_por_necessidades(
+        contexto_composicao, (necessidade,), ciclo_para_corredor,
+    )
+
+    assert len(resultados_aquisicao) == 2
+    por_documento_id = {r.documento_id: r for r in resultados_aquisicao}
+    assert set(por_documento_id) == {'doc-id-x', 'doc-id-y'}
+
+    for documento_id_esperado, registro in por_documento_id.items():
+        assert registro.hash_sha256 == hash_sha256  # mesmo hash nos dois
+        assert len(registro.resultados_corredor) == 1
+        resolucao_retida = registro.resultados_corredor[0].resultado_corredor.resolucao_semantica
+        # A PROVA central: a proveniência retida DENTRO do registro
+        # precisa bater com o documento_id DESSE MESMO registro --
+        # nunca com o de outro documento reaproveitado via cache.
+        assert resolucao_retida.documento_id == documento_id_esperado
+
+
 def test_critico_direto_avaliar_candidatos_ancora_nunca_reclassifica_cliente_divergente():
     """Mesmo cenário, no nível mais direto possível (sem aquisição,
     sem corredor) -- chamada direta a `avaliar_candidatos_ancora` com

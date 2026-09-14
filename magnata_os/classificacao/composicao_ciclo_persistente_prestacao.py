@@ -426,6 +426,7 @@ def _adquirir_inventario_via_corredor(
     que era escrito e nunca lido em lugar nenhum -- observabilidade
     inexistente apesar do nome. 1 documento com problema nunca impede o
     processamento dos demais (mesma política de isolamento já
+    existente antes desta correção).
 
     Retenção da resolução real (evolução do contrato do ciclo de
     Prestação V1, Incremento 4): além do inventário, devolve 1
@@ -469,7 +470,7 @@ def _adquirir_inventario_via_corredor(
             paginas=(texto_documento,),  # 1 "página" = conteúdo completo extraído
             ciclo=ciclo_para_corredor,
             cliente_do_ciclo=None,  # Deixar corredor decidir
-            politica_competencia=contexto.politica_competencia if hasattr(contexto, 'politica_competencia') else None,
+            politica_competencia=contexto.politica_competencia,
             candidatos_colaborador=contexto.tipos_obrigatorios_por_colaborador,
             fonte_vinculos=None,
             fonte_cliente_direto=None,
@@ -582,18 +583,29 @@ def _adquirir_por_necessidades(
 
     Deduplicação física SEM perder a associação necessidade->documento
     (requisito explícito desta correção): o texto extraído de um blob
-    é cacheado por `hash_sha256` (extração é invariável ao contexto).
-    O resultado do CORREDOR é cacheado por (`hash_sha256`, cliente,
-    competência) da necessidade -- nunca só por hash, porque a
-    resolução da dimensão COMPETÊNCIA depende de `competencia_
+    é cacheado só por `hash_sha256` (extração é invariável ao
+    contexto -- é função pura do conteúdo, nunca de quem pediu). O
+    resultado do CORREDOR é cacheado por (`documento_id`,
+    `hash_sha256`, cliente, competência) da necessidade -- nunca só por
+    (hash, cliente, competência), porque o resultado do corredor
+    carrega IDENTIDADE/PROVENIÊNCIA amarrada a `documento_id`
+    (`ContextoExecucaoCorredorPrestacao.documento_id` propaga para
+    `resolucao_semantica.documento_id`); dois `Documento` distintos que
+    por acaso compartilhem o mesmo hash NUNCA podem reaproveitar o
+    resultado calculado para o outro -- isso misturaria a proveniência
+    de um documento com a identidade de outro (correção pós-
+    Ultrareview: a chave anterior, só por hash+cliente+competência,
+    permitia exatamente essa mistura). Também nunca só por hash porque
+    a resolução da dimensão COMPETÊNCIA depende de `competencia_
     esperada` (`_resolver_competencia`, `resolucao_documento_
     prestacao.py`): o MESMO documento avaliado sob expectativas
     diferentes pode legitimamente resolver diferente. Um candidato
-    repetido para 2+ necessidades do MESMO cliente/competência (tipos
-    documentais diferentes, ex.: HOLERITE e FGTS do mesmo cliente/mês)
-    reaproveita o resultado cacheado -- MESMO ASSIM, 1 `_ResultadoAquisicaoPorNecessidade`
-    é registrado por (necessidade, documento): o vínculo nunca
-    desaparece, mesmo quando o processamento físico é reaproveitado."""
+    repetido para 2+ necessidades do MESMO documento/cliente/competência
+    (tipos documentais diferentes, ex.: HOLERITE e FGTS do mesmo
+    cliente/mês) reaproveita o resultado cacheado -- MESMO ASSIM, 1
+    `_ResultadoAquisicaoPorNecessidade` é registrado por (necessidade,
+    documento): o vínculo nunca desaparece, mesmo quando o
+    processamento físico é reaproveitado."""
     inventario_adquirido = InventarioPrestacaoEmMemoria()
     resultados: list = []
     if contexto.fonte_candidatos_por_necessidade is None:
@@ -618,7 +630,10 @@ def _adquirir_por_necessidades(
             if texto_documento is None:
                 continue
 
-            chave_cache = (documento_bruto.hash_sha256, necessidade.cliente, necessidade.competencia)
+            chave_cache = (
+                documento_bruto.documento_id, documento_bruto.hash_sha256,
+                necessidade.cliente, necessidade.competencia,
+            )
             if chave_cache not in corredor_por_chave:
                 contexto_corredor = ContextoExecucaoCorredorPrestacao(
                     documento_id=documento_bruto.documento_id,
@@ -626,7 +641,7 @@ def _adquirir_por_necessidades(
                     paginas=(texto_documento,),
                     ciclo=ciclo_para_corredor,
                     cliente_do_ciclo=necessidade.cliente,  # ESPERADO, nunca inferido do documento
-                    politica_competencia=contexto.politica_competencia if hasattr(contexto, 'politica_competencia') else None,
+                    politica_competencia=contexto.politica_competencia,
                     candidatos_colaborador=contexto.tipos_obrigatorios_por_colaborador,
                     fonte_vinculos=None,
                     fonte_cliente_direto=None,
