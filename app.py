@@ -522,11 +522,20 @@ TIPOS_FISCAIS = {
     'DCTFWeb - Recibo de Entrega', 'DCTFWeb - Declaração',
 }
 
-# Evolution API (gateway WhatsApp) — v2.28. URL e instância não são segredo
-# (default embutido); a API KEY é secreta e DEVE vir por variável de ambiente.
-EVOLUTION_API_URL  = os.environ.get('EVOLUTION_API_URL', 'http://143.95.214.239:8080').rstrip('/')
-EVOLUTION_INSTANCE = os.environ.get('EVOLUTION_INSTANCE', 'magnata')
-EVOLUTION_API_KEY  = os.environ.get('EVOLUTION_API_KEY', '')
+# Evolution API (gateway WhatsApp) — v2.28. Constantes e cliente HTTP
+# extraídos mecanicamente (mesmo comportamento, mesmo payload/auth) para
+# magnata_os/orquestrador/adapters/evolution_cliente_legado.py -- missão
+# "IMPLEMENTAÇÃO LOCAL CONTROLADA — EXTRAÇÃO EVOLUTION + CANÁRIO NOMINAL
+# V1" -- para que o Orquestrador possa compor o transporte real sem
+# importar este módulo inteiro (Flask/sessão/Airtable).
+from magnata_os.orquestrador.adapters.evolution_cliente_legado import (
+    EVOLUTION_API_URL,
+    EVOLUTION_INSTANCE,
+    EVOLUTION_API_KEY,
+    _evolution_enviar_texto,
+    _evolution_enviar_video,
+    _evolution_enviar_documento,
+)
 
 # Limite estrito para o conteudo binario aceito pela rota dedicada de video.
 # Mantido abaixo do limite global do Flask para evitar payloads excessivos na
@@ -7038,23 +7047,6 @@ def _normalizar_numero_evolution(dest: str):
     return digitos if len(digitos) in (12, 13) else None
 
 
-def _evolution_enviar_texto(numero: str, texto: str):
-    """Envia 1 mensagem de texto puro via Evolution API v2 (sendText) — usado
-    para o link de Assinatura Nativa (sem custo extra, mesma instância já
-    configurada para o envio de holerites)."""
-    endpoint = f'{EVOLUTION_API_URL}/message/sendText/{EVOLUTION_INSTANCE}'
-    payload = {'number': numero, 'text': texto}
-    r = requests.post(
-        endpoint,
-        headers={'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json'},
-        json=payload,
-        timeout=90,
-    )
-    if not (200 <= r.status_code < 300):
-        raise RuntimeError(f'Evolution HTTP {r.status_code}: {r.text[:300]}')
-    return r.json()
-
-
 @app.route('/evolution/status', methods=['GET', 'OPTIONS'])
 def evolution_status():
     """Consulta o estado real da conexão da instância Evolution API (o celular
@@ -7133,29 +7125,6 @@ def _decodificar_video_mp4(video_base64):
     return conteudo
 
 
-def _evolution_enviar_video(numero: str, video_base64: str, nome_arquivo: str, legenda: str = ''):
-    """Envia um MP4 já validado como base64 pela Evolution API, com legenda opcional."""
-    endpoint = f'{EVOLUTION_API_URL}/message/sendMedia/{EVOLUTION_INSTANCE}'
-    payload = {
-        'number': numero,
-        'mediatype': 'video',
-        'mimetype': 'video/mp4',
-        'media': video_base64,
-        'fileName': nome_arquivo,
-    }
-    if legenda:
-        payload['caption'] = legenda
-    resposta = requests.post(
-        endpoint,
-        headers={'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json'},
-        json=payload,
-        timeout=90,
-    )
-    if not (200 <= resposta.status_code < 300):
-        raise RuntimeError(f'Evolution HTTP {resposta.status_code}')
-    return resposta.json()
-
-
 @app.route('/whatsapp/enviar-video', methods=['POST', 'OPTIONS'])
 def whatsapp_enviar_video():
     """Envia exclusivamente um MP4 em base64; não aceita URLs externas."""
@@ -7200,41 +7169,6 @@ def whatsapp_enviar_video():
     if identificador:
         resposta['id'] = identificador
     return jsonify(resposta), 200
-
-
-def _evolution_enviar_documento(numero: str, media_url: str, filename: str, caption=None,
-                                 media_bytes: bytes = None):
-    """
-    Envia 1 documento (PDF) via Evolution API v2 (sendMedia).
-
-    Por padrão manda 'media' como URL (Evolution busca o arquivo). Se
-    media_bytes for informado, manda em base64 embutido no payload —
-    mais confiável: elimina a etapa em que a própria Evolution API busca
-    a URL (CloudFront/S3 do Airtable) por conta própria, etapa em que já
-    foi observado em produção (08/07/2026) entrega de PDF corrompido/
-    incompleto para uma minoria dos destinatários ("Erro de formato de
-    arquivo" no WhatsApp), mesmo com o arquivo de origem íntegro
-    (confirmado por download e validação direta do mesmo PDF).
-    """
-    endpoint = f'{EVOLUTION_API_URL}/message/sendMedia/{EVOLUTION_INSTANCE}'
-    payload = {
-        'number': numero,
-        'mediatype': 'document',
-        'mimetype': 'application/pdf',
-        'media': base64.b64encode(media_bytes).decode('utf-8') if media_bytes else media_url,
-        'fileName': filename,
-    }
-    if caption:
-        payload['caption'] = caption
-    r = requests.post(
-        endpoint,
-        headers={'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json'},
-        json=payload,
-        timeout=90,
-    )
-    if not (200 <= r.status_code < 300):
-        raise RuntimeError(f'Evolution HTTP {r.status_code}: {r.text[:300]}')
-    return r.json()
 
 
 def _sanitizar_nome_documento_pdf(nome_arquivo):
