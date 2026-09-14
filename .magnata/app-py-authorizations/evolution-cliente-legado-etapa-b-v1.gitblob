@@ -1,0 +1,17 @@
+# Autorização humana específica — Etapa B: app.py usa cliente Evolution
+# legado extraído.
+# Base: 6f03afc70060eb567e57d5c37b56e8935bd8e9ba (origin/main, PR #162 mesclado)
+# Branch: fix/app-py-usa-evolution-cliente-legado-v2 (PR #163)
+#
+# Escopo nominal autorizado: app.py passa a importar EVOLUTION_API_URL/
+# EVOLUTION_INSTANCE/EVOLUTION_API_KEY e _evolution_enviar_texto/
+# _evolution_enviar_video/_evolution_enviar_documento de
+# magnata_os/orquestrador/adapters/evolution_cliente_legado.py (já
+# extraído e mesclado na Etapa A, PR #162). Nenhuma mudança de
+# comportamento, payload, endpoint, autenticação, timeout ou rota.
+#
+# O blob abaixo autoriza somente esta versão exata de app.py. Qualquer
+# mudança posterior, inclusive comentário, invalida a autorização. Não
+# autoriza rota nova, migration, schema, deploy, credencial, webhook,
+# envio ou merge.
+687c0a47eb4fd999b60a1ea7f0887a9e9e54e21e  app.py
