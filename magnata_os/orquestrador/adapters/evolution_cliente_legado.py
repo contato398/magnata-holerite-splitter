@@ -8,8 +8,8 @@ Extração MECÂNICA, não uma reescrita: `EVOLUTION_API_URL`,
 `_evolution_enviar_documento` têm aqui exatamente o mesmo corpo, mesmos
 payloads, mesma autenticação, mesmos endpoints e mesmo tratamento de
 resposta/erro que tinham em `app.py` — nenhuma linha de lógica mudou.
-`app.py` agora importa esses mesmos nomes deste módulo (ver comentário
-em `app.py` no ponto da extração).
+Na Etapa B, `app.py` passará a importar esses mesmos nomes deste
+módulo, preservando os call sites legados.
 
 Por que este módulo existe: as 3 funções não dependem de Flask, sessão
 (`configurar_sessao_segura`), Airtable nem de nenhum outro estado de
