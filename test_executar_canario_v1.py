@@ -247,3 +247,75 @@ def test_observador_roda_somente_apos_todas_as_acoes_sucedidas():
     assert chamado['vezes'] == 1
     assert chamado['acao_execucao_id'] == 'acao-1'
     assert resultado.observacao == ('acao-1', 'CONCLUIDO')
+
+
+# ---------------------------------------------------------------------
+# Achados BAIXO da Ultrareview da Etapa C (Agente C): correlação
+# multi-ação e falha parcial genuína -- fechados antes do canário real.
+# ---------------------------------------------------------------------
+
+def test_multiplas_acoes_sucedidas_observa_apenas_uma_vez_com_id_da_ultima_acao():
+    # Cenário SUCCEEDED -> SUCCEEDED -> SEM_ACAO_ELEGIVEL: prova que a
+    # correlação ação->assinatura usa o acao_execucao_id da ÚLTIMA ação
+    # efetivamente executada (aqui, 'acao-2'), nunca da primeira nem de
+    # um valor fixo por acidente -- o único teste anterior que checava
+    # o id observado (test_observador_roda_somente_apos_todas_as_acoes_sucedidas)
+    # só tinha 1 ação, o que não discriminava "última" de "primeira".
+    chamado = {'vezes': 0, 'acao_execucao_id': None}
+
+    def _observar(*, porta_assinatura, repositorio_conclusao, acao_execucao_id, instante):
+        chamado['vezes'] += 1
+        chamado['acao_execucao_id'] = acao_execucao_id
+        return 'CONCLUIDO'
+
+    sequencia = [
+        _resultado('SUCCEEDED', 'acao-1'),
+        _resultado('SUCCEEDED', 'acao-2'),
+        _resultado('SEM_ACAO_ELEGIVEL', None),
+    ]
+    chamadas = {'n': 0}
+
+    def _executar(**kw):
+        resultado = sequencia[chamadas['n']]
+        chamadas['n'] += 1
+        return resultado
+
+    resultado = _rodar(executar_mock=_executar, observar_mock=_observar)
+    assert chamadas['n'] == 3  # 2 ações + o marcador terminal, nunca uma 4ª
+    assert [r.situacao for r in resultado.acoes_processadas] == [
+        'SUCCEEDED', 'SUCCEEDED', 'SEM_ACAO_ELEGIVEL',
+    ]
+    assert resultado.todas_sucedidas is True
+    assert chamado['vezes'] == 1  # observador chamado exatamente uma vez
+    assert chamado['acao_execucao_id'] == 'acao-2'  # a ÚLTIMA, nunca 'acao-1'
+    assert resultado.observacao == ('acao-2', 'CONCLUIDO')
+
+
+def test_falha_final_apos_acao_sucedida_interrompe_sem_observar_nem_terceira_tentativa():
+    # Cenário SUCCEEDED -> FAILED_FINAL: falha parcial genuína (distinta
+    # de test_falha_final_interrompe_imediatamente_sem_retry, que só
+    # cobria FAILED_FINAL como primeira e única ação). 'acao-2-incerta'
+    # representa o resultado que ENVIO_EXTERNO_INCERTO produz -- nunca
+    # retentável (ClasseFalha.ENVIO_EXTERNO_INCERTO não é TRANSIENT), o
+    # que executor_persistente_fake.py já traduz para FAILED_FINAL antes
+    # de chegar aqui; este teste cobre o comportamento do canário diante
+    # desse resultado, não a classificação em si.
+    sequencia = [
+        _resultado('SUCCEEDED', 'acao-1'),
+        _resultado('FAILED_FINAL', 'acao-2-incerta'),
+    ]
+    chamadas = {'n': 0}
+
+    def _executar(**kw):
+        resultado = sequencia[chamadas['n']]
+        chamadas['n'] += 1
+        return resultado
+
+    def _observar(**kw):
+        pytest.fail('nunca deveria ser chamado com falha parcial')
+
+    resultado = _rodar(executar_mock=_executar, observar_mock=_observar)
+    assert chamadas['n'] == 2  # nunca uma 3ª tentativa após o FAILED_FINAL
+    assert [r.situacao for r in resultado.acoes_processadas] == ['SUCCEEDED', 'FAILED_FINAL']
+    assert resultado.todas_sucedidas is False
+    assert resultado.observacao is None
