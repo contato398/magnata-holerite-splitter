@@ -1,0 +1,47 @@
+# Autorização humana específica — corte isolado de GET /assinatura/consulta
+# sobre o web legado de produção (Opção B da decisão do Chat Projeto:
+# preparar o web sem deploy amplo de main).
+# Base: 588efb4a254f353c7eb945560c071ec5f6c2c9b5 (commit real hoje
+# implantado no serviço web `magnata-holerite-splitter` do Render — não
+# é branch, é o ponto exato que este corte parte).
+# Branch: fix/corte-isolado-assinatura-consulta-v1 (missão macro local)
+#
+# Escopo nominal autorizado: inserir SOMENTE o bloco da rota
+# GET/OPTIONS /assinatura/consulta (71 linhas), extraído byte-a-byte do
+# commit fedff26:app.py (linhas 11805-11875), entre as linhas 11629 e
+# 11632 do app.py desta base -- mesmo texto, mesma posição relativa
+# (logo após _pdf_original_do_pacote, antes de
+# assinatura_documento_pagina_png). Rota estritamente somente leitura:
+# reaproveita `_buscar_por_campo` já existente nesta base, nunca cria
+# registro, nunca chama `_criar_registro`/`_atualizar_registro`, nunca
+# chama `_evolution_enviar_*`, nunca aceita POST. Resposta sem CPF, sem
+# URL assinada de anexo, sem campo bruto do Airtable. Autenticação via
+# `X-API-KEY` contra `EMAIL_WEBHOOK_KEY`, mesmo padrão já usado por
+# outras rotas desta base (ex. `/whatsapp/enviar-texto`).
+#
+# Ajuste textual (não funcional) em relação ao texto de fedff26: o
+# docstring original citava "(PR #150)" e `_buscar_assinatura_por_token_
+# reservado` como referência de proveniência -- removido nesta base
+# porque essa função não existe em 588efb4 (confirmado por grep antes
+# da inserção); a rota continua idêntica em comportamento, só a prosa
+# do docstring foi ajustada para não referenciar algo inexistente nesta
+# base.
+#
+# Diff confirmado puramente aditivo: 72 inserções, 0 remoções em
+# app.py. Nenhum import novo. Nenhuma dependência de
+# magnata_os/orquestrador, Evolution, boto3 ou psycopg dentro do bloco
+# (única menção a "Evolution" é em prosa do docstring, afirmando que a
+# rota nunca a chama). Teste dedicado
+# test_assinatura_consulta_read_only.py (9 testes, trazido da mesma
+# origem, sem alteração de conteúdo) incluído nesta mesma missão --
+# 9/9 passam contra esta base. Suíte geral desta base: 2213 passed, 57
+# skipped, 0 falhas (baseline menor que main por ser commit histórico
+# anterior -- não é regressão).
+#
+# O blob abaixo autoriza somente esta versão exata de app.py. Qualquer
+# mudança posterior, inclusive comentário, invalida a autorização. Não
+# autoriza migration, deploy, alteração de env/secrets, restart,
+# credencial, webhook, canário, envio WhatsApp real, assinatura real ou
+# merge. Não autoriza nenhuma outra rota, adapter ou módulo além deste
+# bloco isolado.
+85563dbceea621ec21554195e7b948280c7b3249  app.py
