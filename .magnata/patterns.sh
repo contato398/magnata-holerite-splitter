@@ -1088,6 +1088,17 @@ ALLOWED_PATHS=(
   "^test_adaptador_entrada_duravel\.py$"
   "^test_composicao_ciclo_persistente_prestacao\.py$"
   "^test_handoff_documento_corredor\.py$"
+  # Exceção exata e restrita (missão "PRESTAÇÃO DE CONTAS V1.1 INCREMENTO 1
+  # — FONTE INTERNA DE CANDIDATOS POR NECESSIDADE", branch
+  # fix/prestacao-fonte-interna-v11-final, 2026-09-15) — adapter novo de
+  # fonte interna (FonteCandidatosDocumentaisPorNecessidade) que reutiliza
+  # FonteInventarioPrestacao, RepositorioDocumentos, ItemInventarioPrestacao,
+  # NecessidadeDocumentoPrestacao. Só estes 2 caminhos exatos, batidos por
+  # igualdade de string completa via âncora $ no fim. Não libera
+  # "^magnata_os/classificacao/" nem "^test_" de forma ampla. ZERO alteração
+  # em app.py, ZERO migration, ZERO Airtable, ZERO Gmail, ZERO rede.
+  "^magnata_os/classificacao/fonte_candidatos_documento_inventario_interna\.py$"
+  "^test_fonte_candidatos_documento_inventario_interna\.py$"
 )
 
 # ============================================================================
