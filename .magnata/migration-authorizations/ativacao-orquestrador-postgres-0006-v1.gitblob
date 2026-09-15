@@ -7,7 +7,7 @@
 #
 # Base: origin/main @ 7c249a8a40390dbd74358aece35c4a7d00c5df6c (PR #165
 # mesclado — testes pre-canario fechados).
-# Branch de preparacao: chore/preparacao-migration-0006-canario-v1
+# Branch de preparacao: fix/preparacao-migration-0006-canario-v1
 # (preparacao local apenas — este .gitblob nao foi criado numa branch
 # que aplica a migration; a aplicacao real e uma acao humana separada,
 # fora desta branch, conforme requisito (e) abaixo).
