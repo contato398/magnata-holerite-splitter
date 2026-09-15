@@ -1,0 +1,118 @@
+# Autorizacao humana especifica — ATIVACAO ORQUESTRADOR POSTGRES 0006 V1
+#
+# Objetivo: autorizar exclusivamente a aplicacao controlada, no Postgres
+# real magnata_os, da migration 0006 (conclusao durável do ciclo de
+# assinatura por acao) — pre-requisito tecnico para o primeiro canario
+# nominal real observar corretamente a transicao de assinatura.
+#
+# Base: origin/main @ 7c249a8a40390dbd74358aece35c4a7d00c5df6c (PR #165
+# mesclado — testes pre-canario fechados).
+# Branch de preparacao: fix/preparacao-migration-0006-canario-v1
+# (preparacao local apenas — este .gitblob nao foi criado numa branch
+# que aplica a migration; a aplicacao real e uma acao humana separada,
+# fora desta branch, conforme requisito (e) abaixo).
+#
+# Escopo autorizado nesta missao — SOMENTE:
+# 1) preflight somente leitura no Postgres real magnata_os, confirmando
+#    que magnata_orquestrador.conclusao_obrigacao_assinatura ainda nao
+#    existe (to_regclass IS NULL) antes de qualquer DDL;
+# 2) confirmar backup/PITR disponivel antes do primeiro DDL;
+# 3) aplicar a migration 0006 abaixo, pelo blob exato, uma unica vez;
+# 4) validar o schema/tabela/indice/trigger criados apos a aplicacao
+#    (mesma tecnica de to_regclass + information_schema ja usada nos
+#    testes _postgres_real.py deste repositorio);
+# 5) confirmar que magnata_orquestrador.acoes_execucao_plano (0003) e
+#    a funcao magnata_orquestrador.bloquear_mutacao_auditoria() (0001)
+#    ja existem no banco real ANTES de aplicar 0006 (dependencias
+#    diretas — 0006 falha em erro claro de FK/funcao ausente se
+#    qualquer uma faltar, nunca silenciosamente).
+#
+# Pre-condicoes verificadas nesta missao (evidencia de repositorio +
+# validacao local em Postgres 16 efemero, nunca contra producao):
+# - 0006 depende SOMENTE de 0001 (schema magnata_orquestrador + funcao
+#   bloquear_mutacao_auditoria) e 0003 (tabela acoes_execucao_plano,
+#   FK acao_execucao_id). NAO depende de 0002, 0004 nem 0005 (0004 so
+#   adiciona coluna nullable em acoes_execucao_plano, nao referenciada
+#   por 0006; 0005 e outro dominio — execucoes_prestacao — sem relacao).
+# - Nomes/tipos de coluna (acao_execucao_id, estado, correlacao_externa,
+#   evidencia_sha256, registrado_em) conferem exatamente com
+#   magnata_os/orquestrador/adapters/postgres_conclusao_obrigacao_assinatura.py
+#   (RegistroConclusaoObrigacaoAssinatura e os INSERT/SELECT do
+#   repositorio) — nenhuma divergencia de schema encontrada.
+# - Validado localmente contra PostgreSQL 16 efemero (mesma major
+#   version do render.yaml, `postgresMajorVersion: 16`): os 5 testes de
+#   test_conclusao_obrigacao_assinatura_postgres.py passam, incluindo o
+#   teste real que aplica 0001+0002+0003+0004+0006 em sequencia, insere
+#   linhas reais, confirma a trigger append-only bloqueando UPDATE, e
+#   confirma que o estado mais recente e recuperavel apos reconectar
+#   (nova conexao, sem cache em memoria).
+# - A migration NAO e idempotente por reexecucao direta do arquivo (sem
+#   IF NOT EXISTS, mesmo padrao ja usado por 0001-0003): uma segunda
+#   aplicacao falha com "relation already exists" e sofre ROLLBACK
+#   limpo (confirmado localmente) — nunca deixa estado parcial. Nao e
+#   uma regressao nem uma lacuna nova, e o mesmo comportamento ja aceito
+#   nas autorizacoes anteriores.
+# - Rollback testado localmente: remove somente a tabela e a trigger da
+#   0006 (sem CASCADE), confirmado que magnata_orquestrador.acoes_execucao_plano
+#   permanece intacta apos o rollback — destrutivo (perde todo o
+#   historico de conclusao de assinatura), nunca automatico.
+#
+# IMPORTANTE — estado de 0001/0002/0003 em producao: 0001, 0002 e 0003
+# sao registradas aqui como APLICADAS EM PRODUCAO, confirmado por
+# verificacao humana fora desta sessao (esta sessao nao tem acesso a
+# Postgres real; a unica evidencia textual dentro do repositorio antes
+# desta missao era o proprio comentario da migration 0006 afirmando
+# isso, o que por si so nao e comprovacao tecnica — fica registrado que
+# a confirmacao definitiva veio de fora desta sessao, nao de leitura
+# de codigo).
+#
+# Proibido por esta autorizacao:
+# - alterar a migration 0006 ou aplicar qualquer outro SQL de schema;
+# - aplicar 0004 ou 0005 (nao sao pre-requisito de 0006 e nao estao no
+#   escopo desta autorizacao);
+# - executar rollback automaticamente;
+# - tocar app.py, Evolution, WhatsApp, Airtable, credenciais ou deploy;
+# - alterar variavel de ambiente (incluindo ORQUESTRADOR_TRANSPORTE_REAL_AUTORIZADO,
+#   ORQUESTRADOR_S3_BUCKET, ORQUESTRADOR_ASSINATURA_BASE_URL/API_KEY);
+# - configurar S3, Evolution ou endpoint de assinatura reais;
+# - executar o canario nominal ou qualquer envio WhatsApp/assinatura real;
+# - qualquer escrita externa alem do proprio DDL desta migration.
+#
+# Criterios de sucesso da aplicacao real (quando autorizada e executada
+# fora desta sessao):
+# - to_regclass('magnata_orquestrador.conclusao_obrigacao_assinatura')
+#   deixa de ser NULL;
+# - indice conclusao_obrigacao_assinatura_acao_idx presente;
+# - trigger conclusao_obrigacao_assinatura_append_only presente e
+#   efetivamente bloqueando UPDATE/DELETE (testar com uma linha
+#   sintetica, nunca dado real, e fazer ROLLBACK dessa transacao de
+#   teste em seguida);
+# - nenhuma outra tabela/coluna alterada.
+#
+# Criterios de parada imediata:
+# - to_regclass('magnata_orquestrador.acoes_execucao_plano') OU a
+#   funcao magnata_orquestrador.bloquear_mutacao_auditoria() ausentes
+#   no preflight (dependencia direta faltando);
+# - backup/PITR nao confirmavel;
+# - qualquer erro do proprio DDL (a transacao BEGIN/COMMIT do arquivo
+#   já garante que um erro no meio nunca deixa estado parcial — mas a
+#   aplicacao deve parar e reportar, nunca tentar de novo sem investigar);
+# - qualquer sinal de que a migration seria aplicada em banco diferente
+#   do Postgres real de producao do Magnata OS (magnata_os).
+#
+# Rollback disponivel, porem NUNCA automatico — destrutivo, aprovado
+# apenas como plano de recuperacao, requer nova decisao humana explicita
+# para ser executado:
+4a0ed06590086860d4b7555b742bdcece78174f1  magnata_os/orquestrador/migrations/0006_conclusao_obrigacao_assinatura_rollback.sql
+#
+# Blob Git EXATO da migration autorizada para aplicacao controlada,
+# somente apos confirmacao de backup/recuperacao e preflight verde:
+bd1de735aacd47b121952b0317268a931824103e  magnata_os/orquestrador/migrations/0006_conclusao_obrigacao_assinatura.sql
+#
+# DECLARACAO EXPRESSA: este artefato e um REGISTRO DE ESCOPO E CRITERIOS
+# previamente auditados — ele NAO executa nada, NAO aplica a migration
+# por si so, e NAO substitui a autorizacao humana exigida por CLAUDE.md
+# §6(e): a confirmacao humana especifica, numa mensagem distinta desta
+# preparacao, continua sendo o unico gatilho que autoriza o primeiro
+# DDL real contra o Postgres de producao. A existencia deste arquivo no
+# repositorio nunca e, sozinha, essa confirmacao.
