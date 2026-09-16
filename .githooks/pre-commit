@@ -456,6 +456,13 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # contra Postgres efêmero: migration 0004, criar/recuperar, transições,
   # invariantes, rollback. Reusa padrão existente de teste Postgres real.
   "test_execucao_prestacao_postgres_real.py"
+  # Exceção exata (Prestação V1.1 Incremento 1 — Fonte Interna de Candidatos,
+  # branch fix/prestacao-fonte-interna-v11-final, 2026-09-15). Teste de adapter
+  # interno que reutiliza FonteInventarioPrestacao, RepositorioDocumentos,
+  # ItemInventarioPrestacao, NecessidadeDocumentoPrestacao. 12 cenários,
+  # zero dependência externa (Airtable/Gmail/rede). Mantém "^test_" bloqueado
+  # por padrão e libera somente este teste nominal.
+  "test_fonte_candidatos_documento_inventario_interna.py"
   # Token/Link Reservado para Assinatura V1 — nome exato, sem wildcard.
   "test_assinatura_token_reservado.py"
   # Wiring WhatsApp + Assinatura V1 (missão macro local, gate de produção
