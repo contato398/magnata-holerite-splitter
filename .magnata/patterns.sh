@@ -1088,6 +1088,20 @@ ALLOWED_PATHS=(
   "^test_adaptador_entrada_duravel\.py$"
   "^test_composicao_ciclo_persistente_prestacao\.py$"
   "^test_handoff_documento_corredor\.py$"
+  # FASE 1 OWNERSHIP + BRIDGE SEGURA — correção do bypass silencioso de
+  # ownership documental em TABLE_ARQUIVOS (campo F_ARQ_FUNC inexistente
+  # no schema real, achado por auditoria dedicada). Necessário liberar
+  # estes 3 arquivos de teste (^test_ cai em SCRATCH_SCOPE_PATTERNS por
+  # padrão) porque foram tocados para corrigir mocks que fabricavam o
+  # field ID inexistente ('fldxbZwVNa01pchqF') e para cobrir o novo
+  # contrato fail-closed de _validar_owner_arquivo. Não afrouxa "^test_"
+  # de forma ampla — só estes 3 caminhos exatos, por igualdade de string
+  # completa via âncora $ no fim. (test_pacote_assinatura_holerite_ponto.py
+  # e test_assinatura_token_reservado.py, também tocados nesta mesma
+  # correção, já estavam alocados mais acima neste mesmo array.)
+  "^test_correcao_tabela_arquivos\.py$"
+  "^test_comunicado_tipo_assinavel\.py$"
+  "^test_ownership_documental_bridge_v1\.py$"
 )
 
 # ============================================================================

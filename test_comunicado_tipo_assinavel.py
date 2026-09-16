@@ -42,6 +42,7 @@ class TestComunicadoTipoAssinavel(unittest.TestCase):
                     'url': 'https://dl.airtable.com/fake/comunicado_teste.pdf',
                     'filename': 'Comunicado Teste.pdf',
                 }],
+                m.F_ARQ_FUNCIONARIO_OWNER: ['rechfevkZbWn55CJo'],
             },
         }
         return resp

@@ -143,6 +143,18 @@ F_FUNC_DOCUMENTOS = 'fldCWscgMwOT3Ej72'  # Documentos (campo genérico, visível
 # ── Tabelas/Campos Fase 2 — Caixa de Entrada ─────────────────────────────────
 TABLE_EMAILS     = 'tblljRRrraXSipJd1'   # Emails Savian
 TABLE_ARQUIVOS   = 'tblRsvhz8oOcUqhkv'   # Arquivos
+# Funcionário Proprietário (link -> Funcionários) — ownership determinístico
+# do arquivo. Criado sob gate humano separado (Fase 1 — Ownership + Bridge
+# Segura); substitui o field ID inexistente 'fldxbZwVNa01pchqF' que o
+# código antigo lia sem nunca ter sido criado no schema real (bypass
+# silencioso — auditoria de ownership desta mesma fase). Cardinalidade de
+# negócio é exatamente 1 owner, imposta em código (ver
+# _validar_owner_arquivo), independentemente da config visual do Airtable
+# (multipleRecordLinks, prefersSingleRecordLink=false). Definida aqui (e
+# não no bloco de campos F_ARQ_* mais abaixo) porque
+# _validar_configuracao_assinatura_v36() já a referencia e é chamada logo
+# no carregamento do módulo — precisa existir antes desse ponto.
+F_ARQ_FUNCIONARIO_OWNER = 'fldq2Ne6bLaQX9w8y'
 TABLE_PROCESSAR  = 'tblXaLXvGJMyFOayc'   # Processar Arquivos
 TABLE_PENDENCIAS = 'tblRkJBL6Wwf4fxVC'   # Pendências/Revisar
 
@@ -251,12 +263,17 @@ def _validar_configuracao_assinatura_v36():
 
     Retorna: (bool, mensagem_detalhada)
     """
-    # Validar apenas os 4 campos atualmente em uso
+    # Validar apenas os campos atualmente em uso. F_ARQ_FUNCIONARIO_OWNER
+    # entrou aqui na Fase 1 Ownership — precisamente para que um drift
+    # futuro de schema (field ID renomeado/removido) falhe rápido e claro
+    # no startup, em vez de reproduzir o mesmo bypass silencioso encontrado
+    # na auditoria (campo antigo inexistente, checagem sempre inerte).
     campos_obrigatorios = {
         'F_ASS_ARQUIVO_RECORD_ID': F_ASS_ARQUIVO_RECORD_ID,
         'F_ASS_PDF_SHA256': F_ASS_PDF_SHA256,
         'F_ASS_CHAVE_IDEMPOTENCIA': F_ASS_CHAVE_IDEMPOTENCIA,
         'F_ASS_REQUEST_ID': F_ASS_REQUEST_ID,
+        'F_ARQ_FUNCIONARIO_OWNER': F_ARQ_FUNCIONARIO_OWNER,
     }
 
     campos_v36 = campos_obrigatorios
@@ -3202,6 +3219,10 @@ def _montar_e_disparar_kit_admissao(ctx: dict, func_id: str, dry_run: bool,
                         'url': '',  # Será atualizado
                         'filename': nome_kit,
                     }],
+                    # Fase 1 Ownership: producer conhece autoritativamente o
+                    # colaborador (func_id é parâmetro da própria função) —
+                    # grava o owner na materialização, nunca por inferência.
+                    F_ARQ_FUNCIONARIO_OWNER: [func_id],
                 }
             },
             timeout=15,
@@ -4989,6 +5010,11 @@ def _processar_folha_ponto_arquivo(caminho_pdf, folha_mensal, disparar_assinatur
                                         'fields': {
                                             F_ARQ_NOME: filename,
                                             F_ARQ_ATTACH: [{'url': anexo_url, 'filename': filename}],
+                                            # Fase 1 Ownership: func_id já é
+                                            # conhecido autoritativamente
+                                            # (parâmetro do loop) — grava o
+                                            # owner na materialização.
+                                            F_ARQ_FUNCIONARIO_OWNER: [func_id],
                                         }
                                     },
                                     timeout=15,
@@ -10185,6 +10211,69 @@ def _carregar_documento_url(url: str) -> bytes:
     return r.content
 
 
+# Formato tolerante de propósito: Record IDs reais do Airtable são sempre
+# 'rec' + 14 alfanuméricos (17 chars totais), mas a suíte de testes deste
+# repositório usa IDs sintéticos de tamanho variável (ex.: 'recFUNC0000000001')
+# — mesmo padrão de tolerância já usado por _validar_configuracao_assinatura_v36
+# para field IDs ('fld' + alfanumérico, mínimo 10 chars, sem fixar o
+# comprimento exato). O que importa aqui é rejeitar valor vazio, prefixo
+# errado ou caractere não alfanumérico — não replicar o comprimento exato
+# de produção.
+_RE_RECORD_ID = re.compile(r'^rec[A-Za-z0-9]{6,}$')
+
+
+def _validar_owner_arquivo(campos_arquivo, funcionario_id, rotulo, request_id):
+    """Valida ownership documental fail-closed via F_ARQ_FUNCIONARIO_OWNER.
+
+    Ausência de prova NUNCA é estado válido — todo caminho que não seja
+    "exatamente 1 owner igual a funcionario_id" bloqueia. Nenhuma inferência
+    por nome, filename, URL, tamanho ou competência participa desta decisão
+    (achado da auditoria de ownership desta Fase 1: o campo antigo
+    'fldxbZwVNa01pchqF' nunca existiu no schema real, e o
+    `.get(..., [])` correspondente tornava a ausência um bypass silencioso).
+
+    Retorna None se ownership confirmado (prossegue); caso contrário
+    retorna a tupla (corpo_erro, status_http) já pronta para a rota.
+    """
+    valor = campos_arquivo.get(F_ARQ_FUNCIONARIO_OWNER, None)
+
+    if valor is None or not isinstance(valor, list) or len(valor) == 0:
+        logger.error(f'[OWNERSHIP] {rotulo}: F_ARQ_FUNCIONARIO_OWNER ausente/vazio/malformado')
+        return ({
+            'status': 'erro',
+            'erro': f'{rotulo}: arquivo sem proprietário cadastrado (ownership não comprovado)',
+            'request_id': request_id,
+        }, 422)
+
+    if len(valor) > 1:
+        logger.error(f'[OWNERSHIP] {rotulo}: mais de um owner ({len(valor)})')
+        return ({
+            'status': 'erro',
+            'erro': f'{rotulo}: arquivo com múltiplos proprietários — ownership ambíguo',
+            'request_id': request_id,
+        }, 422)
+
+    owner_id = valor[0]
+    if not isinstance(owner_id, str) or not _RE_RECORD_ID.match(owner_id):
+        logger.error(f'[OWNERSHIP] {rotulo}: owner malformado ({owner_id!r})')
+        return ({
+            'status': 'erro',
+            'erro': f'{rotulo}: proprietário do arquivo malformado (não é Record ID válido)',
+            'request_id': request_id,
+        }, 422)
+
+    if owner_id != funcionario_id:
+        logger.error(f'[OWNERSHIP] {rotulo}: arquivo de outro funcionário ({owner_id} != {funcionario_id})')
+        return ({
+            'status': 'erro',
+            'erro': f'{rotulo}: arquivo pertence a outro funcionário',
+            'arquivo_func': owner_id,
+            'request_id': request_id,
+        }, 403)
+
+    return None
+
+
 def _gerar_assinatura_core(funcionario_id, tipo_documento, arquivo_record_id=None, processar_id='',
                             nome_documento=None, mensagem_extra='', disparar_whatsapp=False, dry_run=False,
                             request_id=None, kit_arquivo_record_ids=None, token_reservado=None,
@@ -10301,16 +10390,10 @@ def _gerar_assinatura_core(funcionario_id, tipo_documento, arquivo_record_id=Non
                     'request_id': request_id,
                 }, 400
 
-            # Validar funcionário do arquivo
-            func_arquivo = campos_arquivo.get('fldxbZwVNa01pchqF', [])  # F_ARQ_FUNC (link)
-            if func_arquivo and func_arquivo[0] != funcionario_id:
-                logger.error(f'[ASSINATURA] Arquivo de outro funcionário: {arquivo_record_id} != {funcionario_id}')
-                return {
-                    'status': 'erro',
-                    'erro': f'Arquivo pertence a outro funcionário',
-                    'arquivo_func': func_arquivo[0] if func_arquivo else None,
-                    'request_id': request_id,
-                }, 403
+            # Validar funcionário do arquivo — fail-closed (Fase 1 Ownership)
+            erro_owner = _validar_owner_arquivo(campos_arquivo, funcionario_id, 'Arquivo', request_id)
+            if erro_owner:
+                return erro_owner
 
             # Baixar PDF
             attachment = anexos[0]
@@ -10613,10 +10696,9 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
             return None, ({'status': 'erro', 'erro': f'{rotulo} {arquivo_id} sem attachment',
                             'request_id': request_id}, 400)
 
-        func_arquivo = campos_arquivo.get('fldxbZwVNa01pchqF', [])  # F_ARQ_FUNC (link)
-        if func_arquivo and func_arquivo[0] != funcionario_id:
-            return None, ({'status': 'erro', 'erro': f'{rotulo} pertence a outro funcionário',
-                            'arquivo_func': func_arquivo[0], 'request_id': request_id}, 403)
+        erro_owner = _validar_owner_arquivo(campos_arquivo, funcionario_id, rotulo, request_id)
+        if erro_owner:
+            return None, erro_owner
 
         attachment = anexos[0]
         try:
@@ -10629,6 +10711,7 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
             'bytes': pdf_bytes,
             'filename': attachment.get('filename', 'Documento.pdf'),
             'sha256': hashlib.sha256(pdf_bytes).hexdigest(),
+            'owner': campos_arquivo.get(F_ARQ_FUNCIONARIO_OWNER, [None])[0],
         }, None
 
     holerite, erro_hol = _carregar_e_validar(arquivo_holerite_id, 'Holerite')
@@ -10637,6 +10720,25 @@ def _gerar_pacote_assinatura_holerite_ponto(funcionario_id, arquivo_holerite_id,
     ponto, erro_ponto = _carregar_e_validar(arquivo_ponto_id, 'Folha de Ponto')
     if erro_ponto:
         return erro_ponto
+
+    # Checagem cruzada explícita e nomeada (Fase 1 Ownership): mesmo com os
+    # dois documentos já validados individualmente contra funcionario_id
+    # acima (o que torna esta comparação logicamente redundante hoje — se
+    # A==C e B==C, então A==B), ela é mantida nomeada e independente para
+    # que uma mudança futura num dos dois pontos de validação nunca quebre
+    # silenciosamente esta garantia (CLAUDE.md §4 — falha nunca é
+    # silenciosa). Nunca deve disparar na prática; se disparar, é sinal de
+    # regressão grave, não de caso de negócio legítimo.
+    if holerite['owner'] != ponto['owner']:
+        logger.error(
+            f'[PACOTE HOL+PONTO] Owners divergentes entre Holerite e Folha de Ponto: '
+            f'{holerite["owner"]} != {ponto["owner"]}'
+        )
+        return {
+            'status': 'erro', 'erro': 'owners_divergentes_no_pacote',
+            'mensagem': 'Holerite e Folha de Ponto do pacote pertencem a funcionários diferentes.',
+            'request_id': request_id,
+        }, 403
 
     texto_hol = _extrair_texto_pdf_bytes(holerite['bytes'])
     competencia_hol, _ = extrair_competencia_holerite(texto_hol)

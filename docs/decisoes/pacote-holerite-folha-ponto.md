@@ -154,3 +154,55 @@ específica), mas não foi executado contra dado real nesta sessão — o
 sandbox não tem `AIRTABLE_API_KEY` real nem acesso de rede ao Render de
 produção. O número "34" permanece **provisório** até execução real
 (comando exato na docstring de `main()` do script).
+
+## Adendo — Fase 1 Ownership + Bridge Segura
+
+A decisão original deste documento ("nenhum campo novo no Airtable" —
+ver seção de reenvio, acima) era válida para o entendimento da época: o
+pacote reaproveitava 100% os 4 campos v3.6 já reais e a validação de
+posse existente (`campos_arquivo.get('fldxbZwVNa01pchqF', [])`,
+comentada como `F_ARQ_FUNC (link)`).
+
+Uma auditoria posterior, dedicada especificamente a ownership
+(`TABLE_ARQUIVOS` × Funcionário × Assinatura), provou que esse campo
+**nunca existiu de fato no schema real** de `TABLE_ARQUIVOS` — o
+`.get(..., [])` correspondente sempre retornava lista vazia, e a
+checagem `if func_arquivo and func_arquivo[0] != funcionario_id` nunca
+disparava. Na prática, qualquer `arquivo_record_id` podia ser associado
+a qualquer `funcionario_id` sem bloqueio algum: um bypass silencioso de
+ownership cross-colaborador, presente tanto no fluxo standalone
+(`_gerar_assinatura_core`) quanto no pacote (`_carregar_e_validar`
+dentro de `_gerar_pacote_assinatura_holerite_ponto`).
+
+**Fase 1 (esta correção)** introduz um linked-record real e transitório:
+`F_ARQ_FUNCIONARIO_OWNER` (field ID `fldq2Ne6bLaQX9w8y`, `TABLE_ARQUIVOS
+-> Funcionários`, criado sob gate humano separado, cardinalidade de
+negócio de exatamente 1 owner imposta em código). A validação passou a
+ser centralizada em `_validar_owner_arquivo` (fail-closed: ausência,
+lista vazia, valor não-lista, múltiplos owners ou item malformado
+bloqueiam com 422; owner divergente bloqueia com 403; owner igual
+prossegue) e é chamada pelos dois fluxos que hoje materializam
+`TABLE_ARQUIVOS` com conhecimento autoritativo do colaborador
+(`_montar_e_disparar_kit_admissao`, `_processar_folha_ponto_arquivo`).
+O pacote Holerite+Ponto ganhou também uma checagem cruzada explícita e
+nomeada entre os dois documentos (mesmo sendo logicamente redundante às
+checagens individuais) para que uma regressão futura num dos dois
+pontos nunca quebre essa garantia silenciosamente.
+
+Documentos recebidos por e-mail (`email_webhook`) continuam sem owner
+atribuído — nenhuma inferência por nome, filename, URL, tamanho ou
+competência foi introduzida; nesse estado, o documento simplesmente
+fica bloqueado (422) para assinatura até resolução autoritativa
+posterior, nunca aceito por omissão.
+
+**O Airtable não se torna autoridade definitiva de ownership.**
+`F_ARQ_FUNCIONARIO_OWNER` é uma correção transitória da bridge legada.
+Uma Fase 2, já planejada e não incluída nesta correção, deve mover a
+autoridade de ownership para a camada documental durável
+(`resolucao_documental_temporal`, `magnata_os/documental/modulo01/`),
+com o Airtable voltando a ser apenas adapter/fonte transitória — não o
+sistema de registro do vínculo documento↔colaborador.
+
+Materializador genérico owner-aware de Holerite → `TABLE_ARQUIVOS`
+(reutilizável por EPI, contratos, NR, rescisão etc.) permanece como
+próximo incremento — deliberadamente fora do escopo desta Fase 1.
