@@ -269,11 +269,16 @@ def test_folha_ponto_grava_owner_no_arquivo_criado():
     assert posts_arquivos[0]['fields'][F_ARQ_FUNCIONARIO_OWNER] == [func_id]
 
 
-# ── Drift de schema: F_ARQ_FUNCIONARIO_OWNER faz parte da validação v3.6 ─
+# ── Configuração local: F_ARQ_FUNCIONARIO_OWNER participa da validação
+# de formato v3.6 (_validar_configuracao_assinatura_v36 NUNCA consulta o
+# schema real do Airtable — só valida o literal local: vazio, placeholder,
+# prefixo 'fld', tamanho mínimo, duplicação. Ausência real do field no
+# retorno do Airtable é responsabilidade de _validar_owner_arquivo em
+# runtime, testado separadamente acima) ────────────────────────────────
 
-def test_field_id_owner_participa_da_validacao_de_configuracao():
+def test_field_id_owner_participa_da_validacao_de_configuracao_local():
     ok, msg = app._validar_configuracao_assinatura_v36()
-    assert ok, msg  # o field real configurado deve passar no formato exigido
+    assert ok, msg  # o literal configurado deve passar no formato local exigido
 
 
 def test_field_id_morto_nao_e_mais_referenciado_em_codigo_ativo():

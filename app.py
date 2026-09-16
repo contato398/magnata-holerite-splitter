@@ -264,10 +264,15 @@ def _validar_configuracao_assinatura_v36():
     Retorna: (bool, mensagem_detalhada)
     """
     # Validar apenas os campos atualmente em uso. F_ARQ_FUNCIONARIO_OWNER
-    # entrou aqui na Fase 1 Ownership — precisamente para que um drift
-    # futuro de schema (field ID renomeado/removido) falhe rápido e claro
-    # no startup, em vez de reproduzir o mesmo bypass silencioso encontrado
-    # na auditoria (campo antigo inexistente, checagem sempre inerte).
+    # entrou aqui na Fase 1 Ownership. IMPORTANTE: esta função NUNCA
+    # consulta o schema real do Airtable — valida só a configuração local
+    # (formato do literal: vazio, placeholder, prefixo 'fld', tamanho
+    # mínimo, duplicação entre constantes). Ela não detecta, e não pode
+    # detectar, um field removido/renomeado no Airtable real — isso só é
+    # descoberto em runtime, pela resposta real da API. A proteção
+    # fail-closed contra field ausente no retorno do Airtable é
+    # responsabilidade exclusiva de _validar_owner_arquivo (que trata
+    # ausência do campo na resposta como bloqueio, nunca como bypass).
     campos_obrigatorios = {
         'F_ASS_ARQUIVO_RECORD_ID': F_ASS_ARQUIVO_RECORD_ID,
         'F_ASS_PDF_SHA256': F_ASS_PDF_SHA256,

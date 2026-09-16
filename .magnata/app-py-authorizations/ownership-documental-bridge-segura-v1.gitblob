@@ -38,8 +38,11 @@
 #    autoritativa posterior, nunca por inferência de nome/filename/URL/
 #    competência;
 # 8) F_ARQ_FUNCIONARIO_OWNER incluído em campos_obrigatorios de
-#    _validar_configuracao_assinatura_v36 (drift de field ID falha
-#    rápido e claro no startup).
+#    _validar_configuracao_assinatura_v36 -- validação de CONFIGURACAO
+#    LOCAL apenas (formato do literal: vazio, placeholder, prefixo fld,
+#    tamanho minimo, duplicacao), nunca consulta ao schema real do
+#    Airtable. Ausencia real do field no retorno do Airtable continua
+#    sendo bloqueada fail-closed por _validar_owner_arquivo em runtime.
 #
 # Explicitamente fora de escopo desta autorização (não implementado):
 # materializador genérico owner-aware de Holerite -> TABLE_ARQUIVOS
@@ -53,7 +56,15 @@
 # falhas, 0 regressão. git diff --check limpo. Nenhuma credencial/PII
 # encontrada no diff.
 #
+# Revisão (correção pontual LOW pré-merge do PR #171): comentário impreciso
+# do item 8 corrigido -- _validar_configuracao_assinatura_v36 valida só
+# configuração LOCAL (formato do literal), nunca consulta o schema real do
+# Airtable; não detecta field removido/renomeado em produção. Ausência real
+# do field no retorno do Airtable continua bloqueada fail-closed por
+# _validar_owner_arquivo em runtime -- comportamento funcional inalterado,
+# só o comentário estava impreciso. Novo blob por causa dessa correção.
+#
 # Somente blob exato aprovado; qualquer alteração subsequente (inclusive
 # reordenar, adicionar linha ou trocar comentário) invalida esta
 # autorização e exige um novo blob nominal.
-fc8c056aafbd270334f659fe073254ac5f40abf1  app.py
+b34b3cb2e58bdfb49d3efb8f8f2d73a324a979e7  app.py
