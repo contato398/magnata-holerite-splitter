@@ -506,6 +506,10 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_correcao_tabela_arquivos.py"
   "test_comunicado_tipo_assinavel.py"
   "test_ownership_documental_bridge_v1.py"
+  # MATERIALIZADOR DOCUMENTAL GENÉRICO OWNER-AWARE V1 — teste nominal do
+  # adapter novo (Documento + destinatário -> registro em TABLE_ARQUIVOS
+  # legado, fail-closed em ownership indeterminável).
+  "test_materializador_arquivo_legado.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
