@@ -496,6 +496,16 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_adaptador_entrada_duravel.py"
   "test_composicao_ciclo_persistente_prestacao.py"
   "test_handoff_documento_corredor.py"
+  # FASE 1 OWNERSHIP + BRIDGE SEGURA (correção do bypass silencioso de
+  # ownership documental em TABLE_ARQUIVOS — field ID F_ARQ_FUNC nunca
+  # existiu no schema real). Mesma correção já libera
+  # test_pacote_assinatura_holerite_ponto.py e
+  # test_assinatura_token_reservado.py, ambos já nominais acima — faltam
+  # só estes 3: dois testes legados corrigidos (mocks que fabricavam o
+  # field ID inexistente) e o teste novo do contrato fail-closed.
+  "test_correcao_tabela_arquivos.py"
+  "test_comunicado_tipo_assinavel.py"
+  "test_ownership_documental_bridge_v1.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

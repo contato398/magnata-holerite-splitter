@@ -126,7 +126,16 @@ jobs:
     # job efêmero, nunca reaproveitadas em nenhum outro lugar).
     services:
       postgres:
-        image: postgres:16
+        # PostgreSQL 18 -- produção real do Magnata OS roda 18.4 (evidência
+        # externa confirmada fora desta sessão); a suíte deste job (incluindo
+        # test_conclusao_obrigacao_assinatura_postgres.py, migration 0006)
+        # rodava só contra 16 (mesma major do render.yaml, que é apenas
+        # declarativo -- ver .magnata/migration-authorizations/
+        # ativacao-orquestrador-postgres-0006-v1.gitblob). Troca mínima:
+        # mesmo job, mesma suíte, mesma lógica -- só a versão da imagem,
+        # para fechar a lacuna de evidência empírica em PG18 antes de
+        # qualquer DDL real da 0006 (decisão humana A2).
+        image: postgres:18
         env:
           # "changeme" -- token de placeholder já reconhecido pelo Gate 5
           # de governança deste repositório (.magnata/patterns.sh,
@@ -177,7 +186,7 @@ jobs:
           PGUSER: magnata_teste
           PGPASSWORD: changeme
           PGDATABASE: magnata_alocacao_teste
-        run: python -m pytest -q --tb=short test_magnata_os_documental_alocacao_postgres_real.py test_magnata_os_autenticacao_postgres_real.py test_wiring_prestacao_orquestrador_postgres_shadow_real.py test_repositorio_acoes_execucao_plano_postgres_real.py test_wiring_prestacao_orquestrador_persistente_shadow_real.py test_executor_persistente_fake_postgres_real.py test_execucao_prestacao_postgres_real.py
+        run: python -m pytest -q --tb=short test_magnata_os_documental_alocacao_postgres_real.py test_magnata_os_autenticacao_postgres_real.py test_wiring_prestacao_orquestrador_postgres_shadow_real.py test_repositorio_acoes_execucao_plano_postgres_real.py test_wiring_prestacao_orquestrador_persistente_shadow_real.py test_executor_persistente_fake_postgres_real.py test_execucao_prestacao_postgres_real.py test_conclusao_obrigacao_assinatura_postgres.py
 
       - name: Resumo
         if: always()

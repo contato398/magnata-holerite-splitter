@@ -39,13 +39,39 @@
 #   magnata_os/orquestrador/adapters/postgres_conclusao_obrigacao_assinatura.py
 #   (RegistroConclusaoObrigacaoAssinatura e os INSERT/SELECT do
 #   repositorio) — nenhuma divergencia de schema encontrada.
-# - Validado localmente contra PostgreSQL 16 efemero (mesma major
-#   version do render.yaml, `postgresMajorVersion: 16`): os 5 testes de
-#   test_conclusao_obrigacao_assinatura_postgres.py passam, incluindo o
-#   teste real que aplica 0001+0002+0003+0004+0006 em sequencia, insere
-#   linhas reais, confirma a trigger append-only bloqueando UPDATE, e
-#   confirma que o estado mais recente e recuperavel apos reconectar
-#   (nova conexao, sem cache em memoria).
+# - CORRECAO DECLARADA (reconciliacao PG16 x PG18, missao posterior):
+#   a validacao tecnica desta autorizacao foi feita contra PostgreSQL 16
+#   efemero -- nao contra PostgreSQL 18. `render.yaml` tambem declara
+#   `postgresMajorVersion: 16`, mas esse bloco e puramente DECLARATIVO
+#   (nenhum Blueprint foi rodado com ele -- ver comentario do proprio
+#   render.yaml), e por isso NAO E EVIDENCIA do que roda em producao.
+#   Evidencia externa confirmada fora desta sessao no Postgres real
+#   (`magnata_os`): a versao em producao e **PostgreSQL 18.4**, nao 16.
+#   Os 5 testes de test_conclusao_obrigacao_assinatura_postgres.py
+#   passam contra PostgreSQL 16 efemero, incluindo o teste real que
+#   aplica 0001+0002+0003+0004+0006 em sequencia, insere linhas reais,
+#   confirma a trigger append-only bloqueando UPDATE, e confirma que o
+#   estado mais recente e recuperavel apos reconectar (nova conexao,
+#   sem cache em memoria) -- mas isso NAO foi (ainda) executado contra
+#   PostgreSQL 18 real: esta sessao nao teve acesso a Docker funcional
+#   nem a um pacote PG18 instalavel (apt so oferece PG16; rede externa
+#   ao PGDG bloqueada pela politica do proxy desta sessao).
+#   Auditoria estatica de compatibilidade (missao de reconciliacao),
+#   construcao por construcao do DDL da 0006 -- `BIGINT GENERATED
+#   ALWAYS AS IDENTITY`, FK inline, `CHECK` com lista fechada, `CHECK`
+#   com regex POSIX `~` (motor interno, independente de collation/ICU;
+#   esta migration nao tem `ORDER BY` nem indice de texto sensivel a
+#   locale), `CREATE INDEX` B-tree simples, `CREATE TRIGGER ... EXECUTE
+#   FUNCTION` (sintaxe moderna, ja usada corretamente) -- nenhuma
+#   extensao, nenhuma feature de particionamento, collation customizada
+#   ou funcao exotica. Risco tecnico classificado como **BAIXO** por
+#   simplicidade sintatica (nenhuma das areas de breaking change real
+#   entre versoes maiores do Postgres -- collation/ICU padrao, JSON,
+#   particionamento -- se aplica a este DDL). Ainda assim, esta e uma
+#   lacuna de evidencia empirica (nunca rodado contra PG18 de fato), nao
+#   uma confirmacao -- decisao humana de aceitar o risco com base nesta
+#   auditoria estatica, ou exigir teste real contra PG18 antes do
+#   primeiro DDL, continua pendente e cabe a quem autorizar a aplicacao.
 # - A migration NAO e idempotente por reexecucao direta do arquivo (sem
 #   IF NOT EXISTS, mesmo padrao ja usado por 0001-0003): uma segunda
 #   aplicacao falha com "relation already exists" e sofre ROLLBACK

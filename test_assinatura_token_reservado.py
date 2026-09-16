@@ -36,7 +36,7 @@ def _arquivo():
             'url': 'https://example.invalid/documento.pdf',
             'filename': 'documento-sintetico.pdf',
         }],
-        'fldxbZwVNa01pchqF': [FUNC_ID],
+        app.F_ARQ_FUNCIONARIO_OWNER: [FUNC_ID],
     })
 
 
