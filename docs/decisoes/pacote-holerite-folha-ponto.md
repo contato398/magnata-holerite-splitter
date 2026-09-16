@@ -206,3 +206,51 @@ sistema de registro do vínculo documento↔colaborador.
 Materializador genérico owner-aware de Holerite → `TABLE_ARQUIVOS`
 (reutilizável por EPI, contratos, NR, rescisão etc.) permanece como
 próximo incremento — deliberadamente fora do escopo desta Fase 1.
+
+## Adendo — Materializador Documental Genérico Owner-Aware V1
+
+O incremento registrado acima foi implementado (branch
+`fix/materializador-arquivo-legado-owner-aware-v1`): `Protocol
+MaterializadorArquivoLegado` +
+`ResultadoMaterializacao(arquivo_record_id, documento_id,
+funcionario_id, hash_sha256, reutilizado)` em
+`magnata_os/documental/modulo01/materializador_arquivo.py`, com
+implementação real contra o Airtable legado em
+`adapters/materializador_arquivo_legado.py`.
+
+Reaproveita 100% de campos e mecanismos já existentes — `F_ARQ_HASH`
+(idempotência por conteúdo), `F_ARQ_FUNCIONARIO_OWNER` (ownership),
+`uploadAttachment` nativo do Airtable — **nenhum campo novo no
+Airtable**. `documento.tamanho`/`hash_sha256` são revalidados
+localmente contra `conteudo_bytes` antes de qualquer chamada de rede
+(`TamanhoInconsistente` nova; `HashInconsistente` reutilizada de
+`armazenamento.py`, nunca redefinida).
+
+A unidade operacional é sempre `Documento + destinatário`, nunca só o
+hash: um candidato de mesmo hash com owner válido mas diferente é
+apenas ignorado para este destinatário (o mesmo PDF pode
+legitimamente pertencer a mais de um colaborador); um candidato de
+mesmo hash com owner ausente, múltiplo ou malformado **bloqueia toda a
+operação** — nunca é descartado em silêncio, porque pode ser
+exatamente um registro órfão da mesma relação documento-destinatário
+que se está tentando materializar. Mais de um candidato exato (mesmo
+hash, mesmo owner) também bloqueia (`AmbiguidadeMaterializacao`) — sem
+escolha silenciosa. Um registro exato encontrado sem attachment (órfão
+de uma falha anterior entre criação e upload) tem apenas o upload
+completado no mesmo `arquivo_record_id` — nunca cria um segundo.
+Nenhum resultado é devolvido sem o attachment confirmado.
+
+Nesta V1, **não existe correlação reversa persistida**
+`arquivo_record_id → documento_id` no Airtable — `TABLE_ARQUIVOS`
+continua sem campo para isso, e esta missão não criou nenhum.
+`documento_id` continua sendo a identidade lógica autoritativa no
+Documental; `hash_sha256` preserva identidade de conteúdo na bridge;
+`arquivo_record_id` é a identidade operacional do legado de
+assinatura. Resolver a correlação reversa de forma durável e sem
+heurística fica para a camada F2 (`resolucao_documental_temporal`,
+que permanece isolada/não wireada em produção) ou um mapeamento
+canônico futuro — nenhum dos dois faz parte deste incremento.
+
+`app.py` não foi tocado — o materializador é inteiramente upstream de
+`_gerar_assinatura_core`/`_gerar_pacote_assinatura_holerite_ponto`,
+que continuam recebendo `arquivo_record_id` exatamente como hoje.

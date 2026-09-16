@@ -1113,6 +1113,19 @@ ALLOWED_PATHS=(
   "^test_correcao_tabela_arquivos\.py$"
   "^test_comunicado_tipo_assinavel\.py$"
   "^test_ownership_documental_bridge_v1\.py$"
+  # Exceção exata e restrita (missão "MATERIALIZADOR DOCUMENTAL GENÉRICO
+  # OWNER-AWARE V1", branch fix/materializador-arquivo-legado-owner-aware-v1)
+  # — Protocol puro + adapter novo que materializa um Documento canônico
+  # + destinatário autoritativo (funcionario_id) como registro reutilizável
+  # em TABLE_ARQUIVOS legado (busca por F_ARQ_HASH, grava
+  # F_ARQ_FUNCIONARIO_OWNER, fail-closed em qualquer owner indeterminável).
+  # Só estes 3 caminhos exatos, batidos por igualdade de string completa
+  # via âncora $ no fim. Não libera "^magnata_os/documental/" nem "^test_"
+  # de forma ampla. ZERO alteração em app.py, ZERO migration, ZERO campo
+  # novo no Airtable, ZERO chamada real durante os testes.
+  "^magnata_os/documental/modulo01/materializador_arquivo\.py$"
+  "^magnata_os/documental/modulo01/adapters/materializador_arquivo_legado\.py$"
+  "^test_materializador_arquivo_legado\.py$"
 )
 
 # ============================================================================
