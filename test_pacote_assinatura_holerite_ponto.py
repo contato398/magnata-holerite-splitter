@@ -84,8 +84,8 @@ ELEGIVEL = ('app._status_funcionario_elegivel', {'return_value': (True, None)})
 def _arquivo_ok(func_id=FUNC_ID, filename='doc.pdf', url='https://static/doc.pdf'):
     return _resp(ok=True, json_dict={
         'fields': {
-            'fldm6S1xnp8S6sKFE': [{'url': url, 'filename': filename}],  # F_ARQ_ATTACH
-            'fldxbZwVNa01pchqF': [func_id],  # F_ARQ_FUNC
+            app.F_ARQ_ATTACH: [{'url': url, 'filename': filename}],
+            app.F_ARQ_FUNCIONARIO_OWNER: [func_id],
         },
     })
 
@@ -298,7 +298,7 @@ def test_pacote_arquivo_de_outro_funcionario_e_erro_403():
 
 def test_pacote_arquivo_sem_attachment_e_erro_400():
     resp_sem_anexo = _resp(ok=True, json_dict={'fields': {
-        'fldm6S1xnp8S6sKFE': [], 'fldxbZwVNa01pchqF': [FUNC_ID],
+        app.F_ARQ_ATTACH: [], app.F_ARQ_FUNCIONARIO_OWNER: [FUNC_ID],
     }})
     with patch(*ELEGIVEL[:1], **ELEGIVEL[1]), \
          patch('app._buscar_funcionario_nome_whatsapp', return_value=('Fulano', '5511999999999')), \

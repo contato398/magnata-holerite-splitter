@@ -1,0 +1,70 @@
+# Autorização humana específica — Fase 1 Ownership + Bridge Segura.
+# Base: a9932033908499d461cf2186f22976ea7fbec870 (origin/main).
+# Branch: fix/ownership-documental-bridge-segura-v1
+# Autorização: mensagem do usuário "MAGNATA OS — IMPLEMENTAÇÃO LOCAL
+# AUTORIZADA — FASE 1 OWNERSHIP + BRIDGE SEGURA", com o field ID real já
+# fechado sob gate humano separado (F_ARQ_FUNCIONARIO_OWNER =
+# fldq2Ne6bLaQX9w8y, TABLE_ARQUIVOS -> Funcionários) e escopo nominal
+# detalhado nas seções 3-8 dessa mesma mensagem.
+#
+# Achado que motiva esta correção (auditoria de ownership, missão
+# anterior): _carregar_e_validar/_gerar_assinatura_core liam o field ID
+# 'fldxbZwVNa01pchqF' (comentado como F_ARQ_FUNC), que nunca existiu no
+# schema real de TABLE_ARQUIVOS -- dict.get(campo_inexistente, [])
+# sempre retornava [], e a checagem de posse nunca disparava (bypass
+# silencioso de ownership cross-colaborador).
+#
+# Escopo autorizado (nominal, do próprio texto da missão):
+# 1) constante real F_ARQ_FUNCIONARIO_OWNER = 'fldq2Ne6bLaQX9w8y',
+#    definida antes de _validar_configuracao_assinatura_v36 (que a
+#    referencia e é chamada no carregamento do módulo);
+# 2) remoção de toda leitura ativa do field ID inexistente
+#    'fldxbZwVNa01pchqF' (permanece só em comentário histórico);
+# 3) helper novo _validar_owner_arquivo(campos_arquivo, funcionario_id,
+#    rotulo, request_id) -- fail-closed: ausente/None/vazio/não-lista/
+#    múltiplos owners/item malformado -> 422; owner divergente -> 403;
+#    owner igual -> prossegue (None);
+# 4) aplicado em _gerar_assinatura_core (assinatura standalone) e em
+#    _carregar_e_validar dentro de _gerar_pacote_assinatura_holerite_ponto
+#    (pacote), sempre antes de baixar PDF ou criar qualquer registro;
+# 5) checagem cruzada explícita e nomeada entre owner do Holerite e da
+#    Folha de Ponto no pacote (redundante às checagens individuais, mas
+#    nomeada para nunca depender delas silenciosamente);
+# 6) gravação de F_ARQ_FUNCIONARIO_OWNER: [func_id] nos dois produtores
+#    que já conhecem autoritativamente o colaborador --
+#    _montar_e_disparar_kit_admissao e _processar_folha_ponto_arquivo;
+# 7) email_webhook não alterado -- documento recebido por e-mail
+#    continua sem owner por design, bloqueado (422) até resolução
+#    autoritativa posterior, nunca por inferência de nome/filename/URL/
+#    competência;
+# 8) F_ARQ_FUNCIONARIO_OWNER incluído em campos_obrigatorios de
+#    _validar_configuracao_assinatura_v36 -- validação de CONFIGURACAO
+#    LOCAL apenas (formato do literal: vazio, placeholder, prefixo fld,
+#    tamanho minimo, duplicacao), nunca consulta ao schema real do
+#    Airtable. Ausencia real do field no retorno do Airtable continua
+#    sendo bloqueada fail-closed por _validar_owner_arquivo em runtime.
+#
+# Explicitamente fora de escopo desta autorização (não implementado):
+# materializador genérico owner-aware de Holerite -> TABLE_ARQUIVOS
+# (registrado como próximo incremento em
+# docs/decisoes/pacote-holerite-folha-ponto.md); qualquer alteração de
+# Airtable real, migration, env/secrets, assinatura real, envio
+# WhatsApp real, commit, push, PR, merge ou deploy.
+#
+# Validação: 2518 testes verdes (2499 pré-existentes + 19 novos de
+# test_ownership_documental_bridge_v1.py), 77 skipped (ambiente), 0
+# falhas, 0 regressão. git diff --check limpo. Nenhuma credencial/PII
+# encontrada no diff.
+#
+# Revisão (correção pontual LOW pré-merge do PR #171): comentário impreciso
+# do item 8 corrigido -- _validar_configuracao_assinatura_v36 valida só
+# configuração LOCAL (formato do literal), nunca consulta o schema real do
+# Airtable; não detecta field removido/renomeado em produção. Ausência real
+# do field no retorno do Airtable continua bloqueada fail-closed por
+# _validar_owner_arquivo em runtime -- comportamento funcional inalterado,
+# só o comentário estava impreciso. Novo blob por causa dessa correção.
+#
+# Somente blob exato aprovado; qualquer alteração subsequente (inclusive
+# reordenar, adicionar linha ou trocar comentário) invalida esta
+# autorização e exige um novo blob nominal.
+b34b3cb2e58bdfb49d3efb8f8f2d73a324a979e7  app.py

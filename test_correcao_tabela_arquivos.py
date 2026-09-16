@@ -23,7 +23,7 @@ class TestCorrecaoTabelaArquivos(unittest.TestCase):
         self.pdf_bytes = b'%PDF-1.4 conteudo de teste NR-06'
         self.pdf_sha256 = hashlib.sha256(self.pdf_bytes).hexdigest()
 
-    def _mock_arquivo_response(self):
+    def _mock_arquivo_response(self, func_id='rechfevkZbWn55CJo'):
         """Resposta simulada da tabela REAL Arquivos, com os Field IDs corretos."""
         resp = MagicMock()
         resp.ok = True
@@ -35,6 +35,7 @@ class TestCorrecaoTabelaArquivos(unittest.TestCase):
                     'url': 'https://dl.airtable.com/fake/nr06_teste.pdf',
                     'filename': 'NR 6 Teste.pdf 2026',
                 }],
+                m.F_ARQ_FUNCIONARIO_OWNER: [func_id],
             },
         }
         return resp
@@ -120,7 +121,7 @@ class TestCorrecaoTabelaArquivos(unittest.TestCase):
 
         def fake_get(url, **kwargs):
             if m.TABLE_ARQUIVOS in url:
-                return self._mock_arquivo_response()
+                return self._mock_arquivo_response(func_id='rectWBc5LiGDSu49J')
             if m.TABLE_ASSINATURAS in url:
                 return self._mock_sem_idempotencia_previa()
             raise AssertionError(f'GET inesperado: {url}')
