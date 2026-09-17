@@ -510,6 +510,11 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # adapter novo (Documento + destinatário -> registro em TABLE_ARQUIVOS
   # legado, fail-closed em ownership indeterminável).
   "test_materializador_arquivo_legado.py"
+  # DISTRIBUIÇÃO DOCUMENTAL GENÉRICA V1 — testes nominais do wiring
+  # genérico e do CLI puro adapter (ver .magnata/patterns.sh para o
+  # detalhamento completo da exceção).
+  "test_wiring_distribuicao_documental_shadow.py"
+  "test_distribuir_documento_v1.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

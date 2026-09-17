@@ -12,14 +12,30 @@ Orquestrador nunca muda.
 from __future__ import annotations
 
 import dataclasses
+from typing import Tuple
 
 import requests
 
 from ..obrigacao_assinatura import ObrigacaoAssinatura, PortaObrigacaoAssinatura
 
+TIPO_DOCUMENTO_PACOTE_LEGADO_2 = 'HOLERITE_FOLHA_PONTO'
+"""Único `tipo_documento` para o qual o motor legado sabe agrupar
+exatamente 2 documentos sob uma única obrigação/link (rota
+`_gerar_pacote_assinatura_holerite_ponto` de `app.py`, não tocada aqui).
+Isto é conhecimento do ADAPTER de compatibilidade, nunca do núcleo
+genérico de distribuição documental."""
+
 
 class ObrigacaoAssinaturaLegadoError(RuntimeError):
     """Falha ao criar/recuperar/consultar a obrigação no motor legado."""
+
+
+class QuantidadeArquivosNaoSuportadaPeloLegado(ObrigacaoAssinaturaLegadoError):
+    """O motor legado hoje só sabe: (a) 1 arquivo via `/assinatura/gerar`
+    genérico, ou (b) exatamente 2 arquivos via o pacote dedicado
+    HOLERITE_FOLHA_PONTO. Qualquer outra quantidade é fail-closed nesta
+    V1 -- generalizar o pacote legado para N>2 exigiria alterar `app.py`
+    (arquivo protegido, fora de escopo)."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -40,22 +56,40 @@ class AdapterObrigacaoAssinaturaLegadoHttp:
         acao_execucao_id: str,
         funcionario_id: str,
         tipo_documento: str,
-        arquivo_record_id: str,
+        arquivo_record_ids: Tuple[str, ...],
     ) -> ObrigacaoAssinatura:
         """Chama `/assinatura/gerar` com `token_reservado` +
         `acao_execucao_id` e `disparar_whatsapp=false` (contrato do PR
         #150) -- único método deste adapter com efeito colateral possível
         (cria a obrigação se não existir; se já existir com a mesma
         identidade/token/correlação, o próprio motor legado devolve a
-        existente sem duplicar)."""
-        payload = {
+        existente sem duplicar).
+
+        A forma do payload depende só da QUANTIDADE de arquivos -- nunca
+        do `tipo_documento` isoladamente, exceto para validar que o
+        pacote de 2 documentos é exatamente o caso já suportado pelo
+        legado (`TIPO_DOCUMENTO_PACOTE_LEGADO_2`)."""
+        payload_base = {
             'funcionario_id': funcionario_id,
             'tipo_documento': tipo_documento,
-            'arquivo_record_id': arquivo_record_id,
             'token_reservado': token_reservado,
             'acao_execucao_id': acao_execucao_id,
             'disparar_whatsapp': False,
         }
+        if len(arquivo_record_ids) == 1:
+            payload = {**payload_base, 'arquivo_record_id': arquivo_record_ids[0]}
+        elif len(arquivo_record_ids) == 2 and tipo_documento == TIPO_DOCUMENTO_PACOTE_LEGADO_2:
+            payload = {
+                **payload_base,
+                'arquivo_holerite_record_id': arquivo_record_ids[0],
+                'arquivo_folha_ponto_record_id': arquivo_record_ids[1],
+            }
+        else:
+            raise QuantidadeArquivosNaoSuportadaPeloLegado(
+                f'legado nao suporta {len(arquivo_record_ids)} documento(s) para '
+                f'tipo_documento={tipo_documento!r} -- so 1 (generico) ou exatamente 2 '
+                f'sob tipo_documento={TIPO_DOCUMENTO_PACOTE_LEGADO_2!r}'
+            )
         try:
             resposta = requests.post(
                 f'{self.base_url}/assinatura/gerar',

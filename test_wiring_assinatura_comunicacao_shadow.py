@@ -68,7 +68,7 @@ class _PortaAssinaturaFake:
         self.chamadas_criar = []
 
     def criar_ou_recuperar(self, *, token_reservado, acao_execucao_id,
-                            funcionario_id, tipo_documento, arquivo_record_id):
+                            funcionario_id, tipo_documento, arquivo_record_ids):
         self.chamadas_criar.append((token_reservado, acao_execucao_id))
         return ObrigacaoAssinatura(
             assinatura_id='rec-fake-1',

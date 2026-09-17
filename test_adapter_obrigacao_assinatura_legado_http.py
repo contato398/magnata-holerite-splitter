@@ -11,6 +11,7 @@ import pytest
 from magnata_os.orquestrador.adapters.obrigacao_assinatura_legado_http import (
     AdapterObrigacaoAssinaturaLegadoHttp,
     ObrigacaoAssinaturaLegadoError,
+    QuantidadeArquivosNaoSuportadaPeloLegado,
 )
 from magnata_os.orquestrador.obrigacao_assinatura import ObrigacaoAssinatura
 
@@ -31,15 +32,48 @@ def test_criar_ou_recuperar_chama_gerar_com_disparar_whatsapp_false():
                return_value=_resp(corpo={'assinatura_id': 'rec1', 'link': 'https://x/assinatura/tok'})) as post:
         resultado = ADAPTER.criar_ou_recuperar(
             token_reservado='tok', acao_execucao_id='a' * 64,
-            funcionario_id='rec1', tipo_documento='COMUNICADO', arquivo_record_id='recArq',
+            funcionario_id='rec1', tipo_documento='COMUNICADO', arquivo_record_ids=('recArq',),
         )
     url, kwargs = post.call_args.args, post.call_args.kwargs
     assert url[0].endswith('/assinatura/gerar')
     assert kwargs['json']['disparar_whatsapp'] is False
     assert kwargs['json']['token_reservado'] == 'tok'
     assert kwargs['json']['acao_execucao_id'] == 'a' * 64
+    assert kwargs['json']['arquivo_record_id'] == 'recArq'
     assert isinstance(resultado, ObrigacaoAssinatura)
     assert resultado.assinatura_id == 'rec1'
+
+
+def test_criar_ou_recuperar_com_2_arquivos_usa_payload_do_pacote_holerite_ponto():
+    with patch('magnata_os.orquestrador.adapters.obrigacao_assinatura_legado_http.requests.post',
+               return_value=_resp(corpo={'assinatura_id': 'rec1', 'link': 'https://x/assinatura/tok'})) as post:
+        ADAPTER.criar_ou_recuperar(
+            token_reservado='tok', acao_execucao_id='a' * 64,
+            funcionario_id='rec1', tipo_documento='HOLERITE_FOLHA_PONTO',
+            arquivo_record_ids=('recHolerite', 'recPonto'),
+        )
+    kwargs = post.call_args.kwargs
+    assert kwargs['json']['arquivo_holerite_record_id'] == 'recHolerite'
+    assert kwargs['json']['arquivo_folha_ponto_record_id'] == 'recPonto'
+    assert 'arquivo_record_id' not in kwargs['json']
+
+
+def test_criar_ou_recuperar_com_2_arquivos_fora_do_pacote_holerite_ponto_falha():
+    with pytest.raises(QuantidadeArquivosNaoSuportadaPeloLegado):
+        ADAPTER.criar_ou_recuperar(
+            token_reservado='tok', acao_execucao_id='a' * 64,
+            funcionario_id='rec1', tipo_documento='EPI',
+            arquivo_record_ids=('rec1', 'rec2'),
+        )
+
+
+def test_criar_ou_recuperar_com_3_arquivos_falha_sempre():
+    with pytest.raises(QuantidadeArquivosNaoSuportadaPeloLegado):
+        ADAPTER.criar_ou_recuperar(
+            token_reservado='tok', acao_execucao_id='a' * 64,
+            funcionario_id='rec1', tipo_documento='HOLERITE_FOLHA_PONTO',
+            arquivo_record_ids=('rec1', 'rec2', 'rec3'),
+        )
 
 
 def test_criar_ou_recuperar_propaga_erro_de_rede_como_excecao_dedicada():
@@ -49,7 +83,7 @@ def test_criar_ou_recuperar_propaga_erro_de_rede_como_excecao_dedicada():
         with pytest.raises(ObrigacaoAssinaturaLegadoError):
             ADAPTER.criar_ou_recuperar(
                 token_reservado='tok', acao_execucao_id='a' * 64,
-                funcionario_id='rec1', tipo_documento='COMUNICADO', arquivo_record_id='recArq',
+                funcionario_id='rec1', tipo_documento='COMUNICADO', arquivo_record_ids=('recArq',),
             )
 
 
@@ -59,7 +93,7 @@ def test_criar_ou_recuperar_falha_em_status_nao_2xx():
         with pytest.raises(ObrigacaoAssinaturaLegadoError):
             ADAPTER.criar_ou_recuperar(
                 token_reservado='tok', acao_execucao_id='a' * 64,
-                funcionario_id='rec1', tipo_documento='COMUNICADO', arquivo_record_id='recArq',
+                funcionario_id='rec1', tipo_documento='COMUNICADO', arquivo_record_ids=('recArq',),
             )
 
 

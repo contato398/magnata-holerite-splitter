@@ -9,7 +9,7 @@ Flask, requests, Airtable, credenciais ou `app.py`.
 from __future__ import annotations
 
 import dataclasses
-from typing import Optional, Protocol
+from typing import Optional, Protocol, Tuple
 
 
 @dataclasses.dataclass(frozen=True)
@@ -45,7 +45,7 @@ class PortaObrigacaoAssinatura(Protocol):
         acao_execucao_id: str,
         funcionario_id: str,
         tipo_documento: str,
-        arquivo_record_id: str,
+        arquivo_record_ids: Tuple[str, ...],
     ) -> ObrigacaoAssinatura:
         ...
 

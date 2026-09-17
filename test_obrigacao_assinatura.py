@@ -20,7 +20,7 @@ class _AdapterFake:
         self._obrigacoes = {}
 
     def criar_ou_recuperar(self, *, token_reservado, acao_execucao_id,
-                            funcionario_id, tipo_documento, arquivo_record_id):
+                            funcionario_id, tipo_documento, arquivo_record_ids):
         existente = self._obrigacoes.get(acao_execucao_id)
         if existente is not None:
             return existente
@@ -54,12 +54,12 @@ def test_criar_ou_recuperar_e_idempotente_pela_mesma_correlacao():
     primeira = adapter.criar_ou_recuperar(
         token_reservado='tok', acao_execucao_id='a' * 64,
         funcionario_id='rec1', tipo_documento='COMUNICADO',
-        arquivo_record_id='recArq',
+        arquivo_record_ids=('recArq',),
     )
     segunda = adapter.criar_ou_recuperar(
         token_reservado='tok', acao_execucao_id='a' * 64,
         funcionario_id='rec1', tipo_documento='COMUNICADO',
-        arquivo_record_id='recArq',
+        arquivo_record_ids=('recArq',),
     )
     assert primeira == segunda
 
@@ -69,7 +69,7 @@ def test_consultar_por_correlacao_depois_de_criar_encontra_sem_recriar():
     criada = adapter.criar_ou_recuperar(
         token_reservado='tok', acao_execucao_id='a' * 64,
         funcionario_id='rec1', tipo_documento='COMUNICADO',
-        arquivo_record_id='recArq',
+        arquivo_record_ids=('recArq',),
     )
     consultada = adapter.consultar_por_correlacao(acao_execucao_id='a' * 64)
     assert consultada == criada

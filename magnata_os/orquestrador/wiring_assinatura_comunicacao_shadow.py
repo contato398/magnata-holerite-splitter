@@ -151,7 +151,7 @@ def materializar_assinatura_shadow(
     obrigacao = porta_assinatura.criar_ou_recuperar(
         token_reservado=token_reservado, acao_execucao_id=registro.acao_execucao_id,
         funcionario_id=funcionario_id, tipo_documento=tipo_documento,
-        arquivo_record_id=arquivo_record_id,
+        arquivo_record_ids=(arquivo_record_id,),
     )
 
     envelope_sha256 = armazenar_acao_e_envelope_v1(
