@@ -515,6 +515,14 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # detalhamento completo da exceção).
   "test_wiring_distribuicao_documental_shadow.py"
   "test_distribuir_documento_v1.py"
+  # INCREMENTO VERTICAL PRESTAÇÃO -> ORDEM -> PENDING V1 — teste nominal
+  # do elo Prestação -> Distribuição Documental Genérica e do teste
+  # Postgres real do núcleo genérico (ver .magnata/patterns.sh).
+  "test_wiring_prestacao_distribuicao_documental_shadow.py"
+  "test_wiring_distribuicao_documental_shadow_real.py"
+  # DELTA FINAL A-F -- teste do composition root Cliente+Competência ->
+  # PENDING (ver .magnata/patterns.sh para o detalhamento completo).
+  "test_wiring_prestacao_ate_distribuicao_documental_shadow.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

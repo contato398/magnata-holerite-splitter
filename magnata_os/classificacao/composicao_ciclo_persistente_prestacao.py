@@ -8,7 +8,7 @@ para o detalhe de cada passo):
 2. Criar ou retomar ExecucaoPrestacao (rastreamento UUID opaco)
 3. Descoberta de necessidades documentais SEM exigir nenhuma âncora
    (`executar_ciclo_prestacao_descoberta`)
-4. Aquisição ORIENTADA POR NECESSIDADE (`_adquirir_por_necessidades`,
+4. Aquisição ORIENTADA POR NECESSIDADE (`adquirir_por_necessidades`,
    correção pós-Ultraplan "Correlação Necessidade → Aquisição →
    Resolução"): só candidatos de `contexto.fonte_candidatos_por_
    necessidade` são processados -- cliente/competência esperados vêm
@@ -294,7 +294,7 @@ def _ler_e_extrair_texto(
     de sempre (Incremento 3: evento ESTÁVEL por ponto de falha, nunca
     `str(exc)` cru). Extraída de `_adquirir_inventario_via_corredor`
     para ser reaproveitada também pela aquisição orientada por
-    necessidade (`_adquirir_por_necessidades`, correção pós-Ultraplan
+    necessidade (`adquirir_por_necessidades`, correção pós-Ultraplan
     "Correlação Necessidade → Aquisição → Resolução") -- mesmo
     comportamento observável de antes, nenhuma duplicação de lógica.
     `None` em qualquer falha (já logada aqui); quem chama só decide
@@ -446,7 +446,7 @@ def _adquirir_inventario_via_corredor(
     (`repositorio_documentos.listar_todos()`), sem nenhuma associação
     real e independente entre documento e cliente/competência esperado
     -- exatamente o que a correção elimina do caminho final (ver
-    `_adquirir_por_necessidades`, que a substitui). Mantida como
+    `adquirir_por_necessidades`, que a substitui). Mantida como
     PRIMITIVA testável isoladamente (mesmo papel de sempre: blob ->
     extração -> corredor -> inventário), reutilizada por `_adquirir_
     por_necessidades` só na parte de extração (`_ler_e_extrair_
@@ -542,12 +542,25 @@ def _adquirir_inventario_via_corredor(
 
 
 @dataclasses.dataclass(frozen=True)
-class _ResultadoAquisicaoPorNecessidade:
+class ResultadoAquisicaoPorNecessidade:
     """Associa 1 candidato processado à necessidade REAL que motivou
     buscá-lo -- cliente/competência esperados vêm da PRÓPRIA
     `necessidade` (contrato já completo, `ciclo_prestacao.py`), nunca
-    inferidos do que o documento resolveu. Transporte interno/privado,
-    não sai deste módulo."""
+    inferidos do que o documento resolveu.
+
+    Promovido de privado (`_ResultadoAquisicaoPorNecessidade`) para
+    público nesta correção (Ultraplan "Incremento Vertical Prestação ->
+    Ordem -> PENDING V1") -- mudança de VISIBILIDADE apenas: mesma
+    assinatura, mesmo shape, mesma semântica. Motivo: `necessidade.
+    colaborador` (via este tipo) é exatamente o vínculo que
+    `wiring_prestacao_distribuicao_documental_shadow.py` precisa
+    reaproveitar para montar `OrdemDistribuicaoDocumental` sem
+    reconstruir a correlação necessidade<->documento<->colaborador, que
+    `executar_ciclo_prestacao_persistente` descarta a partir de
+    `resultados_aquisicao` (ela só extrai cliente/competência para o
+    bucket de seleção de âncora). Único caller de produção antes desta
+    correção: `executar_ciclo_prestacao_persistente` (mesmo módulo,
+    logo abaixo) -- inalterado por este rename."""
 
     necessidade: NecessidadeDocumentoPrestacao
     documento_id: str
@@ -555,11 +568,11 @@ class _ResultadoAquisicaoPorNecessidade:
     resultados_corredor: Tuple[ResultadoExecucaoCorredorPrestacao, ...] = ()
 
 
-def _adquirir_por_necessidades(
+def adquirir_por_necessidades(
     contexto: 'ContextoComposicaoPrestacao',
     necessidades: Tuple[NecessidadeDocumentoPrestacao, ...],
     ciclo_para_corredor: ContextoCicloPrestacao,
-) -> Tuple[InventarioPrestacaoEmMemoria, Tuple[_ResultadoAquisicaoPorNecessidade, ...]]:
+) -> Tuple[InventarioPrestacaoEmMemoria, Tuple[ResultadoAquisicaoPorNecessidade, ...]]:
     """Para CADA necessidade, consulta `contexto.fonte_candidatos_por_
     necessidade.candidatos_para(necessidade)` -- NUNCA `repositorio_
     documentos.listar_todos()` em bloco. `cliente_do_ciclo` do
@@ -603,7 +616,7 @@ def _adquirir_por_necessidades(
     repetido para 2+ necessidades do MESMO documento/cliente/competência
     (tipos documentais diferentes, ex.: HOLERITE e FGTS do mesmo
     cliente/mês) reaproveita o resultado cacheado -- MESMO ASSIM, 1
-    `_ResultadoAquisicaoPorNecessidade` é registrado por (necessidade,
+    `ResultadoAquisicaoPorNecessidade` é registrado por (necessidade,
     documento): o vínculo nunca desaparece, mesmo quando o
     processamento físico é reaproveitado."""
     inventario_adquirido = InventarioPrestacaoEmMemoria()
@@ -679,7 +692,7 @@ def _adquirir_por_necessidades(
                 continue
 
             resultados.append(
-                _ResultadoAquisicaoPorNecessidade(
+                ResultadoAquisicaoPorNecessidade(
                     necessidade=necessidade,
                     documento_id=documento_bruto.documento_id,
                     hash_sha256=documento_bruto.hash_sha256,
@@ -804,6 +817,141 @@ def avaliar_candidatos_ancora(
     return ResultadoAvaliacaoCandidatosAncora(ancora=escolhido)
 
 
+def _descobrir_adquirir_e_recalcular_readiness(
+    contexto: 'ContextoComposicaoPrestacao', ciclo_contexto: ContextoCicloPrestacao,
+) -> Tuple[Tuple[ResultadoAquisicaoPorNecessidade, ...], ResultadoCicloPrestacao]:
+    """Extraído de `executar_ciclo_prestacao_persistente` (antigos
+    passos 3-7: descoberta -> aquisição por necessidade -> seleção de
+    âncora -> composição de inventário -> segunda execução do ciclo
+    com readiness real), para ser reutilizado por composições que
+    também precisam do vínculo necessidade->documento->colaborador
+    preservado (`ResultadoAquisicaoPorNecessidade`), não só do estado
+    final de readiness -- sem duplicar esta lógica em dois lugares
+    (Ultraplan "Delta Final A-F -- Cliente+Competência -> PENDING").
+
+    Comportamento IDÊNTICO ao que já existia inline em
+    `executar_ciclo_prestacao_persistente` antes desta extração --
+    puro refactor, mesma sequência de chamadas, mesmos argumentos.
+    `executar_ciclo_prestacao_persistente` chama esta função e seu
+    retorno público (`ExecucaoPrestacao`) permanece exatamente o
+    mesmo; verificado pela suíte de testes já existente, que não foi
+    alterada por esta extração."""
+    inventario_vazio = InventarioPrestacaoEmMemoria()
+    resultado_descoberta = executar_ciclo_prestacao_descoberta(
+        contexto=ciclo_contexto,
+        fonte_clientes=contexto.fonte_clientes,
+        fonte_requisitos=contexto.fonte_requisitos,
+        fonte_inventario=inventario_vazio,
+        requisitos_base=contexto.requisitos_base,
+        competencias_por_cliente=contexto.competencias_por_cliente,
+        fonte_colaboradores_esperados=contexto.fonte_colaboradores_esperados,
+        tipos_obrigatorios_por_colaborador=contexto.tipos_obrigatorios_por_colaborador,
+    )
+
+    necessidades: list = []
+    for resultado_cliente in resultado_descoberta.resultados_por_cliente:
+        necessidades.extend(resultado_cliente.necessidades)
+
+    inventario_adquirido, resultados_aquisicao = adquirir_por_necessidades(
+        contexto, tuple(necessidades), ciclo_contexto,
+    )
+
+    candidatos_por_bucket: dict = {}
+    for resultado_aquisicao in resultados_aquisicao:
+        chave_bucket = (
+            resultado_aquisicao.necessidade.cliente,
+            resultado_aquisicao.necessidade.competencia,
+        )
+        candidatos_vistos = candidatos_por_bucket.setdefault(chave_bucket, {})
+        for resultado_execucao in resultado_aquisicao.resultados_corredor:
+            resolucao = resultado_execucao.resultado_corredor.resolucao_semantica
+            if resolucao is not None:
+                candidatos_vistos[resolucao.semantic_result_id] = resolucao
+
+    resolucoes_ancora_efetivas: dict = {}
+    for resultado_cliente in resultado_descoberta.resultados_por_cliente:
+        cliente = resultado_cliente.cliente
+        competencia = resultado_cliente.competencia
+        candidatos_do_vinculo = tuple(
+            candidatos_por_bucket.get((cliente, competencia), {}).values()
+        )
+        avaliacao = avaliar_candidatos_ancora(candidatos_do_vinculo, cliente, competencia)
+        if avaliacao.ancora is not None:
+            resolucoes_ancora_efetivas[cliente] = avaliacao.ancora
+
+    fontes_para_composicao = []
+    if contexto.fonte_inventario_base:
+        fontes_para_composicao.append(contexto.fonte_inventario_base)
+    fontes_para_composicao.append(inventario_adquirido)
+    fonte_composta = FonteInventarioPrestacaoComposta(fontes=tuple(fontes_para_composicao))
+
+    resultado_ciclo_2 = executar_ciclo_prestacao(
+        contexto=ciclo_contexto,
+        fonte_clientes=contexto.fonte_clientes,
+        fonte_requisitos=contexto.fonte_requisitos,
+        fonte_inventario=fonte_composta,
+        requisitos_base=contexto.requisitos_base,
+        resolucoes_ancora=resolucoes_ancora_efetivas,
+        competencias_por_cliente=contexto.competencias_por_cliente,
+        fonte_colaboradores_esperados=contexto.fonte_colaboradores_esperados,
+        tipos_obrigatorios_por_colaborador=contexto.tipos_obrigatorios_por_colaborador,
+    )
+
+    return resultados_aquisicao, resultado_ciclo_2
+
+
+def resultados_aquisicao_prontos_por_cliente(
+    contexto: 'ContextoComposicaoPrestacao',
+) -> Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...]:
+    """Para cada (cliente, competência) cujo `pacote.estado ==
+    EstadoPacotePrestacao.PRONTO`, devolve os
+    `ResultadoAquisicaoPorNecessidade` daquele vínculo -- prontos para
+    o Orquestrador montar `OrdemDistribuicaoDocumental`
+    (`wiring_prestacao_distribuicao_documental_shadow.py`).
+
+    Clientes/competências NÃO prontos são simplesmente omitidos do
+    retorno -- STOP silencioso e isolado por cliente (nunca contamina
+    os demais: `executar_ciclo_prestacao`/`avaliar_candidatos_ancora`
+    já avaliam cada (cliente, competência) de forma independente,
+    garantia pré-existente reaproveitada aqui, não recriada).
+
+    Reutiliza EXATAMENTE a mesma composição de
+    `executar_ciclo_prestacao_persistente` via
+    `_descobrir_adquirir_e_recalcular_readiness` -- não recalcula nada
+    com lógica própria, não introduz um segundo motor de descoberta/
+    aquisição/readiness.
+
+    Deliberadamente NÃO cria nem atualiza `ExecucaoPrestacao` -- esta
+    função é só leitura + readiness + aquisição, sem efeito colateral
+    de rastreamento de execução (isso continua responsabilidade
+    exclusiva de quem chamar `executar_ciclo_prestacao_persistente`
+    separadamente, se precisar de rastreamento; esta função nunca cria
+    um segundo `execucao_id`, porque nunca cria nenhum)."""
+    if contexto.politica_competencia is not None:
+        verificar_politica_sem_override_por_tipo(contexto.politica_competencia)
+
+    ano_str, mes_str = contexto.competencia_base.split('-')
+    ciclo_contexto = ContextoCicloPrestacao(competencia_base=(int(ano_str), int(mes_str)))
+
+    resultados_aquisicao, resultado_ciclo_2 = _descobrir_adquirir_e_recalcular_readiness(
+        contexto, ciclo_contexto,
+    )
+
+    saida: list = []
+    for resultado_cliente in resultado_ciclo_2.resultados_por_cliente:
+        if resultado_cliente.pacote.estado != EstadoPacotePrestacao.PRONTO:
+            continue  # fail-closed por cliente: readiness insuficiente -> zero Ordem para ele
+        resultados_do_cliente = tuple(
+            ra for ra in resultados_aquisicao
+            if ra.necessidade.cliente == resultado_cliente.cliente
+            and ra.necessidade.competencia == resultado_cliente.competencia
+        )
+        if not resultados_do_cliente:
+            continue  # PRONTO sem aquisição própria nesta execução (ex.: documento já no inventário base) -- nada a distribuir aqui
+        saida.append((resultado_cliente.cliente, resultado_cliente.competencia, resultados_do_cliente))
+    return tuple(saida)
+
+
 def executar_ciclo_prestacao_persistente(
     contexto: ContextoComposicaoPrestacao,
     execucao_id: Optional[str] = None,
@@ -887,129 +1035,16 @@ def executar_ciclo_prestacao_persistente(
             competencia_base=(int(ano_str), int(mes_str))
         )
 
-        # ==== PASSO 3: Descoberta de necessidades SEM âncora ====
-        # `executar_ciclo_prestacao_descoberta` (Incremento 2) nunca
-        # exige `resolucoes_ancora` -- usa só política+inventário já
-        # conhecido para saber o que falta. Substitui a antiga
-        # "primeira execução do ciclo" (que precisava de uma âncora já
-        # pronta em `contexto.resolucoes_ancora`, mesmo sem nenhum
-        # documento ainda adquirido -- ordem invertida em relação ao
-        # que esta missão pede).
-        inventario_vazio = InventarioPrestacaoEmMemoria()
-        resultado_descoberta = executar_ciclo_prestacao_descoberta(
-            contexto=ciclo_contexto,
-            fonte_clientes=contexto.fonte_clientes,
-            fonte_requisitos=contexto.fonte_requisitos,
-            fonte_inventario=inventario_vazio,
-            requisitos_base=contexto.requisitos_base,
-            competencias_por_cliente=contexto.competencias_por_cliente,
-            fonte_colaboradores_esperados=contexto.fonte_colaboradores_esperados,
-            tipos_obrigatorios_por_colaborador=contexto.tipos_obrigatorios_por_colaborador,
-        )
-
-        # ==== PASSO 4: Aquisição ORIENTADA POR NECESSIDADE ====
-        # Coletar todas as necessidades da descoberta.
-        necessidades: list = []
-        for resultado_cliente in resultado_descoberta.resultados_por_cliente:
-            necessidades.extend(resultado_cliente.necessidades)
-
-        # CORREÇÃO pós-Ultraplan "Correlação Necessidade → Aquisição →
-        # Resolução": `_adquirir_inventario_via_corredor` (aquisição em
-        # BLOCO, `repositorio_documentos.listar_todos()`) NÃO É MAIS
-        # chamada aqui -- não preserva nenhuma associação real entre
-        # documento e a necessidade/cliente/competência que motivou
-        # buscá-lo. `_adquirir_por_necessidades` só processa candidatos
-        # devolvidos por `contexto.fonte_candidatos_por_necessidade`
-        # para cada necessidade -- sem essa fonte (`None`, produção
-        # hoje), devolve vazio, NUNCA cai de volta para a aquisição em
-        # bloco.
-        inventario_adquirido, resultados_aquisicao = _adquirir_por_necessidades(
-            contexto, tuple(necessidades), ciclo_contexto,
-        )
-
-        # ==== PASSO 5: Seleção/validação de âncora real, por vínculo LEGÍTIMO ====
-        # CORREÇÃO pós-Ultraplan: divergência só é avaliada DENTRO do
-        # vínculo necessidade->documento preservado por `_adquirir_por_
-        # necessidades` -- nunca mais o pool GLOBAL de todas as
-        # resoluções desta execução confrontado contra cada cliente
-        # ativo (`c234d22`, também rejeitado pela mesma auditoria: gera
-        # divergência cruzada entre clientes que nunca tiveram nenhuma
-        # relação real entre si). O cliente/competência esperados de
-        # cada candidato vêm SEMPRE de `resultado_aquisicao.
-        # necessidade` (a própria necessidade que o buscou), nunca do
-        # que ele resolveu.
-        #
-        # Agrupamento por (cliente, competência): duas necessidades do
-        # MESMO cliente/competência (tipos documentais diferentes, ex.
-        # HOLERITE e FGTS) compartilham o mesmo "balde" de candidatos --
-        # a âncora é por cliente/competência, nunca por tipo. Dedup por
-        # `semantic_result_id` evita contar a MESMA resolução 2x quando
-        # o mesmo documento foi candidato de mais de 1 necessidade
-        # dessa dupla (reaproveitamento físico de `_adquirir_por_
-        # necessidades`, nunca perda da associação -- só evita inflar
-        # a contagem de "quantos candidatos concordam").
-        candidatos_por_bucket: dict = {}
-        for resultado_aquisicao in resultados_aquisicao:
-            chave_bucket = (
-                resultado_aquisicao.necessidade.cliente,
-                resultado_aquisicao.necessidade.competencia,
-            )
-            candidatos_vistos = candidatos_por_bucket.setdefault(chave_bucket, {})
-            for resultado_execucao in resultado_aquisicao.resultados_corredor:
-                resolucao = resultado_execucao.resultado_corredor.resolucao_semantica
-                if resolucao is not None:
-                    candidatos_vistos[resolucao.semantic_result_id] = resolucao
-
-        resolucoes_ancora_efetivas: dict = {}
-        for resultado_cliente in resultado_descoberta.resultados_por_cliente:
-            cliente = resultado_cliente.cliente
-            competencia = resultado_cliente.competencia
-            candidatos_do_vinculo = tuple(
-                candidatos_por_bucket.get((cliente, competencia), {}).values()
-            )
-            # `avaliar_candidatos_ancora` INALTERADA (Incremento 5) --
-            # `semantic_result_id` continua só desempate determinístico
-            # entre evidências já provadas equivalentes/concordantes,
-            # nunca decide validade nem resolve conflito.
-            avaliacao = avaliar_candidatos_ancora(candidatos_do_vinculo, cliente, competencia)
-            # SEM fallback para `contexto.resolucoes_ancora` (auditoria
-            # pós-Incremento 7: zero caller real popula esse campo
-            # hoje). Sem evidência real dentro do vínculo legítimo, o
-            # cliente fica sem âncora -- ausência tratada explicitamente
-            # adiante (Incremento 6: REVISAR / `sem_evidencia_
-            # documental_real`), nunca uma resolução fabricada nem uma
-            # pré-informada não verificável.
-            if avaliacao.ancora is not None:
-                resolucoes_ancora_efetivas[cliente] = avaliacao.ancora
-
-        # ==== PASSO 6: Compor fonte de inventário ====
-        # Usar FonteInventarioPrestacaoComposta para unir:
-        # 1. Inventário base pré-existente (se fornecido)
-        # 2. Inventário adquirido neste ciclo (documentos processados via corredor)
-        # A composição deduplica automaticamente por identidade_logica
-        # (documento_id + cliente + colaborador)
-        fontes_para_composicao = []
-        if contexto.fonte_inventario_base:
-            fontes_para_composicao.append(contexto.fonte_inventario_base)
-
-        # SEMPRE adicionar inventário adquirido (pode estar vazio, isso é OK)
-        fontes_para_composicao.append(inventario_adquirido)
-
-        fonte_composta = FonteInventarioPrestacaoComposta(
-            fontes=tuple(fontes_para_composicao)
-        )
-
-        # ==== PASSO 7: Segunda execução do ciclo (readiness com âncora real ou ausência explícita) ====
-        resultado_ciclo_2 = executar_ciclo_prestacao(
-            contexto=ciclo_contexto,
-            fonte_clientes=contexto.fonte_clientes,
-            fonte_requisitos=contexto.fonte_requisitos,
-            fonte_inventario=fonte_composta,
-            requisitos_base=contexto.requisitos_base,
-            resolucoes_ancora=resolucoes_ancora_efetivas,
-            competencias_por_cliente=contexto.competencias_por_cliente,
-            fonte_colaboradores_esperados=contexto.fonte_colaboradores_esperados,
-            tipos_obrigatorios_por_colaborador=contexto.tipos_obrigatorios_por_colaborador,
+        # ==== PASSOS 3-7: descoberta -> aquisição por necessidade ->
+        # âncora -> composição de inventário -> segunda execução do
+        # ciclo (readiness) ====
+        # Extraído para `_descobrir_adquirir_e_recalcular_readiness`
+        # (Ultraplan "Delta Final A-F -- Cliente+Competência ->
+        # PENDING"), reutilizado também por
+        # `resultados_aquisicao_prontos_por_cliente` -- comportamento
+        # idêntico ao que existia inline aqui antes da extração.
+        _resultados_aquisicao_nao_usados, resultado_ciclo_2 = (
+            _descobrir_adquirir_e_recalcular_readiness(contexto, ciclo_contexto)
         )
 
         # ==== PASSO 8: Determinar estado final ====
