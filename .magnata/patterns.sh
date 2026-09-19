@@ -1126,6 +1126,23 @@ ALLOWED_PATHS=(
   "^magnata_os/documental/modulo01/materializador_arquivo\.py$"
   "^magnata_os/documental/modulo01/adapters/materializador_arquivo_legado\.py$"
   "^test_materializador_arquivo_legado\.py$"
+  # Exceção exata e restrita (missão "DISTRIBUIÇÃO DOCUMENTAL GENÉRICA V1",
+  # branch fix/distribuicao-documental-generica-v1) — wiring genérico
+  # (Ordem -> Preview -> Autorização -> Obrigação opcional -> PlanoDisparo
+  # -> Envelope -> AcaoEnvio PENDING) para QUALQUER Documento canônico,
+  # nunca um `if` por tipo_documento no núcleo; CLI puro adapter de borda.
+  # PortaObrigacaoAssinatura pluralizada (arquivo_record_ids) -- o adapter
+  # HTTP real (AdapterObrigacaoAssinaturaLegadoHttp) TAMBÉM mudou de
+  # contrato, mas sem regressão: todos os callers (produção e teste)
+  # foram atualizados juntos nesta mesma missão; nenhum caller externo a
+  # este diff existia antes para quebrar. Só estes caminhos exatos, batidos
+  # por igualdade de string completa via âncora $ no fim. ZERO alteração em
+  # app.py, ZERO migration, ZERO transporte real durante os testes.
+  "^magnata_os/orquestrador/wiring_distribuicao_documental_shadow\.py$"
+  "^magnata_os/orquestrador/distribuir_documento_v1\.py$"
+  "^test_wiring_distribuicao_documental_shadow\.py$"
+  "^test_distribuir_documento_v1\.py$"
+  "^docs/decisoes/distribuicao-documental-colaborador-v1\.md$"
 )
 
 # ============================================================================
