@@ -1886,7 +1886,7 @@ def test_obrigatorio_necessidade_a_com_documento_que_resolve_outro_cliente_e_div
         necessidades = tuple(
             n for r in resultado_descoberta.resultados_por_cliente for n in r.necessidades
         )
-        inventario_adquirido, resultados_aquisicao = modulo._adquirir_por_necessidades(
+        inventario_adquirido, resultados_aquisicao = modulo.adquirir_por_necessidades(
             contexto_composicao, necessidades, ciclo_para_corredor,
         )
 
@@ -1988,7 +1988,7 @@ def test_obrigatorio_sem_fonte_candidatos_por_necessidade_cliente_fica_em_revisa
     from unittest.mock import patch
     with patch.object(modulo, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer'), \
          patch.object(modulo, 'executar_documento_readonly', _executar_documento_readonly_fake):
-        inventario_adquirido, resultados_aquisicao = modulo._adquirir_por_necessidades(
+        inventario_adquirido, resultados_aquisicao = modulo.adquirir_por_necessidades(
             contexto_composicao, necessidades, ciclo_para_corredor,
         )
     assert resultados_aquisicao == ()  # nenhuma aquisição rodou, mesmo com documento "perfeito" disponível
@@ -2017,7 +2017,7 @@ def test_dois_documentos_mesmo_hash_documento_id_diferente_preservam_propria_pro
     """Dois `Documento` DISTINTOS (documento_id diferente) que por
     acaso compartilham o MESMO `hash_sha256`, candidatos da MESMA
     necessidade/contexto (mesmo cliente/competência) -- cada
-    `_ResultadoAquisicaoPorNecessidade` retido precisa preservar a
+    `ResultadoAquisicaoPorNecessidade` retido precisa preservar a
     PRÓPRIA proveniência: o `resolucao_semantica.documento_id` dentro
     de `resultados_corredor` tem que bater com o `documento_id` daquele
     MESMO registro, nunca com o de outro documento reaproveitado do
@@ -2084,7 +2084,7 @@ def test_dois_documentos_mesmo_hash_documento_id_diferente_preservam_propria_pro
     )
     ciclo_para_corredor = ContextoCicloPrestacao(competencia_base=(2026, 9))
 
-    inventario_adquirido, resultados_aquisicao = modulo._adquirir_por_necessidades(
+    inventario_adquirido, resultados_aquisicao = modulo.adquirir_por_necessidades(
         contexto_composicao, (necessidade,), ciclo_para_corredor,
     )
 

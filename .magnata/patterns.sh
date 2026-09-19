@@ -1143,6 +1143,27 @@ ALLOWED_PATHS=(
   "^test_wiring_distribuicao_documental_shadow\.py$"
   "^test_distribuir_documento_v1\.py$"
   "^docs/decisoes/distribuicao-documental-colaborador-v1\.md$"
+
+  # Incremento vertical Prestação -> OrdemDistribuicaoDocumental -> PENDING
+  # V1 (Ultraplan "Incremento Vertical Prestação -> Ordem -> PENDING"):
+  # preset_id -> política (nunca tipo_documento -> política), elo fino
+  # Prestação -> Distribuição Documental Genérica, e teste Postgres real
+  # do núcleo genérico. Rename de visibilidade em
+  # composicao_ciclo_persistente_prestacao.py já coberto pelo padrão
+  # existente desse arquivo (não repetido aqui). ZERO alteração em
+  # app.py, ZERO migration nova, ZERO transporte real.
+  "^magnata_os/orquestrador/politica_preset_distribuicao_documental\.py$"
+  "^magnata_os/orquestrador/wiring_prestacao_distribuicao_documental_shadow\.py$"
+  "^test_wiring_prestacao_distribuicao_documental_shadow\.py$"
+  "^test_wiring_distribuicao_documental_shadow_real\.py$"
+  "^docs/decisoes/prestacao-distribuicao-documental-v1\.md$"
+
+  # Delta Final A-F (Ultraplan "Cliente+Competência -> PENDING"): teste
+  # do composition root `executar_prestacao_ate_distribuicao_
+  # documental_shadow` -- fecha o trecho upstream (requisitos/
+  # necessidades/aquisição/readiness/pacote) até o elo G-P acima. ZERO
+  # migration, ZERO app.py, ZERO transporte real.
+  "^test_wiring_prestacao_ate_distribuicao_documental_shadow\.py$"
 )
 
 # ============================================================================
