@@ -22,6 +22,7 @@ from magnata_os.documental.modulo01.dominio import Documento, StatusDocumento
 from magnata_os.documental.modulo01.materializador_arquivo import ResultadoMaterializacao
 from magnata_os.documental.modulo01.repositorio import RepositorioDocumentosEmMemoria
 from magnata_os.orquestrador.autorizacao_gate import RepositorioAutorizacoesGateEmMemoria
+from magnata_os.orquestrador.eventos import EstadoExecucao, Sensibilidade, TipoEvento
 from magnata_os.orquestrador.obrigacao_assinatura import ObrigacaoAssinatura
 from magnata_os.orquestrador.politica_preset_distribuicao_documental import (
     PresetDistribuicaoDocumentalDesconhecido,
@@ -29,15 +30,21 @@ from magnata_os.orquestrador.politica_preset_distribuicao_documental import (
 from magnata_os.orquestrador.repositorio_acoes_execucao_plano_postgres import (
     RepositorioAcoesExecucaoPlanoPostgres,
 )
+from magnata_os.orquestrador.repositorio_execucoes import RepositorioExecucoesEmMemoria
 from magnata_os.orquestrador.wiring_distribuicao_documental_shadow import (
     InconsistenciaOrdemDocumento,
     ItemDocumentoOrdem,
+    derivar_identidade_ordem_distribuicao,
 )
 from magnata_os.orquestrador.wiring_prestacao_distribuicao_documental_shadow import (
     ColaboradorAusenteNaNecessidade,
     ColaboradorDivergenteEntreDocumentos,
+    EventoCanonicoNaoAguardaGate,
+    PrestacaoDistribuicaoDocumentalError,
     materializar_prestacao_distribuicao_documental_shadow,
+    montar_evento_canonico_ordem_distribuicao_documental,
     montar_ordem_distribuicao_documental_de_prestacao,
+    registrar_evento_canonico_ordem_distribuicao_documental_shadow,
 )
 
 AGORA = datetime(2099, 1, 1, tzinfo=timezone.utc)
@@ -175,6 +182,7 @@ def _montar_dependencias():
     return {
         'repositorio_documentos': RepositorioDocumentosEmMemoria(),
         'armazenamento': ArmazenamentoArquivosEmMemoria(),
+        'repositorio_execucoes': RepositorioExecucoesEmMemoria(),
         'repositorio_autorizacoes': RepositorioAutorizacoesGateEmMemoria(),
         'repositorio_acoes': RepositorioAcoesExecucaoPlanoPostgres(conexao),
     }, conexao
@@ -498,6 +506,336 @@ def test_documento_hash_divergente_propaga_erro_do_nucleo_sem_mascarar():
             ator_referencia='ator:teste', proveniencia='teste_v1', instante=AGORA,
             **deps,
         )
+
+
+# ---------------------------------------------------------------------
+# Ponte Ordem -> Evento canônico (COMUNICACAO_SOLICITADA)
+# ---------------------------------------------------------------------
+
+def _ordem_minima(*, destinatario='5511999999999', funcionario_id='colab-evento-1'):
+    return montar_ordem_distribuicao_documental_de_prestacao(
+        resultados_aquisicao=(
+            ResultadoAquisicaoPorNecessidade(
+                necessidade=_necessidade(colaborador=_colaborador(funcionario_id)),
+                documento_id='doc-evento-1', hash_sha256='a' * 64,
+            ),
+        ),
+        destinatario=destinatario, preset_id='DOCUMENTO_UNITARIO_SEM_ASSINATURA',
+        tipo_documento='COMUNICADO', mensagem_texto='Segue:',
+    )
+
+
+def test_evento_canonico_tem_campos_exatos():
+    ordem = _ordem_minima()
+    evento = montar_evento_canonico_ordem_distribuicao_documental(ordem=ordem, instante=AGORA)
+    event_id_esperado = derivar_identidade_ordem_distribuicao(ordem)
+
+    assert evento.event_id == event_id_esperado
+    assert evento.event_type == TipoEvento.COMUNICACAO_SOLICITADA
+    assert evento.source == 'distribuicao_documental'
+    assert evento.entity_type == 'ORDEM_DISTRIBUICAO_DOCUMENTAL'
+    assert evento.entity_id == event_id_esperado
+    assert evento.payload_referencia == f'ordem:{event_id_esperado}'
+    assert evento.correlation_id == 'funcionario:colab-evento-1'
+    assert evento.sensibilidade == Sensibilidade.INTERNO
+    assert evento.proveniencia == 'wiring_prestacao_distribuicao_documental_shadow_v1'
+    assert evento.occurred_at == AGORA
+    assert evento.received_at == AGORA
+    # nunca telefone/texto no envelope persistido
+    assert '5511999999999' not in evento.payload_referencia
+    assert 'Segue' not in evento.payload_referencia
+
+
+def test_evento_canonico_exige_instante_com_timezone():
+    ordem = _ordem_minima()
+    with pytest.raises(PrestacaoDistribuicaoDocumentalError):
+        montar_evento_canonico_ordem_distribuicao_documental(ordem=ordem, instante=datetime(2099, 1, 1))
+
+
+def test_mesma_ordem_produz_mesmo_event_id_evento_diferente_produz_id_diferente():
+    ordem_a = _ordem_minima(funcionario_id='colab-x')
+    ordem_a_de_novo = _ordem_minima(funcionario_id='colab-x')
+    ordem_b = _ordem_minima(funcionario_id='colab-y')
+
+    evento_a = montar_evento_canonico_ordem_distribuicao_documental(ordem=ordem_a, instante=AGORA)
+    evento_a2 = montar_evento_canonico_ordem_distribuicao_documental(ordem=ordem_a_de_novo, instante=AGORA)
+    evento_b = montar_evento_canonico_ordem_distribuicao_documental(ordem=ordem_b, instante=AGORA)
+
+    assert evento_a.event_id == evento_a2.event_id
+    assert evento_a.event_id != evento_b.event_id
+
+
+def test_registrar_evento_canonico_cria_execucao_em_waiting_gate():
+    repositorio_execucoes = RepositorioExecucoesEmMemoria()
+    ordem = _ordem_minima()
+
+    execucao = registrar_evento_canonico_ordem_distribuicao_documental_shadow(
+        ordem=ordem, repositorio_execucoes=repositorio_execucoes, instante=AGORA,
+    )
+
+    assert execucao.estado == EstadoExecucao.WAITING_GATE
+    assert execucao.event_type == TipoEvento.COMUNICACAO_SOLICITADA.value
+    assert execucao.event_id == derivar_identidade_ordem_distribuicao(ordem)
+    persistido = repositorio_execucoes.buscar_por_event_id(execucao.event_id)
+    assert persistido is not None
+    assert persistido.estado == EstadoExecucao.WAITING_GATE
+
+
+def test_registrar_evento_canonico_replay_nao_duplica():
+    repositorio_execucoes = RepositorioExecucoesEmMemoria()
+    ordem = _ordem_minima()
+
+    primeiro = registrar_evento_canonico_ordem_distribuicao_documental_shadow(
+        ordem=ordem, repositorio_execucoes=repositorio_execucoes, instante=AGORA,
+    )
+    segundo = registrar_evento_canonico_ordem_distribuicao_documental_shadow(
+        ordem=ordem, repositorio_execucoes=repositorio_execucoes, instante=AGORA,
+    )
+
+    assert primeiro.event_id == segundo.event_id
+    assert len(repositorio_execucoes.listar_todos()) == 1
+
+
+def test_registrar_evento_canonico_concorrencia_nao_duplica():
+    """Corrida em `criar_se_novo` -- só um vencedor cria a linha;
+    nenhuma dupla materialização em `execucoes` (mesma técnica de prova
+    já usada pelo núcleo do motor: threading.Barrier forçando a
+    corrida).
+
+    Achado real, não introduzido por esta ponte: `criar_se_novo`/
+    `reivindicar_retry` são atômicos (lock explícito em `Repositorio
+    Execucoes EmMemoria`), mas as transições internas de `Motor
+    Orquestrador.processar` (RECEIVED -> VALIDATED -> CLASSIFIED ->
+    WAITING_GATE) NÃO são -- um chamador que perde a corrida de criação
+    pode observar `RegistroExecucao` num estado intermediário do
+    vencedor (nunca duplicado, mas transitoriamente não-terminal), e
+    nesse caso esta ponte falha fechado (`EventoCanonicoNaoAguardaGate`)
+    em vez de prosseguir sobre uma garantia ainda não estabelecida --
+    correto por construção, mas registrado aqui como comportamento
+    pré-existente de `motor.py`/`repositorio_execucoes.py` (fora do
+    escopo desta missão alterar). A invariante real e forte, provada
+    abaixo, é: nenhuma segunda linha é criada, e o estado final
+    (após toda a corrida) converge para `WAITING_GATE`."""
+    import threading
+
+    repositorio_execucoes = RepositorioExecucoesEmMemoria()
+    ordem = _ordem_minima()
+    n_threads = 8
+    barreira = threading.Barrier(n_threads)
+    resultados = []
+    falhas_fail_closed = []
+
+    def _tentar():
+        barreira.wait()
+        try:
+            resultados.append(
+                registrar_evento_canonico_ordem_distribuicao_documental_shadow(
+                    ordem=ordem, repositorio_execucoes=repositorio_execucoes, instante=AGORA,
+                )
+            )
+        except EventoCanonicoNaoAguardaGate as exc:
+            falhas_fail_closed.append(exc)
+
+    threads = [threading.Thread(target=_tentar) for _ in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Nenhuma segunda linha materializada -- a invariante que importa.
+    assert len(repositorio_execucoes.listar_todos()) == 1
+    assert len(resultados) + len(falhas_fail_closed) == n_threads
+    if resultados:
+        assert len({r.event_id for r in resultados}) == 1
+    # Estado final, após a corrida, converge para WAITING_GATE -- o
+    # vencedor sempre termina a sequência de transições.
+    final = repositorio_execucoes.buscar_por_event_id(derivar_identidade_ordem_distribuicao(ordem))
+    assert final.estado == EstadoExecucao.WAITING_GATE
+
+
+def test_evento_canonico_fail_closed_quando_motor_nao_atinge_waiting_gate():
+    """Prova de fail-closed: se o registro já existir em estado
+    terminal (nunca WAITING_GATE), a ponte nunca finge sucesso --
+    levanta `EventoCanonicoNaoAguardaGate` em vez de prosseguir para
+    autorização/distribuição sobre uma garantia falsa."""
+    import dataclasses as _dc
+
+    repositorio_execucoes = RepositorioExecucoesEmMemoria()
+    ordem = _ordem_minima()
+    event_id = derivar_identidade_ordem_distribuicao(ordem)
+    evento = montar_evento_canonico_ordem_distribuicao_documental(ordem=ordem, instante=AGORA)
+    from magnata_os.orquestrador.motor import _serializar_evento
+    from magnata_os.orquestrador.repositorio_execucoes import RegistroExecucao
+
+    repositorio_execucoes.criar_se_novo(RegistroExecucao(
+        event_id=event_id, event_type=evento.event_type.value,
+        estado=EstadoExecucao.SUCCEEDED, nivel_autonomia=0, acao='',
+        resultado=None, evidencia=None, attempt=0, next_retry_at=None,
+        last_error_classe=None, last_error_at=None, criado_em=AGORA, atualizado_em=AGORA,
+        evento_json=_serializar_evento(evento),
+    ))
+
+    # Evento duplicado num estado terminal diferente de WAITING_GATE
+    # nunca deveria acontecer em uso normal (nenhuma Acao é registrada
+    # para COMUNICACAO_SOLICITADA); simulado aqui só para provar que a
+    # ponte falha fechado em vez de prosseguir silenciosamente.
+    with pytest.raises(EventoCanonicoNaoAguardaGate):
+        registrar_evento_canonico_ordem_distribuicao_documental_shadow(
+            ordem=ordem, repositorio_execucoes=repositorio_execucoes, instante=AGORA,
+        )
+
+
+def test_ausencia_de_execucao_bloqueia_autorizacao_fail_closed():
+    """Sem passar pela ponte (sem `execucoes` semeado), a autorização
+    explícita via `registrar_decisao_gate_shadow` -- caminho canônico
+    de gate humano para `COMUNICACAO_SOLICITADA` -- recusa fail-closed,
+    provando que a linha em `execucoes` é pré-requisito real, não
+    cosmético."""
+    from magnata_os.orquestrador.autorizacao_gate import (
+        AutorizacaoGateError, DecisaoGate, registrar_decisao_gate_shadow,
+    )
+
+    repositorio_execucoes = RepositorioExecucoesEmMemoria()
+    repositorio_autorizacoes = RepositorioAutorizacoesGateEmMemoria()
+    ordem = _ordem_minima()
+    event_id = derivar_identidade_ordem_distribuicao(ordem)
+
+    with pytest.raises(AutorizacaoGateError):
+        registrar_decisao_gate_shadow(
+            repositorio_execucoes=repositorio_execucoes,
+            repositorio_autorizacoes=repositorio_autorizacoes,
+            event_id=event_id, preview_id='preview-qualquer',
+            decisao=DecisaoGate.AUTORIZADO, ator_referencia='ator:teste',
+            proveniencia='teste_v1', instante=AGORA,
+        )
+
+
+# ---------------------------------------------------------------------
+# E2E Postgres real/efêmero -- ponte Ordem -> Evento canônico ate PENDING
+# ---------------------------------------------------------------------
+
+@pytest.mark.skipif(
+    not __import__('os').environ.get('MAGNATA_TEST_POSTGRES_REAL'),
+    reason='E2E habilitado somente contra PostgreSQL real e controlado',
+)
+def test_e2e_postgres_real_ponte_execucoes_ate_pending_sem_seed_manual():
+    """Prova a cadeia completa contra Postgres real/efêmero, migrations
+    0001-0004: `execucoes` (COMUNICACAO_SOLICITADA, WAITING_GATE) ->
+    `autorizacoes_gate` -> `acoes_execucao_plano` (PENDING) -- SEM
+    nenhum `INSERT` manual de seed em `execucoes` (ao contrário de
+    `test_wiring_distribuicao_documental_shadow_real.py`, que testa o
+    núcleo isolado e por isso precisa de `_semear_execucao_se_ausente`):
+    aqui é a PRÓPRIA ponte (`materializar_prestacao_distribuicao_
+    documental_shadow`, que agora chama `registrar_evento_canonico_
+    ordem_distribuicao_documental_shadow` antes do núcleo) quem fecha a
+    FK. Núcleo genérico (`wiring_distribuicao_documental_shadow.py`)
+    continua intocado -- reutilizado como está."""
+    from pathlib import Path
+
+    psycopg = pytest.importorskip('psycopg', reason='driver psycopg (v3) nao instalado')
+    from magnata_os.orquestrador.repositorio_autorizacoes_gate_postgres import (
+        RepositorioAutorizacoesGatePostgres,
+    )
+    from magnata_os.orquestrador.repositorio_execucoes_postgres import RepositorioExecucoesPostgres
+    from magnata_os.orquestrador.repositorio_acoes_execucao_plano_postgres import (
+        EstadoAcaoExecucaoPlano,
+    )
+
+    raiz_migrations = Path(__file__).parent / 'magnata_os' / 'orquestrador' / 'migrations'
+    migrations = tuple(
+        (raiz_migrations / nome).read_text(encoding='utf-8')
+        for nome in (
+            '0001_repositorio_execucoes.sql', '0002_autorizacoes_gate.sql',
+            '0003_acoes_execucao_plano.sql', '0004_envelope_execucao_autorizada.sql',
+        )
+    )
+    instante = datetime(2099, 3, 1, 12, 0, tzinfo=timezone.utc)
+    destinatario = 'destinatario:e2e:ponte:evento:sintetico'
+
+    def _aplicar_migrations_se_ausentes(conn):
+        with conn.cursor() as cursor:
+            for nome_tabela, migration in zip(
+                ('execucoes', 'autorizacoes_gate', 'acoes_execucao_plano'), migrations[:3],
+            ):
+                cursor.execute("SELECT to_regclass(%s)", (f'magnata_orquestrador.{nome_tabela}',))
+                if cursor.fetchone()[0] is None:
+                    cursor.execute(migration)
+            cursor.execute(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema='magnata_orquestrador' "
+                "AND table_name='acoes_execucao_plano' AND column_name='envelope_sha256'"
+            )
+            if cursor.fetchone() is None:
+                cursor.execute(migrations[3])
+        conn.commit()
+
+    conn = psycopg.connect(cursor_factory=psycopg.ClientCursor)
+    repositorio_documentos = RepositorioDocumentosEmMemoria()
+    armazenamento = ArmazenamentoArquivosEmMemoria()
+    try:
+        _aplicar_migrations_se_ausentes(conn)
+        documento = _preparar_documento(
+            repositorio_documentos, armazenamento,
+            documento_id='documento-e2e-ponte-evento', conteudo=b'e2e-ponte-evento-canonico-v1',
+        )
+        colaborador = _colaborador('colab-e2e-ponte-evento')
+        resultado = _resultado_aquisicao(documento, colaborador=colaborador)
+
+        repositorio_execucoes = RepositorioExecucoesPostgres(conn)
+        repositorio_autorizacoes = RepositorioAutorizacoesGatePostgres(conn)
+        repositorio_acoes = RepositorioAcoesExecucaoPlanoPostgres(conn)
+
+        kwargs = dict(
+            resultados_aquisicao=(resultado,), destinatario=destinatario,
+            preset_id='DOCUMENTO_UNITARIO_SEM_ASSINATURA', tipo_documento='COMUNICADO',
+            mensagem_texto='E2E sintético da ponte Ordem->Evento canônico.',
+            repositorio_documentos=repositorio_documentos, armazenamento=armazenamento,
+            materializador=None, porta_assinatura=None,
+            repositorio_execucoes=repositorio_execucoes,
+            repositorio_autorizacoes=repositorio_autorizacoes, repositorio_acoes=repositorio_acoes,
+            ator_referencia='ator:e2e:ponte:evento', proveniencia='e2e_ponte_evento_v1',
+            instante=instante,
+        )
+
+        primeiro = materializar_prestacao_distribuicao_documental_shadow(**kwargs)
+        segundo = materializar_prestacao_distribuicao_documental_shadow(**kwargs)
+
+        assert primeiro.event_id == segundo.event_id
+        assert primeiro.acao_execucao_id == segundo.acao_execucao_id
+        assert primeiro.assinatura_link is None
+
+        execucao = repositorio_execucoes.buscar_por_event_id(primeiro.event_id)
+        assert execucao is not None
+        assert execucao.event_type == TipoEvento.COMUNICACAO_SOLICITADA.value
+        assert execucao.estado == EstadoExecucao.WAITING_GATE
+
+        with conn.cursor() as cursor:
+            cursor.execute(
+                'SELECT COUNT(*) FROM magnata_orquestrador.execucoes WHERE event_id = %s',
+                (primeiro.event_id,),
+            )
+            (quantidade_execucoes,) = cursor.fetchone()
+        assert quantidade_execucoes == 1  # replay nao duplicou execucoes
+
+        with conn.cursor() as cursor:
+            cursor.execute(
+                'SELECT COUNT(*) FROM magnata_orquestrador.autorizacoes_gate WHERE event_id = %s',
+                (primeiro.event_id,),
+            )
+            (quantidade_autorizacoes,) = cursor.fetchone()
+        assert quantidade_autorizacoes == 1  # replay nao duplicou autorizacao
+
+        with conn.cursor() as cursor:
+            cursor.execute(
+                'SELECT COUNT(*), MAX(estado) FROM magnata_orquestrador.acoes_execucao_plano '
+                'WHERE acao_execucao_id = %s',
+                (primeiro.acao_execucao_id,),
+            )
+            quantidade_acoes, estado_acao = cursor.fetchone()
+        assert quantidade_acoes == 1  # replay nao duplicou a acao PENDING
+        assert estado_acao == EstadoAcaoExecucaoPlano.PENDING.value
+    finally:
+        conn.close()
 
 
 def test_zero_import_de_transporte_ou_evolution_neste_wiring():

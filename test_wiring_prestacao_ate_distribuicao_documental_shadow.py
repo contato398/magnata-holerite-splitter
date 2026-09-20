@@ -43,6 +43,7 @@ from magnata_os.orquestrador.politica_preset_distribuicao_documental import (
 from magnata_os.orquestrador.repositorio_acoes_execucao_plano_postgres import (
     RepositorioAcoesExecucaoPlanoPostgres,
 )
+from magnata_os.orquestrador.repositorio_execucoes import RepositorioExecucoesEmMemoria
 from magnata_os.orquestrador.wiring_prestacao_distribuicao_documental_shadow import (
     ParametrosOrdemPrestacao,
     PrestacaoDistribuicaoDocumentalError,
@@ -231,6 +232,7 @@ def _deps_nucleo():
     return {
         'repositorio_documentos': RepositorioDocumentosEmMemoria(),
         'armazenamento': ArmazenamentoArquivosEmMemoria(),
+        'repositorio_execucoes': RepositorioExecucoesEmMemoria(),
         'repositorio_autorizacoes': RepositorioAutorizacoesGateEmMemoria(),
         'repositorio_acoes': RepositorioAcoesExecucaoPlanoPostgres(conexao),
     }, conexao
