@@ -528,6 +528,16 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # (ver .magnata/patterns.sh para o detalhamento completo).
   "test_postgres_repositorio_esteira.py"
   "test_postgres_repositorio_esteira_real.py"
+  # CONTATO CANÔNICO DE COLABORADOR V1 -- testes nominais da fonte
+  # interna de contato/WhatsApp, bootstrap transitório e resolvedor real
+  # de ResolverParametrosOrdemPrestacao (ver .magnata/patterns.sh para o
+  # detalhamento completo da exceção).
+  "test_contato_colaborador.py"
+  "test_configuracao_contato_colaborador.py"
+  "test_postgres_contato_colaborador.py"
+  "test_bootstrap_contato_colaborador_airtable.py"
+  "test_resolver_parametros_ordem_prestacao_contato_v1.py"
+  "test_integracao_prestacao_contato_ate_pending.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
