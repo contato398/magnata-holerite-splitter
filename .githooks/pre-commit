@@ -523,6 +523,11 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # DELTA FINAL A-F -- teste do composition root Cliente+Competência ->
   # PENDING (ver .magnata/patterns.sh para o detalhamento completo).
   "test_wiring_prestacao_ate_distribuicao_documental_shadow.py"
+  # ADAPTERS POSTGRES DURÁVEIS DE LOTE/ESTEIRA -- testes nominais dos
+  # adapters RepositorioLotesPostgres/RepositorioEstadosEsteiraPostgres
+  # (ver .magnata/patterns.sh para o detalhamento completo).
+  "test_postgres_repositorio_esteira.py"
+  "test_postgres_repositorio_esteira_real.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

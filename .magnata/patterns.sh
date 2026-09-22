@@ -1164,6 +1164,16 @@ ALLOWED_PATHS=(
   # necessidades/aquisição/readiness/pacote) até o elo G-P acima. ZERO
   # migration, ZERO app.py, ZERO transporte real.
   "^test_wiring_prestacao_ate_distribuicao_documental_shadow\.py$"
+
+  # Adapters Postgres duráveis para RepositorioLotes/RepositorioEstadosEsteira
+  # (Ultraplan "Adapter Postgres durável para lote/esteira documental"):
+  # persistência real de LoteDocumental/EstadoEsteiraDocumento contra as
+  # tabelas já existentes (migrations 0005/0006, nenhuma migration nova).
+  # ZERO alteração em composicao.py/Protocols/ServicoCriacaoLote/
+  # ServicoEntradaDocumental, ZERO Airtable/Gmail, ZERO transporte real.
+  "^magnata_os/documental/modulo01/adapters/postgres_repositorio_esteira\.py$"
+  "^test_postgres_repositorio_esteira\.py$"
+  "^test_postgres_repositorio_esteira_real\.py$"
 )
 
 # ============================================================================
