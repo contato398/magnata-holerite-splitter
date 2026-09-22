@@ -543,6 +543,11 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # canônico antes de materializar), PDF -> Documento -> Ordem ->
   # Evento -> PENDING, sem Airtable/Gmail/transporte real.
   "test_distribuir_documento_v1_real.py"
+  # AUDITORIA CANÔNICA DO ELO -- testes nominais da composição nova que
+  # fecha o gap de integração Prestação -> Contato Canônico (ver
+  # .magnata/patterns.sh para o detalhamento completo).
+  "test_executar_prestacao_contato_ate_pending_shadow_v1.py"
+  "test_executar_prestacao_contato_ate_pending_shadow_v1_real.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
