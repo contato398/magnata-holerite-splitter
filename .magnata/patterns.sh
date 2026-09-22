@@ -1174,6 +1174,34 @@ ALLOWED_PATHS=(
   "^magnata_os/documental/modulo01/adapters/postgres_repositorio_esteira\.py$"
   "^test_postgres_repositorio_esteira\.py$"
   "^test_postgres_repositorio_esteira_real\.py$"
+
+  # CONTATO CANÔNICO DE COLABORADOR V1 (implementação LOCAL, gate
+  # pré-publicação — nada aplicado/commitado fora desta branch de
+  # trabalho): fonte interna e durável de contato/WhatsApp por
+  # colaborador (Protocol + EmMemoria + Postgres), bootstrap transitório
+  # Airtable -> fonte interna (nunca em runtime de resolução), e a
+  # primeira implementação real de `ResolverParametrosOrdemPrestacao`
+  # (assinatura intocada). Retenção reversível (Fernet) com hash
+  # auxiliar HMAC separado só para deduplicação/conflito — nunca hash
+  # puro como valor principal, nunca texto puro. `requirements.txt` já
+  # está liberado por caminho exato (entrada acima, linha ~1073,
+  # originalmente para `boto3`) — reaproveitado aqui, sem entrada nova,
+  # para a adição mínima e comentada de `cryptography` (Fernet). ZERO
+  # alteração em app.py, ZERO migration aplicada (0004 permanece
+  # INERTE), ZERO transporte real durante os testes.
+  "^magnata_os/documental/alocacao/contato_colaborador\.py$"
+  "^magnata_os/documental/alocacao/configuracao_contato_colaborador\.py$"
+  "^magnata_os/documental/alocacao/adapters/postgres_contato_colaborador\.py$"
+  "^magnata_os/documental/alocacao/migrations/0004_criar_contato_colaborador_observado\.sql$"
+  "^magnata_os/documental/alocacao/migrations/0004_criar_contato_colaborador_observado_rollback\.sql$"
+  "^magnata_os/documental/importacao_lote/adapters/bootstrap_contato_colaborador_airtable\.py$"
+  "^magnata_os/orquestrador/resolver_parametros_ordem_prestacao_contato_v1\.py$"
+  "^test_contato_colaborador\.py$"
+  "^test_configuracao_contato_colaborador\.py$"
+  "^test_postgres_contato_colaborador\.py$"
+  "^test_bootstrap_contato_colaborador_airtable\.py$"
+  "^test_resolver_parametros_ordem_prestacao_contato_v1\.py$"
+  "^test_integracao_prestacao_contato_ate_pending\.py$"
 )
 
 # ============================================================================
