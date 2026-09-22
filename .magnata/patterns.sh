@@ -1211,6 +1211,29 @@ ALLOWED_PATHS=(
   # fechando a FK de execucoes que faltava. ZERO migration, ZERO
   # composicao.py, ZERO Airtable/Gmail, ZERO transporte real.
   "^test_distribuir_documento_v1_real\.py$"
+
+  # AUDITORIA CANÔNICA DO ELO -- fecha o GAP DE INTEGRAÇÃO identificado:
+  # `executar_prestacao_ate_distribuicao_documental_shadow` (Prestação,
+  # intocado) e `construir_resolvedor_parametros_ordem_prestacao_
+  # contato_v1` (Contato Canônico, intocado) só se encontravam em
+  # test_integracao_prestacao_contato_ate_pending.py -- nenhum código de
+  # produção os ligava. `executar_prestacao_contato_ate_pending_v1.py` é
+  # a única peça nova: composição pura (zero leitura de ambiente na
+  # função principal) que constrói o resolvedor real e delega
+  # inteiramente ao wiring já existente. Compositores de ambiente
+  # (`compor_repositorio_contato_a_partir_do_ambiente`, `compor_chave_
+  # fernet_contato_a_partir_do_ambiente`) reaproveitam Postgres real já
+  # existente -- nenhum cliente Airtable novo, nenhuma regra de negócio
+  # nova. `ContextoComposicaoPrestacao` real (Fonte* Airtable) permanece
+  # gap separado e futuro, nunca composto por este módulo. ZERO
+  # alteração em app.py, motor.py, politica_autonomia.py, autorizacao_
+  # transporte_real.py, ciclo_producao_v1.py, no núcleo genérico de
+  # distribuição ou no núcleo de Contato Canônico. ZERO migration nova
+  # (reaproveita 0004 de alocacao/migrations/, já existente, ainda
+  # INERTE). ZERO transporte real.
+  "^magnata_os/orquestrador/executar_prestacao_contato_ate_pending_v1\.py$"
+  "^test_executar_prestacao_contato_ate_pending_v1\.py$"
+  "^test_executar_prestacao_contato_ate_pending_v1_real\.py$"
 )
 
 # ============================================================================
