@@ -1,4 +1,4 @@
-"""Testes de `executar_prestacao_contato_ate_pending_v1.py` -- a peça
+"""Testes de `executar_prestacao_contato_ate_pending_shadow_v1.py` -- a peça
 nova que fecha o gap de integração (ver "AUDITORIA CANÔNICA DO ELO"):
 liga `executar_prestacao_ate_distribuicao_documental_shadow` (Prestação,
 intocado) ao resolvedor real do Contato Canônico do Colaborador
@@ -59,11 +59,11 @@ from magnata_os.orquestrador.wiring_distribuicao_documental_shadow import (
 from magnata_os.orquestrador.wiring_prestacao_distribuicao_documental_shadow import (
     montar_ordem_distribuicao_documental_de_prestacao,
 )
-import magnata_os.orquestrador.executar_prestacao_contato_ate_pending_v1 as modulo_composicao_v1
-from magnata_os.orquestrador.executar_prestacao_contato_ate_pending_v1 import (
+import magnata_os.orquestrador.executar_prestacao_contato_ate_pending_shadow_v1 as modulo_composicao_v1
+from magnata_os.orquestrador.executar_prestacao_contato_ate_pending_shadow_v1 import (
     compor_chave_fernet_contato_a_partir_do_ambiente,
     compor_repositorio_contato_a_partir_do_ambiente,
-    executar_prestacao_contato_ate_pending_v1,
+    executar_prestacao_contato_ate_pending_shadow_v1,
 )
 
 AGORA = datetime(2099, 1, 1, tzinfo=timezone.utc)
@@ -284,7 +284,7 @@ def _rodar(cliente, colaborador, repositorio_contato, chave_fernet, documento_id
          patch.object(modulo_composicao, 'executar_documento_readonly', fake_executor):
         deps['repositorio_documentos'].salvar(documento)
         deps['armazenamento'].armazenar(hash_sha256, conteudo, 'application/pdf', 'doc.pdf', len(conteudo))
-        resultados = executar_prestacao_contato_ate_pending_v1(
+        resultados = executar_prestacao_contato_ate_pending_shadow_v1(
             contexto=contexto, repositorio_contato=repositorio_contato, chave_fernet=chave_fernet,
             preset_id='DOCUMENTO_UNITARIO_SEM_ASSINATURA', tipo_documento='HOLERITE',
             montar_mensagem_texto=_mensagem_texto,

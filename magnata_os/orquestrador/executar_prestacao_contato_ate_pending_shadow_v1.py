@@ -1,4 +1,5 @@
-"""Composição de produção V1: fecha a costura entre a aquisição da
+"""SHADOW -- prova integrada até PENDING, NUNCA composition root
+operacional de produção. Fecha a costura entre a aquisição da
 Prestação (`executar_prestacao_ate_distribuicao_documental_shadow`,
 `wiring_prestacao_distribuicao_documental_shadow.py`, já existente e
 intocado) e o resolvedor real do Contato Canônico do Colaborador
@@ -8,8 +9,22 @@ intocado) -- até esta correção, os dois só se encontravam em
 `test_integracao_prestacao_contato_ate_pending.py`; nenhum código de
 produção os ligava.
 
+**AVISO DE SEGURANÇA -- LER ANTES DE REUTILIZAR (correção pós-auditoria
+final do PR #181):** o nome deste módulo/função leva `_shadow_` de
+propósito. A cadeia que ele fecha termina em PENDING usando
+`autorizar_preview_assinatura_shadow` -- uma autorização SINTÉTICA,
+criada automaticamente pela composição para provar a integração, NUNCA
+uma decisão humana real. Isso é correto e suficiente para PROVAR esta
+etapa (Gate A/F da auditoria), mas **nunca deve ser lido, chamado ou
+apresentado como um entrypoint operacional de produção**. Um runtime
+real que de fato dispare uma ação a partir de PENDING para um
+colaborador real precisará, antes disso, obter autorização LEGÍTIMA
+depois de `WAITING_GATE` (decisão humana real, não esta função) -- isso
+é trabalho de uma fase futura e distinta, com seus próprios gates
+(G/H/I da auditoria), nunca decidido silenciosamente aqui.
+
 GAP FECHADO (ver auditoria "AUDITORIA CANÔNICA DO ELO", classificação
-"GAP DE INTEGRAÇÃO"): este módulo é a ÚNICA peça nova de produção --
+"GAP DE INTEGRAÇÃO"): este módulo é a ÚNICA peça nova desta correção --
 não duplica nem reescreve nenhuma regra de composição, preview,
 autorização, plano, envelope ou persistência já existente em
 `wiring_prestacao_distribuicao_documental_shadow.py`/`wiring_
@@ -94,13 +109,13 @@ from .wiring_prestacao_distribuicao_documental_shadow import (
 )
 
 __all__ = [
-    'executar_prestacao_contato_ate_pending_v1',
+    'executar_prestacao_contato_ate_pending_shadow_v1',
     'compor_repositorio_contato_a_partir_do_ambiente',
     'compor_chave_fernet_contato_a_partir_do_ambiente',
 ]
 
 
-def executar_prestacao_contato_ate_pending_v1(
+def executar_prestacao_contato_ate_pending_shadow_v1(
     *,
     contexto: ContextoComposicaoPrestacao,
     repositorio_contato: RepositorioContatoColaborador,
@@ -120,11 +135,14 @@ def executar_prestacao_contato_ate_pending_v1(
     instante: datetime,
     canal: str = CANAL_WHATSAPP,
 ) -> Tuple[ResultadoDistribuicaoDocumentalShadow, ...]:
-    """Composição pura (zero I/O de ambiente aqui -- tudo já vem
-    pronto por parâmetro) que fecha CLIENTE+COMPETÊNCIA -> pacote
-    PRONTO -> destinatário resolvido pelo Contato Canônico -> Ordem ->
-    Evento -> WAITING_GATE -> Preview -> autorização shadow -> Plano ->
-    Envelope -> AÇÃO PENDING, sem transporte real.
+    """SHADOW -- prova integrada, NÃO composition root operacional de
+    produção (ver aviso de segurança no topo do módulo). Composição
+    pura (zero I/O de ambiente aqui -- tudo já vem pronto por
+    parâmetro) que fecha CLIENTE+COMPETÊNCIA -> pacote PRONTO ->
+    destinatário resolvido pelo Contato Canônico -> Ordem -> Evento ->
+    WAITING_GATE -> Preview -> autorização SHADOW (sintética, nunca
+    decisão humana real) -> Plano -> Envelope -> AÇÃO PENDING, sem
+    transporte real.
 
     Constrói o resolvedor real (`construir_resolvedor_parametros_
     ordem_prestacao_contato_v1`) sobre `repositorio_contato`/`chave_
@@ -132,7 +150,10 @@ def executar_prestacao_contato_ate_pending_v1(
     distribuicao_documental_shadow` -- nenhuma lógica de composição,
     isolamento por cliente, fail-closed ou idempotência é duplicada
     aqui; ambas já pertencem, respectivamente, ao resolvedor e ao
-    wiring de Prestação (intocados)."""
+    wiring de Prestação (intocados). Um futuro runtime real de
+    produção NUNCA deve chamar esta função esperando autorização
+    legítima -- precisará, antes de qualquer ação real, de uma decisão
+    humana real depois de `WAITING_GATE` (fora de escopo aqui)."""
     resolver_parametros_ordem = construir_resolvedor_parametros_ordem_prestacao_contato_v1(
         repositorio_contato=repositorio_contato,
         chave_fernet=chave_fernet,

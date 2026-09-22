@@ -1217,7 +1217,7 @@ ALLOWED_PATHS=(
   # intocado) e `construir_resolvedor_parametros_ordem_prestacao_
   # contato_v1` (Contato Canônico, intocado) só se encontravam em
   # test_integracao_prestacao_contato_ate_pending.py -- nenhum código de
-  # produção os ligava. `executar_prestacao_contato_ate_pending_v1.py` é
+  # produção os ligava. `executar_prestacao_contato_ate_pending_shadow_v1.py` é
   # a única peça nova: composição pura (zero leitura de ambiente na
   # função principal) que constrói o resolvedor real e delega
   # inteiramente ao wiring já existente. Compositores de ambiente
@@ -1231,9 +1231,9 @@ ALLOWED_PATHS=(
   # distribuição ou no núcleo de Contato Canônico. ZERO migration nova
   # (reaproveita 0004 de alocacao/migrations/, já existente, ainda
   # INERTE). ZERO transporte real.
-  "^magnata_os/orquestrador/executar_prestacao_contato_ate_pending_v1\.py$"
-  "^test_executar_prestacao_contato_ate_pending_v1\.py$"
-  "^test_executar_prestacao_contato_ate_pending_v1_real\.py$"
+  "^magnata_os/orquestrador/executar_prestacao_contato_ate_pending_shadow_v1\.py$"
+  "^test_executar_prestacao_contato_ate_pending_shadow_v1\.py$"
+  "^test_executar_prestacao_contato_ate_pending_shadow_v1_real\.py$"
 )
 
 # ============================================================================

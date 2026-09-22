@@ -1,4 +1,4 @@
-"""E2E Postgres real/efêmero: `executar_prestacao_contato_ate_pending_v1`
+"""E2E Postgres real/efêmero: `executar_prestacao_contato_ate_pending_shadow_v1`
 -- a composição nova que liga a aquisição da Prestação ao resolvedor
 real do Contato Canônico do Colaborador. Nunca executa transporte.
 
@@ -72,8 +72,8 @@ from magnata_os.orquestrador.repositorio_autorizacoes_gate_postgres import (
     RepositorioAutorizacoesGatePostgres,
 )
 from magnata_os.orquestrador.repositorio_execucoes_postgres import RepositorioExecucoesPostgres
-from magnata_os.orquestrador.executar_prestacao_contato_ate_pending_v1 import (
-    executar_prestacao_contato_ate_pending_v1,
+from magnata_os.orquestrador.executar_prestacao_contato_ate_pending_shadow_v1 import (
+    executar_prestacao_contato_ate_pending_shadow_v1,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -122,7 +122,7 @@ def _aplicar_migrations_se_ausentes(conn):
 
 # ---------------------------------------------------------------------
 # Fakes de Prestação (aquisição/readiness) -- mesmo padrão de
-# test_executar_prestacao_contato_ate_pending_v1.py.
+# test_executar_prestacao_contato_ate_pending_shadow_v1.py.
 # ---------------------------------------------------------------------
 
 class _RepositorioExecucoesPrestacaoMemoria:
@@ -299,8 +299,8 @@ def test_e2e_postgres_real_prestacao_contato_ate_pending():
              patch.object(modulo_composicao, 'executar_documento_readonly', fake_executor):
             repositorio_documentos.salvar(documento)
             armazenamento.armazenar(hash_sha256, conteudo, 'application/pdf', 'doc.pdf', len(conteudo))
-            primeiro = executar_prestacao_contato_ate_pending_v1(**kwargs)
-            segundo = executar_prestacao_contato_ate_pending_v1(**kwargs)
+            primeiro = executar_prestacao_contato_ate_pending_shadow_v1(**kwargs)
+            segundo = executar_prestacao_contato_ate_pending_shadow_v1(**kwargs)
 
         assert len(primeiro) == 1 and len(segundo) == 1
         assert primeiro[0].event_id == segundo[0].event_id
