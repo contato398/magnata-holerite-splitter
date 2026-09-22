@@ -1202,6 +1202,15 @@ ALLOWED_PATHS=(
   "^test_bootstrap_contato_colaborador_airtable\.py$"
   "^test_resolver_parametros_ordem_prestacao_contato_v1\.py$"
   "^test_integracao_prestacao_contato_ate_pending\.py$"
+
+  # Fechamento do gap de composição do canário genérico WhatsApp V1:
+  # `registrar_evento_canonico_ordem_distribuicao_documental_shadow`
+  # extraída de wiring_prestacao_distribuicao_documental_shadow.py para
+  # o núcleo genérico (nunca teve dependência real de Prestação) --
+  # distribuir_documento_v1.py agora a chama antes de materializar,
+  # fechando a FK de execucoes que faltava. ZERO migration, ZERO
+  # composicao.py, ZERO Airtable/Gmail, ZERO transporte real.
+  "^test_distribuir_documento_v1_real\.py$"
 )
 
 # ============================================================================

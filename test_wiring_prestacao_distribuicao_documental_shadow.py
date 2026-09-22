@@ -32,6 +32,7 @@ from magnata_os.orquestrador.repositorio_acoes_execucao_plano_postgres import (
 )
 from magnata_os.orquestrador.repositorio_execucoes import RepositorioExecucoesEmMemoria
 from magnata_os.orquestrador.wiring_distribuicao_documental_shadow import (
+    DistribuicaoDocumentalError,
     InconsistenciaOrdemDocumento,
     ItemDocumentoOrdem,
     derivar_identidade_ordem_distribuicao,
@@ -538,7 +539,7 @@ def test_evento_canonico_tem_campos_exatos():
     assert evento.payload_referencia == f'ordem:{event_id_esperado}'
     assert evento.correlation_id == 'funcionario:colab-evento-1'
     assert evento.sensibilidade == Sensibilidade.INTERNO
-    assert evento.proveniencia == 'wiring_prestacao_distribuicao_documental_shadow_v1'
+    assert evento.proveniencia == 'wiring_distribuicao_documental_shadow_v1'
     assert evento.occurred_at == AGORA
     assert evento.received_at == AGORA
     # nunca telefone/texto no envelope persistido
@@ -547,8 +548,12 @@ def test_evento_canonico_tem_campos_exatos():
 
 
 def test_evento_canonico_exige_instante_com_timezone():
+    """`DistribuicaoDocumentalError` (nunca `PrestacaoDistribuicaoDocumentalError`)
+    -- esta validação vive agora no núcleo genérico
+    (`wiring_distribuicao_documental_shadow.py`), extraída de lá desde
+    que deixou de ter qualquer dependência real de Prestação."""
     ordem = _ordem_minima()
-    with pytest.raises(PrestacaoDistribuicaoDocumentalError):
+    with pytest.raises(DistribuicaoDocumentalError):
         montar_evento_canonico_ordem_distribuicao_documental(ordem=ordem, instante=datetime(2099, 1, 1))
 
 
