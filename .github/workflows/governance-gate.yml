@@ -134,22 +134,25 @@ jobs:
           fi
 
   governance-approval:
+    # O ruleset exige ESTE contexto exato em toda PR. Por isso este job
+    # existe sempre: PR não crítica produz o mesmo check automaticamente;
+    # PR crítica usa o Environment protegido e continua dependendo de
+    # aprovação humana fora do diff.
     name: Aprovação humana obrigatória (fora do diff)
     needs: detect
-    if: needs.detect.outputs.critical == 'true'
+    if: always() && needs.detect.result == 'success'
     runs-on: ubuntu-latest
-    # Este Environment ainda não existe no GitHub no momento desta
-    # implementação -- criá-lo e configurar o required reviewer é
-    # etapa externa posterior (ver ADR, seção "sequência de ativação").
-    # Até lá, referenciar um Environment inexistente faz este job
-    # falhar quando (e só quando) uma PR real tocar um caminho crítico
-    # -- comportamento fail-closed esperado, não um bug: sem o
-    # Environment configurado, nenhuma PR de governança consegue ficar
-    # verde, o que é a postura correta enquanto a aprovação humana
-    # externa ainda não está de fato disponível.
-    environment: governance-approval
+    environment:
+      name: ${{ needs.detect.outputs.critical == 'true' && 'governance-approval' || 'governance-noncritical' }}
     steps:
-      - name: Confirmação
+      - name: Confirmação humana de caminho crítico
+        if: needs.detect.outputs.critical == 'true'
         run: |
           echo "Aprovado por revisor humano do Environment governance-approval."
           echo "Caminhos que motivaram esta aprovação: ${{ needs.detect.outputs.matched }}"
+
+      - name: Confirmação automática de PR não crítica
+        if: needs.detect.outputs.critical != 'true'
+        run: |
+          echo "Nenhum caminho crítico de governança foi alterado."
+          echo "Check obrigatório registrado automaticamente sem exigir aprovação humana."
