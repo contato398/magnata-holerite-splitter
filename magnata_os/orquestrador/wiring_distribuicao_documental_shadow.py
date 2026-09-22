@@ -29,6 +29,28 @@ só agrupa 2 documentos sob HOLERITE_FOLHA_PONTO é exclusivamente
 Nunca acopla a `PacotePrestacaoCliente`/Prestação de Contas -- a Ordem
 nasce diretamente de quem a construir (CLI, futuro endpoint, futuro
 corredor), nunca da fonte de candidatos de Prestação.
+
+PONTE ORDEM -> EVENTO CANÔNICO (Ultraplan "Fechamento do gap de
+composição do canário genérico WhatsApp V1"): `registrar_evento_
+canonico_ordem_distribuicao_documental_shadow` fecha a única coisa que
+este núcleo deliberadamente não fazia sozinho -- criar a linha em
+`magnata_orquestrador.execucoes` que a FK de `autorizacoes_gate` exige
+(ver `_montar_ramo_com_assinatura`/`_montar_ramo_sem_assinatura`, que
+chamam `autorizar_preview_assinatura_shadow` sem nunca tocar
+`execucoes`). Reutiliza `TipoEvento.COMUNICACAO_SOLICITADA` (vocabulário
+fechado, já descrito como "evento operacional genérico") e o mesmo
+`event_id` determinístico já derivado por `derivar_identidade_ordem_
+distribuicao` -- nunca `novo_event_id()`, que embutiria timestamp e
+quebraria a garantia "mesma Ordem = mesmo event_id".
+
+Esta função nasceu em `wiring_prestacao_distribuicao_documental_shadow.py`
+(PR "Ordem -> Evento canônico") e foi extraída para cá porque nunca teve
+nenhuma dependência real de Prestação -- recebe só `OrdemDistribuicaoDocumental`
+e um `RepositorioExecucoes`. Mantê-la presa a um módulo nomeado por
+Prestação impediria qualquer chamador genérico (ex.: `distribuir_
+documento_v1.py`) de reutilizá-la sem um import semanticamente estranho.
+`wiring_prestacao_distribuicao_documental_shadow.py` continua reexportando
+os mesmos nomes (compatibilidade), agora só como import deste módulo.
 """
 from __future__ import annotations
 
@@ -48,6 +70,8 @@ from magnata_os.documental.modulo01.repositorio import RepositorioDocumentos
 
 from .autorizacao_gate import RegistroAutorizacaoGate, RepositorioAutorizacoesGate
 from .envelope_execucao_autorizada import armazenar_acao_e_envelope_v1
+from .eventos import Evento, EstadoExecucao, Sensibilidade, TipoEvento
+from .motor import MotorOrquestrador
 from .obrigacao_assinatura import ObrigacaoAssinatura, PortaObrigacaoAssinatura
 from .plano_comunicacao import ConteudoItem, PlanoDisparo, montar_plano_disparo
 from .politica_comunicacao import ItemComunicacao, PreviewComunicacao, montar_preview_comunicacao
@@ -56,10 +80,14 @@ from .repositorio_acoes_execucao_plano_postgres import (
     RepositorioAcoesExecucaoPlanoPostgres,
     criar_registro_acao_plano,
 )
+from .repositorio_execucoes import RegistroExecucao, RepositorioExecucoes
 from .wiring_assinatura_comunicacao_shadow import (
     autorizar_preview_assinatura_shadow,
     gerar_token_reservado_csprng,
 )
+
+SOURCE_EVENTO_ORDEM_DISTRIBUICAO_DOCUMENTAL = 'distribuicao_documental'
+PROVENIENCIA_EVENTO_ORDEM_DISTRIBUICAO_DOCUMENTAL = 'wiring_distribuicao_documental_shadow_v1'
 
 __all__ = [
     'DistribuicaoDocumentalError',
@@ -67,10 +95,13 @@ __all__ = [
     'InconsistenciaOrdemDocumento',
     'PoliticaAgrupamentoNaoSuportada',
     'LinkObrigacaoAssinaturaMalformado',
+    'EventoCanonicoNaoAguardaGate',
     'ItemDocumentoOrdem',
     'OrdemDistribuicaoDocumental',
     'ResultadoDistribuicaoDocumentalShadow',
     'derivar_identidade_ordem_distribuicao',
+    'montar_evento_canonico_ordem_distribuicao_documental',
+    'registrar_evento_canonico_ordem_distribuicao_documental_shadow',
     'materializar_distribuicao_documental_shadow',
 ]
 
@@ -244,6 +275,72 @@ def _extrair_token_do_link(link: str) -> str:
             f'link de obrigação de assinatura não contém token no formato esperado: {link!r}'
         )
     return token
+
+
+class EventoCanonicoNaoAguardaGate(DistribuicaoDocumentalError):
+    """`MotorOrquestrador.processar` não devolveu `WAITING_GATE` para o
+    evento canônico da Ordem -- nunca prossegue para autorização/
+    distribuição sem essa garantia (fail-closed; nunca deveria
+    acontecer em uso normal, já que `COMUNICACAO_SOLICITADA` é
+    HUMAN_REQUIRED em `politica_autonomia.py`)."""
+
+
+# ---------------------------------------------------------------------------
+# Ponte Ordem -> Evento canônico (registro em `execucoes`)
+# ---------------------------------------------------------------------------
+
+def montar_evento_canonico_ordem_distribuicao_documental(
+    *, ordem: OrdemDistribuicaoDocumental, instante: datetime,
+) -> Evento:
+    """Evento canônico que registra a origem da proposta de comunicação
+    desta Ordem em `magnata_orquestrador.execucoes`, ANTES de qualquer
+    autorização. Reutiliza `TipoEvento.COMUNICACAO_SOLICITADA` (vocabulário
+    fechado; nenhum tipo novo) -- `event_id` é SEMPRE `derivar_identidade_
+    ordem_distribuicao(ordem)`, nunca `novo_event_id()` (que embute
+    timestamp e quebraria a garantia "mesma Ordem = mesmo event_id" já
+    usada por `autorizacoes_gate`/`acoes_execucao_plano`). Nenhum
+    texto/destinatário/telefone entra no envelope -- só referências
+    opacas, mesma disciplina de `wiring_prestacao_comunicacao_shadow.py`."""
+    if instante.tzinfo is None:
+        raise DistribuicaoDocumentalError('instante deve possuir timezone')
+    event_id = derivar_identidade_ordem_distribuicao(ordem)
+    return Evento(
+        event_id=event_id,
+        event_type=TipoEvento.COMUNICACAO_SOLICITADA,
+        source=SOURCE_EVENTO_ORDEM_DISTRIBUICAO_DOCUMENTAL,
+        occurred_at=instante,
+        received_at=instante,
+        correlation_id=f'funcionario:{ordem.funcionario_id}',
+        entity_type='ORDEM_DISTRIBUICAO_DOCUMENTAL',
+        entity_id=event_id,
+        payload_referencia=f'ordem:{event_id}',
+        sensibilidade=Sensibilidade.INTERNO,
+        proveniencia=PROVENIENCIA_EVENTO_ORDEM_DISTRIBUICAO_DOCUMENTAL,
+    )
+
+
+def registrar_evento_canonico_ordem_distribuicao_documental_shadow(
+    *,
+    ordem: OrdemDistribuicaoDocumental,
+    repositorio_execucoes: RepositorioExecucoes,
+    instante: datetime,
+) -> RegistroExecucao:
+    """Registra idempotentemente a linha canônica em `execucoes` para
+    esta Ordem, reutilizando `MotorOrquestrador` sem nenhuma `Acao`
+    registrada (`acoes={}`) -- mesmo padrão já usado por `wiring_
+    prestacao_comunicacao_shadow.registrar_intencao_comunicacao_shadow`.
+    Como `COMUNICACAO_SOLICITADA` é HUMAN_REQUIRED (`politica_autonomia.
+    py`), o motor sempre para em `WAITING_GATE` e nunca dispara nenhuma
+    Acao/transporte por si só -- fail-closed (`EventoCanonicoNaoAguardaGate`)
+    se essa invariante não se confirmar."""
+    evento = montar_evento_canonico_ordem_distribuicao_documental(ordem=ordem, instante=instante)
+    execucao = MotorOrquestrador(repositorio=repositorio_execucoes, acoes={}).processar(evento)
+    if execucao.estado != EstadoExecucao.WAITING_GATE:
+        raise EventoCanonicoNaoAguardaGate(
+            f'evento canonico da Ordem deveria terminar em WAITING_GATE; '
+            f'estado atual {execucao.estado.value}'
+        )
+    return execucao
 
 
 # ---------------------------------------------------------------------------

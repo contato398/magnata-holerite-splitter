@@ -538,6 +538,11 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_bootstrap_contato_colaborador_airtable.py"
   "test_resolver_parametros_ordem_prestacao_contato_v1.py"
   "test_integracao_prestacao_contato_ate_pending.py"
+  # FECHAMENTO DO GAP DE COMPOSIÇÃO DO CANÁRIO GENÉRICO WHATSAPP V1 --
+  # E2E Postgres real do CLI genérico corrigido (registro do evento
+  # canônico antes de materializar), PDF -> Documento -> Ordem ->
+  # Evento -> PENDING, sem Airtable/Gmail/transporte real.
+  "test_distribuir_documento_v1_real.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

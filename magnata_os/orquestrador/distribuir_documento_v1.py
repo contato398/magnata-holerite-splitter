@@ -5,8 +5,10 @@ Responsabilidade estrita, nunca mais que isto:
     1. ler inputs (argv/env);
     2. construir a `OrdemDistribuicaoDocumental`;
     3. compor as dependências reais (Postgres, S3, adapter HTTP legado);
-    4. chamar `materializar_distribuicao_documental_shadow`;
-    5. mostrar o resultado.
+    4. registrar o evento canônico da Ordem em `execucoes` (`registrar_
+       evento_canonico_ordem_distribuicao_documental_shadow`, núcleo);
+    5. chamar `materializar_distribuicao_documental_shadow`;
+    6. mostrar o resultado.
 
 Nenhuma regra de negócio vive aqui -- quantidade de documentos
 suportada, política de agrupamento, ordem dos efeitos da assinatura,
@@ -19,6 +21,18 @@ Mesmo nível de maturidade operacional de `executar_canario_v1.py`:
 script manual, nunca chamado pelo Cron Job (`ciclo_producao_v1.py`).
 Nunca dispara transporte real (não importa `porta_execucao`,
 `transporte_real_habilitado`, nem qualquer adapter de Evolution).
+
+CORREÇÃO (fechamento do gap de composição do canário genérico WhatsApp
+V1): este CLI foi criado antes da ponte Ordem->Evento canônico
+(`registrar_evento_canonico_ordem_distribuicao_documental_shadow`) e
+nunca havia sido atualizado -- chamava `materializar_distribuicao_
+documental_shadow` diretamente, sem nunca registrar a linha em
+`magnata_orquestrador.execucoes` que a FK de `autorizacoes_gate` exige.
+Contra Postgres real, isso falhava sem seed manual. Corrigido chamando
+a ponte (agora no núcleo, `wiring_distribuicao_documental_shadow.py`)
+antes de materializar -- mesmo padrão já usado por `wiring_prestacao_
+distribuicao_documental_shadow.materializar_prestacao_distribuicao_
+documental_shadow` para a Prestação.
 """
 from __future__ import annotations
 
@@ -32,11 +46,13 @@ from magnata_os.documental.modulo01.repositorio import RepositorioDocumentos
 
 from .autorizacao_gate import RepositorioAutorizacoesGate
 from .obrigacao_assinatura import PortaObrigacaoAssinatura
+from .repositorio_execucoes import RepositorioExecucoes
 from .wiring_distribuicao_documental_shadow import (
     ItemDocumentoOrdem,
     OrdemDistribuicaoDocumental,
     ResultadoDistribuicaoDocumentalShadow,
     materializar_distribuicao_documental_shadow,
+    registrar_evento_canonico_ordem_distribuicao_documental_shadow,
 )
 
 
@@ -115,6 +131,12 @@ def _compor_repositorio_autorizacoes_a_partir_do_ambiente() -> RepositorioAutori
     return RepositorioAutorizacoesGatePostgres(abrir_conexao())
 
 
+def _compor_repositorio_execucoes_a_partir_do_ambiente() -> RepositorioExecucoes:
+    from magnata_os.documental.modulo01.adapters.conexao import abrir_conexao
+    from .repositorio_execucoes_postgres import RepositorioExecucoesPostgres
+    return RepositorioExecucoesPostgres(abrir_conexao())
+
+
 def _compor_repositorio_acoes_a_partir_do_ambiente():
     from magnata_os.documental.modulo01.adapters.conexao import abrir_conexao
     from .repositorio_acoes_execucao_plano_postgres import RepositorioAcoesExecucaoPlanoPostgres
@@ -159,6 +181,13 @@ def main(argv=None) -> int:
 
     materializador = _compor_materializador_a_partir_do_ambiente() if ordem.exigir_assinatura else None
     porta_assinatura = _compor_obrigacao_assinatura_a_partir_do_ambiente() if ordem.exigir_assinatura else None
+    instante = datetime.now(timezone.utc)
+
+    registrar_evento_canonico_ordem_distribuicao_documental_shadow(
+        ordem=ordem,
+        repositorio_execucoes=_compor_repositorio_execucoes_a_partir_do_ambiente(),
+        instante=instante,
+    )
 
     resultado: ResultadoDistribuicaoDocumentalShadow = materializar_distribuicao_documental_shadow(
         ordem=ordem,
@@ -170,7 +199,7 @@ def main(argv=None) -> int:
         repositorio_acoes=_compor_repositorio_acoes_a_partir_do_ambiente(),
         ator_referencia=args.ator_referencia,
         proveniencia=args.proveniencia,
-        instante=datetime.now(timezone.utc),
+        instante=instante,
     )
 
     print(json.dumps({
