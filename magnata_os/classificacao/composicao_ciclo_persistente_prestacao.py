@@ -1079,6 +1079,88 @@ def resultados_aquisicao_prontos_por_cliente(
     return tuple(saida)
 
 
+# ==== GATE J1b: UNIDADE DE DISTRIBUIÇÃO = CLIENTE + COMPETÊNCIA +
+# COLABORADOR ====
+# `OrdemDistribuicaoDocumental` é, por contrato, de destinatário ÚNICO
+# (`funcionario_id` + `destinatario`), e `montar_ordem_distribuicao_
+# documental_de_prestacao` rejeita mistura de colaboradores. Entregar o
+# pacote do cliente inteiro a esse elo fazia todo cliente com 2+
+# colaboradores prontos produzir ZERO Ordens. O legado confirma a
+# unidade: o envio individual (`/webhook/enviar-whatsapp`, `app.py`) é
+# por funcionário e só com documentos individuais (Holerite, Folha
+# Ponto); documentos de nível cliente vão no pacote de e-mail POR
+# CLIENTE (`/gerar-fila-envios-email`, `/webhook/enviar-email-cliente`),
+# nunca ao colaborador.
+
+EVENTO_DOCUMENTO_NIVEL_CLIENTE_FORA_ORDEM_COLABORADOR = 'documento_nivel_cliente_fora_ordem_colaborador'
+
+
+def _particionar_por_colaborador(
+    cliente: ReferenciaCanonica,
+    competencia: ReferenciaCanonica,
+    resultados: Tuple[ResultadoAquisicaoPorNecessidade, ...],
+) -> Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...]:
+    """Particiona os resultados JÁ ELEGÍVEIS de 1 cliente/competência em
+    1 grupo por colaborador da necessidade -- a identidade do
+    colaborador vem sempre de `necessidade.colaborador`, nunca inferida
+    aqui nem pelo canal.
+
+    - Resultado de necessidade SEM colaborador (nível cliente: Extrato,
+      FGTS, DCTFWeb, guias) nunca entra em grupo nenhum -- nem anexado a
+      um colaborador arbitrário, nem duplicado entre todos; é omitido e
+      registrado. Sua distribuição (pacote do cliente) é outra
+      capacidade, fora desta.
+    - O mesmo documento (`documento_id` + `hash_sha256`) que satisfaz 2+
+      necessidades do MESMO colaborador aparece 1 vez na Ordem (primeira
+      ocorrência); o vínculo necessidade->documento continua existindo
+      em `resultados_aquisicao`, só não é repetido na Ordem.
+    - Grupos em ordem determinística por `colaborador.entidade_id`;
+      dentro do grupo, a ordem de aquisição -- nunca depende da ordem
+      em que os colaboradores foram listados pela fonte."""
+    grupos: dict = {}
+    for resultado in resultados:
+        colaborador = resultado.necessidade.colaborador
+        if colaborador is None:
+            # WARNING, não INFO: a distribuição desse documento ao
+            # cliente ainda não existe neste fluxo -- lacuna conhecida
+            # que precisa ficar visível, nunca silenciosa.
+            _logger.warning(
+                '%s documento_id=%s cliente=%s competencia=%s',
+                EVENTO_DOCUMENTO_NIVEL_CLIENTE_FORA_ORDEM_COLABORADOR,
+                resultado.documento_id, cliente.entidade_id, competencia.entidade_id,
+                extra={
+                    'evento': EVENTO_DOCUMENTO_NIVEL_CLIENTE_FORA_ORDEM_COLABORADOR,
+                    'documento_id': resultado.documento_id,
+                    'cliente': cliente.entidade_id,
+                    'competencia': competencia.entidade_id,
+                },
+            )
+            continue
+        documentos_do_colaborador = grupos.setdefault(colaborador.entidade_id, {})
+        documentos_do_colaborador.setdefault((resultado.documento_id, resultado.hash_sha256), resultado)
+    return tuple(
+        (cliente, competencia, tuple(grupos[colaborador_id].values()))
+        for colaborador_id in sorted(grupos)
+    )
+
+
+def resultados_aquisicao_prontos_por_colaborador(
+    contexto: 'ContextoComposicaoPrestacao',
+) -> Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...]:
+    """Mesma saída de `resultados_aquisicao_prontos_por_cliente` (mesmo
+    formato de trio, mesmo gate de readiness POR CLIENTE, mesmo filtro
+    de elegibilidade do J1), particionada em 1 trio por (cliente,
+    competência, colaborador) -- a unidade que `OrdemDistribuicao
+    Documental` aceita. Cada trio vira, a jusante, 1 Ordem de
+    destinatário único; o `event_id` já difere por colaborador
+    (`funcionario_id`/`destinatario`/documentos fazem parte da
+    identidade da Ordem)."""
+    saida: list = []
+    for cliente, competencia, resultados in resultados_aquisicao_prontos_por_cliente(contexto):
+        saida.extend(_particionar_por_colaborador(cliente, competencia, resultados))
+    return tuple(saida)
+
+
 def executar_ciclo_prestacao_persistente(
     contexto: ContextoComposicaoPrestacao,
     execucao_id: Optional[str] = None,

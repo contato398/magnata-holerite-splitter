@@ -555,15 +555,19 @@ def test_zero_transporte_zero_execucao_prestacao_criada():
 
 
 def test_erro_de_dominio_de_um_cliente_nao_impede_os_demais():
-    """Correção pós-Ultrareview (achado MEDIUM): um cliente cujos
-    `ResultadoAquisicaoPorNecessidade` divergem de colaborador
-    (`ColaboradorDivergenteEntreDocumentos`, erro de DADO daquele
-    cliente específico) não pode impedir que outro cliente, íntegro e
-    processado na mesma chamada, chegue a PENDING -- nem antes nem
-    depois dele na iteração."""
+    """Correção pós-Ultrareview (achado MEDIUM): um erro de DOMÍNIO de
+    um cliente não pode impedir que outro cliente, íntegro e processado
+    na mesma chamada, chegue a PENDING -- nem antes nem depois dele na
+    iteração.
+
+    Gate J1b: o veículo original deste teste era 1 cliente com 2
+    colaboradores (`ColaboradorDivergenteEntreDocumentos`) -- que era
+    justamente o bloqueio do J1b e hoje produz 2 Ordens legítimas. O
+    erro de domínio passa a ser 2 documentos do MESMO colaborador sob o
+    preset unitário (`PoliticaAgrupamentoNaoSuportada`, núcleo
+    genérico); a intenção do teste (isolamento) é a mesma."""
     cliente_com_erro = ReferenciaCanonica('CLIENTE', 'cliente-af-erro-dominio')
     colaborador_1 = ReferenciaCanonica('COLABORADOR', 'colab-af-erro-1')
-    colaborador_2 = ReferenciaCanonica('COLABORADOR', 'colab-af-erro-2')
     cliente_integro = ReferenciaCanonica('CLIENTE', 'cliente-af-integro')
     colaborador_integro = ReferenciaCanonica('COLABORADOR', 'colab-af-integro')
 
@@ -581,13 +585,13 @@ def test_erro_de_dominio_de_um_cliente_nao_impede_os_demais():
     contexto = _contexto(
         clientes=(cliente_com_erro, cliente_integro),
         colaboradores_por_cliente={
-            cliente_com_erro: (colaborador_1, colaborador_2),
+            cliente_com_erro: (colaborador_1,),
             cliente_integro: (colaborador_integro,),
         },
         candidatos_por_necessidade={
-            # cliente_com_erro tem 2 documentos, 1 por colaborador --
-            # ambos resolvem, mas para colaboradores DIFERENTES, o que
-            # o elo G-P rejeita como uma única Ordem (ColaboradorDivergenteEntreDocumentos).
+            # cliente_com_erro tem 2 documentos do MESMO colaborador sob
+            # preset UNITÁRIO -- o núcleo rejeita a Ordem
+            # (PoliticaAgrupamentoNaoSuportada), erro de domínio isolado.
             (cliente_com_erro, _COMPETENCIA_AF): (doc_1, doc_2),
             (cliente_integro, _COMPETENCIA_AF): (doc_integro,),
         },
@@ -603,7 +607,7 @@ def test_erro_de_dominio_de_um_cliente_nao_impede_os_demais():
 
     fake_executor = _executor_readonly_resolve_por_documento({
         'doc-af-erro-1': (cliente_com_erro, _COMPETENCIA_AF, colaborador_1),
-        'doc-af-erro-2': (cliente_com_erro, _COMPETENCIA_AF, colaborador_2),
+        'doc-af-erro-2': (cliente_com_erro, _COMPETENCIA_AF, colaborador_1),
         'doc-af-integro': (cliente_integro, _COMPETENCIA_AF, colaborador_integro),
     })
     with patch.object(modulo_composicao, 'extrair_texto_seguro', lambda conteudo_bytes: 'texto qualquer'), \

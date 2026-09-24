@@ -272,3 +272,85 @@ Outros pontos:
    Quem compõe precisa manter os dois coerentes.
 3. Continuam abertos J2 (fontes reais), J3 (índice interno, migration),
    J4 (composition root por ambiente) e os gates B, C, D, E, G, H e I.
+
+## 12. J1b: distribuição por colaborador (2026-09-24)
+
+**Causa raiz do zero Ordens.** `executar_prestacao_ate_distribuicao_documental_shadow`
+entregava o pacote do cliente inteiro (`resultados_aquisicao_prontos_por_cliente`)
+a `montar_ordem_distribuicao_documental_de_prestacao`. Essa função, por
+contrato, só aceita 1 colaborador por Ordem. Com 2 ou mais colaboradores,
+ela levantava `ColaboradorDivergenteEntreDocumentos`. Com documento de
+nível cliente junto, levantava `ColaboradorAusenteNaNecessidade`. Em
+ambos os casos, o cliente inteiro era descartado. O resolvedor de
+contato também assumia um grupo homogêneo (`resultados[0].necessidade.colaborador`).
+
+**Unidade canônica de distribuição: cliente + competência + colaborador.**
+Evidência:
+- `OrdemDistribuicaoDocumental` tem `funcionario_id` e um único
+  `destinatario`, e o `event_id` já os inclui.
+- No legado, o envio individual `/webhook/enviar-whatsapp` (`app.py`) é
+  por `funcionario_id` e só leva documentos individuais (`Holerite`,
+  `Folha Ponto`).
+- Documentos de nível cliente (guias, extratos, certidões) vão no pacote
+  de **e-mail por cliente** (`/gerar-fila-envios-email`,
+  `/webhook/enviar-email-cliente`), nunca ao colaborador.
+
+**Solução (ESTENDER, sem contrato novo).**
+- `_particionar_por_colaborador` e `resultados_aquisicao_prontos_por_colaborador`
+  (`composicao_ciclo_persistente_prestacao.py`) mantêm o mesmo formato de
+  trio, o mesmo gate de readiness **por cliente** e o mesmo filtro de
+  elegibilidade do J1. Só particionam por `necessidade.colaborador`.
+- O wiring da Prestação passa a iterar por colaborador (troca de 1
+  chamada). O log de isolamento agora inclui o id opaco do colaborador.
+- Resolvedor, `OrdemDistribuicaoDocumental`, núcleo genérico, Plano,
+  Envelope e Orquestrador ficaram intocados.
+- Resultado: N colaboradores prontos geram N Ordens de destinatário único
+  e N `event_id` distintos.
+
+**Documento de nível cliente.** Continua participando da readiness e do
+pacote do cliente, mas **não entra em Ordem de colaborador**: não é
+duplicado nem anexado a ninguém. A omissão é registrada (evento
+`documento_nivel_cliente_fora_ordem_colaborador`). A distribuição desses
+documentos ao cliente (equivalente ao pacote de e-mail do legado) é
+outra capacidade e **continua aberta**. Nenhuma Ordem de cliente foi
+inventada.
+
+**Mesmo documento para 2 necessidades do mesmo colaborador:** aparece 1
+vez na Ordem.
+
+**Teste existente ajustado.**
+`test_wiring_prestacao_ate_distribuicao_documental_shadow.py::test_erro_de_dominio_de_um_cliente_nao_impede_os_demais`
+usava, como veículo do "erro de domínio", justamente 1 cliente com 2
+colaboradores. Esse é o bloqueio do J1b, e agora produz 2 Ordens
+legítimas. O veículo passou a ser 2 documentos do mesmo colaborador sob
+preset unitário (`PoliticaAgrupamentoNaoSuportada`). A intenção do teste
+(isolamento) é a mesma.
+
+**Prova** (`test_aquisicao_prestacao_corredor_real_j1.py`, corredor real
+sem `patch`):
+- 1 colaborador: `event_id` idêntico ao caminho anterior;
+- 2 e 3 colaboradores até PENDING;
+- isolamento A/B, inclusive do contato resolvido;
+- documento em revisão;
+- readiness continua por cliente;
+- Extrato fora das Ordens de colaborador;
+- replay;
+- troca de contato de B muda só a identidade de B;
+- a ordem de listagem dos colaboradores não altera o resultado;
+- deduplicação na partição.
+
+Com o wiring anterior, 7 dos 11 testes J1b falham.
+
+**Pontos abertos depois do J1b:**
+1. **Distribuição de documento de nível cliente ao cliente** (pacote,
+   equivalente ao e-mail do legado): capacidade nova, fora do J1b.
+2. **Preset por colaborador com 2 ou mais documentos** (ex.: Holerite +
+   Folha de Ponto): o resolvedor usa o preset fixo do chamador. Com o
+   preset unitário, um colaborador com 2 documentos cai em
+   `PoliticaAgrupamentoNaoSuportada`, erro isolado só daquele
+   colaborador. Escolher o preset pelo conteúdo do grupo é decisão de
+   política operacional.
+3. A elegibilidade (J1) confere cliente, competência e colaborador, mas
+   **não** o tipo documental da necessidade. Um documento do colaborador
+   A pode satisfazer outra necessidade de A. Não há vazamento entre
+   pessoas, mas vale um incremento próprio.

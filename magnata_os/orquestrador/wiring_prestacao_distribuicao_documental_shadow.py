@@ -79,7 +79,7 @@ from typing import Callable, Optional, Tuple
 from magnata_os.classificacao.composicao_ciclo_persistente_prestacao import (
     ContextoComposicaoPrestacao,
     ResultadoAquisicaoPorNecessidade,
-    resultados_aquisicao_prontos_por_cliente,
+    resultados_aquisicao_prontos_por_colaborador,
 )
 from magnata_os.classificacao.contratos import ReferenciaCanonica
 from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivos
@@ -298,9 +298,10 @@ def executar_prestacao_ate_distribuicao_documental_shadow(
     -> ... -> PENDING` reutilizando, em sequência, só componentes já
     existentes -- nenhum motor novo:
 
-    `resultados_aquisicao_prontos_por_cliente` (Prestação: descoberta
-    -> aquisição -> readiness, já existente, só reexposto) -> gate de
-    readiness (cliente sem `PRONTO` nunca chega aqui) -> `resolver_
+    `resultados_aquisicao_prontos_por_colaborador` (Prestação: descoberta
+    -> aquisição -> readiness por cliente -> partição por colaborador,
+    Gate J1b) -> gate de readiness (cliente sem `PRONTO` nunca chega
+    aqui) -> `resolver_
     parametros_ordem` (decisão externa do chamador, fail-closed se
     `None`) -> `materializar_prestacao_distribuicao_documental_shadow`
     (elo G-P já staged, intocado) -> núcleo genérico -> PENDING.
@@ -319,9 +320,16 @@ def executar_prestacao_ate_distribuicao_documental_shadow(
     interrompendo, como antes desta correção.
 
     Zero transporte: só chama `materializar_prestacao_distribuicao_
-    documental_shadow`, que já para em PENDING."""
+    documental_shadow`, que já para em PENDING.
+
+    Gate J1b: itera `resultados_aquisicao_prontos_por_colaborador` (1
+    trio por cliente+competência+colaborador) em vez do pacote do
+    cliente inteiro -- cliente com N colaboradores prontos produz N
+    Ordens de destinatário único, e o isolamento acima passa a valer
+    por colaborador (erro de domínio de A nunca impede a Ordem de B).
+    Documentos de nível cliente não entram em Ordem de colaborador."""
     resultados: list = []
-    for cliente, competencia, resultados_aquisicao in resultados_aquisicao_prontos_por_cliente(contexto):
+    for cliente, competencia, resultados_aquisicao in resultados_aquisicao_prontos_por_colaborador(contexto):
         parametros = resolver_parametros_ordem(cliente, competencia, resultados_aquisicao)
         if parametros is None:
             continue  # fail-closed: sem parâmetros resolvidos, zero Ordem para este cliente/competência
@@ -344,13 +352,16 @@ def executar_prestacao_ate_distribuicao_documental_shadow(
                 instante=instante,
             )
         except (PrestacaoDistribuicaoDocumentalError, DistribuicaoDocumentalError) as exc:
+            colaborador = resultados_aquisicao[0].necessidade.colaborador
+            colaborador_id = colaborador.entidade_id if colaborador is not None else None
             _logger.error(
-                '%s cliente=%s competencia=%s exception_type=%s',
+                '%s cliente=%s competencia=%s colaborador=%s exception_type=%s',
                 EVENTO_CLIENTE_FALHOU_DISTRIBUICAO_DOCUMENTAL,
-                cliente.entidade_id, competencia.entidade_id, type(exc).__name__,
+                cliente.entidade_id, competencia.entidade_id, colaborador_id, type(exc).__name__,
                 extra={
                     'evento': EVENTO_CLIENTE_FALHOU_DISTRIBUICAO_DOCUMENTAL,
                     'cliente': cliente.entidade_id, 'competencia': competencia.entidade_id,
+                    'colaborador': colaborador_id,
                     'exception_type': type(exc).__name__,
                 },
             )
