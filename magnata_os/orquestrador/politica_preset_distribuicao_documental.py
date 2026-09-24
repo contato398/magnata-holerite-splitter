@@ -59,6 +59,13 @@ _PRESETS_V1: dict = {
         canal='WHATSAPP', exigir_assinatura=True, exigir_comprovante=True,
         politica_agrupamento='AGRUPADO_1_LINK',
     ),
+    # Gate J1b: 1..N documentos QUAISQUER para 1 destinatário, sem
+    # assinatura -- política por cardinalidade, nunca por tipo
+    # documental (`DOCUMENTOS_SEPARADOS`, núcleo genérico).
+    'DOCUMENTOS_SEM_ASSINATURA': PoliticaPresetDistribuicaoDocumental(
+        canal='WHATSAPP', exigir_assinatura=False, exigir_comprovante=False,
+        politica_agrupamento='DOCUMENTOS_SEPARADOS',
+    ),
 }
 
 

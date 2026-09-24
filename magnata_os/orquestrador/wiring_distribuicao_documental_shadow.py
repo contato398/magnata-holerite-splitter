@@ -198,6 +198,11 @@ class ResultadoDistribuicaoDocumentalShadow:
     assinatura_link: Optional[str]
     envelope_sha256: str
     acao_persistida: RegistroAcaoExecucaoPlano
+    """Primeira ação do plano (compatibilidade)."""
+    acoes_persistidas: Tuple[RegistroAcaoExecucaoPlano, ...] = ()
+    """Todas as ações do plano, na ordem (Gate J1b): texto + 1 por
+    documento no ramo sem assinatura; 1 (mensagem com link) no ramo com
+    assinatura."""
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +358,20 @@ _POLITICAS_V1_PERMITIDAS: dict = {
     (2, 'AGRUPADO_1_LINK'): 'separado',
 }
 
+POLITICA_AGRUPAMENTO_DOCUMENTOS_SEPARADOS = 'DOCUMENTOS_SEPARADOS'
+"""Política genérica por CARDINALIDADE (Gate J1b): 1..N documentos
+quaisquer para 1 destinatário, sem assinatura, cada documento como uma
+ação de envio própria (mesmo modelo 1 ação = 1 conteúdo do Plano/
+Envelope/executor). Independe do tipo documental -- nunca uma lista de
+tipos permitidos."""
+
+
+class NomeDocumentoDuplicadoNaOrdem(DistribuicaoDocumentalError):
+    """Dois documentos da mesma Ordem com o mesmo `nome_original` -- o
+    Plano casa conteúdo por (tipo, nome) e o destinatário não saberia
+    distinguir os arquivos. Fail-closed, nunca renomeado por
+    adivinhação."""
+
 
 def _validar_e_mapear_politica_agrupamento(ordem: OrdemDistribuicaoDocumental) -> str:
     """Fail-closed ANTES de qualquer I/O: valida a combinação
@@ -363,7 +382,19 @@ def _validar_e_mapear_politica_agrupamento(ordem: OrdemDistribuicaoDocumental) -
     entregar para N=2 é decisão exclusiva do adapter de compatibilidade
     (`adapters/obrigacao_assinatura_legado_http.py`), nunca deste
     núcleo. Reutiliza `PreferenciaComposicao` já existente -- nenhum
-    motor de agrupamento novo."""
+    motor de agrupamento novo.
+
+    `DOCUMENTOS_SEPARADOS` (Gate J1b) aceita qualquer N >= 1 sem
+    assinatura. Com assinatura continua valendo só a tabela V1 (o motor
+    legado de assinatura agrupa no máximo 2 sob 1 link) -- a modalidade
+    assinatura é decidida pelo preset, nunca pelo tipo documental."""
+    if ordem.politica_agrupamento == POLITICA_AGRUPAMENTO_DOCUMENTOS_SEPARADOS:
+        if ordem.exigir_assinatura:
+            raise PoliticaAgrupamentoNaoSuportada(
+                'DOCUMENTOS_SEPARADOS não suporta exigir_assinatura=True nesta V1 -- '
+                'assinatura de N documentos usa as políticas da tabela V1'
+            )
+        return 'separado'
     chave = (len(ordem.documentos), ordem.politica_agrupamento)
     if chave not in _POLITICAS_V1_PERMITIDAS:
         raise PoliticaAgrupamentoNaoSuportada(
@@ -461,7 +492,7 @@ def materializar_distribuicao_documental_shadow(
         )
         assinatura_link = obrigacao.link
     else:
-        preview, autorizacao, plano, acao = _montar_ramo_sem_assinatura(
+        preview, autorizacao, plano = _montar_ramo_sem_assinatura(
             ordem=ordem, event_id=event_id, preferencia=preferencia,
             documentos_resolvidos=documentos_resolvidos,
             repositorio_autorizacoes=repositorio_autorizacoes,
@@ -471,34 +502,46 @@ def materializar_distribuicao_documental_shadow(
         assinatura_link = None
         acao_execucao_id = None  # definido abaixo pela fórmula genérica
 
-    registro = criar_registro_acao_plano(
-        event_id=event_id, plano=plano, autorizacao=autorizacao, acao=acao, criado_em=instante,
+    # Gate J1b: TODAS as ações do plano são persistidas, cada uma com o
+    # próprio Envelope (mesmo padrão de `wiring_prestacao_orquestrador_
+    # postgres_shadow.py`). Antes só `plano.acoes[0]` era persistida --
+    # no ramo sem assinatura, com a composição 'separado', isso era a
+    # ação de TEXTO: o documento nunca chegava a uma ação executável.
+    if ordem.exigir_assinatura and len(plano.acoes) != 1:
+        raise DistribuicaoDocumentalError(
+            'ramo com assinatura deve produzir exatamente 1 ação (mensagem com o link)'
+        )
+    registros = []
+    for acao_do_plano in plano.acoes:
+        registro = criar_registro_acao_plano(
+            event_id=event_id, plano=plano, autorizacao=autorizacao, acao=acao_do_plano, criado_em=instante,
+        )
+        if acao_execucao_id is not None:
+            # Ramo com assinatura (1 ação): substitui pelo id único
+            # derivado da Ordem (ver `_derivar_acao_execucao_id_
+            # assinatura`) -- o MESMO id já usado para correlacionar a
+            # obrigação, nunca dois ids concorrentes para a mesma ação.
+            registro = dataclasses.replace(registro, acao_execucao_id=acao_execucao_id)
+        envelope_sha256_acao = armazenar_acao_e_envelope_v1(
+            armazenamento=armazenamento, registro=registro, acao=acao_do_plano,
+        )
+        registros.append(dataclasses.replace(registro, envelope_sha256=envelope_sha256_acao))
+    acoes_persistidas = repositorio_acoes.materializar_registros(
+        registros=tuple(registros), autorizacao=autorizacao,
     )
-    if acao_execucao_id is not None:
-        # Ramo com assinatura: substitui pelo id único derivado da Ordem
-        # (ver `_derivar_acao_execucao_id_assinatura`) -- o MESMO id já
-        # usado para correlacionar a obrigação, nunca dois ids
-        # concorrentes para a mesma ação.
-        registro = dataclasses.replace(registro, acao_execucao_id=acao_execucao_id)
-    else:
-        acao_execucao_id = registro.acao_execucao_id
-
-    envelope_sha256 = armazenar_acao_e_envelope_v1(armazenamento=armazenamento, registro=registro, acao=acao)
-    registro_com_envelope = dataclasses.replace(registro, envelope_sha256=envelope_sha256)
-    (acao_persistida,) = repositorio_acoes.materializar_registros(
-        registros=(registro_com_envelope,), autorizacao=autorizacao,
-    )
+    acao_persistida = acoes_persistidas[0]
 
     return ResultadoDistribuicaoDocumentalShadow(
         event_id=event_id,
         autorizacao_id=autorizacao.autorizacao_id,
-        acao_execucao_id=acao_execucao_id,
+        acao_execucao_id=acao_persistida.acao_execucao_id,
         arquivo_record_ids=arquivo_record_ids,
         documento_ids=documento_ids,
         funcionario_id=ordem.funcionario_id,
         assinatura_link=assinatura_link,
-        envelope_sha256=envelope_sha256,
+        envelope_sha256=acao_persistida.envelope_sha256,
         acao_persistida=acao_persistida,
+        acoes_persistidas=tuple(acoes_persistidas),
     )
     # STOP -- porta_execucao/transporte_real_habilitado nunca importados
     # nem chamados neste módulo.
@@ -603,27 +646,33 @@ def _montar_ramo_sem_assinatura(
 ):
     """Sem obrigação/token/link -- documento(s) despachado(s) como
     mídia comum, mesmo padrão das rotas legadas que já enviam WhatsApp
-    sem depender do motor de assinatura. Nesta V1, a tabela de
-    políticas (`_POLITICAS_V1_PERMITIDAS`) só admite N=1 sem
-    assinatura (N=2/AGRUPADO_1_LINK exige exigir_assinatura=True)."""
-    (documento, conteudo_bytes), = documentos_resolvidos
-    item_preview = ItemComunicacao(
-        tipo='documento', nome=documento.nome_original,
-        conteudo_sha256=documento.hash_sha256,
+    sem depender do motor de assinatura. 1..N documentos (Gate J1b):
+    cada documento é um item do preview/plano, na posição da Ordem --
+    o Plano gera 1 ação por passo (texto + 1 por documento)."""
+    nomes = [documento.nome_original for documento, _ in documentos_resolvidos]
+    if len(set(nomes)) != len(nomes):
+        raise NomeDocumentoDuplicadoNaOrdem(
+            'documentos da mesma Ordem precisam de nome_original distinto'
+        )
+    itens_preview = tuple(
+        ItemComunicacao(tipo='documento', nome=documento.nome_original, conteudo_sha256=documento.hash_sha256)
+        for documento, _ in documentos_resolvidos
     )
     preview = montar_preview_comunicacao(
         destinatarios=(ordem.destinatario,), texto=ordem.mensagem_texto,
-        itens=(item_preview,), assinatura=False, comprovante=ordem.exigir_comprovante,
+        itens=itens_preview, assinatura=False, comprovante=ordem.exigir_comprovante,
         preferencia=preferencia,
     )
     autorizacao = autorizar_preview_assinatura_shadow(
         repositorio_autorizacoes=repositorio_autorizacoes, preview=preview,
         event_id=event_id, ator_referencia=ator_referencia, proveniencia=proveniencia, instante=instante,
     )
-    conteudo_item = ConteudoItem(tipo='documento', nome=documento.nome_original, conteudo=conteudo_bytes)
+    conteudos = tuple(
+        ConteudoItem(tipo='documento', nome=documento.nome_original, conteudo=conteudo_bytes)
+        for documento, conteudo_bytes in documentos_resolvidos
+    )
     plano = montar_plano_disparo(
-        preview=preview, texto=ordem.mensagem_texto, conteudos=(conteudo_item,),
+        preview=preview, texto=ordem.mensagem_texto, conteudos=conteudos,
         preview_id_autorizado=autorizacao.preview_id, autorizacao_explicita=True,
     )
-    acao = plano.acoes[0]
-    return preview, autorizacao, plano, acao
+    return preview, autorizacao, plano

@@ -104,8 +104,13 @@ _TEXTO_EXTRATO = 'Extrato Mensal\nCNPJ: 11.222.333/0001-44\nCompetência: 07/202
 # ---------------------------------------------------------------------
 
 def _pdf(texto: str) -> bytes:
+    """Bytes DETERMINÍSTICOS: o fpdf2 grava a data de criação no PDF --
+    sem fixá-la, 2 gerações em segundos diferentes teriam hash (e,
+    portanto, `event_id`) diferentes, e testes de identidade entre 2
+    ambientes passariam ou falhariam conforme o relógio."""
     from fpdf import FPDF
     pdf = FPDF()
+    pdf.set_creation_date(AGORA)
     pdf.add_page()
     pdf.set_font('Helvetica', size=12)
     pdf.multi_cell(0, 10, text=texto)
@@ -463,7 +468,7 @@ def test_todas_as_fontes_fluxo_real_ate_pending_sem_nenhum_patch():
     assert resultado.acao_persistida.estado == EstadoAcaoExecucaoPlano.PENDING
     assert resultado.event_id
     assert resultado.envelope_sha256
-    assert len(ambiente.conexao.linhas) == 1
+    assert len(ambiente.conexao.linhas) == 2  # texto + documento
 
 
 def test_replay_do_fluxo_real_nao_duplica_acao():
@@ -474,7 +479,7 @@ def test_replay_do_fluxo_real_nao_duplica_acao():
 
     assert primeiro.event_id == segundo.event_id
     assert primeiro.acao_persistida.acao_execucao_id == segundo.acao_persistida.acao_execucao_id
-    assert len(ambiente.conexao.linhas) == 1
+    assert len(ambiente.conexao.linhas) == 2  # texto + documento
 
 
 # ---------------------------------------------------------------------
@@ -650,7 +655,7 @@ def test_j1b_dois_colaboradores_do_mesmo_cliente_geram_duas_ordens_ate_pending()
     assert _documentos_por_funcionario(resultados) == {'colab-j1': {'doc-a'}, 'colab-b': {'doc-b'}}
     assert all(r.acao_persistida.estado == EstadoAcaoExecucaoPlano.PENDING for r in resultados)
     assert len({r.event_id for r in resultados}) == 2
-    assert len(ambiente.conexao.linhas) == 2
+    assert len(ambiente.conexao.linhas) == 4  # 2 Ordens x (texto + documento)
 
 
 def test_j1b_tres_colaboradores_sem_logica_especial_para_dois():
@@ -663,7 +668,7 @@ def test_j1b_tres_colaboradores_sem_logica_especial_para_dois():
         'colab-j1': {'doc-a'}, 'colab-b': {'doc-b'}, 'colab-c': {'doc-c'},
     }
     assert len({r.event_id for r in resultados}) == 3
-    assert len(ambiente.conexao.linhas) == 3
+    assert len(ambiente.conexao.linhas) == 6  # 3 Ordens x (texto + documento)
 
 
 def test_j1b_documento_de_a_nunca_chega_a_ordem_nem_ao_contato_de_b():
@@ -767,7 +772,7 @@ def test_j1b_replay_nao_duplica_ordens_eventos_nem_acoes():
     assert [(r.funcionario_id, r.event_id, r.acao_persistida.acao_execucao_id) for r in primeira] == [
         (r.funcionario_id, r.event_id, r.acao_persistida.acao_execucao_id) for r in segunda
     ]
-    assert len(ambiente.conexao.linhas) == 2
+    assert len(ambiente.conexao.linhas) == 4  # 2 Ordens x (texto + documento)
 
 
 def test_j1b_troca_de_contato_de_b_muda_so_a_identidade_de_b():
@@ -830,3 +835,224 @@ def test_j1b_particao_deduplica_documento_do_mesmo_colaborador_e_ordena_por_cola
         (tuple(ra.necessidade.colaborador.entidade_id for ra in g), tuple(ra.documento_id for ra in g))
         for _cliente, _competencia, g in grupos
     ] == [(('colab-b',), ('doc-b',)), (('colab-j1',), ('doc-a',))]
+
+
+# =====================================================================
+# Gate J1b hardening -- GENERICIDADE. Tipos arbitrários (DOCUMENTO_A..D
+# nunca existiram na empresa): a partição por destinatário, a Ordem e o
+# núcleo não dependem de nenhum nome de tipo documental. O tipo só entra
+# na ELEGIBILIDADE da Prestação (pessoa certa + documento certo).
+# =====================================================================
+
+def _resolucao_sintetica(documento_id, *, tipo, colaborador):
+    from magnata_os.classificacao.contratos import (
+        AplicabilidadeDimensao, Cardinalidade, ConfiancaResolucao, EstadoResultadoSemantico, NivelConfianca,
+        PerfilAplicabilidadeResolucao, RegraAplicabilidadeDimensao, ResultadoResolucaoSemantico,
+    )
+    dimensoes = (
+        (DimensaoResolucao.TIPO_DOCUMENTAL, ReferenciaCanonica('TIPO_DOCUMENTAL', tipo)),
+        (DimensaoResolucao.CLIENTE, _CLIENTE),
+        (DimensaoResolucao.COMPETENCIA, _COMPETENCIA),
+        (DimensaoResolucao.COLABORADOR, colaborador),
+    )
+    return ResultadoResolucaoSemantico(
+        documento_id=documento_id, resolver_id='resolver-generico-teste', resolver_version='1',
+        politica_id='generica', politica_version='1',
+        perfil=PerfilAplicabilidadeResolucao(
+            perfil_id='generico-teste', version='1', escopo_documental='qualquer',
+            regras=tuple(
+                RegraAplicabilidadeDimensao(
+                    dimensao=d, aplicabilidade=AplicabilidadeDimensao.OBRIGATORIA, cardinalidade=Cardinalidade(1, 1),
+                ) for d, _ in dimensoes
+            ),
+        ),
+        resolucoes=tuple(
+            ResolucaoDimensao(
+                dimensao=d, estado=EstadoResolucaoDimensao.RESOLVIDA, valores_confirmados=(v,),
+                confianca=ConfiancaResolucao(NivelConfianca.FORTE),
+            ) for d, v in dimensoes
+        ),
+        estado_consolidado=EstadoResultadoSemantico.RESOLVIDA, necessita_revisao_humana=False,
+    )
+
+
+def _resultado_arbitrario(ambiente, documento_id, *, tipo_necessidade, tipo_resolvido, colaborador):
+    """1 `ResultadoAquisicaoPorNecessidade` com resolução RESOLVIDA
+    sintética de tipo ARBITRÁRIO, apontando para um Documento real do
+    ambiente."""
+    from magnata_os.classificacao.orquestrador_corredor_readonly import ResultadoExecucaoCorredorPrestacao
+    from magnata_os.classificacao.resolucao_documento_prestacao import ResultadoProcessamentoDocumentoPrestacao
+    documento = next(d for d in ambiente.documentos if d.documento_id == documento_id)
+    return ResultadoAquisicaoPorNecessidade(
+        necessidade=NecessidadeDocumentoPrestacao(
+            cliente=_CLIENTE, competencia=_COMPETENCIA, tipo_documental=tipo_necessidade,
+            motivo_exigencia='teste-generico', colaborador=colaborador,
+        ),
+        documento_id=documento_id, hash_sha256=documento.hash_sha256,
+        resultados_corredor=(ResultadoExecucaoCorredorPrestacao(
+            resultado_corredor=ResultadoProcessamentoDocumentoPrestacao(
+                documento_id=documento_id, estado=EstadoCorredorDocumentoPrestacao.RESOLVIDO_E_AVANCOU,
+                tipo_documental=tipo_resolvido,
+                resolucao_semantica=_resolucao_sintetica(documento_id, tipo=tipo_resolvido, colaborador=colaborador),
+            ),
+        ),),
+    )
+
+
+def _distribuir_grupos(ambiente, resultados):
+    """Elegibilidade -> partição por destinatário -> 1 Ordem por grupo
+    (preset genérico por cardinalidade) -> núcleo -> PENDING."""
+    from magnata_os.orquestrador.wiring_prestacao_distribuicao_documental_shadow import (
+        materializar_prestacao_distribuicao_documental_shadow,
+    )
+    elegiveis = tuple(r for r in resultados if modulo_composicao._elegivel_para_distribuicao(r))
+    saida = []
+    for _cliente, _competencia, grupo in _particionar_por_colaborador(_CLIENTE, _COMPETENCIA, elegiveis):
+        colaborador_id = grupo[0].necessidade.colaborador.entidade_id
+        saida.append(materializar_prestacao_distribuicao_documental_shadow(
+            resultados_aquisicao=grupo, destinatario=_CONTATOS_ABC[colaborador_id],
+            preset_id='DOCUMENTOS_SEM_ASSINATURA', tipo_documento='DOCUMENTOS_DIVERSOS',
+            mensagem_texto='Seus documentos', repositorio_documentos=ambiente.repositorio_documentos,
+            armazenamento=ambiente.armazenamento, materializador=None, porta_assinatura=None,
+            repositorio_execucoes=ambiente.repositorio_execucoes,
+            repositorio_autorizacoes=ambiente.repositorio_autorizacoes,
+            repositorio_acoes=ambiente.repositorio_acoes,
+            ator_referencia='ator:teste:generico', proveniencia='teste_generico', instante=AGORA,
+        ))
+    return saida
+
+
+def _ambiente_arbitrario():
+    return _Ambiente(
+        tuple((f'doc-{letra}', f'CONTEUDO-{letra}'.encode()) for letra in 'abcd'),
+        colaboradores=(_COLABORADOR, _COLABORADOR_B), contatos=_CONTATOS_ABC,
+    )
+
+
+def _resultados_a_b_c_d(ambiente):
+    def r(documento_id, tipo, colaborador):
+        return _resultado_arbitrario(
+            ambiente, documento_id, tipo_necessidade=tipo, tipo_resolvido=tipo, colaborador=colaborador,
+        )
+    return (
+        r('doc-a', 'DOCUMENTO_A', _COLABORADOR), r('doc-b', 'DOCUMENTO_B', _COLABORADOR),
+        r('doc-c', 'DOCUMENTO_C', _COLABORADOR_B), r('doc-d', 'DOCUMENTO_D', _COLABORADOR_B),
+    )
+
+
+def test_generico_um_destinatario_um_documento_arbitrario():
+    """Teste A."""
+    ambiente = _ambiente_arbitrario()
+    (resultado,) = _distribuir_grupos(ambiente, _resultados_a_b_c_d(ambiente)[:1])
+    assert resultado.documento_ids == ('doc-a',)
+    assert [a.tipo for a in resultado.acoes_persistidas] == ['texto', 'documento']
+
+
+def test_generico_um_destinatario_varios_documentos_arbitrarios_numa_so_distribuicao():
+    """Teste B: DOCUMENTO_A + DOCUMENTO_B (+ o mesmo mecanismo para N)
+    do mesmo destinatário formam UMA Ordem, com 1 ação por documento."""
+    ambiente = _ambiente_arbitrario()
+    (resultado,) = _distribuir_grupos(ambiente, _resultados_a_b_c_d(ambiente)[:2])
+    assert resultado.documento_ids == ('doc-a', 'doc-b')
+    assert [a.tipo for a in resultado.acoes_persistidas] == ['texto', 'documento', 'documento']
+    assert resultado.acao_persistida.estado == EstadoAcaoExecucaoPlano.PENDING
+
+
+def test_generico_dois_destinatarios_sem_vazamento():
+    """Teste C: A recebe A/B, B recebe C/D -- nada cruza."""
+    ambiente = _ambiente_arbitrario()
+    resultados = _distribuir_grupos(ambiente, _resultados_a_b_c_d(ambiente))
+    assert {r.funcionario_id: r.documento_ids for r in resultados} == {
+        'colab-b': ('doc-c', 'doc-d'), 'colab-j1': ('doc-a', 'doc-b'),
+    }
+    conteudos_por_funcionario = {
+        r.funcionario_id: {a.conteudo_sha256 for a in r.acoes_persistidas if a.conteudo_sha256} for r in resultados
+    }
+    hashes = {d.documento_id: d.hash_sha256 for d in ambiente.documentos}
+    assert conteudos_por_funcionario == {
+        'colab-j1': {hashes['doc-a'], hashes['doc-b']}, 'colab-b': {hashes['doc-c'], hashes['doc-d']},
+    }
+
+
+def test_generico_pessoa_certa_documento_errado_e_fail_closed():
+    """Teste D (tipos arbitrários): o documento de A resolvido como
+    DOCUMENTO_B nunca atende a necessidade DOCUMENTO_A de A."""
+    ambiente = _ambiente_arbitrario()
+    errado = _resultado_arbitrario(
+        ambiente, 'doc-a', tipo_necessidade='DOCUMENTO_A', tipo_resolvido='DOCUMENTO_B', colaborador=_COLABORADOR,
+    )
+    certo = _resultado_arbitrario(
+        ambiente, 'doc-a', tipo_necessidade='DOCUMENTO_A', tipo_resolvido='DOCUMENTO_A', colaborador=_COLABORADOR,
+    )
+    assert modulo_composicao._elegivel_para_distribuicao(errado) is False
+    assert modulo_composicao._elegivel_para_distribuicao(certo) is True
+    assert _distribuir_grupos(ambiente, (errado,)) == []
+
+
+def test_pessoa_certa_documento_errado_com_o_corredor_real():
+    """Teste D com o corredor REAL: o holerite real de A oferecido para
+    uma necessidade de OUTRO tipo de A é inelegível; para a necessidade
+    do próprio tipo, é elegível."""
+    ambiente = _Ambiente((('doc-hol', _pdf(_TEXTO_HOLERITE)),))
+
+    def _necessidade(tipo):
+        return NecessidadeDocumentoPrestacao(
+            cliente=_CLIENTE, competencia=_COMPETENCIA, tipo_documental=tipo,
+            motivo_exigencia='teste-j1b', colaborador=_COLABORADOR,
+        )
+
+    (para_outro_tipo,) = _adquirir(ambiente, _necessidade('Folha de Ponto'), **_todas_as_fontes())
+    (para_o_proprio_tipo,) = _adquirir(ambiente, _necessidade(TIPO_HOLERITE), **_todas_as_fontes())
+    # Tudo o mais é idêntico e válido -- o ÚNICO motivo da recusa é o tipo.
+    estado, dimensoes = _estados_dimensoes(para_outro_tipo)
+    assert estado == EstadoCorredorDocumentoPrestacao.RESOLVIDO_E_AVANCOU
+    assert all(
+        dimensoes[d] == EstadoResolucaoDimensao.RESOLVIDA
+        for d in (DimensaoResolucao.CLIENTE, DimensaoResolucao.COMPETENCIA, DimensaoResolucao.COLABORADOR)
+    )
+    assert modulo_composicao._elegivel_para_distribuicao(para_outro_tipo) is False
+    assert modulo_composicao._elegivel_para_distribuicao(para_o_proprio_tipo) is True
+
+
+def test_generico_ordem_de_entrada_dos_documentos_nao_altera_a_identidade():
+    """Teste H: a mesma entrada em ordens diferentes produz as mesmas
+    Ordens (mesmo event_id) -- a posição do documento faz parte da
+    identidade, então a partição a torna determinística."""
+    def _eventos(inverter):
+        ambiente = _ambiente_arbitrario()
+        resultados = _resultados_a_b_c_d(ambiente)
+        if inverter:
+            resultados = tuple(reversed(resultados))
+        return sorted((r.funcionario_id, r.event_id, r.documento_ids) for r in _distribuir_grupos(ambiente, resultados))
+
+    assert _eventos(False) == _eventos(True)
+
+
+def test_generico_replay_nao_duplica():
+    """Teste I (tipos arbitrários, N documentos)."""
+    ambiente = _ambiente_arbitrario()
+    primeira = _distribuir_grupos(ambiente, _resultados_a_b_c_d(ambiente))
+    segunda = _distribuir_grupos(ambiente, _resultados_a_b_c_d(ambiente))
+    ids = lambda rs: sorted(a.acao_execucao_id for r in rs for a in r.acoes_persistidas)
+    assert ids(primeira) == ids(segunda)
+    assert len(ambiente.conexao.linhas) == 6  # 2 Ordens x (texto + 2 documentos)
+
+
+def test_particao_e_elegibilidade_nao_decidem_por_nome_de_documento():
+    """Prova de não acoplamento na camada da Prestação: a partição por
+    destinatário e a checagem de tipo da elegibilidade não contêm nenhum
+    nome documental concreto."""
+    nomes_reais = ('holerite', 'folha', 'ponto', 'contrato', 'advert', 'extrato', 'fgts', 'rescis')
+    for funcao in (
+        modulo_composicao._particionar_por_colaborador,
+        modulo_composicao._tipo_resolvido_atende_necessidade,
+        modulo_composicao.resultados_aquisicao_prontos_por_colaborador,
+    ):
+        arvore = ast.parse(inspect.getsource(funcao).lstrip())
+        corpo = arvore.body[0].body
+        docstring = corpo[0].value if corpo and isinstance(corpo[0], ast.Expr) else None
+        literais = [
+            no.value for no in ast.walk(arvore)
+            if isinstance(no, ast.Constant) and isinstance(no.value, str) and no is not docstring
+        ]
+        assert [l for l in literais if any(n in l.lower() for n in nomes_reais)] == [], funcao.__name__

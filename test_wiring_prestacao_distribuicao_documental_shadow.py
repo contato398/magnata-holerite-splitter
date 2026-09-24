@@ -485,7 +485,8 @@ def test_replay_idempotente_mesmo_event_id_sem_duplicar():
 
     assert primeiro.event_id == segundo.event_id
     assert primeiro.acao_execucao_id == segundo.acao_execucao_id
-    assert len(_conexao.linhas) == 1
+    # Gate J1b: todas as ações do plano são persistidas (texto + documento).
+    assert len(_conexao.linhas) == 2
 
 
 def test_documento_hash_divergente_propaga_erro_do_nucleo_sem_mascarar():

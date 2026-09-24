@@ -354,3 +354,130 @@ Com o wiring anterior, 7 dos 11 testes J1b falham.
    **não** o tipo documental da necessidade. Um documento do colaborador
    A pode satisfazer outra necessidade de A. Não há vazamento entre
    pessoas, mas vale um incremento próprio.
+
+(Os itens 2 e 3 foram resolvidos no hardening da §13.)
+
+## 13. J1b hardening: distribuição documental genérica por destinatário (2026-09-24)
+
+### Cláusulas arquiteturais
+
+> **A distribuição documental do Magnata OS é agnóstica ao tipo
+> documental.** Tipos documentais pertencem às regras dos domínios e às
+> políticas de elegibilidade, não à infraestrutura de distribuição nem
+> ao canal.
+
+> **Assinatura digital é uma modalidade/capacidade da distribuição, e
+> não uma propriedade intrínseca de um tipo documental.**
+
+### O que o legado mostrou
+Evidência levantada por subagentes só de leitura:
+- **Assinatura:** o núcleo e os presets decidem **só pela flag
+  `exigir_assinatura` do preset**, indexado por `preset_id`, nunca por
+  tipo. Os literais de tipo (`HOLERITE_FOLHA_PONTO`, `KIT_ADMISSAO`)
+  aparecem só no adapter legado
+  (`adapters/obrigacao_assinatura_legado_http.py`) e no `app.py`. Esse
+  encapsulamento foi preservado.
+- **N documentos:** o modelo estabelecido é **1 ação = 1 conteúdo = 1
+  chamada Evolution = 1 Envelope**. O legado (`/webhook/enviar-whatsapp`)
+  já envia N documentos como N chamadas. `montar_plano_disparo` gera 1
+  ação por passo. O repositório e o executor já tratam N ações por
+  evento, e `wiring_prestacao_orquestrador_postgres_shadow.py` já
+  persiste todas as ações do plano.
+- **Vocabulário de tipos:** a necessidade e o corredor usam as mesmas
+  strings canônicas. A única tradução conhecida é
+  `TRADUCAO_FAMILIA_B_PARA_MOTOR_GERAL`.
+
+### Classificação do problema
+Foi uma combinação de três limitações:
+
+1. **Defeito no núcleo genérico (anterior ao J1b, com impacto
+   operacional).** `materializar_distribuicao_documental_shadow`
+   persistia só `plano.acoes[0]`. No ramo sem assinatura, com a
+   composição `'separado'`, essa é a **ação de texto**: **o documento
+   nunca virava ação executável nem Envelope**. Nenhum teste anterior
+   (#179, #181, J1, J1b) conferia o conteúdo da ação.
+   **Correção:** persistir **todas** as ações do plano, cada uma com seu
+   Envelope, seguindo o padrão já existente. O ramo com assinatura
+   continua com exatamente 1 ação (mensagem com link) e agora falha
+   fechado se não tiver. `ResultadoDistribuicaoDocumentalShadow` ganha o
+   campo aditivo `acoes_persistidas`; `acao_persistida` continua sendo a
+   primeira ação.
+2. **Política por cardinalidade ausente.** O ramo sem assinatura só
+   aceitava N=1.
+   **Correção:** nova política genérica `DOCUMENTOS_SEPARADOS`, que
+   aceita 1..N documentos quaisquer sem assinatura, e novo preset
+   `DOCUMENTOS_SEM_ASSINATURA`. Com assinatura, continua valendo a tabela
+   V1 (o motor legado de assinatura agrupa no máximo 2 por link, e isso
+   continua encapsulado no adapter). Nomes de arquivo duplicados na
+   mesma Ordem falham fechado (`NomeDocumentoDuplicadoNaOrdem`).
+3. **Elegibilidade da Prestação ("pessoa certa, documento errado").**
+   `_tipo_resolvido_atende_necessidade` exige que o tipo resolvido pelo
+   corredor, com valor único, seja o tipo da necessidade. A comparação é
+   genérica e reaproveita a tradução canônica. É regra da Prestação: a
+   camada genérica nunca olha o tipo. A partição passa a ordenar os
+   documentos do grupo por (`documento_id`, `hash`), porque a posição
+   faz parte do `event_id` e uma ordem diferente de candidatos geraria
+   uma Ordem "nova" (replay duplicado).
+
+**Sem mudança:** Ordem, Envelope, executor, Orquestrador, autorização e
+fluxo pós-PENDING.
+
+### Modelo adotado
+A cadeia é necessidade → documento elegível (Prestação: pessoa +
+cliente + competência + tipo) → partição por destinatário → política
+(preset por `preset_id`: modalidade e cardinalidade) → Ordem de
+destinatário único com 1..N documentos → evento → Orquestrador → plano →
+N ações, cada uma com seu Envelope.
+
+- **Documento de nível cliente:** continua fora das Ordens de
+  colaborador (§12).
+- **Escolha do preset:** continua sendo do chamador. O
+  `DOCUMENTOS_SEM_ASSINATURA` serve para 1..N documentos, então dispensa
+  lógica de preset por quantidade.
+
+### Prova
+**Testes com tipos arbitrários** (`DOCUMENTO_A..D`) nunca existiram na
+empresa. Eles cobrem:
+- 1 destinatário com 1 documento;
+- 1 destinatário com N documentos;
+- A recebe A/B e B recebe C/D, sem vazamento, incluindo o conteúdo das
+  ações;
+- pessoa certa com documento errado, com tipos arbitrários **e** com o
+  corredor real;
+- ordem de entrada;
+- replay;
+- mesmo tipo sob modalidades diferentes;
+- núcleo com N = 1, 2, 3 e 5;
+- a regressão do defeito do `acoes[0]`;
+- não acoplamento (AST): nenhum literal de nome documental real no
+  núcleo, nos presets, na partição nem na checagem de tipo. O scanner foi
+  validado detectando os literais do adapter legado.
+
+**Fluxo real até PENDING** (PDF real → extração → corredor → elegibilidade
+→ readiness → partição → Ordem → Contato → evento → Orquestrador →
+PENDING) continua provado com os tipos que o corredor real sabe
+classificar. O corredor não classifica tipos arbitrários; a genericidade
+da camada de distribuição é provada acima dele.
+
+**Fixture de teste:** o PDF sintético passou a ser determinístico
+(`set_creation_date`). Sem isso, testes de identidade entre 2 ambientes
+dependiam do relógio.
+
+### Pontos abertos
+1. **Envio de documento de nível cliente ao cliente** (pacote): continua
+   aberto (§12).
+2. **Assinatura para N > 2 documentos, ou para 2 documentos fora do
+   pacote legado:** limitação do motor legado de assinatura, encapsulada
+   no adapter e fail-closed. Generalizar isso é trabalho do domínio de
+   assinatura e é pós-PENDING.
+3. **Mudança única de identidade:** a ordenação dos documentos do grupo
+   muda **uma vez** o `event_id` de grupos com 2 ou mais documentos
+   cuja ordem anterior era diferente. Isso afeta só dados shadow
+   gerados pelo commit `1185be9`, que nunca foi publicado. Em 1
+   documento nada muda.
+4. **CLI `distribuir_documento_v1`:** continua exibindo só o
+   `acao_execucao_id` da primeira ação (texto). É informativo; os ids
+   das ações de documento estão em `acoes_persistidas`.
+5. **Canal:** os presets atuais são de WhatsApp. Outro canal é outro
+   preset e outro executor; nada na Ordem nem no núcleo depende do canal
+   além do valor opaco.

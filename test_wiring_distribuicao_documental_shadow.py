@@ -734,3 +734,160 @@ def test_ordem_dos_documentos_participa_da_identidade():
         politica_agrupamento='AGRUPADO_1_LINK',
     )
     assert derivar_identidade_ordem_distribuicao(ordem_1) != derivar_identidade_ordem_distribuicao(ordem_2)
+
+
+# ---------------------------------------------------------------------
+# Gate J1b -- distribuição GENÉRICA: 1..N documentos quaisquer, tipos
+# arbitrários (DOCUMENTO_A/B/C nunca existiram na empresa), modalidade
+# (assinatura) decidida só pelo preset.
+# ---------------------------------------------------------------------
+
+def _preparar_documentos_arbitrarios(deps, n):
+    return tuple(
+        _preparar_documento(
+            deps['repositorio_documentos'], deps['armazenamento'],
+            documento_id=f'doc-{letra}', conteudo=f'CONTEUDO-{letra}'.encode(), nome_original=f'{letra}.pdf',
+        )
+        for letra in 'ABCDEFGH'[:n]
+    )
+
+
+def _ordem_separada(documentos, **kwargs):
+    return _ordem_generica(
+        documentos=tuple(ItemDocumentoOrdem(d.documento_id, d.hash_sha256) for d in documentos),
+        tipo_documento=kwargs.pop('tipo_documento', 'DOCUMENTO_A'),
+        politica_agrupamento='DOCUMENTOS_SEPARADOS', **kwargs,
+    )
+
+
+def test_n1_sem_assinatura_o_documento_vira_acao_executavel_persistida():
+    """Regressão do defeito encontrado no J1b: antes só `plano.acoes[0]`
+    (a ação de TEXTO) era persistida -- o documento nunca chegava a uma
+    ação executável nem a um Envelope."""
+    deps = _montar_dependencias()
+    (documento,) = _preparar_documentos_arbitrarios(deps, 1)
+    resultado = materializar_distribuicao_documental_shadow(
+        ordem=_ordem_generica(documentos=(ItemDocumentoOrdem(documento.documento_id, documento.hash_sha256),)),
+        materializador=None, porta_assinatura=None,
+        ator_referencia='rh:teste', proveniencia='teste:sintetico', instante=AGORA, **deps,
+    )
+    assert [a.tipo for a in resultado.acoes_persistidas] == ['texto', 'documento']
+    assert resultado.acoes_persistidas[1].conteudo_sha256 == documento.hash_sha256
+    assert all(a.envelope_sha256 for a in resultado.acoes_persistidas)
+    assert resultado.acao_persistida == resultado.acoes_persistidas[0]
+
+
+@pytest.mark.parametrize('n', [1, 2, 3, 5])
+def test_documentos_separados_aceita_n_documentos_arbitrarios_sem_logica_por_quantidade(n):
+    deps = _montar_dependencias()
+    documentos = _preparar_documentos_arbitrarios(deps, n)
+    resultado = materializar_distribuicao_documental_shadow(
+        ordem=_ordem_separada(documentos), materializador=None, porta_assinatura=None,
+        ator_referencia='rh:teste', proveniencia='teste:sintetico', instante=AGORA, **deps,
+    )
+    assert [a.tipo for a in resultado.acoes_persistidas] == ['texto'] + ['documento'] * n
+    assert [a.conteudo_sha256 for a in resultado.acoes_persistidas[1:]] == [d.hash_sha256 for d in documentos]
+    assert len({a.acao_execucao_id for a in resultado.acoes_persistidas}) == n + 1
+    assert len({a.envelope_sha256 for a in resultado.acoes_persistidas}) == n + 1
+    assert resultado.documento_ids == tuple(d.documento_id for d in documentos)
+
+
+def test_documentos_separados_replay_nao_duplica_acoes():
+    deps = _montar_dependencias()
+    documentos = _preparar_documentos_arbitrarios(deps, 3)
+    kwargs = dict(materializador=None, porta_assinatura=None, ator_referencia='rh:teste',
+                  proveniencia='teste:sintetico', instante=AGORA, **deps)
+    primeiro = materializar_distribuicao_documental_shadow(ordem=_ordem_separada(documentos), **kwargs)
+    segundo = materializar_distribuicao_documental_shadow(ordem=_ordem_separada(documentos), **kwargs)
+    assert [a.acao_execucao_id for a in primeiro.acoes_persistidas] == [
+        a.acao_execucao_id for a in segundo.acoes_persistidas
+    ]
+    assert primeiro.event_id == segundo.event_id
+
+
+def test_documentos_separados_com_assinatura_falha_fechado_antes_de_io():
+    deps = _montar_dependencias()
+    documentos = _preparar_documentos_arbitrarios(deps, 2)
+    with pytest.raises(PoliticaAgrupamentoNaoSuportada):
+        materializar_distribuicao_documental_shadow(
+            ordem=_ordem_separada(documentos, exigir_assinatura=True, exigir_comprovante=True),
+            materializador=_MaterializadorFake(), porta_assinatura=_PortaAssinaturaFake(),
+            ator_referencia='rh:teste', proveniencia='teste:sintetico', instante=AGORA, **deps,
+        )
+
+
+def test_documentos_com_mesmo_nome_na_mesma_ordem_falha_fechado():
+    from magnata_os.orquestrador.wiring_distribuicao_documental_shadow import NomeDocumentoDuplicadoNaOrdem
+    deps = _montar_dependencias()
+    documentos = tuple(
+        _preparar_documento(deps['repositorio_documentos'], deps['armazenamento'],
+                            documento_id=f'doc-{i}', conteudo=f'X{i}'.encode(), nome_original='mesmo.pdf')
+        for i in range(2)
+    )
+    with pytest.raises(NomeDocumentoDuplicadoNaOrdem):
+        materializar_distribuicao_documental_shadow(
+            ordem=_ordem_separada(documentos), materializador=None, porta_assinatura=None,
+            ator_referencia='rh:teste', proveniencia='teste:sintetico', instante=AGORA, **deps,
+        )
+
+
+def test_mesmo_tipo_documental_sob_modalidades_diferentes_sem_mudar_o_mecanismo():
+    """Teste G: o MESMO tipo documental arbitrário segue com ou sem
+    assinatura -- a modalidade vem só do preset; `resolver_preset` nem
+    recebe tipo documental."""
+    import inspect as _inspect
+    from magnata_os.orquestrador.politica_preset_distribuicao_documental import resolver_preset
+
+    assert list(_inspect.signature(resolver_preset).parameters) == ['preset_id']
+    sem = resolver_preset('DOCUMENTOS_SEM_ASSINATURA')
+    com = resolver_preset('DOCUMENTO_UNITARIO_COM_ASSINATURA')
+    assert (sem.exigir_assinatura, com.exigir_assinatura) == (False, True)
+
+    for exigir_assinatura, politica in ((False, 'DOCUMENTOS_SEPARADOS'), (True, 'UNITARIO')):
+        deps = _montar_dependencias()
+        (documento,) = _preparar_documentos_arbitrarios(deps, 1)
+        resultado = materializar_distribuicao_documental_shadow(
+            ordem=_ordem_generica(
+                documentos=(ItemDocumentoOrdem(documento.documento_id, documento.hash_sha256),),
+                tipo_documento='DOCUMENTO_A', exigir_assinatura=exigir_assinatura,
+                exigir_comprovante=exigir_assinatura, politica_agrupamento=politica,
+            ),
+            materializador=_MaterializadorFake() if exigir_assinatura else None,
+            porta_assinatura=_PortaAssinaturaFake() if exigir_assinatura else None,
+            ator_referencia='rh:teste', proveniencia='teste:sintetico', instante=AGORA, **deps,
+        )
+        assert (resultado.assinatura_link is not None) == exigir_assinatura
+
+
+_NOMES_DOCUMENTAIS_REAIS = ('holerite', 'folha', 'ponto', 'contrato', 'advert', 'extrato', 'fgts', 'rescis', 'kit_admiss')
+
+
+def _literais_de_codigo(modulo):
+    """Strings do CÓDIGO (docstrings excluídas) -- onde uma decisão por
+    nome de documento apareceria (comparação, dict, if)."""
+    import inspect
+    arvore = ast.parse(inspect.getsource(modulo))
+    docstrings = {
+        id(no.body[0].value)
+        for no in ast.walk(arvore)
+        if isinstance(no, (ast.Module, ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef))
+        and no.body and isinstance(no.body[0], ast.Expr) and isinstance(no.body[0].value, ast.Constant)
+    }
+    return [
+        no.value for no in ast.walk(arvore)
+        if isinstance(no, ast.Constant) and isinstance(no.value, str) and id(no) not in docstrings
+    ]
+
+
+def test_nucleo_generico_e_presets_nao_decidem_por_nome_de_documento():
+    """Prova de não acoplamento: nenhum literal de nome documental real
+    no código do núcleo de distribuição nem da tabela de presets."""
+    import magnata_os.orquestrador.politica_preset_distribuicao_documental as modulo_presets
+    import magnata_os.orquestrador.wiring_distribuicao_documental_shadow as modulo_nucleo
+
+    for modulo in (modulo_nucleo, modulo_presets):
+        achados = [
+            literal for literal in _literais_de_codigo(modulo)
+            if any(nome in literal.lower() for nome in _NOMES_DOCUMENTAIS_REAIS)
+        ]
+        assert achados == [], (modulo.__name__, achados)

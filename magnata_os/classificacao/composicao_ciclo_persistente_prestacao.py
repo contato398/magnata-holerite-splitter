@@ -968,6 +968,29 @@ def _descobrir_adquirir_e_recalcular_readiness(
 EVENTO_DOCUMENTO_INELEGIVEL_DISTRIBUICAO = 'documento_inelegivel_distribuicao'
 
 
+def _tipo_resolvido_atende_necessidade(
+    resolucao: ResultadoResolucaoSemantico, necessidade: NecessidadeDocumentoPrestacao,
+) -> bool:
+    """Gate J1b ("pessoa certa, documento errado"): o TIPO documental
+    que o corredor resolveu (valor único) precisa ser o tipo da
+    necessidade que buscou o documento -- senão o documento de A que
+    satisfaz outra necessidade de A entraria na distribuição como se
+    fosse o documento pedido. Comparação genérica, sem nenhum nome de
+    tipo: ambos os lados usam o vocabulário canônico do motor, e a
+    única tradução conhecida entre vocabulários
+    (`TRADUCAO_FAMILIA_B_PARA_MOTOR_GERAL`) é reaproveitada, nunca
+    reescrita. Regra da elegibilidade da Prestação -- a distribuição
+    genérica nunca olha tipo."""
+    tipo_resolvido = _dimensao_resolvida_com_valor_unico(resolucao, DimensaoResolucao.TIPO_DOCUMENTAL)
+    if tipo_resolvido is None:
+        return False
+
+    def _canonico(tipo: str) -> str:
+        return TRADUCAO_FAMILIA_B_PARA_MOTOR_GERAL.get(tipo, tipo)
+
+    return _canonico(tipo_resolvido.entidade_id) == _canonico(necessidade.tipo_documental)
+
+
 def _elegivel_para_distribuicao(resultado: ResultadoAquisicaoPorNecessidade) -> bool:
     """Gate J1 (achado da revisão adversarial): `adquirir_por_
     necessidades` registra 1 resultado por (necessidade, candidato)
@@ -1007,6 +1030,7 @@ def _elegivel_para_distribuicao(resultado: ResultadoAquisicaoPorNecessidade) -> 
                 _dimensao_resolvida_com_valor_unico(resolucao, dimensao) != valor
                 for dimensao, valor in esperado.items()
             )
+            or not _tipo_resolvido_atende_necessidade(resolucao, necessidade)
         ):
             elegivel = False
             break
@@ -1115,8 +1139,12 @@ def _particionar_por_colaborador(
       ocorrência); o vínculo necessidade->documento continua existindo
       em `resultados_aquisicao`, só não é repetido na Ordem.
     - Grupos em ordem determinística por `colaborador.entidade_id`;
-      dentro do grupo, a ordem de aquisição -- nunca depende da ordem
-      em que os colaboradores foram listados pela fonte."""
+      dentro do grupo, documentos ordenados por (`documento_id`,
+      `hash_sha256`) -- a posição do documento faz parte da identidade
+      da Ordem (`event_id`), então a ordem em que a fonte de candidatos
+      devolveu os documentos nunca pode gerar uma Ordem "nova" para o
+      mesmo conjunto (replay duplicado). Nunca depende da ordem de
+      listagem de colaboradores nem de documentos."""
     grupos: dict = {}
     for resultado in resultados:
         colaborador = resultado.necessidade.colaborador
@@ -1139,7 +1167,7 @@ def _particionar_por_colaborador(
         documentos_do_colaborador = grupos.setdefault(colaborador.entidade_id, {})
         documentos_do_colaborador.setdefault((resultado.documento_id, resultado.hash_sha256), resultado)
     return tuple(
-        (cliente, competencia, tuple(grupos[colaborador_id].values()))
+        (cliente, competencia, tuple(grupos[colaborador_id][chave] for chave in sorted(grupos[colaborador_id])))
         for colaborador_id in sorted(grupos)
     )
 
