@@ -62,6 +62,7 @@ from .ciclo_prestacao import (
     executar_ciclo_prestacao_descoberta,
 )
 from .competencia_esperada_prestacao import (
+    POLITICA_COMPETENCIA_PRESTACAO_V1,
     PoliticaCompetenciaPrestacao,
     verificar_politica_sem_override_por_tipo,
 )
@@ -76,9 +77,11 @@ from .execucao_prestacao import (
     RepositorioExecucoesPrestacao,
     criar_execucao_prestacao,
 )
+from magnata_os.documental.importacao_lote.contratos import CandidatoFuncionario
 from magnata_os.documental.modulo01.armazenamento import ArquivoNaoEncontrado
 from magnata_os.documental.modulo01.dominio import Documento
 from .fonte_candidatos_por_necessidade import FonteCandidatosDocumentaisPorNecessidade
+from .fonte_cliente_direto_documento import FonteClienteDiretoDocumento
 from .fonte_clientes_prestacao import FonteClientesPrestacao
 from .fonte_colaboradores_esperados_prestacao import (
     FonteColaboradoresEsperadosPrestacao,
@@ -101,7 +104,10 @@ from .prestacao_readiness import (
     ItemInventarioPrestacao,
     RequisitoDocumentalPrestacao,
 )
+from .resolucao_documento_prestacao import EstadoCorredorDocumentoPrestacao
 from .roteamento_documental import extrair_texto_seguro
+from .vinculo_unidade_prestacao import FonteUnidadePostoPrestacao
+from .vinculos_prestacao import FonteVinculosPrestacao
 
 _logger = logging.getLogger(__name__)
 
@@ -202,6 +208,95 @@ class ContextoComposicaoPrestacao:
     ausência de evidência contextual, tratada como
     `sem_evidencia_documental_real` → REVISAR, nunca um fallback
     silencioso."""
+
+    # ---- Gate J1: fontes de resolução de dimensões do corredor ----
+    # Antes do J1 a aquisição fixava as 3 fontes abaixo em `None` e
+    # passava `tipos_obrigatorios_por_colaborador` (tipos documentais,
+    # `str`) como `candidatos_colaborador` -- o corredor real levantava
+    # `AttributeError` em todo documento de granularidade colaborador
+    # (engolido como `corredor_falhou`) e nenhuma dimensão CLIENTE/
+    # UNIDADE_POSTO podia ser resolvida (ver docs/decisoes/auditoria-
+    # gate-j-composicao-prestacao-v1.md). Estes campos só REPASSAM ao
+    # corredor as mesmas portas que `ContextoExecucaoCorredorPrestacao`
+    # já declara -- nenhum contrato novo. Default = ausência explícita:
+    # a dimensão correspondente fica NAO_AVALIADA/NAO_ENCONTRADA (REVISAR),
+    # nunca fabricada. `fonte_candidatos_relacao` NÃO entra aqui: não
+    # resolve dimensão nenhuma (só relação documental pós-resolução).
+
+    candidatos_colaborador: Tuple[CandidatoFuncionario, ...] = dataclasses.field(default=(), repr=False)
+    """Universo de colaboradores contra o qual o corredor identifica o
+    colaborador pelo CONTEÚDO do documento (CPF/nome, `resolver_
+    funcionario`). Carrega CPF em memória -- nunca logado, nunca
+    persistido por este módulo, fora do `repr` do contexto (nenhum
+    traceback/log que imprima o contexto expõe CPF). Validado em
+    `__post_init__`: só `CandidatoFuncionario`, nunca tipo documental
+    (regressão do J1)."""
+
+    fonte_vinculos: Optional[FonteVinculosPrestacao] = None
+    """COLABORADOR -> CLIENTE na competência (granularidade colaborador)."""
+
+    fonte_unidade_posto: Optional[FonteUnidadePostoPrestacao] = None
+    """COLABORADOR -> UNIDADE_POSTO na competência (hoje exigido pelo
+    perfil de Holerite)."""
+
+    fonte_cliente_direto: Optional[FonteClienteDiretoDocumento] = None
+    """Cliente comprovado pelo próprio texto (granularidade cliente:
+    Extrato, FGTS Guia)."""
+
+    def __post_init__(self) -> None:
+        candidatos = tuple(self.candidatos_colaborador)
+        invalidos = [c for c in candidatos if not isinstance(c, CandidatoFuncionario)]
+        if invalidos:
+            raise TypeError(
+                'candidatos_colaborador aceita somente CandidatoFuncionario '
+                f'(recebido: {sorted({type(c).__name__ for c in invalidos})})'
+            )
+        object.__setattr__(self, 'candidatos_colaborador', candidatos)
+
+
+def _contexto_corredor(
+    contexto: 'ContextoComposicaoPrestacao',
+    documento_bruto: Documento,
+    texto_documento: str,
+    ciclo_para_corredor: ContextoCicloPrestacao,
+    cliente_do_ciclo: Optional[ReferenciaCanonica],
+) -> ContextoExecucaoCorredorPrestacao:
+    """Único ponto que monta o contexto do corredor para a aquisição
+    (Gate J1) -- as duas aquisições (`adquirir_por_necessidades` e a
+    primitiva em bloco) passam a repassar as MESMAS fontes, nunca uma
+    cópia divergente da outra.
+
+    `politica_competencia=None` no contexto (não informada) NÃO é mais
+    repassado como `None`: o corredor chamava `.competencia_esperada_
+    para` em `None` sempre que `cliente_do_ciclo` estava presente (todo
+    documento de `adquirir_por_necessidades`) -- `AttributeError`,
+    engolido como `corredor_falhou`. Sem política informada, vale o
+    default canônico que o próprio `ContextoExecucaoCorredorPrestacao`
+    já declara (`POLITICA_COMPETENCIA_PRESTACAO_V1`)."""
+    politica_competencia = (
+        contexto.politica_competencia
+        if contexto.politica_competencia is not None
+        else POLITICA_COMPETENCIA_PRESTACAO_V1
+    )
+    return ContextoExecucaoCorredorPrestacao(
+        documento_id=documento_bruto.documento_id,
+        hash_sha256=documento_bruto.hash_sha256,
+        paginas=(texto_documento,),  # 1 "página" = conteúdo completo extraído
+        ciclo=ciclo_para_corredor,
+        cliente_do_ciclo=cliente_do_ciclo,
+        politica_competencia=politica_competencia,
+        candidatos_colaborador=contexto.candidatos_colaborador,
+        fonte_vinculos=contexto.fonte_vinculos,
+        fonte_cliente_direto=contexto.fonte_cliente_direto,
+        fonte_unidade_posto=contexto.fonte_unidade_posto,
+        fonte_candidatos_relacao=None,
+        clientes_broadcast=(),
+        identificar_pagina=None,
+        personalizar_contexto_do_grupo=None,
+        registrar_dados_correlacao=False,
+        fonte_inventario_pacote=None,
+        politica_requisitos=None,
+    )
 
 
 # ==== FUNÇÕES PRIMITIVAS (INCREMENTO 1 — revisadas) ====
@@ -464,24 +559,9 @@ def _adquirir_inventario_via_corredor(
             continue
 
         # Construir contexto para o corredor (todas as dependências são opcionais)
-        contexto_corredor = ContextoExecucaoCorredorPrestacao(
-            documento_id=documento_bruto.documento_id,
-            hash_sha256=documento_bruto.hash_sha256,
-            paginas=(texto_documento,),  # 1 "página" = conteúdo completo extraído
-            ciclo=ciclo_para_corredor,
+        contexto_corredor = _contexto_corredor(
+            contexto, documento_bruto, texto_documento, ciclo_para_corredor,
             cliente_do_ciclo=None,  # Deixar corredor decidir
-            politica_competencia=contexto.politica_competencia,
-            candidatos_colaborador=contexto.tipos_obrigatorios_por_colaborador,
-            fonte_vinculos=None,
-            fonte_cliente_direto=None,
-            fonte_unidade_posto=None,
-            fonte_candidatos_relacao=None,
-            clientes_broadcast=(),
-            identificar_pagina=None,
-            personalizar_contexto_do_grupo=None,
-            registrar_dados_correlacao=False,
-            fonte_inventario_pacote=None,
-            politica_requisitos=None,
         )
 
         # Executar corredor: resolve semanticamente, escreve no
@@ -648,24 +728,9 @@ def adquirir_por_necessidades(
                 necessidade.cliente, necessidade.competencia,
             )
             if chave_cache not in corredor_por_chave:
-                contexto_corredor = ContextoExecucaoCorredorPrestacao(
-                    documento_id=documento_bruto.documento_id,
-                    hash_sha256=documento_bruto.hash_sha256,
-                    paginas=(texto_documento,),
-                    ciclo=ciclo_para_corredor,
+                contexto_corredor = _contexto_corredor(
+                    contexto, documento_bruto, texto_documento, ciclo_para_corredor,
                     cliente_do_ciclo=necessidade.cliente,  # ESPERADO, nunca inferido do documento
-                    politica_competencia=contexto.politica_competencia,
-                    candidatos_colaborador=contexto.tipos_obrigatorios_por_colaborador,
-                    fonte_vinculos=None,
-                    fonte_cliente_direto=None,
-                    fonte_unidade_posto=None,
-                    fonte_candidatos_relacao=None,
-                    clientes_broadcast=(),
-                    identificar_pagina=None,
-                    personalizar_contexto_do_grupo=None,
-                    registrar_dados_correlacao=False,
-                    fonte_inventario_pacote=None,
-                    politica_requisitos=None,
                 )
                 try:
                     resultado_corredor_cru = executar_documento_readonly(
@@ -900,6 +965,67 @@ def _descobrir_adquirir_e_recalcular_readiness(
     return resultados_aquisicao, resultado_ciclo_2
 
 
+EVENTO_DOCUMENTO_INELEGIVEL_DISTRIBUICAO = 'documento_inelegivel_distribuicao'
+
+
+def _elegivel_para_distribuicao(resultado: ResultadoAquisicaoPorNecessidade) -> bool:
+    """Gate J1 (achado da revisão adversarial): `adquirir_por_
+    necessidades` registra 1 resultado por (necessidade, candidato)
+    QUALQUER que seja o estado do corredor -- correto para a avaliação
+    de âncora, mas `resultados_aquisicao_prontos_por_cliente` os
+    repassava TODOS à distribuição assim que o cliente ficava PRONTO.
+    Antes do J1 isso era inalcançável (o corredor real quebrava em todo
+    documento); com o corredor real funcionando, um candidato em
+    REVISAO_NECESSARIA -- ou RESOLVIDO para OUTRO colaborador/cliente/
+    competência que não o da necessidade -- entraria na Ordem do
+    colaborador da necessidade (documento de uma pessoa enviado a
+    outra).
+
+    Elegível só quando TODA execução do corredor para o documento
+    terminou `RESOLVIDO_E_AVANCOU`, sem revisão humana, e a resolução
+    REAL confirma, com valor único, exatamente o cliente/competência da
+    necessidade -- e o colaborador, quando a necessidade tem um. Nunca
+    corrige nem reatribui: inelegível é só omitido da distribuição e
+    registrado (evento estável, só identificadores)."""
+    necessidade = resultado.necessidade
+    esperado = {
+        DimensaoResolucao.CLIENTE: necessidade.cliente,
+        DimensaoResolucao.COMPETENCIA: necessidade.competencia,
+    }
+    if necessidade.colaborador is not None:
+        esperado[DimensaoResolucao.COLABORADOR] = necessidade.colaborador
+
+    elegivel = bool(resultado.resultados_corredor)
+    for execucao in resultado.resultados_corredor:
+        corredor = execucao.resultado_corredor
+        resolucao = corredor.resolucao_semantica
+        if (
+            corredor.estado != EstadoCorredorDocumentoPrestacao.RESOLVIDO_E_AVANCOU
+            or resolucao is None
+            or resolucao.necessita_revisao_humana
+            or any(
+                _dimensao_resolvida_com_valor_unico(resolucao, dimensao) != valor
+                for dimensao, valor in esperado.items()
+            )
+        ):
+            elegivel = False
+            break
+
+    if not elegivel:
+        _logger.warning(
+            '%s documento_id=%s cliente=%s competencia=%s',
+            EVENTO_DOCUMENTO_INELEGIVEL_DISTRIBUICAO,
+            resultado.documento_id, necessidade.cliente.entidade_id, necessidade.competencia.entidade_id,
+            extra={
+                'evento': EVENTO_DOCUMENTO_INELEGIVEL_DISTRIBUICAO,
+                'documento_id': resultado.documento_id,
+                'cliente': necessidade.cliente.entidade_id,
+                'competencia': necessidade.competencia.entidade_id,
+            },
+        )
+    return elegivel
+
+
 def resultados_aquisicao_prontos_por_cliente(
     contexto: 'ContextoComposicaoPrestacao',
 ) -> Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...]:
@@ -945,6 +1071,7 @@ def resultados_aquisicao_prontos_por_cliente(
             ra for ra in resultados_aquisicao
             if ra.necessidade.cliente == resultado_cliente.cliente
             and ra.necessidade.competencia == resultado_cliente.competencia
+            and _elegivel_para_distribuicao(ra)
         )
         if not resultados_do_cliente:
             continue  # PRONTO sem aquisição própria nesta execução (ex.: documento já no inventário base) -- nada a distribuir aqui

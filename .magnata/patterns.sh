@@ -1234,6 +1234,17 @@ ALLOWED_PATHS=(
   "^magnata_os/orquestrador/executar_prestacao_contato_ate_pending_shadow_v1\.py$"
   "^test_executar_prestacao_contato_ate_pending_shadow_v1\.py$"
   "^test_executar_prestacao_contato_ate_pending_shadow_v1_real\.py$"
+
+  # GATE J1 -- auditoria do Gate J (composição real do Contexto da
+  # Prestação) + correção do wiring do corredor real na aquisição
+  # (`composicao_ciclo_persistente_prestacao.py`, já coberto acima):
+  # `candidatos_colaborador` recebia tipos documentais, fontes de
+  # vínculo/unidade/cliente direto fixas em None, política de
+  # competência None repassada ao corredor. Teste nominal prova o
+  # corredor REAL (sem patch) até PENDING com fontes sintéticas em
+  # memória. ZERO migration, ZERO Airtable, ZERO transporte real.
+  "^docs/decisoes/auditoria-gate-j-composicao-prestacao-v1\.md$"
+  "^test_aquisicao_prestacao_corredor_real_j1\.py$"
 )
 
 # ============================================================================

@@ -204,12 +204,18 @@ def _resolucao_ancora_holerite(documento_id, *, cliente, competencia, colaborado
 
     perfil = PerfilAplicabilidadeResolucao(
         perfil_id='prestacao-composicao-v1-real-teste', version='1', escopo_documental='prestacao-contas',
-        regras=(_regra(DimensaoResolucao.CLIENTE), _regra(DimensaoResolucao.COMPETENCIA)),
+        regras=(
+            _regra(DimensaoResolucao.CLIENTE), _regra(DimensaoResolucao.COMPETENCIA),
+            _regra(DimensaoResolucao.COLABORADOR),
+        ),
     )
     return ResultadoResolucaoSemantico(
         documento_id=documento_id, resolver_id='resolver-composicao-v1-real-teste', resolver_version='1',
         politica_id='prestacao-composicao-v1-real', politica_version='1', perfil=perfil,
-        resolucoes=(_dim(DimensaoResolucao.CLIENTE, cliente), _dim(DimensaoResolucao.COMPETENCIA, competencia)),
+        resolucoes=(
+            _dim(DimensaoResolucao.CLIENTE, cliente), _dim(DimensaoResolucao.COMPETENCIA, competencia),
+            _dim(DimensaoResolucao.COLABORADOR, colaborador),
+        ),
         estado_consolidado=EstadoResultadoSemantico.RESOLVIDA, necessita_revisao_humana=False,
     )
 
