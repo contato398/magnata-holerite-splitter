@@ -457,6 +457,62 @@ def test_replay_do_fluxo_real_nao_duplica_acao():
 
 
 # ---------------------------------------------------------------------
+# Elegibilidade para distribuição (achado da revisão adversarial do J1):
+# com o corredor real funcionando, candidatos em revisão ou resolvidos
+# para OUTRA pessoa passaram a chegar em `resultados_aquisicao`.
+# ---------------------------------------------------------------------
+
+_CANDIDATO_OUTRO = CandidatoFuncionario(func_id='colab-outro', cpf='99988877766', nome_normalizado='CICRANO SINTETICO')
+_TEXTO_HOLERITE_OUTRO = (
+    'Recibo de Pagamento -- Total de Vencimentos\n'
+    'Competência: 07/2026\n'
+    'CPF: 999.888.777-66'
+)
+
+
+def _documentos_distribuiveis(contexto):
+    return {
+        ra.documento_id
+        for _cliente, _competencia, resultados in resultados_aquisicao_prontos_por_cliente(contexto)
+        for ra in resultados
+    }
+
+
+def test_candidato_em_revisao_nunca_entra_na_distribuicao(caplog):
+    """`doc-ruim` tem CPF fora do universo de candidatos -> REVISAO; o
+    cliente fica PRONTO pelo `doc-hol` válido, mas `doc-ruim` nunca é
+    distribuído -- e a omissão é registrada, nunca silenciosa."""
+    ambiente = _Ambiente((
+        ('doc-hol', _pdf(_TEXTO_HOLERITE)), ('doc-ruim', _pdf(_TEXTO_HOLERITE_OUTRO)),
+    ))
+    with caplog.at_level(logging.WARNING, logger=modulo_composicao.__name__):
+        distribuiveis = _documentos_distribuiveis(ambiente.contexto(**_todas_as_fontes()))
+
+    assert distribuiveis == {'doc-hol'}
+    assert [
+        r.documento_id for r in caplog.records
+        if getattr(r, 'evento', None) == modulo_composicao.EVENTO_DOCUMENTO_INELEGIVEL_DISTRIBUICAO
+    ] == ['doc-ruim']
+
+
+def test_documento_de_outro_colaborador_nunca_vai_para_a_ordem_da_necessidade():
+    """A fonte de candidatos devolve, para a necessidade do colaborador
+    A, também o holerite do colaborador B (resolvido de verdade para B).
+    Nunca pode entrar na Ordem de A -- A recebe exatamente o próprio
+    documento (preset UNITÁRIO chega a PENDING, o que só é possível com
+    1 documento)."""
+    ambiente = _Ambiente((
+        ('doc-hol', _pdf(_TEXTO_HOLERITE)), ('doc-outro', _pdf(_TEXTO_HOLERITE_OUTRO)),
+    ))
+    fontes = dict(_todas_as_fontes(), candidatos_colaborador=(_CANDIDATO, _CANDIDATO_OUTRO))
+
+    assert _documentos_distribuiveis(ambiente.contexto(**fontes)) == {'doc-hol'}
+    (resultado,) = ambiente.executar_ate_pending(ambiente.contexto(**fontes))
+    assert resultado.funcionario_id == _COLABORADOR.entidade_id
+    assert resultado.acao_persistida.estado == EstadoAcaoExecucaoPlano.PENDING
+
+
+# ---------------------------------------------------------------------
 # Granularidade cliente -- `fonte_cliente_direto` só resolve com
 # evidência do próprio texto.
 # ---------------------------------------------------------------------

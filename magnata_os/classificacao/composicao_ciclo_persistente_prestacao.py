@@ -104,6 +104,7 @@ from .prestacao_readiness import (
     ItemInventarioPrestacao,
     RequisitoDocumentalPrestacao,
 )
+from .resolucao_documento_prestacao import EstadoCorredorDocumentoPrestacao
 from .roteamento_documental import extrair_texto_seguro
 from .vinculo_unidade_prestacao import FonteUnidadePostoPrestacao
 from .vinculos_prestacao import FonteVinculosPrestacao
@@ -964,6 +965,67 @@ def _descobrir_adquirir_e_recalcular_readiness(
     return resultados_aquisicao, resultado_ciclo_2
 
 
+EVENTO_DOCUMENTO_INELEGIVEL_DISTRIBUICAO = 'documento_inelegivel_distribuicao'
+
+
+def _elegivel_para_distribuicao(resultado: ResultadoAquisicaoPorNecessidade) -> bool:
+    """Gate J1 (achado da revisão adversarial): `adquirir_por_
+    necessidades` registra 1 resultado por (necessidade, candidato)
+    QUALQUER que seja o estado do corredor -- correto para a avaliação
+    de âncora, mas `resultados_aquisicao_prontos_por_cliente` os
+    repassava TODOS à distribuição assim que o cliente ficava PRONTO.
+    Antes do J1 isso era inalcançável (o corredor real quebrava em todo
+    documento); com o corredor real funcionando, um candidato em
+    REVISAO_NECESSARIA -- ou RESOLVIDO para OUTRO colaborador/cliente/
+    competência que não o da necessidade -- entraria na Ordem do
+    colaborador da necessidade (documento de uma pessoa enviado a
+    outra).
+
+    Elegível só quando TODA execução do corredor para o documento
+    terminou `RESOLVIDO_E_AVANCOU`, sem revisão humana, e a resolução
+    REAL confirma, com valor único, exatamente o cliente/competência da
+    necessidade -- e o colaborador, quando a necessidade tem um. Nunca
+    corrige nem reatribui: inelegível é só omitido da distribuição e
+    registrado (evento estável, só identificadores)."""
+    necessidade = resultado.necessidade
+    esperado = {
+        DimensaoResolucao.CLIENTE: necessidade.cliente,
+        DimensaoResolucao.COMPETENCIA: necessidade.competencia,
+    }
+    if necessidade.colaborador is not None:
+        esperado[DimensaoResolucao.COLABORADOR] = necessidade.colaborador
+
+    elegivel = bool(resultado.resultados_corredor)
+    for execucao in resultado.resultados_corredor:
+        corredor = execucao.resultado_corredor
+        resolucao = corredor.resolucao_semantica
+        if (
+            corredor.estado != EstadoCorredorDocumentoPrestacao.RESOLVIDO_E_AVANCOU
+            or resolucao is None
+            or resolucao.necessita_revisao_humana
+            or any(
+                _dimensao_resolvida_com_valor_unico(resolucao, dimensao) != valor
+                for dimensao, valor in esperado.items()
+            )
+        ):
+            elegivel = False
+            break
+
+    if not elegivel:
+        _logger.warning(
+            '%s documento_id=%s cliente=%s competencia=%s',
+            EVENTO_DOCUMENTO_INELEGIVEL_DISTRIBUICAO,
+            resultado.documento_id, necessidade.cliente.entidade_id, necessidade.competencia.entidade_id,
+            extra={
+                'evento': EVENTO_DOCUMENTO_INELEGIVEL_DISTRIBUICAO,
+                'documento_id': resultado.documento_id,
+                'cliente': necessidade.cliente.entidade_id,
+                'competencia': necessidade.competencia.entidade_id,
+            },
+        )
+    return elegivel
+
+
 def resultados_aquisicao_prontos_por_cliente(
     contexto: 'ContextoComposicaoPrestacao',
 ) -> Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...]:
@@ -1009,6 +1071,7 @@ def resultados_aquisicao_prontos_por_cliente(
             ra for ra in resultados_aquisicao
             if ra.necessidade.cliente == resultado_cliente.cliente
             and ra.necessidade.competencia == resultado_cliente.competencia
+            and _elegivel_para_distribuicao(ra)
         )
         if not resultados_do_cliente:
             continue  # PRONTO sem aquisição própria nesta execução (ex.: documento já no inventário base) -- nada a distribuir aqui

@@ -218,3 +218,57 @@ consome nenhum adapter Airtable.
 sintético real, extração real e corredor real, **sem nenhum `patch`**,
 até PENDING, incluindo replay. Contra o código anterior ao J1, 11 dos
 12 testes do escopo original falham.
+
+## 10. Achado posterior da Ultrareview: fail-closed de elegibilidade (commit 2)
+
+**O que foi achado.** `adquirir_por_necessidades` registra 1 resultado
+por (necessidade, candidato) em **qualquer** estado do corredor. Isso é
+correto para avaliar âncora. Mas `resultados_aquisicao_prontos_por_cliente`
+repassava todos esses resultados à distribuição assim que o cliente
+ficava PRONTO.
+
+**Por que só apareceu depois do J1.** Antes, o corredor real quebrava em
+todo documento, então nenhum resultado real chegava ali. O J1 tornou o
+caminho alcançável. Provado com o corredor real: um candidato em
+`REVISAO_NECESSARIA` foi selecionado para distribuição junto com o
+documento válido. Um documento **resolvido para outro colaborador**, mas
+devolvido como candidato para a necessidade do colaborador A, entraria
+na Ordem de A. Ou seja, o documento de uma pessoa seria enviado a outra
+(risco de LGPD).
+
+**Por que fail-closed.** O filtro só retira e nunca reatribui. Não
+existe cenário em que ele faça algo ser distribuído que antes não seria.
+Correção: `_elegivel_para_distribuicao` só deixa passar documento
+`RESOLVIDO_E_AVANCOU`, sem revisão humana, cuja resolução real confirme,
+com valor único, o cliente e a competência da necessidade e também o
+colaborador, quando a necessidade tiver um. O inelegível é omitido e
+registrado (evento `documento_inelegivel_distribuicao`, só com ids).
+
+**Prova:** testes específicos em `test_aquisicao_prestacao_corredor_real_j1.py`
+(documento em revisão, documento de outro colaborador, documento válido
+continua elegível e chega a PENDING). Sem o filtro, os 2 testes de
+bloqueio falham.
+
+## 11. Bloqueios abertos depois do J1 (não corrigidos)
+
+**J1b: novo bloqueio, separado do J1. É pré-requisito de qualquer
+cliente real.** `resultados_aquisicao_prontos_por_cliente` agrupa por
+cliente/competência. O wiring de Prestação (protegido) exige 1
+colaborador por Ordem (`ColaboradorDivergenteEntreDocumentos`). Um
+cliente real com 2 ou mais colaboradores prontos gera **zero Ordens**
+(erro isolado e logado). Um documento de granularidade cliente adquirido
+junto (colaborador `None`) gera `ColaboradorAusenteNaNecessidade`.
+Resolver isso exige decidir o agrupamento por colaborador a jusante da
+aquisição.
+
+Outros pontos:
+1. O default `tipos_obrigatorios_por_colaborador =
+   ('Holerite da Folha de Pagamento',)` não bate com o vocabulário do
+   motor (`'Holerite'`). Todo composer real precisa informar
+   `(TIPO_HOLERITE,)`. Não foi alterado para não mudar a semântica de
+   quem usa o default.
+2. Com a política default V1, a competência esperada de SKY Tatuí na
+   aquisição é base−1, enquanto o ciclo usa `competencias_por_cliente`.
+   Quem compõe precisa manter os dois coerentes.
+3. Continuam abertos J2 (fontes reais), J3 (índice interno, migration),
+   J4 (composition root por ambiente) e os gates B, C, D, E, G, H e I.
