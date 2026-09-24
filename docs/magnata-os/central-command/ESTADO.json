@@ -119,6 +119,7 @@
     "fix/auto-orquestrador-fc44870-73",
     "fix/auto-orquestrador-fc44870-74",
     "fix/auto-orquestrador-fc44870-75",
+    "fix/auto-orquestrador-ff1aee5-114",
     "fix/competencia-fiscal-periodo-apuracao-sem-de",
     "fix/corte-isolado-assinatura-consulta-v1",
     "fix/fluxo-whatsapp-assinatura-v1",
@@ -138,15 +139,15 @@
   "contexto": {
     "limite_atencao_tokens": 8000,
     "limite_trocar_sessao_tokens": 12000,
-    "medido_em": "2026-09-22T16:58:07.112474+00:00",
+    "medido_em": "2026-09-24T17:11:55.051981+00:00",
     "mensagem": null,
     "metrica": "chars//4; ESTADO.contexto excluido da propria medicao",
-    "razao_tier0_sobre_total": 0.0676,
+    "razao_tier0_sobre_total": 0.0774,
     "status_contexto": "NORMAL",
-    "tier0_chars": 25323,
-    "tier0_tokens_aprox": 6330,
-    "tier2_chars": 374373,
-    "tier2_tokens_aprox": 93593
+    "tier0_chars": 29354,
+    "tier0_tokens_aprox": 7338,
+    "tier2_chars": 379037,
+    "tier2_tokens_aprox": 94759
   },
   "cpf_em_documentacao": [],
   "documentos_central_command": [
@@ -185,9 +186,9 @@
   ],
   "graphify_snapshot_status": "sem_sinal_de_mudanca",
   "links_quebrados": [],
-  "main_assunto": "Merge pull request #177 from contato398/fix/contato-colaborador-canonico-v1",
-  "main_data": "2026-09-22 11:08:48 -0300",
-  "main_sha": "a1e26a0",
+  "main_assunto": "Merge pull request #184 from contato398/fix/gate-j1b-distribuicao-por-colaborador-v1",
+  "main_data": "2026-09-24 12:51:15 -0300",
+  "main_sha": "060a089",
   "session_handoff_freshness": "desatualizado",
   "testes": {
     "falhando": 0,
