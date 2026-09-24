@@ -968,6 +968,29 @@ def _descobrir_adquirir_e_recalcular_readiness(
 EVENTO_DOCUMENTO_INELEGIVEL_DISTRIBUICAO = 'documento_inelegivel_distribuicao'
 
 
+def _tipo_resolvido_atende_necessidade(
+    resolucao: ResultadoResolucaoSemantico, necessidade: NecessidadeDocumentoPrestacao,
+) -> bool:
+    """Gate J1b ("pessoa certa, documento errado"): o TIPO documental
+    que o corredor resolveu (valor único) precisa ser o tipo da
+    necessidade que buscou o documento -- senão o documento de A que
+    satisfaz outra necessidade de A entraria na distribuição como se
+    fosse o documento pedido. Comparação genérica, sem nenhum nome de
+    tipo: ambos os lados usam o vocabulário canônico do motor, e a
+    única tradução conhecida entre vocabulários
+    (`TRADUCAO_FAMILIA_B_PARA_MOTOR_GERAL`) é reaproveitada, nunca
+    reescrita. Regra da elegibilidade da Prestação -- a distribuição
+    genérica nunca olha tipo."""
+    tipo_resolvido = _dimensao_resolvida_com_valor_unico(resolucao, DimensaoResolucao.TIPO_DOCUMENTAL)
+    if tipo_resolvido is None:
+        return False
+
+    def _canonico(tipo: str) -> str:
+        return TRADUCAO_FAMILIA_B_PARA_MOTOR_GERAL.get(tipo, tipo)
+
+    return _canonico(tipo_resolvido.entidade_id) == _canonico(necessidade.tipo_documental)
+
+
 def _elegivel_para_distribuicao(resultado: ResultadoAquisicaoPorNecessidade) -> bool:
     """Gate J1 (achado da revisão adversarial): `adquirir_por_
     necessidades` registra 1 resultado por (necessidade, candidato)
@@ -1007,6 +1030,7 @@ def _elegivel_para_distribuicao(resultado: ResultadoAquisicaoPorNecessidade) -> 
                 _dimensao_resolvida_com_valor_unico(resolucao, dimensao) != valor
                 for dimensao, valor in esperado.items()
             )
+            or not _tipo_resolvido_atende_necessidade(resolucao, necessidade)
         ):
             elegivel = False
             break
@@ -1076,6 +1100,92 @@ def resultados_aquisicao_prontos_por_cliente(
         if not resultados_do_cliente:
             continue  # PRONTO sem aquisição própria nesta execução (ex.: documento já no inventário base) -- nada a distribuir aqui
         saida.append((resultado_cliente.cliente, resultado_cliente.competencia, resultados_do_cliente))
+    return tuple(saida)
+
+
+# ==== GATE J1b: UNIDADE DE DISTRIBUIÇÃO = CLIENTE + COMPETÊNCIA +
+# COLABORADOR ====
+# `OrdemDistribuicaoDocumental` é, por contrato, de destinatário ÚNICO
+# (`funcionario_id` + `destinatario`), e `montar_ordem_distribuicao_
+# documental_de_prestacao` rejeita mistura de colaboradores. Entregar o
+# pacote do cliente inteiro a esse elo fazia todo cliente com 2+
+# colaboradores prontos produzir ZERO Ordens. O legado confirma a
+# unidade: o envio individual (`/webhook/enviar-whatsapp`, `app.py`) é
+# por funcionário e só com documentos individuais (Holerite, Folha
+# Ponto); documentos de nível cliente vão no pacote de e-mail POR
+# CLIENTE (`/gerar-fila-envios-email`, `/webhook/enviar-email-cliente`),
+# nunca ao colaborador.
+
+EVENTO_DOCUMENTO_NIVEL_CLIENTE_FORA_ORDEM_COLABORADOR = 'documento_nivel_cliente_fora_ordem_colaborador'
+
+
+def _particionar_por_colaborador(
+    cliente: ReferenciaCanonica,
+    competencia: ReferenciaCanonica,
+    resultados: Tuple[ResultadoAquisicaoPorNecessidade, ...],
+) -> Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...]:
+    """Particiona os resultados JÁ ELEGÍVEIS de 1 cliente/competência em
+    1 grupo por colaborador da necessidade -- a identidade do
+    colaborador vem sempre de `necessidade.colaborador`, nunca inferida
+    aqui nem pelo canal.
+
+    - Resultado de necessidade SEM colaborador (nível cliente: Extrato,
+      FGTS, DCTFWeb, guias) nunca entra em grupo nenhum -- nem anexado a
+      um colaborador arbitrário, nem duplicado entre todos; é omitido e
+      registrado. Sua distribuição (pacote do cliente) é outra
+      capacidade, fora desta.
+    - O mesmo documento (`documento_id` + `hash_sha256`) que satisfaz 2+
+      necessidades do MESMO colaborador aparece 1 vez na Ordem (primeira
+      ocorrência); o vínculo necessidade->documento continua existindo
+      em `resultados_aquisicao`, só não é repetido na Ordem.
+    - Grupos em ordem determinística por `colaborador.entidade_id`;
+      dentro do grupo, documentos ordenados por (`documento_id`,
+      `hash_sha256`) -- a posição do documento faz parte da identidade
+      da Ordem (`event_id`), então a ordem em que a fonte de candidatos
+      devolveu os documentos nunca pode gerar uma Ordem "nova" para o
+      mesmo conjunto (replay duplicado). Nunca depende da ordem de
+      listagem de colaboradores nem de documentos."""
+    grupos: dict = {}
+    for resultado in resultados:
+        colaborador = resultado.necessidade.colaborador
+        if colaborador is None:
+            # WARNING, não INFO: a distribuição desse documento ao
+            # cliente ainda não existe neste fluxo -- lacuna conhecida
+            # que precisa ficar visível, nunca silenciosa.
+            _logger.warning(
+                '%s documento_id=%s cliente=%s competencia=%s',
+                EVENTO_DOCUMENTO_NIVEL_CLIENTE_FORA_ORDEM_COLABORADOR,
+                resultado.documento_id, cliente.entidade_id, competencia.entidade_id,
+                extra={
+                    'evento': EVENTO_DOCUMENTO_NIVEL_CLIENTE_FORA_ORDEM_COLABORADOR,
+                    'documento_id': resultado.documento_id,
+                    'cliente': cliente.entidade_id,
+                    'competencia': competencia.entidade_id,
+                },
+            )
+            continue
+        documentos_do_colaborador = grupos.setdefault(colaborador.entidade_id, {})
+        documentos_do_colaborador.setdefault((resultado.documento_id, resultado.hash_sha256), resultado)
+    return tuple(
+        (cliente, competencia, tuple(grupos[colaborador_id][chave] for chave in sorted(grupos[colaborador_id])))
+        for colaborador_id in sorted(grupos)
+    )
+
+
+def resultados_aquisicao_prontos_por_colaborador(
+    contexto: 'ContextoComposicaoPrestacao',
+) -> Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...]:
+    """Mesma saída de `resultados_aquisicao_prontos_por_cliente` (mesmo
+    formato de trio, mesmo gate de readiness POR CLIENTE, mesmo filtro
+    de elegibilidade do J1), particionada em 1 trio por (cliente,
+    competência, colaborador) -- a unidade que `OrdemDistribuicao
+    Documental` aceita. Cada trio vira, a jusante, 1 Ordem de
+    destinatário único; o `event_id` já difere por colaborador
+    (`funcionario_id`/`destinatario`/documentos fazem parte da
+    identidade da Ordem)."""
+    saida: list = []
+    for cliente, competencia, resultados in resultados_aquisicao_prontos_por_cliente(contexto):
+        saida.extend(_particionar_por_colaborador(cliente, competencia, resultados))
     return tuple(saida)
 
 

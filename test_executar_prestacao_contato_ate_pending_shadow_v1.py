@@ -158,7 +158,7 @@ def _resolucao_ancora_holerite(documento_id, *, cliente, competencia, colaborado
         perfil_id='prestacao-composicao-v1-teste', version='1', escopo_documental='prestacao-contas',
         regras=(
             _regra(DimensaoResolucao.CLIENTE), _regra(DimensaoResolucao.COMPETENCIA),
-            _regra(DimensaoResolucao.COLABORADOR),
+            _regra(DimensaoResolucao.COLABORADOR), _regra(DimensaoResolucao.TIPO_DOCUMENTAL),
         ),
     )
     return ResultadoResolucaoSemantico(
@@ -167,6 +167,7 @@ def _resolucao_ancora_holerite(documento_id, *, cliente, competencia, colaborado
         resolucoes=(
             _dim(DimensaoResolucao.CLIENTE, cliente), _dim(DimensaoResolucao.COMPETENCIA, competencia),
             _dim(DimensaoResolucao.COLABORADOR, colaborador),
+            _dim(DimensaoResolucao.TIPO_DOCUMENTAL, ReferenciaCanonica('TIPO_DOCUMENTAL', TIPO_HOLERITE)),
         ),
         estado_consolidado=EstadoResultadoSemantico.RESOLVIDA, necessita_revisao_humana=False,
     )
