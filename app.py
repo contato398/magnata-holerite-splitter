@@ -1748,15 +1748,24 @@ def _criar_registro(table_id: str, fields: dict) -> str:
     return r.json()['id']
 
 
-def _buscar_por_campo(table_id: str, campo_nome: str, valor: str):
-    """Busca o 1º registro onde {campo_nome} = valor. Retorna o registro ou None."""
+def _buscar_por_campo(table_id: str, campo_nome: str, valor: str, por_field_id: bool = False):
+    """Busca o 1º registro onde {campo_nome} = valor. Retorna o registro ou None.
+
+    Por padrão o Airtable devolve `fields` indexado pelo NOME do campo --
+    comportamento de que dependem os callers que leem por nome. Quem lê
+    `fields` por Field ID (`F_...`) precisa passar `por_field_id=True`,
+    que pede `returnFieldsByFieldId=true`; sem isso, toda leitura por ID
+    devolve None."""
     _at_throttle()
     valor_escapado = valor.replace('"', '\\"')
     formula = f'{{{campo_nome}}}="{valor_escapado}"'
+    params = {'filterByFormula': formula, 'maxRecords': 1}
+    if por_field_id:
+        params['returnFieldsByFieldId'] = 'true'
     r = requests.get(
         f'https://api.airtable.com/v0/{BASE_ID}/{table_id}',
         headers={'Authorization': f'Bearer {_airtable_api_key_atual()}'},
-        params={'filterByFormula': formula, 'maxRecords': 1},
+        params=params,
         timeout=30,
     )
     r.raise_for_status()
@@ -11853,9 +11862,13 @@ def assinatura_consulta():
     nunca precise reutilizar `/assinatura/gerar` como consulta -- aquela
     rota pode criar estado se a obrigação não existir.
 
-    Reaproveita `_buscar_por_campo`, o mesmo helper de leitura já usado
-    por `assinatura_documento_proxy` e por `_buscar_assinatura_por_token_
-    reservado` (PR #150) -- nenhuma query nova.
+    Reaproveita `_buscar_por_campo` (o mesmo helper de leitura de
+    `assinatura_documento_proxy`) -- nenhuma query nova -- com
+    `por_field_id=True`: esta rota filtra e LÊ `fields` por Field ID
+    (`F_ASS_*`), então precisa de `returnFieldsByFieldId=true`, como
+    `_buscar_assinatura_por_token_reservado` já faz. Sem isso o Airtable
+    devolve os campos por nome e `status`/`link`/comprovante voltavam
+    sempre vazios (Gate 2, confirmado por leitura live).
 
     GET /assinatura/consulta?acao_execucao_id=<sha256>
     GET /assinatura/consulta?token_reservado=<base64url>
@@ -11885,7 +11898,7 @@ def assinatura_consulta():
     campo = F_ASS_REQUEST_ID if acao_execucao_id else F_ASS_HASH
     valor = acao_execucao_id or token_reservado
     try:
-        registro = _buscar_por_campo(TABLE_ASSINATURAS, campo, valor)
+        registro = _buscar_por_campo(TABLE_ASSINATURAS, campo, valor, por_field_id=True)
     except Exception as exc:
         logger.warning(f'[ASSINATURA] Falha na consulta read-only: {type(exc).__name__}')
         return jsonify({'status': 'erro', 'erro': 'falha_consulta'}), 503
