@@ -1,0 +1,21 @@
+# Autorização humana específica -- Gate 2: correção de leitura da rota
+# GET /assinatura/consulta (Field IDs).
+# Base: 060a089920e82bd6c15695e8b11ff81c591c64e9 (origin/main, PR #184
+# mesclado). Branch: fix/assinatura-consulta-field-ids-v1. Data: 2026-09-25.
+#
+# Autorizado explicitamente pelo humano na missão "GATE 2 -- CORREÇÃO
+# ISOLADA DE /assinatura/consulta", após defeito confirmado por prova
+# estática + verificação live somente leitura + Ultrareview.
+#
+# Escopo nominal: _buscar_por_campo ganha parâmetro opcional
+# por_field_id=False (padrão inalterado para os callers que leem por
+# nome); somente assinatura_consulta passa por_field_id=True
+# (returnFieldsByFieldId=true), e a docstring incorreta da rota é
+# corrigida. Nenhuma outra mudança em app.py: criação de assinatura,
+# status, conclusão, observador, Orquestrador, distribuição e Evolution
+# intocados.
+#
+# O blob abaixo autoriza somente esta versão exata de app.py. Qualquer
+# mudança posterior, inclusive comentário, invalida esta autorização. Não
+# autoriza migration, deploy, credencial, webhook, envio real ou merge.
+cb774d8fd724ae82a02a957abe499c596d3620f4  app.py
