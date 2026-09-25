@@ -476,6 +476,10 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_wiring_assinatura_comunicacao_shadow.py"
   "test_assinatura_consulta_read_only.py"
   "test_adapter_obrigacao_assinatura_legado_http.py"
+  # GATE 3 -- reconciliação humana de envio externo incerto: E2E Postgres
+  # real das ações do plano (já em ALLOWED_PATHS e no job postgres-real),
+  # nome exato, sem wildcard.
+  "test_repositorio_acoes_execucao_plano_postgres_real.py"
   "test_observador_assinatura.py"
   # ATIVAÇÃO CONTROLADA DO WIRING WHATSAPP + ASSINATURA V1 (implementação
   # LOCAL da fase de ativação, PROD NÃO autorizada) — gate fail-closed de
