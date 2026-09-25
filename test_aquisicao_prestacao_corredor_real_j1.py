@@ -855,6 +855,8 @@ def _resolucao_sintetica(documento_id, *, tipo, colaborador):
         (DimensaoResolucao.COMPETENCIA, _COMPETENCIA),
         (DimensaoResolucao.COLABORADOR, colaborador),
     )
+    # Documento de nível cliente: sem dimensão COLABORADOR (nunca um valor fabricado).
+    dimensoes = tuple((d, v) for d, v in dimensoes if v is not None)
     return ResultadoResolucaoSemantico(
         documento_id=documento_id, resolver_id='resolver-generico-teste', resolver_version='1',
         politica_id='generica', politica_version='1',
@@ -1056,3 +1058,240 @@ def test_particao_e_elegibilidade_nao_decidem_por_nome_de_documento():
             if isinstance(no, ast.Constant) and isinstance(no.value, str) and no is not docstring
         ]
         assert [l for l in literais if any(n in l.lower() for n in nomes_reais)] == [], funcao.__name__
+
+
+# =====================================================================
+# Prestação upstream real V1 -- PACOTE / INTENÇÃO DE NÍVEL CLIENTE.
+# Documento sem colaborador ganha destino no domínio (intenção de
+# cliente, sem funcionario_id, sem endereço, sem canal) e continua fora
+# de toda Ordem de colaborador.
+# =====================================================================
+
+import dataclasses as _dataclasses  # noqa: E402
+
+from magnata_os.classificacao.composicao_ciclo_persistente_prestacao import (  # noqa: E402
+    EVENTO_CLIENTE_FALHOU_INTENCAO_DISTRIBUICAO,
+    EVENTO_DOCUMENTO_COM_COLABORADOR_FORA_INTENCAO_CLIENTE,
+    _separar_nivel_cliente,
+    intencoes_distribuicao_cliente_prontas,
+    resultados_aquisicao_prontos_nivel_cliente,
+)
+from magnata_os.classificacao.pacote_prestacao import PapelDestinatarioOrganizacional  # noqa: E402
+
+
+def _ambiente_com_extrato(*, colaboradores=(_COLABORADOR, _COLABORADOR_B)):
+    return _Ambiente(
+        _pdfs_abc(*colaboradores) + (('doc-ext', _pdf(_TEXTO_EXTRATO)),),
+        colaboradores=colaboradores, contatos=_CONTATOS_ABC,
+        requisitos_base=(TIPO_HOLERITE, 'Extrato da Folha de Pagamento'),
+    )
+
+
+def _contexto_com_extrato(ambiente):
+    return ambiente.contexto(**_fontes_abc(), fonte_cliente_direto=_FonteClienteDireto())
+
+
+def _trocar_cliente(resultado, cliente):
+    return _dataclasses.replace(
+        resultado, necessidade=_dataclasses.replace(resultado.necessidade, cliente=cliente),
+    )
+
+
+def test_nivel_cliente_corredor_real_gera_uma_intencao_de_cliente_e_zero_ordem_de_colaborador():
+    """PDF real -> corredor real -> readiness PRONTO -> Extrato vira
+    intenção do CLIENTE; os holerites viram as Ordens dos colaboradores;
+    nenhum documento cruza de uma granularidade para a outra."""
+    ambiente = _ambiente_com_extrato()
+    contexto = _contexto_com_extrato(ambiente)
+
+    (intencao,) = intencoes_distribuicao_cliente_prontas(contexto)
+    assert (intencao.cliente, intencao.competencia) == (_CLIENTE, _COMPETENCIA)
+    assert intencao.documento_ids == ('doc-ext',)
+    assert intencao.documentos[0].tipos_documentais == ('Extrato da Folha de Pagamento',)
+    assert intencao.papel_destinatario == PapelDestinatarioOrganizacional.CLIENTE_INSTITUCIONAL
+
+    ordens = ambiente.executar_ate_pending(contexto)
+    assert _documentos_por_funcionario(ordens) == {'colab-j1': {'doc-a'}, 'colab-b': {'doc-b'}}
+    assert not {'doc-a', 'doc-b'} & set(intencao.documento_ids)
+
+
+def test_nivel_cliente_replay_mantem_a_mesma_intencao():
+    ambiente = _ambiente_com_extrato()
+    primeira = intencoes_distribuicao_cliente_prontas(_contexto_com_extrato(ambiente))
+    segunda = intencoes_distribuicao_cliente_prontas(_contexto_com_extrato(ambiente))
+    assert len(primeira) == 1
+    assert [i.intencao_id for i in primeira] == [i.intencao_id for i in segunda]
+
+
+def test_nivel_cliente_readiness_nao_pronto_nao_gera_intencao():
+    """Holerite de B inválido: o pacote do cliente não fica PRONTO --
+    nem Ordem de colaborador, nem intenção de cliente (mesmo gate)."""
+    ambiente = _Ambiente(
+        (('doc-a', _pdf(_TEXTO_HOLERITE)), ('doc-b-ruim', _pdf(_TEXTO_HOLERITE_OUTRO)),
+         ('doc-ext', _pdf(_TEXTO_EXTRATO))),
+        colaboradores=(_COLABORADOR, _COLABORADOR_B), contatos=_CONTATOS_ABC,
+        requisitos_base=(TIPO_HOLERITE, 'Extrato da Folha de Pagamento'),
+    )
+    assert intencoes_distribuicao_cliente_prontas(_contexto_com_extrato(ambiente)) == ()
+
+
+def test_nivel_cliente_documento_sem_cliente_comprovado_nao_entra_na_intencao():
+    """Sem `fonte_cliente_direto` o Extrato não resolve CLIENTE: fica
+    inelegível, o cliente não fica PRONTO e nada é fabricado."""
+    ambiente = _ambiente_com_extrato()
+    assert intencoes_distribuicao_cliente_prontas(ambiente.contexto(**_fontes_abc())) == ()
+
+
+def test_nivel_cliente_documento_que_identifica_colaborador_fica_fora_da_intencao(caplog):
+    """Necessidade de nível cliente, mas a resolução do documento
+    confirmou um colaborador: é documento de pessoa -- nunca vai ao
+    pacote do cliente. Genérico (tipos arbitrários)."""
+    ambiente = _ambiente_arbitrario()
+    de_pessoa = _resultado_arbitrario(
+        ambiente, 'doc-a', tipo_necessidade='DOCUMENTO_A', tipo_resolvido='DOCUMENTO_A', colaborador=_COLABORADOR,
+    )
+    de_pessoa = _dataclasses.replace(
+        de_pessoa, necessidade=_dataclasses.replace(de_pessoa.necessidade, colaborador=None),
+    )
+    do_cliente = _resultado_arbitrario(
+        ambiente, 'doc-b', tipo_necessidade='DOCUMENTO_B', tipo_resolvido='DOCUMENTO_B', colaborador=None,
+    )
+    with caplog.at_level(logging.WARNING, logger=modulo_composicao.__name__):
+        separados = _separar_nivel_cliente(_CLIENTE, _COMPETENCIA, (de_pessoa, do_cliente))
+
+    assert [r.documento_id for r in separados] == ['doc-b']
+    assert [
+        r.documento_id for r in caplog.records
+        if getattr(r, 'evento', None) == EVENTO_DOCUMENTO_COM_COLABORADOR_FORA_INTENCAO_CLIENTE
+    ] == ['doc-a']
+
+
+def test_nivel_cliente_separacao_ignora_colaborador_e_e_deterministica():
+    ambiente = _ambiente_arbitrario()
+
+    def r(documento_id, tipo, colaborador=None):
+        return _resultado_arbitrario(
+            ambiente, documento_id, tipo_necessidade=tipo, tipo_resolvido=tipo, colaborador=colaborador,
+        )
+
+    resultados = (r('doc-d', 'DOCUMENTO_D'), r('doc-a', 'DOCUMENTO_A', _COLABORADOR), r('doc-c', 'DOCUMENTO_C'))
+    esperado = ['doc-c', 'doc-d']
+    assert [x.documento_id for x in _separar_nivel_cliente(_CLIENTE, _COMPETENCIA, resultados)] == esperado
+    assert [x.documento_id for x in _separar_nivel_cliente(_CLIENTE, _COMPETENCIA, resultados[::-1])] == esperado
+
+
+def test_nivel_cliente_erro_de_dominio_de_um_cliente_nao_para_os_demais(monkeypatch, caplog):
+    """Isolamento por cliente: o trio do cliente X é inválido (resultado
+    de outro cliente misturado) -> registrado; o cliente Y segue."""
+    ambiente = _ambiente_arbitrario()
+    cliente_y = ReferenciaCanonica('CLIENTE', 'cliente-y')
+    bom = _resultado_arbitrario(
+        ambiente, 'doc-b', tipo_necessidade='DOCUMENTO_B', tipo_resolvido='DOCUMENTO_B', colaborador=None,
+    )
+    bom_y = _trocar_cliente(bom, cliente_y)
+    monkeypatch.setattr(modulo_composicao, 'resultados_aquisicao_prontos_nivel_cliente', lambda contexto: (
+        (_CLIENTE, _COMPETENCIA, (bom, bom_y)),  # resultado de cliente-y misturado no trio de _CLIENTE
+        (cliente_y, _COMPETENCIA, (bom_y,)),
+    ))
+    with caplog.at_level(logging.ERROR, logger=modulo_composicao.__name__):
+        intencoes = intencoes_distribuicao_cliente_prontas(object())
+
+    assert [i.cliente for i in intencoes] == [cliente_y]
+    assert [
+        r.cliente for r in caplog.records
+        if getattr(r, 'evento', None) == EVENTO_CLIENTE_FALHOU_INTENCAO_DISTRIBUICAO
+    ] == [_CLIENTE.entidade_id]
+
+
+def test_nivel_cliente_erro_sistemico_propaga(monkeypatch):
+    def _quebra(contexto):
+        raise ConnectionError('fonte indisponivel')
+
+    monkeypatch.setattr(modulo_composicao, 'resultados_aquisicao_prontos_nivel_cliente', _quebra)
+    with pytest.raises(ConnectionError):
+        intencoes_distribuicao_cliente_prontas(object())
+
+
+def test_nivel_cliente_resultados_prontos_so_trazem_necessidades_sem_colaborador():
+    ambiente = _ambiente_com_extrato()
+    trios = resultados_aquisicao_prontos_nivel_cliente(_contexto_com_extrato(ambiente))
+    assert [(c, k, tuple(r.documento_id for r in rs)) for c, k, rs in trios] == [
+        (_CLIENTE, _COMPETENCIA, ('doc-ext',)),
+    ]
+    assert all(r.necessidade.colaborador is None for _c, _k, rs in trios for r in rs)
+
+
+def test_nivel_cliente_separacao_e_intencao_nao_decidem_por_nome_de_documento():
+    nomes_reais = (
+        'holerite', 'folha', 'ponto', 'contrato', 'advert', 'extrato', 'fgts', 'rescis', 'dctf', 'certid',
+    )
+    for funcao in (
+        modulo_composicao._separar_nivel_cliente,
+        modulo_composicao._documento_identifica_colaborador,
+        modulo_composicao.resultados_aquisicao_prontos_nivel_cliente,
+        modulo_composicao.intencoes_distribuicao_cliente_prontas,
+        modulo_composicao.particionar_nivel_cliente,
+        modulo_composicao.intencoes_distribuicao_cliente_de_trios,
+    ):
+        arvore = ast.parse(inspect.getsource(funcao).lstrip())
+        corpo = arvore.body[0].body
+        docstring = corpo[0].value if corpo and isinstance(corpo[0], ast.Expr) else None
+        literais = [
+            no.value for no in ast.walk(arvore)
+            if isinstance(no, ast.Constant) and isinstance(no.value, str) and no is not docstring
+        ]
+        assert [l for l in literais if any(n in l.lower() for n in nomes_reais)] == [], funcao.__name__
+
+
+@pytest.mark.parametrize('estado', [
+    EstadoResolucaoDimensao.NAO_ENCONTRADA,
+    EstadoResolucaoDimensao.AMBIGUA,
+    EstadoResolucaoDimensao.NAO_AVALIADA,
+])
+def test_nivel_cliente_colaborador_nao_confirmado_tambem_fica_fora_da_intencao(estado):
+    """Fail-closed por si só: a dimensão COLABORADOR existir (mesmo sem
+    valor confirmado) já prova granularidade de pessoa -- não depende de
+    a elegibilidade ter barrado antes."""
+    ambiente = _ambiente_arbitrario()
+    base = _resultado_arbitrario(
+        ambiente, 'doc-a', tipo_necessidade='DOCUMENTO_A', tipo_resolvido='DOCUMENTO_A', colaborador=_COLABORADOR,
+    )
+    (execucao,) = base.resultados_corredor
+    resolucao = execucao.resultado_corredor.resolucao_semantica
+    resolucao = _dataclasses.replace(resolucao, resolucoes=tuple(
+        ResolucaoDimensao(dimensao=DimensaoResolucao.COLABORADOR, estado=estado)
+        if r.dimensao == DimensaoResolucao.COLABORADOR else r
+        for r in resolucao.resolucoes
+    ))
+    resultado = _dataclasses.replace(
+        base,
+        necessidade=_dataclasses.replace(base.necessidade, colaborador=None),
+        resultados_corredor=(_dataclasses.replace(
+            execucao, resultado_corredor=_dataclasses.replace(
+                execucao.resultado_corredor, resolucao_semantica=resolucao,
+            ),
+        ),),
+    )
+    assert _separar_nivel_cliente(_CLIENTE, _COMPETENCIA, (resultado,)) == ()
+
+
+def test_nivel_cliente_mesmo_snapshot_para_ordens_e_intencoes():
+    """Composition root futuro: 1 cálculo de readiness -> Ordens de
+    colaborador E intenções de cliente, sem recomputar o ciclo."""
+    from magnata_os.classificacao.composicao_ciclo_persistente_prestacao import (
+        intencoes_distribuicao_cliente_de_trios,
+        particionar_nivel_cliente,
+    )
+    ambiente = _ambiente_com_extrato()
+    trios = resultados_aquisicao_prontos_por_cliente(_contexto_com_extrato(ambiente))
+
+    por_colaborador = [
+        g for c, k, rs in trios for g in _particionar_por_colaborador(c, k, rs)
+    ]
+    (intencao,) = intencoes_distribuicao_cliente_de_trios(particionar_nivel_cliente(trios))
+
+    documentos_ordens = {r.documento_id for _c, _k, grupo in por_colaborador for r in grupo}
+    assert documentos_ordens == {'doc-a', 'doc-b'}
+    assert intencao.documento_ids == ('doc-ext',)
+    assert intencao.intencao_id == intencoes_distribuicao_cliente_prontas(
+        _contexto_com_extrato(ambiente))[0].intencao_id
