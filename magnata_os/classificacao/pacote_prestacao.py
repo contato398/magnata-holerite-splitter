@@ -20,7 +20,7 @@ import dataclasses
 import enum
 import hashlib
 import json
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, Optional, Protocol, Tuple
 
 from .cardinalidade_colaborador_por_tipo import ResultadoObrigatoriedadeDocumental
 from .contratos import ReferenciaCanonica, ResultadoResolucaoSemantico
@@ -216,6 +216,25 @@ class PapelDestinatarioOrganizacional(str, enum.Enum):
     existe -- não são adivinhados aqui."""
 
     CLIENTE_INSTITUCIONAL = 'CLIENTE_INSTITUCIONAL'
+    CONTADOR_DO_CLIENTE = 'CONTADOR_DO_CLIENTE'
+    """Escritório contábil do cliente -- papel PRÓPRIO, nunca um
+    fallback automático de `CLIENTE_INSTITUCIONAL`: a regra "sem e-mail
+    do cliente, usar o do contador" é do legado (`app.py`) e, se for
+    adotada, pertence à política de canal/entrega, não à fonte."""
+
+
+class FonteDestinatarioOrganizacionalCliente(Protocol):
+    """Porta dos endereços do destinatário ORGANIZACIONAL de um cliente
+    por papel. Devolve os endereços como a fonte os tem (vazio = sem dado
+    confiável -- nunca inventado). Hoje implementada por um bridge
+    Airtable read-only transitório (`importacao_lote/adapters/airtable_
+    destinatario_cliente.py`); troca futura por cadastro interno pelo
+    MESMO Protocol. O domínio nunca conhece a fonte, e a intenção nunca
+    carrega o endereço -- ele só é resolvido no momento do canal."""
+
+    def enderecos_para(
+        self, cliente: ReferenciaCanonica, papel: PapelDestinatarioOrganizacional,
+    ) -> Tuple[str, ...]: ...
 
 
 class IntencaoDistribuicaoClienteError(ValueError):

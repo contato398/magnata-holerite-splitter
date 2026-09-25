@@ -301,6 +301,21 @@ class _Ambiente:
             ator_referencia='ator:teste:j1', proveniencia='teste_j1_corredor_real', instante=AGORA,
         )
 
+    def executar_ate_pending_com_trios(self, contexto, trios_prontos):
+        """Mesmo caminho, sobre um snapshot JÁ calculado (J3)."""
+        return executar_prestacao_contato_ate_pending_shadow_v1(
+            contexto=contexto, repositorio_contato=self.repositorio_contato, chave_fernet=_CHAVE_FERNET,
+            preset_id='DOCUMENTO_UNITARIO_SEM_ASSINATURA', tipo_documento='HOLERITE',
+            montar_mensagem_texto=lambda cliente, competencia: f'Documento {competencia.entidade_id}',
+            repositorio_documentos=self.repositorio_documentos, armazenamento=self.armazenamento,
+            materializador=None, porta_assinatura=None,
+            repositorio_execucoes=self.repositorio_execucoes,
+            repositorio_autorizacoes=self.repositorio_autorizacoes,
+            repositorio_acoes=self.repositorio_acoes,
+            ator_referencia='ator:teste:j1', proveniencia='teste_j1_corredor_real', instante=AGORA,
+            trios_prontos=trios_prontos,
+        )
+
 
 def _todas_as_fontes():
     return dict(
@@ -1295,3 +1310,133 @@ def test_nivel_cliente_mesmo_snapshot_para_ordens_e_intencoes():
     assert intencao.documento_ids == ('doc-ext',)
     assert intencao.intencao_id == intencoes_distribuicao_cliente_prontas(
         _contexto_com_extrato(ambiente))[0].intencao_id
+
+
+# =====================================================================
+# J3 -- ÍNDICE INTERNO Documento <-> escopo alimentando o ciclo real.
+# Produtor = resultado do corredor real na ingestão (mesmo que alimenta o
+# sink); consumidor = candidatos por necessidade sobre o índice. Nenhuma
+# fonte de candidatos "em memória por cliente" -- só o índice.
+# =====================================================================
+
+from magnata_os.classificacao.competencia_esperada_prestacao import (  # noqa: E402
+    POLITICA_COMPETENCIA_PRESTACAO_V1,
+)
+from magnata_os.classificacao.composicao_ciclo_persistente_prestacao import (  # noqa: E402
+    diagnosticar_prestacao_upstream,
+)
+from magnata_os.classificacao.correlacao_documento_prestacao import (  # noqa: E402
+    RepositorioCorrelacaoDocumentoPrestacaoEmMemoria,
+    registrar_correlacoes_do_corredor,
+)
+from magnata_os.classificacao.fonte_candidatos_documento_inventario_interna import (  # noqa: E402
+    FonteCandidatosDocumentoInventarioInterna,
+)
+from magnata_os.classificacao.inventario_prestacao_memoria import InventarioPrestacaoEmMemoria  # noqa: E402
+from magnata_os.classificacao.orquestrador_corredor_readonly import (  # noqa: E402
+    ContextoExecucaoCorredorPrestacao,
+    executar_documento_readonly,
+)
+
+
+def _ingerir_no_indice(ambiente, indice, *, fonte_cliente_direto=None, candidatos=None):
+    """Ingestão: cada Documento interno passa pelo corredor real SEM
+    nenhuma necessidade (ciclo da competência, cliente não informado) e o
+    produtor grava as relações sustentadas no índice."""
+    candidatos = candidatos if candidatos is not None else (_CANDIDATO, _CANDIDATO_B, _CANDIDATO_C)
+    for documento in ambiente.documentos:
+        with ambiente.armazenamento.abrir_leitura(documento.hash_sha256) as arquivo:
+            conteudo = arquivo.read()
+        from magnata_os.documental.extracao_texto import extrair_texto_pdf
+        contexto = ContextoExecucaoCorredorPrestacao(
+            documento_id=documento.documento_id, hash_sha256=documento.hash_sha256,
+            paginas=(extrair_texto_pdf(conteudo),), ciclo=ContextoCicloPrestacao((2026, 7)),
+            cliente_do_ciclo=None, politica_competencia=POLITICA_COMPETENCIA_PRESTACAO_V1,
+            candidatos_colaborador=candidatos, fonte_vinculos=_FonteVinculos(),
+            fonte_cliente_direto=fonte_cliente_direto, fonte_unidade_posto=_FonteUnidadePosto(),
+            fonte_candidatos_relacao=None, clientes_broadcast=(), identificar_pagina=None,
+            personalizar_contexto_do_grupo=None, registrar_dados_correlacao=False,
+            fonte_inventario_pacote=None, politica_requisitos=None,
+        )
+        resultados = executar_documento_readonly(contexto, InventarioPrestacaoEmMemoria())
+        registrar_correlacoes_do_corredor(
+            indice, documento_id=documento.documento_id, resultados_corredor=resultados, registrado_em=AGORA,
+        )
+
+
+def _indice_do_ambiente(ambiente):
+    return RepositorioCorrelacaoDocumentoPrestacaoEmMemoria(
+        documento_existe=lambda d: ambiente.repositorio_documentos.buscar_por_id(d) is not None,
+    )
+
+
+def _contexto_pelo_indice(ambiente, indice, **fontes):
+    import dataclasses
+    return dataclasses.replace(
+        ambiente.contexto(**fontes),
+        fonte_candidatos_por_necessidade=FonteCandidatosDocumentoInventarioInterna(
+            fonte_inventario=indice, repositorio_documentos=ambiente.repositorio_documentos,
+        ),
+    )
+
+
+def test_j3_indice_interno_alimenta_o_ciclo_ate_pronto_ordens_e_intencao_do_cliente():
+    ambiente = _ambiente_com_extrato()
+    indice = _indice_do_ambiente(ambiente)
+    _ingerir_no_indice(ambiente, indice, fonte_cliente_direto=_FonteClienteDireto())
+
+    contexto = _contexto_pelo_indice(ambiente, indice, **_fontes_abc(), fonte_cliente_direto=_FonteClienteDireto())
+    diagnostico = diagnosticar_prestacao_upstream(contexto)
+
+    (cliente,) = diagnostico.clientes
+    assert cliente.estado_pacote == 'PRONTO'
+    assert set(cliente.documentos_elegiveis) == {'doc-a', 'doc-b', 'doc-ext'}
+    grupos = {g[0].necessidade.colaborador.entidade_id: {r.documento_id for r in g}
+              for _c, _k, g in diagnostico.grupos_por_colaborador()}
+    assert grupos == {'colab-j1': {'doc-a'}, 'colab-b': {'doc-b'}}
+    (intencao,) = diagnostico.intencoes_cliente()
+    assert intencao.documento_ids == ('doc-ext',)
+
+    # As Ordens saem do MESMO snapshot, até PENDING (sem transporte).
+    ordens = ambiente.executar_ate_pending_com_trios(contexto, diagnostico.trios_prontos)
+    assert _documentos_por_funcionario(ordens) == {'colab-j1': {'doc-a'}, 'colab-b': {'doc-b'}}
+
+
+def test_j3_documento_fora_do_indice_deixa_o_cliente_em_revisao_sem_fabricar():
+    ambiente = _ambiente_com_extrato()
+    indice = _indice_do_ambiente(ambiente)  # nada ingerido -> nenhum candidato
+    diagnostico = diagnosticar_prestacao_upstream(
+        _contexto_pelo_indice(ambiente, indice, **_fontes_abc(), fonte_cliente_direto=_FonteClienteDireto()),
+    )
+    (cliente,) = diagnostico.clientes
+    assert cliente.estado_pacote == 'EM_REVISAO'
+    assert 'sem_evidencia_documental_real' in cliente.motivos
+    assert diagnostico.trios_prontos == () and diagnostico.intencoes_cliente() == ()
+
+
+def test_j3_documento_de_a_indexado_nunca_e_candidato_da_necessidade_de_b():
+    ambiente = _Ambiente(
+        _pdfs_abc(_COLABORADOR, _COLABORADOR_B),
+        colaboradores=(_COLABORADOR, _COLABORADOR_B), contatos=_CONTATOS_ABC,
+    )
+    indice = _indice_do_ambiente(ambiente)
+    _ingerir_no_indice(ambiente, indice)
+    fonte = FonteCandidatosDocumentoInventarioInterna(
+        fonte_inventario=indice, repositorio_documentos=ambiente.repositorio_documentos,
+    )
+
+    def _candidatos(colaborador):
+        return [d.documento_id for d in fonte.candidatos_para(NecessidadeDocumentoPrestacao(
+            cliente=_CLIENTE, competencia=_COMPETENCIA, tipo_documental=TIPO_HOLERITE,
+            motivo_exigencia='teste-j3', colaborador=colaborador,
+        ))]
+
+    assert _candidatos(_COLABORADOR) == ['doc-a']
+    assert _candidatos(_COLABORADOR_B) == ['doc-b']
+
+
+def test_j3_documento_em_revisao_na_ingestao_nao_vira_candidato():
+    ambiente = _Ambiente((('doc-ruim', _pdf(_TEXTO_HOLERITE_OUTRO)),))  # CPF fora do universo
+    indice = _indice_do_ambiente(ambiente)
+    _ingerir_no_indice(ambiente, indice)
+    assert indice.historico_do_documento('doc-ruim') == ()

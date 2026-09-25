@@ -107,6 +107,21 @@ class LeitorAirtableSomenteLeitura:
             for r in registros
         ]
 
+    def listar_campos_destinatario_clientes(self) -> list[dict]:
+        """Só leitura: os campos de destinatário que o legado já usa na
+        tabela Clientes (`Email`, `Email Contador`) -- sem nenhuma regra
+        (a escolha/fallback entre eles NÃO é feita aqui). Devolve
+        `{'cliente_id', 'email', 'emails_contador'}` crus por cliente."""
+        registros = self._listar_todos(TABLE_CLIENTES, ['Email', 'Email Contador'])
+        return [
+            {
+                'cliente_id': r['id'],
+                'email': r.get('fields', {}).get('Email'),
+                'emails_contador': r.get('fields', {}).get('Email Contador'),
+            }
+            for r in registros
+        ]
+
     def holerites_existentes_na_folha(self, folha_mensal: str) -> set[str]:
         """Retorna o conjunto de func_id que já têm holerite criado nesta
         folha — mesma checagem de `_buscar_holerite_existente` do app.py,

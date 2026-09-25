@@ -70,10 +70,18 @@ de `FonteDadosCorrelacaoEmMemoria`, preservada): é só um cache local
 de UMA execução controlada, exatamente o que o §13 da missão pede."""
 from __future__ import annotations
 
-from typing import Optional, Sequence, Tuple
+from datetime import datetime, timezone
+from typing import Callable, Optional, Sequence, Tuple
 
-from magnata_os.classificacao.competencia_esperada_prestacao import ContextoCicloPrestacao
+from magnata_os.classificacao.competencia_esperada_prestacao import (
+    POLITICA_COMPETENCIA_PRESTACAO_V1,
+    ContextoCicloPrestacao,
+)
 from magnata_os.classificacao.contratos import ReferenciaCanonica
+from magnata_os.classificacao.correlacao_documento_prestacao import (
+    RepositorioCorrelacaoDocumentoPrestacao,
+    registrar_correlacoes_do_corredor,
+)
 from magnata_os.classificacao.fonte_candidatos_relacao_documental_do_inventario import (
     FonteCandidatosRelacaoDocumentalDoInventario,
     FonteDadosCorrelacaoEmMemoria,
@@ -159,8 +167,17 @@ class ExecucaoCorredorReadonly:
         habilitar_correlacao_transitoria: bool = False,
         cliente_do_ciclo: Optional[ReferenciaCanonica] = None,
         fonte_unidade_posto_override: Optional[FonteUnidadePostoPrestacao] = None,
+        registro_correlacao: Optional[RepositorioCorrelacaoDocumentoPrestacao] = None,
+        relogio: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self._ciclo = ciclo
+        # J3 -- produtor do índice Documento interno <-> escopo da
+        # Prestação, no MESMO ponto em que o corredor já avança o
+        # documento para o inventário (nunca um pipeline paralelo).
+        # `None` (default) preserva 100% o comportamento anterior.
+        self._registro_correlacao = registro_correlacao
+        self._relogio = relogio
+        self.ultimo_registro_correlacao = None
         self._cliente_do_ciclo = cliente_do_ciclo
         self._sink = InventarioPrestacaoEmMemoria()
         self._fonte_vinculos = FonteVinculosPrestacaoAirtableShadow(leitor)
@@ -232,6 +249,48 @@ class ExecucaoCorredorReadonly:
         agora disponível também na borda real, sem duplicar a lógica."""
         return self._fonte_colaboradores_esperados
 
+    def _competencias_validaveis(self, resultados) -> frozenset:
+        """Competências que o ciclo DESTA execução consegue validar --
+        exatamente a que o corredor usa como esperada: a da política para
+        `cliente_do_ciclo` quando ele existe (a base NUNCA é validada nesse
+        caso), senão a base do ciclo -- mais as dos itens efetivamente
+        resolvidos. O índice nunca supera relação de outra competência por
+        causa desta execução."""
+        competencias = set()
+        if self._ciclo is not None and self._ciclo.competencia_base is not None:
+            if self._cliente_do_ciclo is not None:
+                esperada = POLITICA_COMPETENCIA_PRESTACAO_V1.competencia_esperada_para(
+                    self._ciclo, self._cliente_do_ciclo, '',
+                )
+            else:
+                esperada = self._ciclo.competencia_base
+            if esperada is not None:
+                competencias.add(f'{esperada[0]:04d}-{esperada[1]:02d}')
+        for resultado in resultados:
+            for item in resultado.itens_inventario:
+                competencias.add(item.competencia.entidade_id)
+        return frozenset(competencias)
+
+    @property
+    def produz_indice_correlacao(self) -> bool:
+        """Esta execução grava o índice J3 (tem produtor)?"""
+        return self._registro_correlacao is not None
+
+    # Prestação upstream real: as MESMAS instâncias de fonte desta
+    # execução, reaproveitadas pelo composition root do ciclo
+    # (`composicao_prestacao_upstream.py`) -- nunca reconstruídas lá.
+    @property
+    def fonte_vinculos(self) -> FonteVinculosPrestacaoAirtableShadow:
+        return self._fonte_vinculos
+
+    @property
+    def fonte_unidade_posto(self) -> FonteUnidadePostoPrestacao:
+        return self._fonte_unidade_posto
+
+    @property
+    def fonte_cliente_direto(self) -> FonteClienteDiretoDocumentoAirtableShadow:
+        return self._fonte_cliente_direto
+
     @property
     def sink(self) -> InventarioPrestacaoEmMemoria:
         """Inventário GERADO só por esta execução -- para inspeção
@@ -298,6 +357,17 @@ class ExecucaoCorredorReadonly:
             politica_requisitos=politica_requisitos,
         )
         resultados = executar_documento_readonly(contexto, self._sink)
+
+        if self._registro_correlacao is not None and resultados:
+            # Mesmo resultado que alimentou o sink: só itens de documento
+            # RESOLVIDO_E_AVANCOU viram relação VIGENTE; documento que
+            # foi para revisão supera as relações antes vigentes. Falha
+            # aqui propaga (nunca silenciosa) -- o chamador decide.
+            self.ultimo_registro_correlacao = registrar_correlacoes_do_corredor(
+                self._registro_correlacao, documento_id=documento_id,
+                resultados_corredor=resultados, registrado_em=self._relogio(),
+                competencias_superaveis=self._competencias_validaveis(resultados),
+            )
 
         if self._fonte_dados_correlacao is not None:
             for resultado in resultados:

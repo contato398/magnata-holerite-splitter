@@ -1092,7 +1092,17 @@ def resultados_aquisicao_prontos_por_cliente(
     resultados_aquisicao, resultado_ciclo_2 = _descobrir_adquirir_e_recalcular_readiness(
         contexto, ciclo_contexto,
     )
+    return _trios_prontos(resultados_aquisicao, resultado_ciclo_2)
 
+
+def _trios_prontos(
+    resultados_aquisicao: Tuple[ResultadoAquisicaoPorNecessidade, ...],
+    resultado_ciclo_2: ResultadoCicloPrestacao,
+) -> Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...]:
+    """Gate de readiness POR CLIENTE + elegibilidade J1 sobre um
+    snapshot JÁ calculado -- extraído de `resultados_aquisicao_prontos_
+    por_cliente` (comportamento idêntico) para que o diagnóstico da
+    Prestação upstream use exatamente o mesmo filtro, sem recomputar."""
     saida: list = []
     for resultado_cliente in resultado_ciclo_2.resultados_por_cliente:
         if resultado_cliente.pacote.estado != EstadoPacotePrestacao.PRONTO:
@@ -1333,6 +1343,90 @@ def intencoes_distribuicao_cliente_prontas(
     interno documento<->necessidade (J3), nunca de promover id Airtable a
     documento interno."""
     return intencoes_distribuicao_cliente_de_trios(resultados_aquisicao_prontos_nivel_cliente(contexto))
+
+
+# ==== DIAGNÓSTICO DE SNAPSHOT ÚNICO (composition root / piloto) ====
+
+
+def particionar_por_colaborador(
+    trios_prontos: Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...],
+) -> Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...]:
+    """Mesma partição de `resultados_aquisicao_prontos_por_colaborador`,
+    sobre trios JÁ calculados (nunca recomputa o ciclo)."""
+    saida: list = []
+    for cliente, competencia, resultados in trios_prontos:
+        saida.extend(_particionar_por_colaborador(cliente, competencia, resultados))
+    return tuple(saida)
+
+
+@dataclasses.dataclass(frozen=True)
+class DiagnosticoClientePrestacao:
+    """Visão SANITIZADA de 1 cliente/competência no snapshot: só ids
+    opacos e contagens -- nunca CPF, nome, e-mail ou conteúdo."""
+
+    cliente: ReferenciaCanonica
+    competencia: ReferenciaCanonica
+    estado_pacote: str
+    motivos: Tuple[str, ...]
+    tipos_faltantes: Tuple[str, ...]
+    necessidades_pendentes: int
+    documentos_candidatos: Tuple[str, ...]
+    documentos_elegiveis: Tuple[str, ...]
+    documentos_rejeitados: Tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class DiagnosticoPrestacaoUpstream:
+    """1 ÚNICO cálculo de descoberta -> aquisição -> readiness, do qual
+    derivam, sem recomputar, as Ordens de colaborador e as intenções de
+    cliente -- nunca 2 snapshots divergentes."""
+
+    clientes: Tuple[DiagnosticoClientePrestacao, ...]
+    trios_prontos: Tuple = dataclasses.field(repr=False, default=())
+
+    def grupos_por_colaborador(self):
+        return particionar_por_colaborador(self.trios_prontos)
+
+    def intencoes_cliente(self) -> Tuple[IntencaoDistribuicaoCliente, ...]:
+        return intencoes_distribuicao_cliente_de_trios(particionar_nivel_cliente(self.trios_prontos))
+
+
+def diagnosticar_prestacao_upstream(contexto: 'ContextoComposicaoPrestacao') -> DiagnosticoPrestacaoUpstream:
+    """Mesma composição de `resultados_aquisicao_prontos_por_cliente`
+    (política de competência, descoberta, aquisição por necessidade,
+    âncora, readiness, `_trios_prontos`), expondo também o diagnóstico por
+    cliente para o relatório do piloto shadow. Leitura pura: não cria
+    `ExecucaoPrestacao`, não escreve nada."""
+    if contexto.politica_competencia is not None:
+        verificar_politica_sem_override_por_tipo(contexto.politica_competencia)
+    ano_str, mes_str = contexto.competencia_base.split('-')
+    ciclo_contexto = ContextoCicloPrestacao(competencia_base=(int(ano_str), int(mes_str)))
+
+    resultados_aquisicao, resultado_ciclo_2 = _descobrir_adquirir_e_recalcular_readiness(contexto, ciclo_contexto)
+    trios = _trios_prontos(resultados_aquisicao, resultado_ciclo_2)
+
+    clientes = []
+    for resultado_cliente in resultado_ciclo_2.resultados_por_cliente:
+        do_cliente = [
+            ra for ra in resultados_aquisicao
+            if ra.necessidade.cliente == resultado_cliente.cliente
+            and ra.necessidade.competencia == resultado_cliente.competencia
+        ]
+        elegiveis = sorted({ra.documento_id for ra in do_cliente if _elegivel_para_distribuicao(ra)})
+        candidatos = sorted({ra.documento_id for ra in do_cliente})
+        pacote = resultado_cliente.pacote
+        clientes.append(DiagnosticoClientePrestacao(
+            cliente=resultado_cliente.cliente,
+            competencia=resultado_cliente.competencia,
+            estado_pacote=pacote.estado.value,
+            motivos=tuple(pacote.motivos),
+            tipos_faltantes=tuple(pacote.tipos_faltantes),
+            necessidades_pendentes=len(resultado_cliente.necessidades),
+            documentos_candidatos=tuple(candidatos),
+            documentos_elegiveis=tuple(elegiveis),
+            documentos_rejeitados=tuple(d for d in candidatos if d not in set(elegiveis)),
+        ))
+    return DiagnosticoPrestacaoUpstream(clientes=tuple(clientes), trios_prontos=trios)
 
 
 def executar_ciclo_prestacao_persistente(

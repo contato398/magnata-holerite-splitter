@@ -138,6 +138,7 @@ def executar_prestacao_contato_ate_pending_shadow_v1(
     instante: datetime,
     canal: str = CANAL_WHATSAPP,
     repositorio_conclusao: Optional[RepositorioConclusaoObrigacaoAssinaturaPostgres] = None,
+    trios_prontos: Optional[Tuple] = None,
 ) -> Tuple[ResultadoDistribuicaoDocumentalShadow, ...]:
     """SHADOW -- prova integrada, NÃO composition root operacional de
     produção (ver aviso de segurança no topo do módulo). Composição
@@ -180,6 +181,7 @@ def executar_prestacao_contato_ate_pending_shadow_v1(
         proveniencia=proveniencia,
         instante=instante,
         repositorio_conclusao=repositorio_conclusao,
+        trios_prontos=trios_prontos,
     )
 
 

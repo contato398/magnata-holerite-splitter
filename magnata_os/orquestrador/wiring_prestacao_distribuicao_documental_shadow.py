@@ -79,6 +79,7 @@ from typing import Callable, Optional, Tuple
 from magnata_os.classificacao.composicao_ciclo_persistente_prestacao import (
     ContextoComposicaoPrestacao,
     ResultadoAquisicaoPorNecessidade,
+    particionar_por_colaborador,
     resultados_aquisicao_prontos_por_colaborador,
 )
 from magnata_os.classificacao.contratos import ReferenciaCanonica
@@ -299,6 +300,7 @@ def executar_prestacao_ate_distribuicao_documental_shadow(
     proveniencia: str,
     instante: datetime,
     repositorio_conclusao: Optional[RepositorioConclusaoObrigacaoAssinaturaPostgres] = None,
+    trios_prontos: Optional[Tuple] = None,
 ) -> Tuple[ResultadoDistribuicaoDocumentalShadow, ...]:
     """Composition root do Delta Final A-F: fecha `CLIENTE+COMPETÊNCIA
     -> ... -> PENDING` reutilizando, em sequência, só componentes já
@@ -333,9 +335,20 @@ def executar_prestacao_ate_distribuicao_documental_shadow(
     cliente inteiro -- cliente com N colaboradores prontos produz N
     Ordens de destinatário único, e o isolamento acima passa a valer
     por colaborador (erro de domínio de A nunca impede a Ordem de B).
-    Documentos de nível cliente não entram em Ordem de colaborador."""
+    Documentos de nível cliente não entram em Ordem de colaborador.
+
+    `trios_prontos` (opcional, J3 / Prestação upstream): trios JÁ
+    calculados por `resultados_aquisicao_prontos_por_cliente` /
+    `diagnosticar_prestacao_upstream` -- quando informados, a partição
+    por colaborador é feita sobre ELES (mesmo snapshot das intenções de
+    cliente), sem recomputar o ciclo. `None` preserva o comportamento
+    anterior."""
+    grupos = (
+        particionar_por_colaborador(trios_prontos) if trios_prontos is not None
+        else resultados_aquisicao_prontos_por_colaborador(contexto)
+    )
     resultados: list = []
-    for cliente, competencia, resultados_aquisicao in resultados_aquisicao_prontos_por_colaborador(contexto):
+    for cliente, competencia, resultados_aquisicao in grupos:
         parametros = resolver_parametros_ordem(cliente, competencia, resultados_aquisicao)
         if parametros is None:
             continue  # fail-closed: sem parâmetros resolvidos, zero Ordem para este cliente/competência
