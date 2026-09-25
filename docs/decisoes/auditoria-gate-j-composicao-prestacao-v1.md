@@ -596,3 +596,14 @@ Nenhuma bridge foi removida sem substituto.
 - **Candidatos duplicados:** dois documentos distintos que resolvem para a mesma necessidade de nível cliente entram os dois na intenção. É o mesmo comportamento das Ordens, sem regressão. No pacote do cliente isso significa possível entrega duplicada; a deduplicação por necessidade é decisão do consumidor da intenção.
 - `tipos_documentais` faz parte do `intencao_id`: mudança de vocabulário muda a identidade para os mesmos documentos físicos.
 - Certidões não aparecem em nenhum requisito. A granularidade de DCTFWeb (`broadcast_estrutural`, `clientes_broadcast=()`) provavelmente nunca fica elegível. Isso não foi alterado.
+
+### 14.8 Continuação autorizada: J3 atravessado (desenho e schema)
+
+O gate J3 foi atravessado por decisão humana. Detalhes em `docs/decisoes/correlacao-documento-prestacao-v1.md`:
+- migration orquestrador 0007 inerte, com rollback;
+- produtor no corredor existente, mais o de ponto;
+- consumidor sobre a fonte interna já existente;
+- bridge transitório do destinatário do cliente;
+- composition root de borda e backfill projetado.
+
+Continuam bloqueados: aplicação da migration, backfill real e piloto contra banco real.
