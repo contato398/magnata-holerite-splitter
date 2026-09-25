@@ -71,7 +71,10 @@ class _RepoAcoesFake:
         return self.pares
 
     def listar_succeeded_recentes(self, *, limite=200):
-        return self.succeeded
+        raise AssertionError(
+            'Gate 1: o observador nunca mais seleciona "toda ação SUCCEEDED de texto" -- '
+            'a seleção vem das obrigações persistidas (listar_acoes_para_observacao)'
+        )
 
 
 def _fabrica_repo_acoes(pares=(), succeeded=()):
@@ -93,11 +96,17 @@ class _RepoConclusaoFake:
 
 
 def _patches(repo_acoes_cls, executar_mock=None, observar_mock=None):
-    """Contexto único com todos os pontos de composição substituídos."""
+    """Contexto único com todos os pontos de composição substituídos.
+    `succeeded` agora representa as ações com obrigação de assinatura
+    persistida e não concluída (seleção canônica do Gate 1)."""
+    class _RepoConclusao(_RepoConclusaoFake):
+        def listar_acoes_para_observacao(self, *, limite=200):
+            return tuple(acao.acao_execucao_id for acao in repo_acoes_cls.succeeded)
+
     return (
         patch.object(ciclo, 'RepositorioAcoesExecucaoPlanoPostgres', repo_acoes_cls),
         patch.object(ciclo, 'RepositorioAutorizacoesGatePostgres', _RepoAutorizacoesFake),
-        patch.object(ciclo, 'RepositorioConclusaoObrigacaoAssinaturaPostgres', _RepoConclusaoFake),
+        patch.object(ciclo, 'RepositorioConclusaoObrigacaoAssinaturaPostgres', _RepoConclusao),
         patch.object(ciclo, 'executar_proxima_acao_persistente', executar_mock),
         patch.object(ciclo, 'observar_e_registrar_transicao', observar_mock),
     )
@@ -269,6 +278,70 @@ def test_observador_roda_estritamente_depois_do_executor():
     assert indices_exec and indices_obs
     assert max(indices_exec) < min(indices_obs)
     assert resultado.observacoes == (('a' * 64, 'CONCLUIDO'), ('b' * 64, 'CONCLUIDO'))
+
+
+def test_acoes_sem_obrigacao_de_assinatura_nunca_chegam_ao_adapter_legado():
+    """Gate 1: N ações executadas (texto + DOCUMENTO_A/B/C), nenhuma com
+    obrigação persistida -> o observador não seleciona nada e o adapter
+    de assinatura (Airtable via HTTP) recebe ZERO consultas."""
+    executadas = []
+
+    def _executar(*, event_id, preview_id, **kw):
+        if len(executadas) < 4:
+            executadas.append(event_id)
+            return ResultadoCicloExecutorPersistente('SUCCEEDED', 'x' * 64, 'dry-run:ref')
+        return ResultadoCicloExecutorPersistente('SEM_ACAO_ELEGIVEL', None, None)
+
+    class _PortaQueNaoPodeSerConsultada:
+        def consultar_por_correlacao(self, **kw):
+            raise AssertionError('ação sem obrigação nunca pode gerar consulta ao adapter de assinatura')
+
+    conexao = _ConexaoLock(lock_adquirido=True)
+    patches = _patches(
+        _fabrica_repo_acoes(pares=(('evt-docs', 'p1'),), succeeded=()),
+        executar_mock=_executar,
+        observar_mock=ciclo.observar_e_registrar_transicao,
+    )
+    _entrar(patches)
+    try:
+        resultado = ciclo.executar_um_ciclo_producao(
+            conexao_postgres=conexao, armazenamento=object(), porta_execucao=ExecutorAcaoDryRun(),
+            porta_obrigacao_assinatura=_PortaQueNaoPodeSerConsultada(), instante=AGORA,
+            claim_referencia='ciclo-teste',
+        )
+    finally:
+        _sair(patches)
+    assert len(executadas) == 4
+    assert resultado.observacoes == ()
+
+
+def test_registro_de_obrigacoes_indisponivel_nao_derruba_o_ciclo(caplog):
+    """Rollout: se a 0006 ainda não existir, a seleção falha -- o executor
+    já rodou, o ciclo termina, a falha é registrada (nunca silenciosa)."""
+    def _executar(**kw):
+        return ResultadoCicloExecutorPersistente('SEM_ACAO_ELEGIVEL', None, None)
+
+    class _RepoConclusaoIndisponivel(_RepoConclusaoFake):
+        def listar_acoes_para_observacao(self, *, limite=200):
+            raise RuntimeError('relation "conclusao_obrigacao_assinatura" does not exist')
+
+    conexao = _ConexaoLock(lock_adquirido=True)
+    patches = _patches(_fabrica_repo_acoes(pares=(('evt-1', 'p1'),)), executar_mock=_executar, observar_mock=None)
+    patches = patches[:2] + (
+        patch.object(ciclo, 'RepositorioConclusaoObrigacaoAssinaturaPostgres', _RepoConclusaoIndisponivel),
+    ) + patches[3:]
+    _entrar(patches)
+    try:
+        with caplog.at_level('ERROR'):
+            resultado = ciclo.executar_um_ciclo_producao(
+                conexao_postgres=conexao, armazenamento=object(), porta_execucao=ExecutorAcaoDryRun(),
+                porta_obrigacao_assinatura=object(), instante=AGORA, claim_referencia='ciclo-teste',
+            )
+    finally:
+        _sair(patches)
+    assert resultado.lock_adquirido is True and resultado.observacoes == ()
+    assert any('observador de assinatura indisponivel' in r.getMessage() for r in caplog.records)
+    assert any('pg_advisory_unlock' in sql for sql, _ in conexao.chamadas)  # lock do ciclo liberado
 
 
 def test_para_no_primeiro_sem_acao_elegivel_por_par():

@@ -28,6 +28,9 @@ from datetime import datetime
 
 from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivos
 
+from .adapters.postgres_conclusao_obrigacao_assinatura import (
+    RepositorioConclusaoObrigacaoAssinaturaPostgres,
+)
 from .autorizacao_gate import (
     DecisaoGate,
     RegistroAutorizacaoGate,
@@ -121,6 +124,7 @@ def materializar_assinatura_shadow(
     arquivo_record_id: str,
     event_id: str,
     instante: datetime,
+    repositorio_conclusao: RepositorioConclusaoObrigacaoAssinaturaPostgres,
 ) -> ResultadoWiringAssinaturaShadow:
     """Composição completa até a persistência da ação, sem transporte:
 
@@ -159,8 +163,19 @@ def materializar_assinatura_shadow(
     )
     registro_com_envelope = dataclasses.replace(registro, envelope_sha256=envelope_sha256)
 
+    # Gate 1: marcador canônico da obrigação (migration 0006), sob o MESMO
+    # `acao_execucao_id` opaco, na MESMA transação que persiste a ação
+    # (depois do INSERT dela -- FK) e só se ainda não houver histórico
+    # (replay nunca regride nem duplica).
+    def _marcar_obrigacao(cursor):
+        repositorio_conclusao.registrar_obrigacao_inicial_na_transacao(
+            cursor, acao_execucao_id=registro_com_envelope.acao_execucao_id,
+            correlacao_externa=obrigacao.assinatura_id or None, registrado_em=instante,
+        )
+
     (acao_persistida,) = repositorio_acoes.materializar_registros(
         registros=(registro_com_envelope,), autorizacao=autorizacao,
+        na_mesma_transacao=_marcar_obrigacao,
     )
 
     return ResultadoWiringAssinaturaShadow(

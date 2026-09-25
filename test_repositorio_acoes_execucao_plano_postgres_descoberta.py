@@ -77,24 +77,10 @@ def test_listar_pares_elegiveis_respeita_limite():
     assert 50 in params
 
 
-def test_listar_succeeded_recentes_filtra_por_estado_e_tipo_texto():
-    conexao = _Conexao(linhas=[_linha_succeeded()])
-    repo = RepositorioAcoesExecucaoPlanoPostgres(conexao)
-
-    resultado = repo.listar_succeeded_recentes()
-
-    assert len(resultado) == 1
-    assert resultado[0].estado == EstadoAcaoExecucaoPlano.SUCCEEDED
-    _, params = conexao.executados[0]
-    assert EstadoAcaoExecucaoPlano.SUCCEEDED.value in params
-    assert 'texto' in params
-
-
-def test_listar_succeeded_recentes_e_apenas_select():
-    conexao = _Conexao(linhas=[])
-    repo = RepositorioAcoesExecucaoPlanoPostgres(conexao)
-    repo.listar_succeeded_recentes(limite=10)
-    sql, params = conexao.executados[0]
-    assert sql.strip().upper().startswith('SELECT')
-    assert 10 in params
-    assert conexao.commits == 0
+def test_repositorio_de_acoes_nao_seleciona_candidatas_a_assinatura_por_tipo():
+    """Gate 1: o proxy histórico `estado=SUCCEEDED AND tipo='texto'`
+    (`listar_succeeded_recentes`) foi removido -- a existência de uma
+    obrigação de assinatura é estado persistido na migration 0006
+    (`RepositorioConclusaoObrigacaoAssinaturaPostgres.listar_acoes_para_
+    observacao`), nunca o tipo físico da ação."""
+    assert not hasattr(RepositorioAcoesExecucaoPlanoPostgres, 'listar_succeeded_recentes')

@@ -21,6 +21,9 @@ from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivosEm
 from magnata_os.documental.modulo01.dominio import Documento, StatusDocumento
 from magnata_os.documental.modulo01.materializador_arquivo import ResultadoMaterializacao
 from magnata_os.documental.modulo01.repositorio import RepositorioDocumentosEmMemoria
+from magnata_os.orquestrador.adapters.postgres_conclusao_obrigacao_assinatura import (
+    RepositorioConclusaoObrigacaoAssinaturaEmMemoria,
+)
 from magnata_os.orquestrador.autorizacao_gate import RepositorioAutorizacoesGateEmMemoria
 from magnata_os.orquestrador.eventos import EstadoExecucao, Sensibilidade, TipoEvento
 from magnata_os.orquestrador.obrigacao_assinatura import ObrigacaoAssinatura
@@ -186,6 +189,7 @@ def _montar_dependencias():
         'repositorio_execucoes': RepositorioExecucoesEmMemoria(),
         'repositorio_autorizacoes': RepositorioAutorizacoesGateEmMemoria(),
         'repositorio_acoes': RepositorioAcoesExecucaoPlanoPostgres(conexao),
+        'repositorio_conclusao': RepositorioConclusaoObrigacaoAssinaturaEmMemoria(),
     }, conexao
 
 

@@ -36,6 +36,12 @@ class _RepoConclusaoFake:
         self.registros.append(registro)
         self._estado = registro.estado
 
+    def registrar_transicao_se_mudou(self, registro):
+        if registro.estado == self._estado:
+            return False
+        self.registrar_transicao(registro)
+        return True
+
 
 def test_sem_obrigacao_retorna_none_sem_registrar():
     porta = _PortaFake(obrigacao=None)

@@ -143,6 +143,16 @@ def _compor_repositorio_acoes_a_partir_do_ambiente():
     return RepositorioAcoesExecucaoPlanoPostgres(abrir_conexao())
 
 
+def _compor_repositorio_conclusao_a_partir_do_ambiente():
+    """Registro canônico da obrigação de assinatura (migration 0006) --
+    só composto quando a Ordem exige assinatura (Gate 1)."""
+    from magnata_os.documental.modulo01.adapters.conexao import abrir_conexao
+    from .adapters.postgres_conclusao_obrigacao_assinatura import (
+        RepositorioConclusaoObrigacaoAssinaturaPostgres,
+    )
+    return RepositorioConclusaoObrigacaoAssinaturaPostgres(abrir_conexao())
+
+
 def _parse_args(argv) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--documento', action='append', required=True,
@@ -181,6 +191,9 @@ def main(argv=None) -> int:
 
     materializador = _compor_materializador_a_partir_do_ambiente() if ordem.exigir_assinatura else None
     porta_assinatura = _compor_obrigacao_assinatura_a_partir_do_ambiente() if ordem.exigir_assinatura else None
+    repositorio_conclusao = (
+        _compor_repositorio_conclusao_a_partir_do_ambiente() if ordem.exigir_assinatura else None
+    )
     instante = datetime.now(timezone.utc)
 
     registrar_evento_canonico_ordem_distribuicao_documental_shadow(
@@ -200,6 +213,7 @@ def main(argv=None) -> int:
         ator_referencia=args.ator_referencia,
         proveniencia=args.proveniencia,
         instante=instante,
+        repositorio_conclusao=repositorio_conclusao,
     )
 
     print(json.dumps({

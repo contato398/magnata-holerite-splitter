@@ -142,12 +142,28 @@ def executar_um_ciclo_producao(
 
         repositorio_conclusao = RepositorioConclusaoObrigacaoAssinaturaPostgres(conexao_postgres)
         observacoes = []
-        for acao in repositorio_acoes.listar_succeeded_recentes():
+        # Gate 1: seleção CANÔNICA -- só ações SUCCEEDED com obrigação de
+        # assinatura persistida (migration 0006) e ainda não CONCLUIDO.
+        # Nunca mais "toda ação de texto": ação sem obrigação nunca chega
+        # ao adapter legado de assinatura.
+        try:
+            acoes_para_observar = repositorio_conclusao.listar_acoes_para_observacao()
+        except Exception as exc:
+            # Registro de obrigações indisponível (ex.: 0006 ainda não
+            # aplicada): o executor acima já rodou e está persistido; a
+            # observação fica para o próximo ciclo -- falha registrada,
+            # nunca silenciosa, nunca derruba o ciclo.
+            logger.error(
+                '[CICLO_PRODUCAO] observador de assinatura indisponivel classe=%s',
+                type(exc).__name__,
+            )
+            acoes_para_observar = ()
+        for acao_execucao_id in acoes_para_observar:
             try:
                 estado = observar_e_registrar_transicao(
                     porta_assinatura=porta_obrigacao_assinatura,
                     repositorio_conclusao=repositorio_conclusao,
-                    acao_execucao_id=acao.acao_execucao_id,
+                    acao_execucao_id=acao_execucao_id,
                     instante=instante,
                 )
             except Exception as exc:
@@ -157,13 +173,13 @@ def executar_um_ciclo_producao(
                 # próximo ciclo -- nada é persistido neste caminho.
                 logger.warning(
                     '[CICLO_PRODUCAO] observador falhou para acao_execucao_id=%s classe=%s',
-                    acao.acao_execucao_id, type(exc).__name__,
+                    acao_execucao_id, type(exc).__name__,
                 )
                 continue
-            observacoes.append((acao.acao_execucao_id, estado))
+            observacoes.append((acao_execucao_id, estado))
             logger.info(
                 '[CICLO_PRODUCAO] observador acao_execucao_id=%s estado=%s',
-                acao.acao_execucao_id, estado,
+                acao_execucao_id, estado,
             )
 
         return ResultadoCicloProducao(

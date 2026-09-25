@@ -95,6 +95,9 @@ from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivos
 from magnata_os.documental.modulo01.materializador_arquivo import MaterializadorArquivoLegado
 from magnata_os.documental.modulo01.repositorio import RepositorioDocumentos
 
+from .adapters.postgres_conclusao_obrigacao_assinatura import (
+    RepositorioConclusaoObrigacaoAssinaturaPostgres,
+)
 from .autorizacao_gate import RepositorioAutorizacoesGate
 from .obrigacao_assinatura import PortaObrigacaoAssinatura
 from .repositorio_acoes_execucao_plano_postgres import RepositorioAcoesExecucaoPlanoPostgres
@@ -134,6 +137,7 @@ def executar_prestacao_contato_ate_pending_shadow_v1(
     proveniencia: str,
     instante: datetime,
     canal: str = CANAL_WHATSAPP,
+    repositorio_conclusao: Optional[RepositorioConclusaoObrigacaoAssinaturaPostgres] = None,
 ) -> Tuple[ResultadoDistribuicaoDocumentalShadow, ...]:
     """SHADOW -- prova integrada, NÃO composition root operacional de
     produção (ver aviso de segurança no topo do módulo). Composição
@@ -175,6 +179,7 @@ def executar_prestacao_contato_ate_pending_shadow_v1(
         ator_referencia=ator_referencia,
         proveniencia=proveniencia,
         instante=instante,
+        repositorio_conclusao=repositorio_conclusao,
     )
 
 

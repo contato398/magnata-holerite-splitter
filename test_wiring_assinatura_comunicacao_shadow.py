@@ -7,6 +7,9 @@ from datetime import datetime, timezone
 import pytest
 
 from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivosEmMemoria
+from magnata_os.orquestrador.adapters.postgres_conclusao_obrigacao_assinatura import (
+    RepositorioConclusaoObrigacaoAssinaturaEmMemoria,
+)
 from magnata_os.orquestrador.autorizacao_gate import RepositorioAutorizacoesGateEmMemoria
 from magnata_os.orquestrador.obrigacao_assinatura import ObrigacaoAssinatura
 from magnata_os.orquestrador.repositorio_acoes_execucao_plano_postgres import (
@@ -134,6 +137,7 @@ def test_composicao_completa_ate_persistencia_sem_transporte():
     conexao = _Conexao()
     repositorio_acoes = RepositorioAcoesExecucaoPlanoPostgres(conexao)
 
+    repositorio_conclusao = RepositorioConclusaoObrigacaoAssinaturaEmMemoria()
     resultado = materializar_assinatura_shadow(
         porta_assinatura=porta, repositorio_acoes=repositorio_acoes,
         armazenamento=armazenamento, preview=preview, autorizacao=autorizacao,
@@ -141,6 +145,7 @@ def test_composicao_completa_ate_persistencia_sem_transporte():
         funcionario_id='recFUNC',
         tipo_documento='COMUNICADO', arquivo_record_id='recARQ',
         event_id='evento-assinatura-1', instante=AGORA,
+        repositorio_conclusao=repositorio_conclusao,
     )
 
     assert resultado.obrigacao.assinatura_id == 'rec-fake-1'
@@ -150,6 +155,12 @@ def test_composicao_completa_ate_persistencia_sem_transporte():
     assert porta.chamadas_criar == [(token, resultado.acao_persistida.acao_execucao_id)]
     assert resultado.acao_persistida.estado == EstadoAcaoExecucaoPlano.PENDING
     assert resultado.envelope_sha256
+    # Gate 1: marcador canônico da obrigação sob o MESMO id opaco da ação
+    # (aqui, a identidade genérica de `criar_registro_acao_plano` -- outra
+    # fórmula que a do núcleo de distribuição, mesmo contrato).
+    (marcador,) = repositorio_conclusao.listar_historico(resultado.acao_persistida.acao_execucao_id)
+    assert marcador.estado == 'AGUARDANDO_ASSINATURA'
+    assert marcador.correlacao_externa == 'rec-fake-1'
     # nunca importa transporte real nem infraestrutura de fornecedor --
     # só os imports de módulo, não a prosa dos comentários (que
     # legitimamente EXPLICA o que o wiring evita, citando "Evolution").
