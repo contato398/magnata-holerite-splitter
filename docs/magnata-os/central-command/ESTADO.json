@@ -1,5 +1,5 @@
 {
-  "autorizacoes_app_py": 24,
+  "autorizacoes_app_py": 25,
   "branches_fora_de_main": [
     "claude/evolution-api-instances-1s9raa",
     "claude/magnata-central-command-0n0713",
@@ -13,6 +13,7 @@
     "fix/auto-orquestrador-02c796c-32",
     "fix/auto-orquestrador-05dccde-22",
     "fix/auto-orquestrador-05dccde-23",
+    "fix/auto-orquestrador-060a089-121",
     "fix/auto-orquestrador-0f19e4d-110",
     "fix/auto-orquestrador-0f19e4d-111",
     "fix/auto-orquestrador-1b85021-47",
@@ -68,6 +69,7 @@
     "fix/auto-orquestrador-9ec5149-29",
     "fix/auto-orquestrador-9ec5149-30",
     "fix/auto-orquestrador-a993203-86",
+    "fix/auto-orquestrador-b284b96-125",
     "fix/auto-orquestrador-b49ec8d-53",
     "fix/auto-orquestrador-b49ec8d-54",
     "fix/auto-orquestrador-b6ab405-28",
@@ -119,6 +121,7 @@
     "fix/auto-orquestrador-fc44870-73",
     "fix/auto-orquestrador-fc44870-74",
     "fix/auto-orquestrador-fc44870-75",
+    "fix/auto-orquestrador-ff1aee5-114",
     "fix/competencia-fiscal-periodo-apuracao-sem-de",
     "fix/corte-isolado-assinatura-consulta-v1",
     "fix/fluxo-whatsapp-assinatura-v1",
@@ -138,15 +141,15 @@
   "contexto": {
     "limite_atencao_tokens": 8000,
     "limite_trocar_sessao_tokens": 12000,
-    "medido_em": "2026-09-22T16:58:07.112474+00:00",
+    "medido_em": "2026-09-25T21:35:29.072386+00:00",
     "mensagem": null,
     "metrica": "chars//4; ESTADO.contexto excluido da propria medicao",
-    "razao_tier0_sobre_total": 0.0676,
+    "razao_tier0_sobre_total": 0.0774,
     "status_contexto": "NORMAL",
-    "tier0_chars": 25323,
-    "tier0_tokens_aprox": 6330,
-    "tier2_chars": 374373,
-    "tier2_tokens_aprox": 93593
+    "tier0_chars": 29354,
+    "tier0_tokens_aprox": 7338,
+    "tier2_chars": 379037,
+    "tier2_tokens_aprox": 94759
   },
   "cpf_em_documentacao": [],
   "documentos_central_command": [
@@ -185,9 +188,9 @@
   ],
   "graphify_snapshot_status": "sem_sinal_de_mudanca",
   "links_quebrados": [],
-  "main_assunto": "Merge pull request #177 from contato398/fix/contato-colaborador-canonico-v1",
-  "main_data": "2026-09-22 11:08:48 -0300",
-  "main_sha": "a1e26a0",
+  "main_assunto": "Merge pull request #190 from contato398/fix/pre-canario-seguro-reconciliacao-main-v1",
+  "main_data": "2026-09-25 16:35:18 -0300",
+  "main_sha": "d6f1b58",
   "session_handoff_freshness": "desatualizado",
   "testes": {
     "falhando": 0,
