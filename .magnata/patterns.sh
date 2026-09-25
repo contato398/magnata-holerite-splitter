@@ -1255,6 +1255,34 @@ ALLOWED_PATHS=(
   # + ENVIO_EXTERNO_INCERTO): regras, CAS, auditoria atômica, limites.
   # ZERO migration, ZERO endpoint/CLI, ZERO transporte.
   "^docs/decisoes/reconciliacao-envio-incerto-v1\.md$"
+
+  # ETAPA PRÉ-CANÁRIO SEGURO V1 WHATSAPP -- fecha o gap de autorização
+  # humana LEGÍTIMA (nunca sintética) do Grande Orquestrador.
+  # `autorizacao_operador_real_v1.py` é função IRMÃ de `autorizar_
+  # preview_assinatura_shadow` (wiring_assinatura_comunicacao_shadow.py,
+  # intocado) -- mesmo contrato `RegistroAutorizacaoGate`/
+  # `RepositorioAutorizacoesGate` (autorizacao_gate.py, intocado), mas
+  # exige `Sujeito` autenticado real (magnata_os/autenticacao/,
+  # intocado) via `exigir_perfil`, nunca uma string de ator livre; nunca
+  # parametriza a shadow (decisão registrada: função irmã, não um
+  # parâmetro booleano, para que um erro de configuração nunca vire
+  # autorização sintética em produção por engano). `materializar_
+  # documento_pre_canario_operador_real_v1.py` reproduz a composição já
+  # existente de `_montar_ramo_sem_assinatura` (wiring_distribuicao_
+  # documental_shadow.py, intocado -- só reutilizado via suas funções
+  # públicas: `montar_preview_comunicacao`, `montar_plano_disparo`,
+  # `criar_registro_acao_plano`, `armazenar_acao_e_envelope_v1`) restrita
+  # a exatamente 1 documento sem assinatura (mesmo escopo do Marco A do
+  # Ultraplan Corretivo -- nunca depende da migration 0006, que continua
+  # ausente do Postgres real). Termina em PENDING; ZERO import de
+  # `porta_execucao`/`transporte_real_habilitado`/`ExecutorEvolutionLegado`/
+  # `ciclo_producao_v1`. ZERO migration nova, ZERO Airtable, ZERO
+  # transporte real, ZERO Cron, ZERO alteração em app.py.
+  "^magnata_os/orquestrador/autorizacao_operador_real_v1\.py$"
+  "^magnata_os/orquestrador/materializar_documento_pre_canario_operador_real_v1\.py$"
+  "^test_autorizacao_operador_real_v1\.py$"
+  "^test_materializar_documento_pre_canario_operador_real_v1\.py$"
+  "^test_materializar_documento_pre_canario_operador_real_v1_real\.py$"
 )
 
 # ============================================================================

@@ -555,6 +555,12 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # GATE J1 -- corredor real (sem patch) da aquisição da Prestação até
   # PENDING (ver .magnata/patterns.sh para o detalhamento completo).
   "test_aquisicao_prestacao_corredor_real_j1.py"
+  # ETAPA PRÉ-CANÁRIO SEGURO V1 WHATSAPP -- autorização humana REAL
+  # (nunca shadow) do Grande Orquestrador, e composição até PENDING que
+  # a utiliza (ver .magnata/patterns.sh para o detalhamento completo).
+  "test_autorizacao_operador_real_v1.py"
+  "test_materializar_documento_pre_canario_operador_real_v1.py"
+  "test_materializar_documento_pre_canario_operador_real_v1_real.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
