@@ -48,13 +48,10 @@ def observar_e_registrar_transicao(
         return None
 
     novo_estado = _mapear_estado(obrigacao)
-    estado_anterior = repositorio_conclusao.estado_mais_recente(acao_execucao_id)
-    if novo_estado == estado_anterior:
-        # Idempotente: nenhuma mudança real, nenhum registro novo --
-        # nunca duplica histórico só porque foi consultado de novo.
-        return novo_estado
-
-    repositorio_conclusao.registrar_transicao(RegistroConclusaoObrigacaoAssinatura(
+    # Idempotente e atômico (Gate 1): a comparação com o último estado e o
+    # append acontecem na MESMA transação, sob lock por ação -- nunca
+    # duplica histórico por replay nem por 2 processos concorrentes.
+    repositorio_conclusao.registrar_transicao_se_mudou(RegistroConclusaoObrigacaoAssinatura(
         acao_execucao_id=acao_execucao_id,
         estado=novo_estado,
         correlacao_externa=obrigacao.assinatura_id or None,

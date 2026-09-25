@@ -1245,6 +1245,12 @@ ALLOWED_PATHS=(
   # memória. ZERO migration, ZERO Airtable, ZERO transporte real.
   "^docs/decisoes/auditoria-gate-j-composicao-prestacao-v1\.md$"
   "^test_aquisicao_prestacao_corredor_real_j1\.py$"
+
+  # GATE 1 (assinatura) -- registro canônico da obrigação de assinatura
+  # (reutiliza a migration 0006, sem schema novo): decisão arquitetural,
+  # ordem de persistência, idempotência/concorrência, compatibilidade
+  # histórica e plano de rollout. ZERO migration aplicada, ZERO backfill.
+  "^docs/decisoes/obrigacao-assinatura-canonica-v1\.md$"
 )
 
 # ============================================================================

@@ -18,6 +18,9 @@ from magnata_os.documental.modulo01.materializador_arquivo import (
     ResultadoMaterializacao,
 )
 from magnata_os.documental.modulo01.repositorio import RepositorioDocumentosEmMemoria
+from magnata_os.orquestrador.adapters.postgres_conclusao_obrigacao_assinatura import (
+    RepositorioConclusaoObrigacaoAssinaturaEmMemoria,
+)
 from magnata_os.orquestrador.autorizacao_gate import RepositorioAutorizacoesGateEmMemoria
 from magnata_os.orquestrador.obrigacao_assinatura import ObrigacaoAssinatura
 from magnata_os.orquestrador.repositorio_acoes_execucao_plano_postgres import (
@@ -189,6 +192,7 @@ def _montar_dependencias():
         'armazenamento': ArmazenamentoArquivosEmMemoria(),
         'repositorio_autorizacoes': RepositorioAutorizacoesGateEmMemoria(),
         'repositorio_acoes': RepositorioAcoesExecucaoPlanoPostgres(_Conexao()),
+        'repositorio_conclusao': RepositorioConclusaoObrigacaoAssinaturaEmMemoria(),
     }
 
 
@@ -891,3 +895,176 @@ def test_nucleo_generico_e_presets_nao_decidem_por_nome_de_documento():
             if any(nome in literal.lower() for nome in _NOMES_DOCUMENTAIS_REAIS)
         ]
         assert achados == [], (modulo.__name__, achados)
+
+
+# ---------------------------------------------------------------------
+# Gate 1 -- registro canônico da obrigação de assinatura (migration
+# 0006): a existência da obrigação vira estado persistido correlacionado
+# ao `acao_execucao_id` opaco. Tipos documentais arbitrários.
+# ---------------------------------------------------------------------
+
+def _ordem_assinada(deps, tipo_documento='DOCUMENTO_A'):
+    (documento,) = _preparar_documentos_arbitrarios(deps, 1)
+    return _ordem_generica(
+        documentos=(ItemDocumentoOrdem(documento.documento_id, documento.hash_sha256),),
+        tipo_documento=tipo_documento, exigir_assinatura=True, exigir_comprovante=True,
+    )
+
+
+def _executar_assinada(deps, ordem, porta, materializador=None):
+    return materializar_distribuicao_documental_shadow(
+        ordem=ordem, materializador=materializador or _MaterializadorFake(), porta_assinatura=porta,
+        ator_referencia='rh:teste', proveniencia='teste:gate1', instante=AGORA, **deps,
+    )
+
+
+def _estados(deps, acao_execucao_id):
+    return [r.estado for r in deps['repositorio_conclusao'].listar_historico(acao_execucao_id)]
+
+
+def test_assinatura_registra_marcador_canonico_sob_o_id_opaco_da_acao():
+    deps = _montar_dependencias()
+    porta = _PortaAssinaturaFake()
+    resultado = _executar_assinada(deps, _ordem_assinada(deps), porta)
+    (registro,) = deps['repositorio_conclusao'].listar_historico(resultado.acao_execucao_id)
+    assert registro.estado == 'AGUARDANDO_ASSINATURA'
+    assert registro.acao_execucao_id == resultado.acao_persistida.acao_execucao_id
+    assert registro.correlacao_externa == porta._por_correlacao[resultado.acao_execucao_id].assinatura_id
+
+
+def test_sem_assinatura_nenhum_marcador_de_obrigacao_para_n_documentos():
+    deps = _montar_dependencias()
+    documentos = _preparar_documentos_arbitrarios(deps, 3)
+    resultado = materializar_distribuicao_documental_shadow(
+        ordem=_ordem_separada(documentos), materializador=None, porta_assinatura=None,
+        ator_referencia='rh:teste', proveniencia='teste:gate1', instante=AGORA, **deps,
+    )
+    for acao in resultado.acoes_persistidas:
+        assert _estados(deps, acao.acao_execucao_id) == []
+
+
+def test_exigir_assinatura_sem_registro_de_obrigacao_falha_antes_de_qualquer_io():
+    deps = _montar_dependencias()
+    deps['repositorio_conclusao'] = None
+    materializador = _MaterializadorFake()
+    with pytest.raises(DistribuicaoDocumentalError, match='repositorio_conclusao'):
+        _executar_assinada(deps, _ordem_assinada(deps), _PortaAssinaturaFake(), materializador)
+    assert materializador.chamadas == 0
+
+
+def test_replay_da_assinatura_nao_duplica_marcador_nem_obrigacao():
+    deps = _montar_dependencias()
+    porta = _PortaAssinaturaFake()
+    ordem = _ordem_assinada(deps)
+    resultados = [_executar_assinada(deps, ordem, porta) for _ in range(3)]
+    assert len({r.acao_execucao_id for r in resultados}) == 1
+    assert _estados(deps, resultados[0].acao_execucao_id) == ['AGUARDANDO_ASSINATURA']
+    assert len(porta._por_correlacao) == 1
+
+
+def test_replay_depois_de_assinado_nunca_regride_o_estado():
+    from magnata_os.orquestrador.adapters.postgres_conclusao_obrigacao_assinatura import (
+        RegistroConclusaoObrigacaoAssinatura,
+    )
+    deps = _montar_dependencias()
+    porta = _PortaAssinaturaFake()
+    ordem = _ordem_assinada(deps)
+    primeiro = _executar_assinada(deps, ordem, porta)
+    deps['repositorio_conclusao'].registrar_transicao_se_mudou(RegistroConclusaoObrigacaoAssinatura(
+        acao_execucao_id=primeiro.acao_execucao_id, estado='ASSINADO', correlacao_externa='x',
+        evidencia_sha256=None, registrado_em=AGORA,
+    ))
+    _executar_assinada(deps, ordem, porta)
+    assert _estados(deps, primeiro.acao_execucao_id) == ['AGUARDANDO_ASSINATURA', 'ASSINADO']
+
+
+class _FalhaUmaVez:
+    """Envolve um objeto e faz o método indicado falhar só na 1ª chamada
+    (simula queda do processo naquela fronteira)."""
+
+    def __init__(self, alvo, metodo):
+        self._alvo, self._metodo, self._falhou = alvo, metodo, False
+
+    def __getattr__(self, nome):
+        original = getattr(self._alvo, nome)
+        if nome != self._metodo:
+            return original
+
+        def _talvez_falhar(*args, **kwargs):
+            if not self._falhou:
+                self._falhou = True
+                raise RuntimeError(f'queda sintetica em {nome}')
+            return original(*args, **kwargs)
+        return _talvez_falhar
+
+
+def test_crash_depois_da_obrigacao_antes_da_acao_replay_recupera_e_completa():
+    """Caso 1: obrigação criada, ação ainda não persistida."""
+    deps = _montar_dependencias()
+    porta = _PortaAssinaturaFake()
+    ordem = _ordem_assinada(deps)
+    repositorio_acoes_real = deps['repositorio_acoes']
+    deps['repositorio_acoes'] = _FalhaUmaVez(repositorio_acoes_real, 'materializar_registros')
+    with pytest.raises(RuntimeError, match='queda sintetica'):
+        _executar_assinada(deps, ordem, porta)
+    assert len(porta._por_correlacao) == 1  # obrigação já existe
+    resultado = _executar_assinada(deps, ordem, porta)  # replay
+    assert len(porta._por_correlacao) == 1  # recuperada, nunca duplicada
+    assert _estados(deps, resultado.acao_execucao_id) == ['AGUARDANDO_ASSINATURA']
+
+
+def test_falha_no_marcador_desfaz_a_acao_e_o_replay_completa_os_dois():
+    """Caso 2 eliminado por construção: o marcador é gravado na MESMA
+    transação da ação (`na_mesma_transacao`) -- uma falha nele faz a
+    transação da ação terminar em ROLLBACK, sem commit, e o replay grava
+    o marcador. Este fake de conexão só registra commit/rollback (não
+    descarta linhas); a atomicidade real -- ação e marcador nascem e
+    morrem juntos -- é provada contra Postgres em
+    `test_conclusao_obrigacao_assinatura_postgres.py::test_real_marcador_
+    na_transacao_da_acao_nasce_e_morre_junto_com_ela` (CI)."""
+    deps = _montar_dependencias()
+    porta = _PortaAssinaturaFake()
+    ordem = _ordem_assinada(deps)
+    conexao_acoes = deps['repositorio_acoes']._conexao
+    repositorio_conclusao_real = deps['repositorio_conclusao']
+    deps['repositorio_conclusao'] = _FalhaUmaVez(
+        repositorio_conclusao_real, 'registrar_obrigacao_inicial_na_transacao',
+    )
+    with pytest.raises(RuntimeError, match='queda sintetica'):
+        _executar_assinada(deps, ordem, porta)
+    assert conexao_acoes.rollbacks == 1 and conexao_acoes.commits == 0  # ação não foi commitada
+    resultado = _executar_assinada(deps, ordem, porta)  # replay
+    assert repositorio_conclusao_real.estado_mais_recente(resultado.acao_execucao_id) == 'AGUARDANDO_ASSINATURA'
+    assert len(repositorio_conclusao_real.listar_historico(resultado.acao_execucao_id)) == 1
+
+
+def test_marcador_e_gravado_dentro_da_transacao_da_acao_antes_do_commit():
+    deps = _montar_dependencias()
+    conexao_acoes = deps['repositorio_acoes']._conexao
+    momentos = []
+    repositorio_conclusao_real = deps['repositorio_conclusao']
+
+    class _Espiao:
+        def registrar_obrigacao_inicial_na_transacao(self, cursor, **kwargs):
+            momentos.append(('marcador', conexao_acoes.commits))
+            return repositorio_conclusao_real.registrar_obrigacao_inicial_na_transacao(cursor, **kwargs)
+
+    deps['repositorio_conclusao'] = _Espiao()
+    _executar_assinada(deps, _ordem_assinada(deps), _PortaAssinaturaFake())
+    assert momentos == [('marcador', 0)]  # antes do commit da ação
+    assert conexao_acoes.commits == 1
+
+
+def test_mesmo_tipo_com_e_sem_assinatura_so_a_modalidade_decide_o_marcador():
+    deps = _montar_dependencias()
+    com = _executar_assinada(deps, _ordem_assinada(deps, 'DOCUMENTO_A'), _PortaAssinaturaFake())
+    deps_sem = _montar_dependencias()
+    (documento,) = _preparar_documentos_arbitrarios(deps_sem, 1)
+    sem = materializar_distribuicao_documental_shadow(
+        ordem=_ordem_generica(documentos=(ItemDocumentoOrdem(documento.documento_id, documento.hash_sha256),),
+                              tipo_documento='DOCUMENTO_A'),
+        materializador=None, porta_assinatura=None,
+        ator_referencia='rh:teste', proveniencia='teste:gate1', instante=AGORA, **deps_sem,
+    )
+    assert _estados(deps, com.acao_execucao_id) == ['AGUARDANDO_ASSINATURA']
+    assert all(_estados(deps_sem, a.acao_execucao_id) == [] for a in sem.acoes_persistidas)

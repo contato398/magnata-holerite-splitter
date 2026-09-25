@@ -86,6 +86,9 @@ from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivos
 from magnata_os.documental.modulo01.materializador_arquivo import MaterializadorArquivoLegado
 from magnata_os.documental.modulo01.repositorio import RepositorioDocumentos
 
+from .adapters.postgres_conclusao_obrigacao_assinatura import (
+    RepositorioConclusaoObrigacaoAssinaturaPostgres,
+)
 from .autorizacao_gate import RepositorioAutorizacoesGate
 from .obrigacao_assinatura import PortaObrigacaoAssinatura
 from .politica_preset_distribuicao_documental import resolver_preset
@@ -221,6 +224,7 @@ def materializar_prestacao_distribuicao_documental_shadow(
     ator_referencia: str,
     proveniencia: str,
     instante: datetime,
+    repositorio_conclusao: Optional[RepositorioConclusaoObrigacaoAssinaturaPostgres] = None,
 ) -> ResultadoDistribuicaoDocumentalShadow:
     """Monta a Ordem (`montar_ordem_distribuicao_documental_de_
     prestacao`), registra seu evento canônico em `execucoes` (`registrar_
@@ -247,6 +251,7 @@ def materializar_prestacao_distribuicao_documental_shadow(
         ator_referencia=ator_referencia,
         proveniencia=proveniencia,
         instante=instante,
+        repositorio_conclusao=repositorio_conclusao,
     )
 
 
@@ -293,6 +298,7 @@ def executar_prestacao_ate_distribuicao_documental_shadow(
     ator_referencia: str,
     proveniencia: str,
     instante: datetime,
+    repositorio_conclusao: Optional[RepositorioConclusaoObrigacaoAssinaturaPostgres] = None,
 ) -> Tuple[ResultadoDistribuicaoDocumentalShadow, ...]:
     """Composition root do Delta Final A-F: fecha `CLIENTE+COMPETÊNCIA
     -> ... -> PENDING` reutilizando, em sequência, só componentes já
@@ -350,6 +356,7 @@ def executar_prestacao_ate_distribuicao_documental_shadow(
                 ator_referencia=ator_referencia,
                 proveniencia=proveniencia,
                 instante=instante,
+                repositorio_conclusao=repositorio_conclusao,
             )
         except (PrestacaoDistribuicaoDocumentalError, DistribuicaoDocumentalError) as exc:
             colaborador = resultados_aquisicao[0].necessidade.colaborador

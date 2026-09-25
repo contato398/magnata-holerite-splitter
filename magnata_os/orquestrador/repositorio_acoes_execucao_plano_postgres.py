@@ -11,7 +11,7 @@ import hashlib
 import json
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 from .autorizacao_gate import DecisaoGate, RegistroAutorizacaoGate
 from .envelope_execucao_autorizada import calcular_identidades_acao
@@ -154,8 +154,16 @@ class RepositorioAcoesExecucaoPlanoPostgres:
     def materializar_registros(
         self, *, registros: Tuple[RegistroAcaoExecucaoPlano, ...],
         autorizacao: RegistroAutorizacaoGate,
+        na_mesma_transacao: Optional[Callable[[object], None]] = None,
     ) -> Tuple[RegistroAcaoExecucaoPlano, ...]:
-        """Persiste registros já preparados; blobs devem existir antes."""
+        """Persiste registros já preparados; blobs devem existir antes.
+
+        `na_mesma_transacao(cursor)` (opcional) roda DENTRO desta
+        transação, depois dos INSERTs e antes do commit -- quem precisa
+        que outro fato nasça atomicamente com as ações (ex.: o marcador
+        canônico da obrigação de assinatura, Gate 1) o grava aqui: as
+        ações nunca ficam reivindicáveis sem esse fato, e uma falha
+        nele desfaz as ações (rollback)."""
         persistidos = []
         try:
             with self._conexao.cursor() as cursor:
@@ -202,6 +210,8 @@ class RepositorioAcoesExecucaoPlanoPostgres:
                         persistidos.append(existente_registro)
                     else:
                         persistidos.append(registro)
+                if na_mesma_transacao is not None:
+                    na_mesma_transacao(cursor)
             self._conexao.commit()
             return tuple(persistidos)
         except Exception:
@@ -282,25 +292,6 @@ class RepositorioAcoesExecucaoPlanoPostgres:
             )
             linhas = cursor.fetchall()
         return tuple((linha[0], linha[1]) for linha in linhas)
-
-    def listar_succeeded_recentes(
-        self, *, limite: int = 200,
-    ) -> Tuple[RegistroAcaoExecucaoPlano, ...]:
-        """Somente leitura: ações já `SUCCEEDED`, mais recentes primeiro
-        -- candidatas a observação de assinatura. O observador do ciclo
-        de produção cruza isto com `conclusao_obrigacao_assinatura` (em
-        outro repositório) para saber quais ainda faltam concluir; esta
-        consulta nunca sabe nada sobre assinatura."""
-        with self._conexao.cursor() as cursor:
-            cursor.execute(
-                f'''SELECT {_COLUNAS_SQL} FROM {_TABELA}
-                     WHERE estado = %s AND tipo = %s
-                     ORDER BY atualizado_em DESC
-                     LIMIT %s''',
-                (EstadoAcaoExecucaoPlano.SUCCEEDED.value, 'texto', limite),
-            )
-            linhas = cursor.fetchall()
-        return tuple(_linha_para_registro(linha) for linha in linhas)
 
     def reivindicar_acao_exata(
         self, *, acao_execucao_id: str, claim_referencia: str,

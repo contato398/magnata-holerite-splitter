@@ -68,6 +68,9 @@ from magnata_os.documental.modulo01.materializador_arquivo import (
 )
 from magnata_os.documental.modulo01.repositorio import RepositorioDocumentos
 
+from .adapters.postgres_conclusao_obrigacao_assinatura import (
+    RepositorioConclusaoObrigacaoAssinaturaPostgres,
+)
 from .autorizacao_gate import RegistroAutorizacaoGate, RepositorioAutorizacoesGate
 from .envelope_execucao_autorizada import armazenar_acao_e_envelope_v1
 from .eventos import Evento, EstadoExecucao, Sensibilidade, TipoEvento
@@ -457,12 +460,21 @@ def materializar_distribuicao_documental_shadow(
     ator_referencia: str,
     proveniencia: str,
     instante: datetime,
+    repositorio_conclusao: Optional[RepositorioConclusaoObrigacaoAssinaturaPostgres] = None,
 ) -> ResultadoDistribuicaoDocumentalShadow:
     """Composição completa até a persistência da ação PENDING, sem
     transporte: resolve documento(s) -> (se exigir_assinatura)
     materializa no legado e resolve obrigação/link idempotentemente,
     SEMPRE depois da autorização do preview exato -> PlanoDisparo ->
-    Envelope -> ação persistida.
+    Envelope -> ação persistida -> (se exigir_assinatura) marcador
+    canônico da obrigação (`AGUARDANDO_ASSINATURA`, migration 0006).
+
+    Gate 1: `repositorio_conclusao` é obrigatório quando
+    `exigir_assinatura=True` (fail-closed antes de qualquer I/O) -- uma
+    obrigação sem marcador persistido nunca seria observada. O marcador
+    só é gravado DEPOIS da ação persistida (FK da 0006) e só se ainda não
+    houver histórico -- replay após crash entre a ação e o marcador o
+    repara; replay com marcador (ou estado posterior) é no-op.
 
     `materializador`/`porta_assinatura` podem ser `None` quando
     `ordem.exigir_assinatura=False` (nenhuma materialização em
@@ -471,9 +483,12 @@ def materializar_distribuicao_documental_shadow(
     `whatsapp_enviar_documento`/`whatsapp_enviar_texto`, que despacham
     mídia sem depender do motor de assinatura)."""
     preferencia = _validar_e_mapear_politica_agrupamento(ordem)  # fail-closed antes de qualquer outra checagem
-    if ordem.exigir_assinatura and (materializador is None or porta_assinatura is None):
+    if ordem.exigir_assinatura and (
+        materializador is None or porta_assinatura is None or repositorio_conclusao is None
+    ):
         raise DistribuicaoDocumentalError(
-            'exigir_assinatura=True exige materializador e porta_assinatura não-nulos'
+            'exigir_assinatura=True exige materializador, porta_assinatura e '
+            'repositorio_conclusao não-nulos'
         )
 
     event_id = derivar_identidade_ordem_distribuicao(ordem)
@@ -526,8 +541,20 @@ def materializar_distribuicao_documental_shadow(
             armazenamento=armazenamento, registro=registro, acao=acao_do_plano,
         )
         registros.append(dataclasses.replace(registro, envelope_sha256=envelope_sha256_acao))
+    marcar_obrigacao = None
+    if ordem.exigir_assinatura:
+        # Marcador canônico da obrigação (Gate 1), na MESMA transação que
+        # persiste a ação: a ação nunca fica reivindicável/enviável sem o
+        # marcador. O `acao_execucao_id` é tratado como opaco -- o mesmo
+        # id sob o qual a obrigação foi criada e a ação persistida.
+        def marcar_obrigacao(cursor):
+            repositorio_conclusao.registrar_obrigacao_inicial_na_transacao(
+                cursor, acao_execucao_id=registros[0].acao_execucao_id,
+                correlacao_externa=obrigacao.assinatura_id or None, registrado_em=instante,
+            )
+
     acoes_persistidas = repositorio_acoes.materializar_registros(
-        registros=tuple(registros), autorizacao=autorizacao,
+        registros=tuple(registros), autorizacao=autorizacao, na_mesma_transacao=marcar_obrigacao,
     )
     acao_persistida = acoes_persistidas[0]
 
