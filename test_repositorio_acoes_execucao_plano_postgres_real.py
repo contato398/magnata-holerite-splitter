@@ -726,6 +726,67 @@ def test_g3_decisoes_conflitantes_concorrentes_so_uma_vence():
     conn.close()
 
 
+def test_g3_atomicidade_falha_na_auditoria_reverte_a_acao_no_banco_real():
+    """Sem janela intermediária: auditoria que falha (erro do banco -- FK
+    -- ou erro depois de já ter inserido a trilha) desfaz a mudança de
+    estado E a própria trilha. Nem ação sem auditoria, nem auditoria sem
+    ação."""
+    from magnata_os.orquestrador.repositorio_execucoes import RegistroRecuperacao
+
+    conn = psycopg.connect(cursor_factory=psycopg.ClientCursor)
+    _preparar(conn)
+    repo, ids, incerta = _cenario_incerto(conn, 'atomicidade')
+    event_id = ids['__evento__'][0]
+    execucoes = RepositorioExecucoesPostgres(conn)
+
+    def _registro(evento):
+        return RegistroRecuperacao(
+            event_id=evento,
+            decisao='RECONCILIACAO_MANUAL_ENVIO_INCERTO_SEM_ENVIO',
+            estado_observado='FAILED_FINAL', registrado_em=AGORA,
+            motivo='ator=operador:sintetico; teste de atomicidade', evidencia='x',
+        )
+
+    # 1) O INSERT da auditoria viola a FK (evento inexistente) no próprio banco.
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        repo.liberar_envio_incerto_para_retry(
+            acao=incerta, atualizado_em=AGORA,
+            na_mesma_transacao=lambda cursor: execucoes.registrar_recuperacao_na_transacao(
+                cursor, _registro(f'evento-inexistente-{uuid.uuid4().hex}')),
+        )
+    # 2) A auditoria é inserida e algo falha depois, ainda antes do commit.
+    def _insere_e_quebra(cursor):
+        execucoes.registrar_recuperacao_na_transacao(cursor, _registro(event_id))
+        raise RuntimeError('falha sintetica apos auditoria')
+
+    with pytest.raises(RuntimeError):
+        repo.confirmar_envio_incerto_enviado(
+            acao=incerta, atualizado_em=AGORA, resultado_referencia='EXT-1',
+            evidencia=b'x', na_mesma_transacao=_insere_e_quebra,
+        )
+
+    atual = repo.buscar(incerta.acao_execucao_id)
+    assert atual.estado == EstadoAcaoExecucaoPlano.FAILED_FINAL
+    assert atual.ultimo_erro_classe == CLASSE_ENVIO_EXTERNO_INCERTO
+    assert atual.concluido_em == incerta.concluido_em
+    assert atual.attempt == incerta.attempt
+    assert atual.resultado_referencia is None
+    assert _trilha_g3(conn, event_id) == []
+    assert _claim(repo, ids[('dest:A', 2)], 'worker:a2') is None
+
+    # Depois das falhas, a reconciliação legítima continua possível (CAS intacto)
+    # e deixa estado + decisão juntos.
+    confirmada = confirmar_envio_incerto_como_enviado(
+        repositorio_acoes=repo, repositorio_execucoes=execucoes,
+        acao=incerta, instante=AGORA, **_kwargs_humanos_b(),
+    )
+    assert confirmada.estado == EstadoAcaoExecucaoPlano.SUCCEEDED
+    assert [r.decisao for r in _trilha_g3(conn, event_id)] == [
+        'RECONCILIACAO_MANUAL_ENVIO_INCERTO_ENVIADO',
+    ]
+    conn.close()
+
+
 def test_g3_isolamento_por_evento_mesmo_destinatario():
     conn = psycopg.connect(cursor_factory=psycopg.ClientCursor)
     _preparar(conn)
