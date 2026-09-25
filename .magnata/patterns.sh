@@ -1251,6 +1251,10 @@ ALLOWED_PATHS=(
   # ordem de persistência, idempotência/concorrência, compatibilidade
   # histórica e plano de rollout. ZERO migration aplicada, ZERO backfill.
   "^docs/decisoes/obrigacao-assinatura-canonica-v1\.md$"
+  # GATE 3 -- reconciliação humana de envio externo INCERTO (FAILED_FINAL
+  # + ENVIO_EXTERNO_INCERTO): regras, CAS, auditoria atômica, limites.
+  # ZERO migration, ZERO endpoint/CLI, ZERO transporte.
+  "^docs/decisoes/reconciliacao-envio-incerto-v1\.md$"
 )
 
 # ============================================================================
