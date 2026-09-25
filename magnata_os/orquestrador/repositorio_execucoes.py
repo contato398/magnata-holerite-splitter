@@ -169,6 +169,11 @@ class RepositorioExecucoesEmMemoria:
     def registrar_recuperacao(self, registro: 'RegistroRecuperacao') -> None:
         self._recuperacoes.setdefault(registro.event_id, []).append(registro)
 
+    def registrar_recuperacao_na_transacao(self, cursor, registro: 'RegistroRecuperacao') -> None:
+        """Em memória não há transação -- mesmo efeito de
+        `registrar_recuperacao` (o cursor é ignorado)."""
+        self.registrar_recuperacao(registro)
+
     def listar_recuperacoes(self, event_id: str) -> List['RegistroRecuperacao']:
         return list(self._recuperacoes.get(event_id, []))
 

@@ -232,23 +232,31 @@ class RepositorioExecucoesPostgres:
     def registrar_recuperacao(self, registro: RegistroRecuperacao) -> None:
         try:
             with self._conexao.cursor() as cursor:
-                cursor.execute(
-                    f'INSERT INTO {_TABELA_RECUPERACAO} '
-                    '(event_id, decisao, estado_observado, registrado_em, '
-                    'motivo, evidencia) VALUES (%s, %s, %s, %s, %s, %s)',
-                    (
-                        registro.event_id,
-                        registro.decisao,
-                        registro.estado_observado,
-                        registro.registrado_em,
-                        registro.motivo,
-                        registro.evidencia,
-                    ),
-                )
+                self.registrar_recuperacao_na_transacao(cursor, registro)
             self._conexao.commit()
         except Exception:
             self._conexao.rollback()
             raise
+
+    def registrar_recuperacao_na_transacao(self, cursor, registro: RegistroRecuperacao) -> None:
+        """Mesmo INSERT append-only, DENTRO da transação de quem chama (sem
+        commit) -- para decisões humanas que precisam nascer atomicamente
+        com a mudança de estado da ação (Gate 3: reconciliação de envio
+        incerto). Nunca existe "ação reconciliada sem registro de quem
+        decidiu e por quê"."""
+        cursor.execute(
+            f'INSERT INTO {_TABELA_RECUPERACAO} '
+            '(event_id, decisao, estado_observado, registrado_em, '
+            'motivo, evidencia) VALUES (%s, %s, %s, %s, %s, %s)',
+            (
+                registro.event_id,
+                registro.decisao,
+                registro.estado_observado,
+                registro.registrado_em,
+                registro.motivo,
+                registro.evidencia,
+            ),
+        )
 
     def listar_recuperacoes(self, event_id: str) -> List[RegistroRecuperacao]:
         with self._conexao.cursor() as cursor:

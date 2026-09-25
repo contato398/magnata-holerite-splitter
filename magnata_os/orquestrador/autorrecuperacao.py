@@ -42,6 +42,13 @@ class DecisaoRecuperacao(str, Enum):
     # para retry. Nunca escrita por processo automatico -- so por chamada
     # humana com ator_referencia e motivo obrigatorios.
     LIBERACAO_MANUAL_ACAO_SEM_ENVIO = 'LIBERACAO_MANUAL_ACAO_SEM_ENVIO'
+    # Gate 3 -- reconciliacao humana de envio externo INCERTO (acao em
+    # FAILED_FINAL + ultimo_erro_classe=ENVIO_EXTERNO_INCERTO). Valores
+    # proprios, nunca reaproveitados de outra semantica: nada foi
+    # reexecutado nem "retentado" automaticamente. Sempre humanos, com
+    # ator, motivo e evidencia; nunca escritos por automacao.
+    RECONCILIACAO_MANUAL_ENVIO_INCERTO_SEM_ENVIO = 'RECONCILIACAO_MANUAL_ENVIO_INCERTO_SEM_ENVIO'
+    RECONCILIACAO_MANUAL_ENVIO_INCERTO_ENVIADO = 'RECONCILIACAO_MANUAL_ENVIO_INCERTO_ENVIADO'
 
 
 @dataclasses.dataclass(frozen=True)

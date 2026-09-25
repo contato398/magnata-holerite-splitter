@@ -14,6 +14,7 @@ from enum import Enum
 from typing import Callable, Optional, Tuple
 
 from .autorizacao_gate import DecisaoGate, RegistroAutorizacaoGate
+from .classificador_falha import ClasseFalha
 from .envelope_execucao_autorizada import calcular_identidades_acao
 from .plano_comunicacao import AcaoEnvio, PlanoDisparo
 from .politica_comunicacao import hash_conteudo_comunicacao
@@ -68,6 +69,14 @@ _COLUNAS = (
 )
 _COLUNAS_SQL = ', '.join(_COLUNAS)
 _COLUNAS_SQL_ACAO = ', '.join(f'a.{coluna}' for coluna in _COLUNAS)
+
+# Gate 3: única classe de FAILED_FINAL reconciliável por humano. Qualquer
+# outra (PERMANENT, INVALID_INPUT, HUMAN_GATE, ...) nunca reabre.
+CLASSE_ENVIO_EXTERNO_INCERTO = ClasseFalha.ENVIO_EXTERNO_INCERTO.value
+# Marcador gravado ao liberar para retry: tira a ação da classe incerta
+# (não pode ser "re-reconciliada" sem nova falha incerta real) e deixa
+# rastro de que o próximo claim nasceu de decisão humana.
+CLASSE_ENVIO_INCERTO_LIBERADO_SEM_ENVIO = 'ENVIO_INCERTO_LIBERADO_SEM_ENVIO'
 
 
 def _identidades_acao(acao: AcaoEnvio) -> Tuple[str, Optional[str], Optional[str], Optional[str]]:
@@ -565,6 +574,111 @@ class RepositorioAcoesExecucaoPlanoPostgres:
             atualizado_em=atualizado_em,
             resultado_referencia=resultado_referencia,
             evidencia=evidencia,
+        )
+
+    # -----------------------------------------------------------------
+    # Gate 3 -- reconciliação humana de ENVIO EXTERNO INCERTO.
+    #
+    # `FAILED_FINAL` NÃO é genericamente reabrível: a única exceção é a
+    # classe `ENVIO_EXTERNO_INCERTO`, e só por decisão humana com
+    # evidência. Enquanto incerta, a ação continua não-SUCCEEDED e, pelo
+    # predicado sequencial já existente (inalterado), bloqueia as ações
+    # posteriores do mesmo (event_id, preview_id, destinatario_sha256).
+    # -----------------------------------------------------------------
+
+    def listar_envios_incertos(self) -> Tuple[RegistroAcaoExecucaoPlano, ...]:
+        """Visão somente leitura para inspeção humana: ações em
+        `FAILED_FINAL` com `ultimo_erro_classe = ENVIO_EXTERNO_INCERTO`.
+        Só metadados/hashes já persistidos (destinatário e conteúdo como
+        SHA-256, nunca em claro); nunca decide nada."""
+        with self._conexao.cursor() as cursor:
+            cursor.execute(
+                f'''SELECT {_COLUNAS_SQL} FROM {_TABELA}
+                     WHERE estado = %s AND ultimo_erro_classe = %s
+                     ORDER BY atualizado_em ASC, acao_execucao_id''',
+                (EstadoAcaoExecucaoPlano.FAILED_FINAL.value, CLASSE_ENVIO_EXTERNO_INCERTO),
+            )
+            linhas = cursor.fetchall()
+        return tuple(_linha_para_registro(linha) for linha in linhas)
+
+    def _reconciliar_envio_incerto(
+        self, *, acao: RegistroAcaoExecucaoPlano, estado: EstadoAcaoExecucaoPlano,
+        erro_classe: Optional[str], atualizado_em: datetime,
+        resultado_referencia: Optional[str], evidencia: Optional[bytes],
+        na_mesma_transacao: Callable[[object], None],
+    ) -> Optional[RegistroAcaoExecucaoPlano]:
+        """CAS EXCLUSIVO de `FAILED_FINAL + ENVIO_EXTERNO_INCERTO`: exige
+        estado, classe, `claim_sha256` e `attempt` iguais aos que o humano
+        inspecionou (identidade do incidente -- `attempt` é defesa em
+        profundidade: o contrato não garante `claim_referencia` único por
+        claim, só os produtores atuais o derivam do instante).
+        `na_mesma_transacao(cursor)` grava a auditoria humana na MESMA
+        transação -- só roda se o CAS venceu; falha nela desfaz a mudança.
+        Nunca executa transporte; nunca mexe em `attempt`."""
+        terminal = estado in {EstadoAcaoExecucaoPlano.SUCCEEDED, EstadoAcaoExecucaoPlano.FAILED_FINAL}
+        evidencia_sha256 = hash_conteudo_comunicacao(evidencia) if evidencia is not None else None
+        try:
+            with self._conexao.cursor() as cursor:
+                cursor.execute(
+                    f'''UPDATE {_TABELA}
+                           SET estado = %s, proxima_tentativa_em = NULL,
+                               ultimo_erro_classe = %s,
+                               resultado_referencia = %s,
+                               evidencia_sha256 = %s, atualizado_em = %s,
+                               concluido_em = %s
+                         WHERE acao_execucao_id = %s
+                           AND estado = %s
+                           AND ultimo_erro_classe = %s
+                           AND claim_sha256 IS NOT DISTINCT FROM %s
+                           AND attempt = %s
+                     RETURNING {_COLUNAS_SQL}''',
+                    (
+                        estado.value, erro_classe, resultado_referencia, evidencia_sha256,
+                        atualizado_em, atualizado_em if terminal else None,
+                        acao.acao_execucao_id,
+                        EstadoAcaoExecucaoPlano.FAILED_FINAL.value,
+                        CLASSE_ENVIO_EXTERNO_INCERTO,
+                        acao.claim_sha256, acao.attempt,
+                    ),
+                )
+                linha = cursor.fetchone()
+                if linha is not None:
+                    na_mesma_transacao(cursor)
+            self._conexao.commit()
+            return _linha_para_registro(linha) if linha else None
+        except Exception:
+            self._conexao.rollback()
+            raise
+
+    def liberar_envio_incerto_para_retry(
+        self, *, acao: RegistroAcaoExecucaoPlano, atualizado_em: datetime,
+        na_mesma_transacao: Callable[[object], None],
+    ) -> Optional[RegistroAcaoExecucaoPlano]:
+        """Caso humano A: evidência de que o envio NÃO ocorreu ->
+        `FAILED_RETRYABLE` (não-terminal: `concluido_em` NULL,
+        `proxima_tentativa_em` NULL = elegível já, como a liberação de
+        EXECUTING órfão). `attempt` intacto: só o próximo claim real
+        incrementa, e `MAX_TENTATIVAS` continua valendo no executor. As
+        posteriores seguem bloqueadas até esta chegar a SUCCEEDED."""
+        return self._reconciliar_envio_incerto(
+            acao=acao, estado=EstadoAcaoExecucaoPlano.FAILED_RETRYABLE,
+            erro_classe=CLASSE_ENVIO_INCERTO_LIBERADO_SEM_ENVIO, atualizado_em=atualizado_em,
+            resultado_referencia=None, evidencia=None, na_mesma_transacao=na_mesma_transacao,
+        )
+
+    def confirmar_envio_incerto_enviado(
+        self, *, acao: RegistroAcaoExecucaoPlano, atualizado_em: datetime,
+        resultado_referencia: str, evidencia: bytes,
+        na_mesma_transacao: Callable[[object], None],
+    ) -> Optional[RegistroAcaoExecucaoPlano]:
+        """Caso humano B: evidência externa de que o envio OCORREU ->
+        `SUCCEEDED` sem reenvio, com o id externo e o hash da evidência
+        (mesmo padrão de `reconciliar_envio_confirmado`). O predicado
+        sequencial libera a próxima ação naturalmente."""
+        return self._reconciliar_envio_incerto(
+            acao=acao, estado=EstadoAcaoExecucaoPlano.SUCCEEDED, erro_classe=None,
+            atualizado_em=atualizado_em, resultado_referencia=resultado_referencia,
+            evidencia=evidencia, na_mesma_transacao=na_mesma_transacao,
         )
 
     def listar_em_execucao_reivindicadas_antes_de(
