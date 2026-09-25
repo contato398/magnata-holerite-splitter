@@ -524,3 +524,58 @@ def test_real_selecao_canonica_so_acoes_succeeded_com_obrigacao_nao_concluida():
         ids['texto_aguardando'], ids['documento_com_obrigacao'], ids['assinado_sem_comprovante'],
     }
     conexao.close()
+
+
+@_REAL
+def test_real_gate3_envio_incerto_so_entra_na_observacao_quando_confirmado_enviado():
+    """Compatibilidade Gate 1 x Gate 3: ação com obrigação em FAILED_FINAL
+    + ENVIO_EXTERNO_INCERTO nunca é observada; liberada para retry
+    (caso A) continua fora; confirmada como enviada (caso B) vira
+    SUCCEEDED e entra na seleção canônica sem nenhuma regra nova."""
+    from magnata_os.orquestrador.reconciliacao_execucao_orfa import (
+        confirmar_envio_incerto_como_enviado,
+        liberar_envio_incerto_sem_envio_confirmado,
+    )
+    from magnata_os.orquestrador.repositorio_acoes_execucao_plano_postgres import (
+        CLASSE_ENVIO_EXTERNO_INCERTO,
+        RepositorioAcoesExecucaoPlanoPostgres,
+    )
+    from magnata_os.orquestrador.repositorio_execucoes_postgres import RepositorioExecucoesPostgres
+
+    conexao = _conectar_com_migrations()
+    ids = _semear_acoes(conexao, [
+        ('documento_incerto_a', 'documento', 'FAILED_FINAL'),
+        ('documento_incerto_b', 'documento', 'FAILED_FINAL'),
+    ])
+    with conexao.cursor() as cursor:
+        cursor.execute(
+            "UPDATE magnata_orquestrador.acoes_execucao_plano SET ultimo_erro_classe = %s "
+            "WHERE acao_execucao_id IN (%s, %s)",
+            (CLASSE_ENVIO_EXTERNO_INCERTO, ids['documento_incerto_a'], ids['documento_incerto_b']),
+        )
+    conexao.commit()
+    obrigacoes = RepositorioConclusaoObrigacaoAssinaturaPostgres(conexao)
+    for rotulo in ('documento_incerto_a', 'documento_incerto_b'):
+        obrigacoes.registrar_obrigacao_inicial(
+            acao_execucao_id=ids[rotulo], correlacao_externa='r', registrado_em=AGORA,
+        )
+
+    def _selecionadas():
+        return set(obrigacoes.listar_acoes_para_observacao(limite=10_000)) & set(ids.values())
+
+    assert _selecionadas() == set()
+    acoes = RepositorioAcoesExecucaoPlanoPostgres(conexao)
+    execucoes = RepositorioExecucoesPostgres(conexao)
+    assert liberar_envio_incerto_sem_envio_confirmado(
+        repositorio_acoes=acoes, repositorio_execucoes=execucoes,
+        acao=acoes.buscar(ids['documento_incerto_a']), ator_referencia='operador:sintetico',
+        motivo='conferido', evidencia_ausencia_envio='sem registro', instante=AGORA,
+    ).estado.value == 'FAILED_RETRYABLE'
+    assert confirmar_envio_incerto_como_enviado(
+        repositorio_acoes=acoes, repositorio_execucoes=execucoes,
+        acao=acoes.buscar(ids['documento_incerto_b']), ator_referencia='operador:sintetico',
+        motivo='conferido', resultado_referencia_externo='EXT-SINTETICO',
+        evidencia_envio='painel mostra entrega', instante=AGORA,
+    ).estado.value == 'SUCCEEDED'
+    assert _selecionadas() == {ids['documento_incerto_b']}
+    conexao.close()
