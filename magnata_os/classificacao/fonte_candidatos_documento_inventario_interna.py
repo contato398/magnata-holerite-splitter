@@ -35,6 +35,15 @@ from magnata_os.documental.modulo01.dominio import Documento
 from .ciclo_prestacao import NecessidadeDocumentoPrestacao
 from .fonte_candidatos_por_necessidade import FonteCandidatosDocumentaisPorNecessidade
 from .inventario_prestacao import FonteInventarioPrestacao
+from .normalizacao_requisitos_prestacao import TRADUCAO_FAMILIA_B_PARA_MOTOR_GERAL
+
+
+def _tipo_canonico(tipo: str) -> str:
+    """Mesma tradução de vocabulário que a elegibilidade J1b já usa
+    (`_tipo_resolvido_atende_necessidade`): necessidade em vocabulário
+    Família B e item em vocabulário do motor designam o MESMO tipo.
+    Nunca aproxima tipos diferentes -- só a tradução conhecida."""
+    return TRADUCAO_FAMILIA_B_PARA_MOTOR_GERAL.get(tipo, tipo)
 
 
 class FonteCandidatosDocumentoInventarioInterna:
@@ -80,9 +89,10 @@ class FonteCandidatosDocumentoInventarioInterna:
         )
 
         # Filtrar por tipo_documental
+        tipo_esperado = _tipo_canonico(necessidade.tipo_documental)
         itens_tipo_ok = [
             item for item in itens
-            if item.tipo_documental == necessidade.tipo_documental
+            if _tipo_canonico(item.tipo_documental) == tipo_esperado
         ]
 
         # Filtrar por colaborador (se necessidade exige um específico)
@@ -101,11 +111,14 @@ class FonteCandidatosDocumentoInventarioInterna:
 
         # Recuperar Documento por documento_id
         # Fail-closed: ignora items cujo documento não exista
-        candidatos = []
+        # (mesmo documento em 2+ itens -- ex.: 2 origens do índice -- vira 1 candidato)
+        candidatos = {}
         for item in itens_filtrados:
+            if item.documento_id in candidatos:
+                continue
             documento = self._repositorio_documentos.buscar_por_id(item.documento_id)
             if documento is not None:
-                candidatos.append(documento)
+                candidatos[item.documento_id] = documento
 
         # Retornar determinístico (ordenado por documento_id)
-        return tuple(sorted(candidatos, key=lambda d: d.documento_id))
+        return tuple(sorted(candidatos.values(), key=lambda d: d.documento_id))

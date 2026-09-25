@@ -1283,6 +1283,20 @@ ALLOWED_PATHS=(
   "^test_autorizacao_operador_real_v1\.py$"
   "^test_materializar_documento_pre_canario_operador_real_v1\.py$"
   "^test_materializar_documento_pre_canario_operador_real_v1_real\.py$"
+  # PRESTAÇÃO UPSTREAM REAL / J3 -- índice de correlação Documento interno
+  # <-> escopo da Prestação (migration orquestrador 0007, INERTE, nunca
+  # aplicada nesta fase), produtor/consumidor, bridge transitório do
+  # destinatário do cliente (Airtable read-only) e composição de borda.
+  # Nomes exatos, sem wildcard.
+  "^magnata_os/orquestrador/migrations/0007_correlacao_documento_prestacao\.sql$"
+  "^magnata_os/orquestrador/migrations/0007_correlacao_documento_prestacao_rollback\.sql$"
+  "^magnata_os/classificacao/correlacao_documento_prestacao\.py$"
+  "^magnata_os/classificacao/adapters/postgres_correlacao_documento_prestacao\.py$"
+  "^magnata_os/documental/importacao_lote/adapters/airtable_destinatario_cliente\.py$"
+  "^magnata_os/documental/importacao_lote/composicao_prestacao_upstream\.py$"
+  "^test_correlacao_documento_prestacao\.py$"
+  "^test_correlacao_documento_prestacao_postgres_real\.py$"
+  "^docs/decisoes/correlacao-documento-prestacao-v1\.md$"
 )
 
 # ============================================================================
