@@ -1,0 +1,8 @@
+# Autorização humana específica — PR 192 — 2026-09-26
+# Missão "PRESTAÇÃO J3 — PUBLICAÇÃO CONTROLADA":
+# autorizada a criação da migration aditiva e do rollback para a correlação
+# Documento interno ↔ escopo/necessidade da Prestação. Esta autorização
+# cobre SOMENTE os dois blobs exatos abaixo e NÃO autoriza aplicar migration
+# em banco real, executar backfill, deploy ou transporte.
+ba06c547ffed58c3acb2a4c334f607c3482b6f4b  magnata_os/orquestrador/migrations/0007_correlacao_documento_prestacao.sql
+e9a4f8425e81afeebc2b1fb4d957766da78161ca  magnata_os/orquestrador/migrations/0007_correlacao_documento_prestacao_rollback.sql
