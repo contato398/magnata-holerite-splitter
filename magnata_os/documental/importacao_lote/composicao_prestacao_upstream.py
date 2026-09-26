@@ -240,7 +240,7 @@ def executar_backfill_correlacao(
     documentos: Iterable,
     armazenamento: ArmazenamentoArquivos,
     execucao_corredor: ExecucaoCorredorReadonly,
-    candidatos_colaborador: Tuple = (),
+    candidatos_colaborador: Tuple,
     retomar_apos: Optional[str] = None,
     limite: Optional[int] = None,
 ) -> RelatorioBackfillCorrelacao:
@@ -263,6 +263,11 @@ def executar_backfill_correlacao(
         # Falha nunca silenciosa: sem produtor, todo documento pareceria
         # "sem_relacao" e nada seria gravado.
         raise RuntimeError('backfill exige execução do corredor COM produtor do índice (registro_correlacao)')
+    if not tuple(candidatos_colaborador):
+        # Sem universo de colaboradores, todo documento de colaborador iria
+        # para revisão e o produtor SUPERARIA relações válidas -- degradação
+        # silenciosa. Obrigatório, nunca default vazio.
+        raise RuntimeError('backfill exige o universo de colaboradores (candidatos_colaborador) não vazio')
     rel = dict(processados=0, com_relacao_vigente=0, sem_relacao=0, sem_blob=0, mime_nao_suportado=0,
                relacoes_novas=0, relacoes_reativadas=0, relacoes_superadas=0)
     erros = []
@@ -343,20 +348,34 @@ def compor_contexto_prestacao_upstream_a_partir_do_ambiente(
     if not chave:
         raise RuntimeError('AIRTABLE_API_KEY ausente -- composição real não pode prosseguir')
     leitor = LeitorAirtableSomenteLeitura(chave)
-    conexao = abrir_conexao(ambiente=env)
-    conexao_indice = abrir_conexao(ambiente=env) if com_produtor_indice else None
-    registro = (
-        RepositorioCorrelacaoDocumentoPrestacaoPostgres(conexao_indice)
-        if conexao_indice is not None else None
-    )
-    execucao = ExecucaoCorredorReadonly(
-        leitor, ContextoCicloPrestacao(competencia_base=_competencia_base_tupla(competencia_base)),
-        registro_correlacao=registro,
-    )
-    contexto = compor_contexto_prestacao_upstream(
-        leitor=leitor, execucao_corredor=execucao, competencia_base=competencia_base,
-        fonte_candidatos_por_necessidade=construir_fonte_candidatos_por_necessidade_postgres(conexao),
-        repositorio_documentos=RepositorioDocumentosPostgres(conexao), armazenamento=armazenamento,
-        repositorio_execucoes_prestacao=RepositorioExecucoesPrestacaoPostgres(conexao), clientes=clientes,
-    )
+    abertas = []
+    try:
+        conexao = abrir_conexao(ambiente=env)
+        abertas.append(conexao)
+        conexao_indice = abrir_conexao(ambiente=env) if com_produtor_indice else None
+        if conexao_indice is not None:
+            abertas.append(conexao_indice)
+        registro = (
+            RepositorioCorrelacaoDocumentoPrestacaoPostgres(conexao_indice)
+            if conexao_indice is not None else None
+        )
+        execucao = ExecucaoCorredorReadonly(
+            leitor, ContextoCicloPrestacao(competencia_base=_competencia_base_tupla(competencia_base)),
+            registro_correlacao=registro,
+        )
+        contexto = compor_contexto_prestacao_upstream(
+            leitor=leitor, execucao_corredor=execucao, competencia_base=competencia_base,
+            fonte_candidatos_por_necessidade=construir_fonte_candidatos_por_necessidade_postgres(conexao),
+            repositorio_documentos=RepositorioDocumentosPostgres(conexao), armazenamento=armazenamento,
+            repositorio_execucoes_prestacao=RepositorioExecucoesPrestacaoPostgres(conexao), clientes=clientes,
+        )
+    except Exception:
+        # Falha no meio da composição: nenhuma conexão fica órfã (quem chama
+        # só passa a ser dono delas no retorno bem-sucedido).
+        for aberta in abertas:
+            try:
+                aberta.close()
+            except Exception:  # noqa: BLE001 -- fechamento best effort; a falha original propaga
+                pass
+        raise
     return contexto, execucao, conexao, conexao_indice

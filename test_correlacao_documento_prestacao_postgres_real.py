@@ -1,7 +1,7 @@
 """J3 contra PostgreSQL real/efêmero (CI: job postgres-real).
 
 Prova no banco o que o schema promete: FK para `documentos` (nenhum
-record-id externo), `UNIQUE (relacao_id, sequencia)`, append-only,
+record-id externo), `UNIQUE (relacao_id, origem, sequencia)`, append-only,
 idempotência de replay, concorrência sem duplicidade, relações legítimas
 1:N coexistindo, histórico revisão -> resolvido, rollback reversível, e o
 consumidor devolvendo Documento INTERNO. Termina com o ciclo real da

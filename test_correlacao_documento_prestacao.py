@@ -340,6 +340,9 @@ def test_ponto_sem_evidencia_suficiente_nao_gera_relacao(alocacoes, texto):
 
 # ---- destinatário organizacional (bridge Airtable read-only) --------------
 
+_UNIVERSO = ('candidato-sintetico',)
+
+
 class _LeitorClientes:
     def __init__(self, registros):
         self._registros = registros
@@ -422,6 +425,7 @@ def test_backfill_reusa_produtor_e_e_idempotente_reiniciavel_e_auditavel():
 
     primeiro = borda.executar_backfill_correlacao(
         documentos=documentos, armazenamento=armazenamento, execucao_corredor=execucao,
+        candidatos_colaborador=_UNIVERSO,
     )
     assert execucao.processados == ['doc-1', 'doc-3']       # ordem determinística
     assert (primeiro.processados, primeiro.com_relacao_vigente, primeiro.sem_relacao, primeiro.sem_blob) == (2, 1, 1, 1)
@@ -430,6 +434,7 @@ def test_backfill_reusa_produtor_e_e_idempotente_reiniciavel_e_auditavel():
 
     segundo = borda.executar_backfill_correlacao(
         documentos=documentos, armazenamento=armazenamento, execucao_corredor=_ExecucaoFalsa(ambiente, relacoes),
+        candidatos_colaborador=_UNIVERSO,
     )
     assert segundo.relacoes_novas == 0                       # replay não grava nada novo
     assert len(ambiente.indice.historico_do_documento('doc-1')) == 1
@@ -437,6 +442,7 @@ def test_backfill_reusa_produtor_e_e_idempotente_reiniciavel_e_auditavel():
     retomado = borda.executar_backfill_correlacao(
         documentos=documentos, armazenamento=armazenamento,
         execucao_corredor=_ExecucaoFalsa(ambiente, relacoes), retomar_apos='doc-2',
+        candidatos_colaborador=_UNIVERSO,
     )
     assert retomado.processados == 2 and retomado.ultimo_documento_id == 'doc-4'
 
@@ -448,6 +454,7 @@ def test_backfill_conta_conflito_quando_reprocessamento_muda_o_escopo():
     relatorio = borda.executar_backfill_correlacao(
         documentos=[d for d in documentos if d.documento_id == 'doc-1'], armazenamento=armazenamento,
         execucao_corredor=_ExecucaoFalsa(ambiente, {'doc-1': (_item(documento_id='doc-1', cliente=CLI_B),)}),
+        candidatos_colaborador=_UNIVERSO,
     )
     assert (relatorio.relacoes_novas, relatorio.relacoes_superadas) == (1, 1)
 
@@ -662,5 +669,73 @@ def test_backfill_sem_produtor_do_indice_falha_explicitamente():
     with pytest.raises(RuntimeError, match='produtor'):
         borda.executar_backfill_correlacao(
             documentos=documentos, armazenamento=armazenamento, execucao_corredor=execucao,
+            candidatos_colaborador=_UNIVERSO,
         )
     assert execucao.processados == []
+
+
+def test_backfill_sem_universo_de_colaboradores_falha_antes_de_superar_relacoes():
+    from magnata_os.documental.importacao_lote import composicao_prestacao_upstream as borda
+    ambiente, armazenamento, documentos = _backfill_ambiente()
+    ambiente.registrar('doc-1', [_item(documento_id='doc-1')])
+    execucao = _ExecucaoFalsa(ambiente, {})
+    with pytest.raises(RuntimeError, match='colaboradores'):
+        borda.executar_backfill_correlacao(
+            documentos=documentos, armazenamento=armazenamento, execucao_corredor=execucao,
+            candidatos_colaborador=(),
+        )
+    assert execucao.processados == []
+    assert len(ambiente.indice.historico_do_documento('doc-1')) == 1
+
+
+def test_compositor_de_ambiente_fecha_conexoes_se_a_composicao_falhar(monkeypatch):
+    from magnata_os.documental.importacao_lote import composicao_prestacao_upstream as borda
+    import magnata_os.documental.modulo01.adapters.conexao as modulo_conexao
+
+    abertas = []
+
+    class _Conexao:
+        fechada = False
+
+        def close(self):
+            self.fechada = True
+
+    def _abrir(ambiente=None, **kwargs):
+        conexao = _Conexao()
+        abertas.append(conexao)
+        return conexao
+
+    def _composicao_quebra(**kwargs):
+        raise ConnectionError('fonte indisponivel')
+
+    monkeypatch.setattr(modulo_conexao, 'abrir_conexao', _abrir)
+    monkeypatch.setattr(borda, 'compor_contexto_prestacao_upstream', _composicao_quebra)
+    with pytest.raises(ConnectionError):
+        borda.compor_contexto_prestacao_upstream_a_partir_do_ambiente(
+            competencia_base='2026-07', armazenamento=object(), com_produtor_indice=True,
+            ambiente={'AIRTABLE_API_KEY': 'dummy'},
+        )
+    assert len(abertas) == 2 and all(c.fechada for c in abertas)
+
+
+def test_cenario_do_ciclo_postgres_real_reproduzido_com_o_twin_em_memoria():
+    """O MESMO cenário do teste Postgres-real (`montar_cenario_ciclo`),
+    rodado localmente com o twin -- prova da lógica independente do banco."""
+    import test_correlacao_documento_prestacao_postgres_real as real
+    from magnata_os.classificacao.composicao_ciclo_persistente_prestacao import diagnosticar_prestacao_upstream
+
+    for com_holerite_b, pronto in ((True, True), (False, False)):
+        docs = RepositorioDocumentosEmMemoria()
+        indice = RepositorioCorrelacaoDocumentoPrestacaoEmMemoria(lambda d: docs.buscar_por_id(d) is not None)
+        fonte = FonteCandidatosDocumentoInventarioInterna(fonte_inventario=indice, repositorio_documentos=docs)
+        contexto, marca, (col_a, col_b) = real.montar_cenario_ciclo(docs, indice, fonte, com_holerite_b=com_holerite_b)
+        diagnostico = diagnosticar_prestacao_upstream(contexto)
+        (cliente,) = diagnostico.clientes
+        assert (cliente.estado_pacote == 'PRONTO') is pronto
+        if pronto:
+            grupos = {g[0].necessidade.colaborador.entidade_id: [r.documento_id for r in g]
+                      for _c, _k, g in diagnostico.grupos_por_colaborador()}
+            assert grupos == {col_a.entidade_id: [f'doc-a-{marca}'], col_b.entidade_id: [f'doc-b-{marca}']}
+            assert [i.documento_ids for i in diagnostico.intencoes_cliente()] == [(f'doc-ext-{marca}',)]
+        else:
+            assert diagnostico.trios_prontos == () and diagnostico.intencoes_cliente() == ()
