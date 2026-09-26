@@ -131,6 +131,7 @@ Decisão humana: manter temporariamente a fonte real existente no Airtable, read
 - **Isolado:** erro por documento é contado pelo tipo da exceção, e o lote segue.
 - **Execução por competência:** 1 ciclo por execução, como a ingestão.
 - **Exige produtor:** sem `registro_correlacao`, o backfill falha explicitamente em vez de reportar tudo como `sem_relacao`.
+- **Exige o universo de colaboradores:** `candidatos_colaborador` é obrigatório e não pode ser vazio. Sem ele, todo documento de colaborador iria para revisão e o produtor superaria relações válidas. Se a ingestão real passar `clientes_broadcast` ou `identificar_pagina`, o backfill precisa receber os mesmos valores (mesmo produtor, mesmos parâmetros).
 
 **Estimativa:** esta sessão não tem acesso ao banco real, então não há números. O próprio relatório do backfill é o instrumento de estimativa numa primeira rodada controlada (limite pequeno, em staging, com autorização):
 
@@ -198,3 +199,6 @@ Sem migration aplicada, o backfill não roda.
 7. **Competência deslocada (SKY Tatuí):** um documento só é indexado por uma execução cujo ciclo valida a competência dele (a base do ciclo, ou `cliente_do_ciclo` com a política). A ingestão ou o backfill desses clientes precisa rodar com o ciclo ou o cliente correspondentes. Com o escopo de superação, execuções de outros meses nunca apagam essas relações.
 8. **Resultado vazio do corredor** (PDF sem página processada) não registra nada: relações antes `VIGENTE` permanecem. Isso é seguro porque a aquisição revalida cada candidato.
 9. **Leituras do adapter** não fazem commit, no mesmo padrão dos demais repositórios. Quem mantém a conexão aberta encerra a transação. Os testes reais fecham toda conexão no teardown.
+10. **Documento com correlação não pode ser removido:** a FK (`NO ACTION`) somada ao append-only faz `RepositorioDocumentosPostgres.remover` falhar para um Documento que tenha correlação. Hoje nada chama `remover`. Um futuro fluxo de apagamento LGPD ou hard delete vai precisar de decisão própria (anonimização do Documento, ou migration que permita expurgo controlado da trilha).
+11. **Aplicação real (runbook):** a 0007 e o rollback travam `documentos` com lock forte durante a criação e a remoção da FK. Aplique com `SET lock_timeout`, em janela controlada, e depois da modulo01 0001 (FK entre módulos, resolvida pelo `search_path`, declarada no cabeçalho).
+12. **Costura futura com a autorização humana real (PR #190), fora deste escopo:** a Ordem da Prestação já é compatível com `materializar_documento_pre_canario_operador_real_v1` sem mudar contrato. Mas o pré-canário hoje aceita só 1 documento `UNITARIO` sem assinatura (preset `DOCUMENTO_UNITARIO_SEM_ASSINATURA`). A intenção de cliente não é Ordem, e o registro do evento canônico precisa ser feito pela costura. Verificar também a colisão de `event_id` entre autorização shadow e real da mesma Ordem num banco com dados shadow.
