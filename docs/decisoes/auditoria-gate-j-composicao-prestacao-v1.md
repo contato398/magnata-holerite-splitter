@@ -481,3 +481,129 @@ dependiam do relógio.
 5. **Canal:** os presets atuais são de WhatsApp. Outro canal é outro
    preset e outro executor; nada na Ordem nem no núcleo depende do canal
    além do valor opaco.
+
+## 14. Prestação upstream real: fechamento operacional (2026-09-25)
+
+- **Base:** `main` @ `de69fb2` (Gate 3 mesclado).
+- **Branch:** `fix/prestacao-upstream-real-v1`. A missão pedia `feat/prestacao-upstream-real-v1`, mas o gate de governança só aceita `feat/*` enumerado em `.magnata/patterns.sh`, e todas as entregas anteriores usaram `fix/<slug>`. Divergência registrada; nenhuma alteração de governança.
+- **Resultado:** **gate material no J3.** A parte independente foi entregue: o pacote/intenção de nível cliente.
+
+### 14.1 Mapa J2: fonte de cada responsabilidade
+
+Aplicada a decisão provisória do §9: fonte interna quando ela existe *de verdade*, Airtable read-only transitório atrás do Protocol quando não existe. "Existe de verdade" quer dizer tabela aplicada **e** produtor real gravando nela.
+
+| Responsabilidade | Fonte antes | Fonte depois | Situação |
+|---|---|---|---|
+| clientes ativos | `FonteClientesPrestacaoAirtable` (não ligado) | igual | transitória. Não há cadastro interno de cliente; exige migration |
+| requisitos | `FonteRequisitosPrestacaoCanonica` + `CADASTRO_REQUISITOS_PRESTACAO_V2` | igual | **canônica** |
+| colaboradores esperados | `FonteColaboradoresEsperadosPrestacaoAirtableShadow` | igual | transitória. As tabelas de alocação existem, mas falta a consulta reversa por cliente e **não há produtor** de `vigencia_cliente_por_posto` |
+| vínculo colaborador → cliente | `FonteVinculosPrestacaoAirtableShadow` | igual | transitória. Mesmo motivo; nenhum adapter interno implementa `resolver_clientes` |
+| unidade/posto | adapter Airtable + `FonteUnidadePostoPrestacaoComPrioridadeHistorica` | igual | canônica **no código**, sem dados: a alocação não tem produtor real |
+| identidade (universo do corredor) | `LeitorAirtableSomenteLeitura.listar_funcionarios` | igual | transitória. O interno guarda só o HMAC do CPF; trocar é mudança funcional |
+| contato | `RepositorioContatoColaboradorPostgres` | igual | **canônica** no código. Operacionalmente depende da migration alocacao/0004 e do bootstrap |
+| inventário | adapters Airtable (ids Airtable) | igual | transitória, só para readiness. Não serve para aquisição |
+| documento candidato por necessidade | `None` em produção | igual | **gate J3** (§14.2) |
+| cliente direto do documento | `FonteClienteDiretoDocumentoAirtableShadow` | igual | transitória. Não há cadastro interno de cliente/CNPJ |
+
+Nesta missão nenhuma troca foi feita: onde havia fonte interna, faltava produtor ou dado, e trocar teria sido declarar "canônico" o que está vazio. Nenhuma dependência nova do Airtable foi criada. O domínio (`classificacao`) continua sem importar Airtable (`test_magnata_os_classificacao_arquitetura_sem_dependencia_airtable.py`).
+
+### 14.2 J3: índice documento ↔ necessidade. Gate material
+
+**Não é derivável** com o que é persistido hoje. Nenhuma tabela escrita por produtor real guarda, por `documento_id` interno, os cinco atributos de que a necessidade precisa: cliente, competência, tipo, colaborador e elegibilidade.
+
+| Atributo | Onde está persistido | Produtor real |
+|---|---|---|
+| tipo | `resolucao_documental_temporal.tipo_documental` (modulo01/0010); `itens_importacao_lote` (0009); evento `IMPORTACAO_LOTE_ITEM_ESCRITO` | nenhum. `executar_escrita_do_lote` só é chamado em testes. A esteira calcula o tipo e grava só etapa/situação |
+| competência | `resolucao_documental_temporal.competencia` | nenhum |
+| colaborador | `resolucao_documental_temporal.colaborador_id` | nenhum. O id vigente é o record-id do Airtable |
+| cliente | **nenhuma coluna**. A 0010 exclui cliente por decisão e o deriva por alocação, o que não serve para documento de nível cliente | — |
+| elegibilidade | `estados_esteira_documental` (0006) | sim (esteira), mas não diz a qual necessidade o documento atende |
+
+Todo inventário real devolve record-id do Airtable como `documento_id`. Por isso `FonteCandidatosDocumentoInventarioInterna` produz zero candidatos (fail-closed, correto). Usar record-id do Airtable como documento interno está proibido.
+
+**Recomendação mínima (não executada):**
+1. **Produtor, só código:** em `ServicoCriacaoLote._processar_um_arquivo`, depois do gate de classificação (e de identificação, para documento de colaborador), gravar em `resolucao_documental_temporal` via `RepositorioResolucaoTemporalPostgres.salvar_com_evento`. Esse caminho já é idempotente (UNIQUE `documento_id` + CAS + evento atômico).
+2. **Consumidor, só código:** um adapter Postgres de `FonteCandidatosDocumentaisPorNecessidade` com `resolucao_documental_temporal ⋈ estados_esteira_documental`, filtrando tipo, competência, colaborador, `RESOLVIDA` e `CONCLUIDO` sem bloqueio. O cliente vem pela alocação (vigências) e o documento por `RepositorioDocumentosPostgres.buscar_por_id`.
+3. **Schema (gate):** cliente do documento de nível cliente, que contraria o comentário da 0010 e por isso exige ADR. Duas opções: coluna `cliente_id` anulável numa migration 0011, ou tabela própria `resolucao_documental_cliente_direto` por `documento_id`. Opcionalmente, estado por dimensão. Ambas são aditivas e reversíveis com SQL de rollback, no padrão 0009/0010.
+4. **Backfill:** reler o binário do S3 por hash e rodar o mesmo resolvedor. É idempotente por `salvar_com_evento`, mas é backfill real, logo gate.
+5. **Pré-requisitos:** aplicar a 0010 (e a 0011) no banco real, gate de produção. Decidir o `colaborador_id` canônico versus o `func_id` do Airtable (J2 identidade).
+
+### 14.3 Pacote/intenção de nível cliente (entregue)
+
+- **Problema:** até aqui o documento sem colaborador ficava fora da Ordem de colaborador (correto) e não virava nada (só WARNING).
+- **Onde:** extensão de `pacote_prestacao.py` (REUTILIZAR > ESTENDER > CRIAR).
+- **Conceitos:**
+  - `IntencaoDistribuicaoCliente`: `cliente + competência + papel_destinatario + documentos`. Não tem `funcionario_id`, endereço nem canal. `intencao_id` é determinístico.
+  - `DocumentoIntencaoCliente`: `documento_id + hash + tipos das necessidades atendidas`. O mesmo documento aparece uma vez.
+  - `PapelDestinatarioOrganizacional.CLIENTE_INSTITUCIONAL`: é papel, não endereço.
+- **Composição** (`composicao_ciclo_persistente_prestacao.py`): `_separar_nivel_cliente`, `particionar_nivel_cliente`, `resultados_aquisicao_prontos_nivel_cliente`, `intencoes_distribuicao_cliente_de_trios` e `intencoes_distribuicao_cliente_prontas`.
+  - `particionar_nivel_cliente` e `intencoes_distribuicao_cliente_de_trios` recebem trios já calculados. Assim um composition root deriva Ordens e intenções do **mesmo** snapshot de readiness, sem rodar o ciclo duas vezes.
+  - Usam o **mesmo** gate de readiness por cliente e a **mesma** elegibilidade (`resultados_aquisicao_prontos_por_cliente` + `_elegivel_para_distribuicao`); nenhuma regra paralela.
+- **Regras:**
+  - A granularidade vem da necessidade (`colaborador is None`). Não existe lista de tipos: nenhum literal de nome documental, com teste AST.
+  - Documento com granularidade de pessoa nunca entra no pacote do cliente. Recebe o evento `documento_com_colaborador_fora_intencao_cliente`.
+    - Critério fail-closed: a dimensão COLABORADOR existe na resolução em qualquer estado diferente de `NAO_APLICAVEL` (confirmada, ambígua ou não encontrada), ou a resolução está ausente.
+  - A partição por colaborador não mudou: documento de cliente continua fora de toda Ordem de colaborador.
+  - Isolamento: erro de domínio de um cliente gera `cliente_falhou_intencao_distribuicao` e os demais seguem; erro sistêmico propaga.
+- **Para na intenção.** Não há Orquestrador, evento, preview nem transporte. Motivos:
+  - Não existe fonte canônica de destinatário do cliente. Os campos `Email`/`Email Contador` da tabela Clientes existem só no legado (`app.py`/Airtable).
+  - Não existe executor de canal para cliente; o único é WhatsApp, e documento de cliente não é adaptado artificialmente a ele.
+  - `OrdemDistribuicaoDocumental` é por contrato de um colaborador, e reusá-la com `funcionario_id` falso seria fabricação.
+- **Gate de dado operacional:** a fonte de destinatário do cliente (Protocol novo, transitório sobre Airtable ou interno) e a política de canal (e-mail é só o precedente legado) são o próximo passo. Um contrato de Ordem sem `funcionario_id` exige ADR.
+
+### 14.4 Readiness real
+
+Coberta pela suíte existente, sem mudança de regra:
+
+| Caso | Onde está coberto |
+|---|---|
+| universais / condicionais | `test_magnata_os_classificacao_cadastro_requisitos_prestacao.py` |
+| cardinalidade por colaborador | `combinar_pacote_com_obrigatoriedade_documental` e testes |
+| ausente → FALTANDO/INCOMPLETO | suíte de readiness |
+| revisão → EM_REVISAO | suíte de readiness |
+| outro cliente | `inventario_de_outro_cliente` → REVISAR |
+| competência errada | DIVERGENTE/BLOQUEADO |
+| tipo errado / outro colaborador (elegibilidade) | J1/J1b (`_tipo_resolvido_atende_necessidade`, `_elegivel_para_distribuicao`) |
+
+`PRONTO` exige resolução real (âncora) e todos os requisitos presentes. Sem J3, nenhum cliente real chega a PRONTO: fica REVISAR (`sem_evidencia_documental_real`), fail-closed.
+
+### 14.5 Composition root e piloto shadow real: bloqueados pelo J3
+
+Composição mínima identificada, sem runner paralelo: estender `executar_prestacao_contato_ate_pending_shadow_v1.py`, que já compõe o Contato por ambiente, com:
+- uma função **a criar**, `compor_contexto_composicao_prestacao_a_partir_do_ambiente` (ainda não existe);
+- os composers de `distribuir_documento_v1`/`ciclo_producao_v1`, com `materializador=None` (o materializador legado **escreve** no Airtable) e sem assinatura.
+
+Sem `fonte_candidatos_por_necessidade` real, essa composição roda de ponta a ponta e produz **zero** Ordens e zero intenções. Montá-la agora seria entregar um runner que nunca faz nada. O piloto shadow com documentos reais também depende do índice. Nenhum dos dois foi criado.
+
+### 14.6 Dependências do Airtable remanescentes
+
+- **Substituídas:** nenhuma nesta missão.
+- **Já canônicas antes desta missão:** requisitos e contato (no código).
+- **Transitórias atrás de Protocol:** clientes, colaboradores esperados, vínculo, identidade (universo do corredor), inventário para readiness, cliente direto e destinatário do cliente (só legado).
+- **Plano de remoção:**
+  1. J3 (índice + produtor na ingestão).
+  2. Produtor real de alocação/vigência cliente-posto, que libera vínculo, colaboradores esperados e unidade/posto internos.
+  3. Cadastro interno de cliente/CNPJ + destinatários do cliente, que libera clientes, cliente direto e destinatário.
+  4. Identidade canônica de colaborador (decisão sobre `func_id`).
+
+Nenhuma bridge foi removida sem substituto.
+
+### 14.7 Riscos declarados
+
+- `resultados_aquisicao_prontos_por_cliente` omite o cliente PRONTO sem aquisição própria nesta execução. Documentos de nível cliente que estejam só no inventário base (ids Airtable) nunca viram intenção; é o mesmo gap do J3.
+- Deriva de vocabulário: o default `tipos_obrigatorios_por_colaborador='Holerite da Folha de Pagamento'` difere de `TIPO_HOLERITE='Holerite'` (§11). Sem `fonte_colaboradores_esperados`, um tipo de colaborador vira necessidade sem colaborador. A guarda nova impede que ele entre no pacote do cliente se a resolução confirmar colaborador, mas o composition root real precisa passar os tipos certos.
+- **A intenção pode ser subconjunto do pacote:** contém só os documentos adquiridos nesta execução. Se a readiness do cliente dependeu de documento que está só no inventário base, esse documento não entra. Isso está declarado no docstring de `intencoes_distribuicao_cliente_prontas`. Fecha junto com o J3.
+- **Candidatos duplicados:** dois documentos distintos que resolvem para a mesma necessidade de nível cliente entram os dois na intenção. É o mesmo comportamento das Ordens, sem regressão. No pacote do cliente isso significa possível entrega duplicada; a deduplicação por necessidade é decisão do consumidor da intenção.
+- `tipos_documentais` faz parte do `intencao_id`: mudança de vocabulário muda a identidade para os mesmos documentos físicos.
+- Certidões não aparecem em nenhum requisito. A granularidade de DCTFWeb (`broadcast_estrutural`, `clientes_broadcast=()`) provavelmente nunca fica elegível. Isso não foi alterado.
+
+### 14.8 Continuação autorizada: J3 atravessado (desenho e schema)
+
+O gate J3 foi atravessado por decisão humana. Detalhes em `docs/decisoes/correlacao-documento-prestacao-v1.md`:
+- migration orquestrador 0007 inerte, com rollback;
+- produtor no corredor existente, mais o de ponto;
+- consumidor sobre a fonte interna já existente;
+- bridge transitório do destinatário do cliente;
+- composition root de borda e backfill projetado.
+
+Continuam bloqueados: aplicação da migration, backfill real e piloto contra banco real.

@@ -480,6 +480,10 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # real das ações do plano (já em ALLOWED_PATHS e no job postgres-real),
   # nome exato, sem wildcard.
   "test_repositorio_acoes_execucao_plano_postgres_real.py"
+  # PRESTAÇÃO UPSTREAM REAL / J3 -- índice Documento <-> escopo: unitário
+  # e Postgres real (este no job postgres-real), nomes exatos.
+  "test_correlacao_documento_prestacao.py"
+  "test_correlacao_documento_prestacao_postgres_real.py"
   "test_observador_assinatura.py"
   # ATIVAÇÃO CONTROLADA DO WIRING WHATSAPP + ASSINATURA V1 (implementação
   # LOCAL da fase de ativação, PROD NÃO autorizada) — gate fail-closed de

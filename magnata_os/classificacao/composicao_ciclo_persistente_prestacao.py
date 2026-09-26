@@ -98,7 +98,13 @@ from .inventario_prestacao_memoria import InventarioPrestacaoEmMemoria
 from .normalizacao_requisitos_prestacao import (
     TRADUCAO_FAMILIA_B_PARA_MOTOR_GERAL,
 )
-from .pacote_prestacao import EstadoPacotePrestacao, PacotePrestacaoCliente
+from .pacote_prestacao import (
+    EstadoPacotePrestacao,
+    IntencaoDistribuicaoCliente,
+    IntencaoDistribuicaoClienteError,
+    PacotePrestacaoCliente,
+    montar_intencao_distribuicao_cliente,
+)
 from .politica_requisitos_prestacao import PoliticaRequisitosPrestacao
 from .prestacao_readiness import (
     ItemInventarioPrestacao,
@@ -1086,7 +1092,17 @@ def resultados_aquisicao_prontos_por_cliente(
     resultados_aquisicao, resultado_ciclo_2 = _descobrir_adquirir_e_recalcular_readiness(
         contexto, ciclo_contexto,
     )
+    return _trios_prontos(resultados_aquisicao, resultado_ciclo_2)
 
+
+def _trios_prontos(
+    resultados_aquisicao: Tuple[ResultadoAquisicaoPorNecessidade, ...],
+    resultado_ciclo_2: ResultadoCicloPrestacao,
+) -> Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...]:
+    """Gate de readiness POR CLIENTE + elegibilidade J1 sobre um
+    snapshot JÁ calculado -- extraído de `resultados_aquisicao_prontos_
+    por_cliente` (comportamento idêntico) para que o diagnóstico da
+    Prestação upstream use exatamente o mesmo filtro, sem recomputar."""
     saida: list = []
     for resultado_cliente in resultado_ciclo_2.resultados_por_cliente:
         if resultado_cliente.pacote.estado != EstadoPacotePrestacao.PRONTO:
@@ -1149,8 +1165,9 @@ def _particionar_por_colaborador(
     for resultado in resultados:
         colaborador = resultado.necessidade.colaborador
         if colaborador is None:
-            # WARNING, não INFO: a distribuição desse documento ao
-            # cliente ainda não existe neste fluxo -- lacuna conhecida
+            # WARNING, não INFO: o destino DE DOMÍNIO desse documento é a
+            # intenção do cliente (`intencoes_distribuicao_cliente_prontas`),
+            # mas a ENTREGA ao cliente ainda não existe -- lacuna conhecida
             # que precisa ficar visível, nunca silenciosa.
             _logger.warning(
                 '%s documento_id=%s cliente=%s competencia=%s',
@@ -1187,6 +1204,229 @@ def resultados_aquisicao_prontos_por_colaborador(
     for cliente, competencia, resultados in resultados_aquisicao_prontos_por_cliente(contexto):
         saida.extend(_particionar_por_colaborador(cliente, competencia, resultados))
     return tuple(saida)
+
+
+# ==== NÍVEL CLIENTE: INTENÇÃO DE DISTRIBUIÇÃO DO CLIENTE ====
+# Complemento do Gate J1b: o que `_particionar_por_colaborador` omite
+# (necessidade sem colaborador) passa a ter destino no DOMÍNIO -- uma
+# `IntencaoDistribuicaoCliente` por cliente+competência, sem
+# `funcionario_id`, sem endereço, sem canal. Mesmo gate de readiness e
+# mesma elegibilidade (`resultados_aquisicao_prontos_por_cliente` +
+# `_elegivel_para_distribuicao`), nunca uma regra paralela.
+
+EVENTO_DOCUMENTO_COM_COLABORADOR_FORA_INTENCAO_CLIENTE = 'documento_com_colaborador_fora_intencao_cliente'
+EVENTO_CLIENTE_FALHOU_INTENCAO_DISTRIBUICAO = 'cliente_falhou_intencao_distribuicao'
+
+
+def _documento_identifica_colaborador(resultado: ResultadoAquisicaoPorNecessidade) -> bool:
+    """O documento tem granularidade de PESSOA? Então nunca entra no
+    pacote do cliente, mesmo que a necessidade que o buscou seja de nível
+    cliente (granularidades diferentes; cf. o inverso em
+    `_particionar_por_colaborador`). Fail-closed por si só (não depende de
+    a elegibilidade já ter barrado antes): basta a dimensão COLABORADOR
+    existir na resolução em qualquer estado diferente de NAO_APLICAVEL --
+    confirmada, ambígua ou não encontrada. Resolução ausente também não
+    prova nível cliente. Genérico: olha a dimensão, nunca o nome do tipo."""
+    for execucao in resultado.resultados_corredor:
+        resolucao = execucao.resultado_corredor.resolucao_semantica
+        if resolucao is None:
+            return True
+        for item in resolucao.resolucoes:
+            if (
+                item.dimensao == DimensaoResolucao.COLABORADOR
+                and item.estado != EstadoResolucaoDimensao.NAO_APLICAVEL
+            ):
+                return True
+    return False
+
+
+def _separar_nivel_cliente(
+    cliente: ReferenciaCanonica,
+    competencia: ReferenciaCanonica,
+    resultados: Tuple[ResultadoAquisicaoPorNecessidade, ...],
+) -> Tuple[ResultadoAquisicaoPorNecessidade, ...]:
+    """Dos resultados JÁ ELEGÍVEIS de 1 cliente/competência, devolve só
+    os de nível cliente (`necessidade.colaborador is None`) cujo documento
+    não identifica colaborador -- ordem determinística por (`documento_id`,
+    `hash_sha256`, tipo da necessidade), independente da ordem da fonte."""
+    selecionados = []
+    for resultado in resultados:
+        if resultado.necessidade.colaborador is not None:
+            continue  # vai (ou já foi) para a Ordem do próprio colaborador
+        if _documento_identifica_colaborador(resultado):
+            _logger.warning(
+                '%s documento_id=%s cliente=%s competencia=%s',
+                EVENTO_DOCUMENTO_COM_COLABORADOR_FORA_INTENCAO_CLIENTE,
+                resultado.documento_id, cliente.entidade_id, competencia.entidade_id,
+                extra={
+                    'evento': EVENTO_DOCUMENTO_COM_COLABORADOR_FORA_INTENCAO_CLIENTE,
+                    'documento_id': resultado.documento_id,
+                    'cliente': cliente.entidade_id,
+                    'competencia': competencia.entidade_id,
+                },
+            )
+            continue
+        selecionados.append(resultado)
+    return tuple(sorted(
+        selecionados,
+        key=lambda r: (r.documento_id, r.hash_sha256, r.necessidade.tipo_documental),
+    ))
+
+
+def particionar_nivel_cliente(
+    trios_prontos: Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...],
+) -> Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...]:
+    """Pura, sobre trios JÁ calculados por `resultados_aquisicao_prontos_
+    por_cliente` -- permite a um composition root derivar Ordens de
+    colaborador (`_particionar_por_colaborador`) e intenções de cliente do
+    MESMO snapshot, sem rodar descoberta/aquisição/readiness duas vezes."""
+    saida: list = []
+    for cliente, competencia, resultados in trios_prontos:
+        nivel_cliente = _separar_nivel_cliente(cliente, competencia, resultados)
+        if nivel_cliente:
+            saida.append((cliente, competencia, nivel_cliente))
+    return tuple(saida)
+
+
+def resultados_aquisicao_prontos_nivel_cliente(
+    contexto: 'ContextoComposicaoPrestacao',
+) -> Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...]:
+    """Mesmo gate de readiness POR CLIENTE e mesma elegibilidade de
+    `resultados_aquisicao_prontos_por_cliente`, restrito aos resultados de
+    nível cliente -- 1 trio por (cliente, competência) com ao menos 1
+    documento de nível cliente elegível. Cliente sem nenhum é omitido."""
+    return particionar_nivel_cliente(resultados_aquisicao_prontos_por_cliente(contexto))
+
+
+def intencoes_distribuicao_cliente_de_trios(
+    trios_nivel_cliente: Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...],
+) -> Tuple[IntencaoDistribuicaoCliente, ...]:
+    """Monta as intenções a partir de trios de nível cliente já
+    separados (`particionar_nivel_cliente`). Isolamento: erro de DOMÍNIO
+    de 1 cliente (`IntencaoDistribuicaoClienteError`) é registrado com
+    evento estável e não impede os demais; qualquer outra exceção
+    (sistêmica) propaga -- nunca vira "documento faltante"."""
+    intencoes: list = []
+    for cliente, competencia, resultados in trios_nivel_cliente:
+        try:
+            intencoes.append(montar_intencao_distribuicao_cliente(
+                cliente=cliente, competencia=competencia, resultados_aquisicao=resultados,
+            ))
+        except IntencaoDistribuicaoClienteError as exc:
+            _logger.error(
+                '%s cliente=%s competencia=%s exception_type=%s',
+                EVENTO_CLIENTE_FALHOU_INTENCAO_DISTRIBUICAO,
+                cliente.entidade_id, competencia.entidade_id, type(exc).__name__,
+                extra={
+                    'evento': EVENTO_CLIENTE_FALHOU_INTENCAO_DISTRIBUICAO,
+                    'cliente': cliente.entidade_id,
+                    'competencia': competencia.entidade_id,
+                    'exception_type': type(exc).__name__,
+                },
+            )
+    return tuple(intencoes)
+
+
+def intencoes_distribuicao_cliente_prontas(
+    contexto: 'ContextoComposicaoPrestacao',
+) -> Tuple[IntencaoDistribuicaoCliente, ...]:
+    """1 `IntencaoDistribuicaoCliente` por cliente+competência PRONTO com
+    documentos de nível cliente elegíveis. Para na INTENÇÃO: nenhum
+    destinatário concreto, nenhum canal, nenhum Orquestrador, nenhum
+    transporte.
+
+    LIMITE DECLARADO: a intenção contém só os documentos de nível cliente
+    ADQUIRIDOS NESTA EXECUÇÃO (mesmo recorte das Ordens de colaborador).
+    Documento que satisfaz a readiness só via `fonte_inventario_base`
+    (hoje ids Airtable) não entra -- se o cliente depender dele, a
+    intenção é um SUBCONJUNTO do pacote. Fechar isso depende do índice
+    interno documento<->necessidade (J3), nunca de promover id Airtable a
+    documento interno."""
+    return intencoes_distribuicao_cliente_de_trios(resultados_aquisicao_prontos_nivel_cliente(contexto))
+
+
+# ==== DIAGNÓSTICO DE SNAPSHOT ÚNICO (composition root / piloto) ====
+
+
+def particionar_por_colaborador(
+    trios_prontos: Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...],
+) -> Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...]:
+    """Mesma partição de `resultados_aquisicao_prontos_por_colaborador`,
+    sobre trios JÁ calculados (nunca recomputa o ciclo)."""
+    saida: list = []
+    for cliente, competencia, resultados in trios_prontos:
+        saida.extend(_particionar_por_colaborador(cliente, competencia, resultados))
+    return tuple(saida)
+
+
+@dataclasses.dataclass(frozen=True)
+class DiagnosticoClientePrestacao:
+    """Visão SANITIZADA de 1 cliente/competência no snapshot: só ids
+    opacos e contagens -- nunca CPF, nome, e-mail ou conteúdo."""
+
+    cliente: ReferenciaCanonica
+    competencia: ReferenciaCanonica
+    estado_pacote: str
+    motivos: Tuple[str, ...]
+    tipos_faltantes: Tuple[str, ...]
+    necessidades_pendentes: int
+    documentos_candidatos: Tuple[str, ...]
+    documentos_elegiveis: Tuple[str, ...]
+    documentos_rejeitados: Tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class DiagnosticoPrestacaoUpstream:
+    """1 ÚNICO cálculo de descoberta -> aquisição -> readiness, do qual
+    derivam, sem recomputar, as Ordens de colaborador e as intenções de
+    cliente -- nunca 2 snapshots divergentes."""
+
+    clientes: Tuple[DiagnosticoClientePrestacao, ...]
+    trios_prontos: Tuple = dataclasses.field(repr=False, default=())
+
+    def grupos_por_colaborador(self):
+        return particionar_por_colaborador(self.trios_prontos)
+
+    def intencoes_cliente(self) -> Tuple[IntencaoDistribuicaoCliente, ...]:
+        return intencoes_distribuicao_cliente_de_trios(particionar_nivel_cliente(self.trios_prontos))
+
+
+def diagnosticar_prestacao_upstream(contexto: 'ContextoComposicaoPrestacao') -> DiagnosticoPrestacaoUpstream:
+    """Mesma composição de `resultados_aquisicao_prontos_por_cliente`
+    (política de competência, descoberta, aquisição por necessidade,
+    âncora, readiness, `_trios_prontos`), expondo também o diagnóstico por
+    cliente para o relatório do piloto shadow. Leitura pura: não cria
+    `ExecucaoPrestacao`, não escreve nada."""
+    if contexto.politica_competencia is not None:
+        verificar_politica_sem_override_por_tipo(contexto.politica_competencia)
+    ano_str, mes_str = contexto.competencia_base.split('-')
+    ciclo_contexto = ContextoCicloPrestacao(competencia_base=(int(ano_str), int(mes_str)))
+
+    resultados_aquisicao, resultado_ciclo_2 = _descobrir_adquirir_e_recalcular_readiness(contexto, ciclo_contexto)
+    trios = _trios_prontos(resultados_aquisicao, resultado_ciclo_2)
+
+    clientes = []
+    for resultado_cliente in resultado_ciclo_2.resultados_por_cliente:
+        do_cliente = [
+            ra for ra in resultados_aquisicao
+            if ra.necessidade.cliente == resultado_cliente.cliente
+            and ra.necessidade.competencia == resultado_cliente.competencia
+        ]
+        elegiveis = sorted({ra.documento_id for ra in do_cliente if _elegivel_para_distribuicao(ra)})
+        candidatos = sorted({ra.documento_id for ra in do_cliente})
+        pacote = resultado_cliente.pacote
+        clientes.append(DiagnosticoClientePrestacao(
+            cliente=resultado_cliente.cliente,
+            competencia=resultado_cliente.competencia,
+            estado_pacote=pacote.estado.value,
+            motivos=tuple(pacote.motivos),
+            tipos_faltantes=tuple(pacote.tipos_faltantes),
+            necessidades_pendentes=len(resultado_cliente.necessidades),
+            documentos_candidatos=tuple(candidatos),
+            documentos_elegiveis=tuple(elegiveis),
+            documentos_rejeitados=tuple(d for d in candidatos if d not in set(elegiveis)),
+        ))
+    return DiagnosticoPrestacaoUpstream(clientes=tuple(clientes), trios_prontos=trios)
 
 
 def executar_ciclo_prestacao_persistente(

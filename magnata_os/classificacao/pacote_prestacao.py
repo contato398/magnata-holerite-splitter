@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import dataclasses
 import enum
-from typing import Optional, Tuple
+import hashlib
+import json
+from typing import Iterable, Optional, Protocol, Tuple
 
 from .cardinalidade_colaborador_por_tipo import ResultadoObrigatoriedadeDocumental
 from .contratos import ReferenciaCanonica, ResultadoResolucaoSemantico
@@ -180,4 +182,186 @@ def combinar_pacote_com_holerite(
         tipos_faltantes = tuple(sorted(tipos_faltantes + (TIPO_HOLERITE,)))
     return dataclasses.replace(
         pacote, estado=novo_estado, tipos_faltantes=tipos_faltantes, holerite=resultado_holerite,
+    )
+
+
+# =====================================================================
+# PACOTE / INTENÇÃO DE DISTRIBUIÇÃO DE NÍVEL CLIENTE (Prestação upstream
+# real V1). Fecha no DOMÍNIO a lacuna do Gate J1b: documentos cuja
+# necessidade não tem colaborador (granularidade cliente) nunca entram em
+# Ordem de colaborador, mas até aqui também não viravam nada -- só um
+# WARNING. Esta intenção é o destino deles: `cliente + competência +
+# documentos de nível cliente`, sem `funcionario_id`.
+#
+# Deliberadamente PARA NA INTENÇÃO: nenhum endereço de destinatário
+# (quem recebe é um PAPEL organizacional; o endereço depende de fonte
+# canônica de destinatários do cliente, que hoje só existe no legado),
+# nenhum canal (e-mail é só o precedente do legado, nunca arquitetura do
+# domínio), nenhuma lista de tipos documentais (a granularidade vem da
+# NECESSIDADE e da resolução do documento). Puro: sem I/O. Recebe os
+# resultados de aquisição por duck typing (`necessidade`,
+# `documento_id`, `hash_sha256`) para não criar ciclo de import com a
+# composição.
+# =====================================================================
+
+VERSAO_INTENCAO_DISTRIBUICAO_CLIENTE = 'intencao-distribuicao-cliente-v1'
+
+
+class PapelDestinatarioOrganizacional(str, enum.Enum):
+    """Quem recebe, como PAPEL -- nunca um endereço. V1 conhece só o
+    destinatário institucional do próprio cliente (entidade Cliente como
+    "destinatário institucional de documentos coletivos",
+    MAGNATA_OS_ENTIDADES.md). Papéis mais finos (financeiro,
+    administrativo, contador) dependem de fonte canônica que ainda não
+    existe -- não são adivinhados aqui."""
+
+    CLIENTE_INSTITUCIONAL = 'CLIENTE_INSTITUCIONAL'
+    CONTADOR_DO_CLIENTE = 'CONTADOR_DO_CLIENTE'
+    """Escritório contábil do cliente -- papel PRÓPRIO, nunca um
+    fallback automático de `CLIENTE_INSTITUCIONAL`: a regra "sem e-mail
+    do cliente, usar o do contador" é do legado (`app.py`) e, se for
+    adotada, pertence à política de canal/entrega, não à fonte."""
+
+
+class FonteDestinatarioOrganizacionalCliente(Protocol):
+    """Porta dos endereços do destinatário ORGANIZACIONAL de um cliente
+    por papel. Devolve os endereços como a fonte os tem (vazio = sem dado
+    confiável -- nunca inventado). Hoje implementada por um bridge
+    Airtable read-only transitório (`importacao_lote/adapters/airtable_
+    destinatario_cliente.py`); troca futura por cadastro interno pelo
+    MESMO Protocol. O domínio nunca conhece a fonte, e a intenção nunca
+    carrega o endereço -- ele só é resolvido no momento do canal."""
+
+    def enderecos_para(
+        self, cliente: ReferenciaCanonica, papel: PapelDestinatarioOrganizacional,
+    ) -> Tuple[str, ...]: ...
+
+
+class IntencaoDistribuicaoClienteError(ValueError):
+    """Erro de DOMÍNIO, isolável por cliente: os resultados recebidos não
+    formam uma intenção de nível cliente válida."""
+
+
+class ResultadoComColaboradorNaIntencaoCliente(IntencaoDistribuicaoClienteError):
+    """Uma necessidade com colaborador tentou entrar na intenção de
+    cliente -- granularidades diferentes nunca se misturam."""
+
+
+class ResultadoDeOutroClienteOuCompetencia(IntencaoDistribuicaoClienteError):
+    """Resultado cuja necessidade é de outro cliente ou competência."""
+
+
+@dataclasses.dataclass(frozen=True)
+class DocumentoIntencaoCliente:
+    """1 documento físico da intenção. `tipos_documentais` são os tipos
+    das NECESSIDADES que ele satisfaz (vocabulário da necessidade, nunca
+    reinterpretado) -- o mesmo documento que atende 2 necessidades do
+    cliente aparece 1 vez, com os 2 tipos."""
+
+    documento_id: str
+    hash_sha256: str
+    tipos_documentais: Tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not str(self.documento_id or '').strip():
+            raise IntencaoDistribuicaoClienteError('documento_id deve ser texto não vazio')
+        if not str(self.hash_sha256 or '').strip():
+            raise IntencaoDistribuicaoClienteError('hash_sha256 deve ser texto não vazio')
+        tipos = tuple(self.tipos_documentais)
+        if not tipos or any(not str(t or '').strip() for t in tipos):
+            raise IntencaoDistribuicaoClienteError('tipos_documentais exige ao menos 1 tipo não vazio')
+        if tipos != tuple(sorted(set(tipos))):
+            raise IntencaoDistribuicaoClienteError('tipos_documentais deve ser ordenado e sem repetição')
+
+
+@dataclasses.dataclass(frozen=True)
+class IntencaoDistribuicaoCliente:
+    """Intenção de entregar documentos de nível cliente ao destinatário
+    ORGANIZACIONAL do cliente numa competência. Nunca carrega
+    `funcionario_id`, endereço nem canal."""
+
+    cliente: ReferenciaCanonica
+    competencia: ReferenciaCanonica
+    papel_destinatario: PapelDestinatarioOrganizacional
+    documentos: Tuple[DocumentoIntencaoCliente, ...]
+
+    def __post_init__(self) -> None:
+        if self.cliente.tipo_entidade != 'CLIENTE':
+            raise IntencaoDistribuicaoClienteError('cliente deve ser referência canônica de CLIENTE')
+        if self.competencia.tipo_entidade != 'COMPETENCIA':
+            raise IntencaoDistribuicaoClienteError('competencia deve ser referência canônica de COMPETENCIA')
+        if not isinstance(self.papel_destinatario, PapelDestinatarioOrganizacional):
+            raise IntencaoDistribuicaoClienteError('papel_destinatario deve ser PapelDestinatarioOrganizacional')
+        documentos = tuple(self.documentos)
+        if not documentos:
+            raise IntencaoDistribuicaoClienteError('intenção de cliente exige ao menos 1 documento')
+        chaves = [(d.documento_id, d.hash_sha256) for d in documentos]
+        if chaves != sorted(set(chaves)):
+            raise IntencaoDistribuicaoClienteError(
+                'documentos devem estar ordenados por (documento_id, hash_sha256) e sem repetição'
+            )
+        object.__setattr__(self, 'documentos', documentos)
+
+    @property
+    def documento_ids(self) -> Tuple[str, ...]:
+        return tuple(d.documento_id for d in self.documentos)
+
+    @property
+    def intencao_id(self) -> str:
+        """Identidade DETERMINÍSTICA: mesmo cliente/competência/papel/
+        documentos -> mesmo id (replay nunca gera intenção "nova"); a
+        ordem de chegada dos resultados nunca entra (documentos já são
+        canônicos pela invariante acima)."""
+        payload = {
+            'versao': VERSAO_INTENCAO_DISTRIBUICAO_CLIENTE,
+            'cliente': [self.cliente.tipo_entidade, self.cliente.entidade_id],
+            'competencia': [self.competencia.tipo_entidade, self.competencia.entidade_id],
+            'papel_destinatario': self.papel_destinatario.value,
+            'documentos': [
+                [d.documento_id, d.hash_sha256, list(d.tipos_documentais)] for d in self.documentos
+            ],
+        }
+        serializado = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(',', ':'))
+        return hashlib.sha256(serializado.encode('utf-8')).hexdigest()
+
+
+def montar_intencao_distribuicao_cliente(
+    *,
+    cliente: ReferenciaCanonica,
+    competencia: ReferenciaCanonica,
+    resultados_aquisicao: Iterable,
+    papel_destinatario: PapelDestinatarioOrganizacional = PapelDestinatarioOrganizacional.CLIENTE_INSTITUCIONAL,
+) -> IntencaoDistribuicaoCliente:
+    """Monta a intenção a partir de resultados de aquisição JÁ
+    ELEGÍVEIS de nível cliente (a elegibilidade continua sendo da
+    composição da Prestação, nunca refeita aqui). Fail-closed: qualquer
+    resultado com colaborador, ou de outro cliente/competência, derruba a
+    intenção inteira desse cliente com erro de domínio -- nunca é
+    "filtrado em silêncio" para dentro de uma intenção menor."""
+    tipos_por_documento: dict = {}
+    for resultado in resultados_aquisicao:
+        necessidade = resultado.necessidade
+        if necessidade.colaborador is not None:
+            raise ResultadoComColaboradorNaIntencaoCliente(
+                f'necessidade com colaborador não pertence à intenção de cliente '
+                f'(documento_id={resultado.documento_id!r})'
+            )
+        if necessidade.cliente != cliente or necessidade.competencia != competencia:
+            raise ResultadoDeOutroClienteOuCompetencia(
+                f'resultado de outro cliente/competência (documento_id={resultado.documento_id!r})'
+            )
+        chave = (resultado.documento_id, resultado.hash_sha256)
+        tipos_por_documento.setdefault(chave, set()).add(necessidade.tipo_documental)
+
+    return IntencaoDistribuicaoCliente(
+        cliente=cliente,
+        competencia=competencia,
+        papel_destinatario=papel_destinatario,
+        documentos=tuple(
+            DocumentoIntencaoCliente(
+                documento_id=documento_id, hash_sha256=hash_sha256,
+                tipos_documentais=tuple(sorted(tipos_por_documento[(documento_id, hash_sha256)])),
+            )
+            for documento_id, hash_sha256 in sorted(tipos_por_documento)
+        ),
     )
