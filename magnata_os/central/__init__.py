@@ -5,17 +5,17 @@ WhatsApp, e-mail, Flask, Render ou qualquer fornecedor externo.
 """
 
 from .distribuicao import (
-    AcaoFallback,
     CanalDistribuicao,
     EstadoDistribuicao,
     OrdemDistribuicao,
+    encaminhar_para_fallback_manual,
     transicionar,
 )
 
 __all__ = [
-    "AcaoFallback",
     "CanalDistribuicao",
     "EstadoDistribuicao",
     "OrdemDistribuicao",
+    "encaminhar_para_fallback_manual",
     "transicionar",
 ]
