@@ -15,6 +15,7 @@ Transformar o Magnata OS em uma plataforma operacional multi-domínio, com o Gra
 7. **Rastreabilidade:** cada ação deve ter identidade, estado, tentativa, resultado e evidência.
 8. **Idempotência:** repetir uma operação não deve criar duplicidade.
 9. **Intervenção humana mínima:** só solicitar ação quando houver erro, conflito, ausência de dado essencial ou decisão que não possa ser tomada com segurança.
+10. **Uma única máquina de execução:** a camada Central não cria estados paralelos; reutiliza o ciclo canônico do Orquestrador.
 
 ## Arquitetura-alvo
 
@@ -49,18 +50,22 @@ CAPACIDADES TRANSVERSAIS
 
 Fluxo canônico:
 
-`necessidade -> localização -> validação -> preparação -> ordem de distribuição -> canal -> evidência -> fechamento`
+`necessidade -> localização -> validação -> preparação -> ordem de distribuição -> gate/política -> execução -> evidência -> fechamento`
 
-## Modelo de estado mínimo
+A ordem é genérica para **1..N documentos** e **1..N destinatários**. Assinatura e comprovante são requisitos de política/capacidade, não propriedades do tipo documental.
 
-Toda operação de distribuição deve conseguir representar, no mínimo:
+## Modelo de intenção de distribuição
+
+A intenção central deve carregar, no mínimo:
 
 - `intent_id`
-- `document_id`
-- `document_version`
-- `recipient_id`
+- `document_ids[]`
+- `document_versions[]`
+- `recipient_ids[]`
 - `channel`
-- `status`
+- `signature_required`
+- `receipt_required`
+- `state`
 - `attempt_count`
 - `last_error`
 - `created_at`
@@ -68,13 +73,27 @@ Toda operação de distribuição deve conseguir representar, no mínimo:
 - `evidence_id`
 - `fallback_required`
 
-Estados recomendados:
+O núcleo não conhece `tipo_documento`, preset específico de holerite, EPI, NR, contrato etc. Essa resolução permanece upstream.
 
-`PENDING -> PREPARANDO -> PRONTO -> ENVIANDO -> ENTREGUE -> ASSINATURA_PENDENTE -> CONCLUIDO`
+### Estados de execução
 
-Com saídas controladas para:
+A Central reutiliza `EstadoAcaoExecucaoPlano` do Orquestrador:
 
-`BLOQUEADO`, `ERRO_RETRY`, `FALLBACK_MANUAL`, `CANCELADO`.
+`PENDING -> EXECUTING -> SUCCEEDED`
+
+ou:
+
+`EXECUTING -> FAILED_RETRYABLE -> EXECUTING`
+
+ou:
+
+`EXECUTING -> FAILED_FINAL`
+
+Não existe um segundo estado `ENVIANDO/CONCLUÍDO` paralelo. A camada de painel poderá apresentar rótulos amigáveis como projeção visual, mas não criará uma segunda fonte de verdade.
+
+### Fallback manual
+
+O fallback é uma **marca de política**, não um novo estado de execução. Quando o canal automático não puder concluir com segurança, a Central marca `fallback_required` e o painel oferece a ação humana mínima. O estado canônico continua pertencendo ao Orquestrador.
 
 ## Busca documental
 
@@ -120,21 +139,24 @@ Visões iniciais:
 - Auditoria
 - Saúde dos canais
 
+O primeiro snapshot operacional é **somente leitura** e deriva do repositório de execuções já existente. Não cria uma nova fonte de verdade.
+
 ## Fases de execução
 
 ### Fase 0 — Fundação (esta branch)
 
 - registrar arquitetura-alvo;
 - registrar fronteiras entre Orquestrador, domínios, capacidades e canais;
-- definir contrato mínimo de estado e fallback;
+- definir contrato mínimo de intenção, estado e fallback;
+- provar 1..N documentos/destinatários;
+- derivar snapshot do estado persistido;
 - preservar o legado sem alteração de produção.
 
 ### Fase 1 — Núcleo operacional
 
-- expor estado operacional via API;
 - consolidar identidade documental e destinatário;
-- criar serviço de distribuição idempotente;
-- criar observabilidade de tentativas/erros;
+- ligar o contrato central à Ordem genérica existente;
+- criar/adaptar persistência sem duplicar `execucoes`/`acoes_execucao_plano`;
 - manter Airtable sincronizado, mas não obrigatório para execução.
 
 ### Fase 2 — Painel Central
