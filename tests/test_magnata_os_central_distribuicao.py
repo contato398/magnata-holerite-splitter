@@ -10,9 +10,9 @@ from magnata_os.central import (
 def ordem() -> OrdemDistribuicao:
     return OrdemDistribuicao(
         intent_id="intent-test-001",
-        document_id="doc-test-001",
-        document_version="sha256:test",
-        recipient_id="recipient-test-001",
+        document_ids=("doc-test-001", "doc-test-002"),
+        document_versions=("sha256:test-1", "sha256:test-2"),
+        recipient_ids=("recipient-test-001", "recipient-test-002"),
         channel=CanalDistribuicao("WHATSAPP"),
     )
 
@@ -65,28 +65,32 @@ def test_transicao_invalida_e_rejeitada():
         raise AssertionError("transição inválida deveria ser rejeitada")
 
 
-def test_ordem_exige_identidade_minima():
+def test_ordem_exige_documento_e_destinatario():
     try:
         OrdemDistribuicao(
-            intent_id="",
-            document_id="doc-test-001",
-            document_version="sha256:test",
-            recipient_id="recipient-test-001",
+            intent_id="intent-test-001",
+            document_ids=(),
+            document_versions=(),
+            recipient_ids=("recipient-test-001",),
             channel="EMAIL",
         )
     except ValueError as exc:
-        assert "obrigatórios" in str(exc)
+        assert "ao menos 1 documento" in str(exc)
     else:
-        raise AssertionError("ordem sem intent_id deveria ser rejeitada")
+        raise AssertionError("ordem sem documento deveria ser rejeitada")
 
 
-def test_canal_e_extensivel_sem_edicao_do_nucleo():
+def test_documentos_e_destinatarios_sao_realmente_1_a_n():
     ordem_futura = OrdemDistribuicao(
         intent_id="intent-test-002",
-        document_id="doc-test-002",
-        document_version="sha256:test-2",
-        recipient_id="recipient-test-002",
+        document_ids=("doc-a", "doc-b", "doc-c"),
+        document_versions=("sha-a", "sha-b", "sha-c"),
+        recipient_ids=("dest-a", "dest-b", "dest-c"),
         channel="CANAL_FUTURO",
+        signature_required=True,
+        receipt_required=True,
     )
 
-    assert ordem_futura.channel == "CANAL_FUTURO"
+    assert len(ordem_futura.document_ids) == 3
+    assert len(ordem_futura.recipient_ids) == 3
+    assert ordem_futura.signature_required is True
