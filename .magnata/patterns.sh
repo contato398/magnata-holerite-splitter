@@ -1283,6 +1283,22 @@ ALLOWED_PATHS=(
   "^test_autorizacao_operador_real_v1\.py$"
   "^test_materializar_documento_pre_canario_operador_real_v1\.py$"
   "^test_materializar_documento_pre_canario_operador_real_v1_real\.py$"
+
+  # INCREMENTO A1 -- assinatura genérica 1..N no núcleo (branch
+  # fix/assinatura-multidocumento-lote-v1). `_POLITICAS_V1_PERMITIDAS`
+  # generalizado: AGRUPADO_1_LINK aceita qualquer N>=1 com assinatura,
+  # por CARDINALIDADE (nunca por tipo_documento) -- o adapter real
+  # (obrigacao_assinatura_legado_http.py, intocado) e app.py (intocado)
+  # continuam limitados a N<=2 até o Incremento A2, fora de escopo aqui.
+  # `politica_comunicacao.py` ganhou campo aditivo `itens_manifesto` em
+  # `PreviewComunicacao`/`montar_preview_comunicacao` (default `()`,
+  # retrocompatível com todo chamador existente): manifesto N-ário que
+  # participa da IDENTIDADE do preview (hash/posição de cada documento)
+  # sem virar passo de composição/ação -- fecha o achado do Ultraplan de
+  # que o ramo com assinatura autorizava só texto+link, nunca os hashes
+  # dos documentos em si. ZERO alteração em app.py, ZERO migration, ZERO
+  # transporte real, ZERO mudança no adapter HTTP real.
+  "^magnata_os/orquestrador/politica_comunicacao\.py$"
 )
 
 # ============================================================================
