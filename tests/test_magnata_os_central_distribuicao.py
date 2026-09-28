@@ -2,6 +2,7 @@ from magnata_os.central import (
     CanalDistribuicao,
     EstadoDistribuicao,
     OrdemDistribuicao,
+    encaminhar_para_fallback_manual,
     transicionar,
 )
 
@@ -12,50 +13,52 @@ def ordem() -> OrdemDistribuicao:
         document_id="doc-test-001",
         document_version="sha256:test",
         recipient_id="recipient-test-001",
-        channel=CanalDistribuicao.WHATSAPP,
+        channel=CanalDistribuicao("WHATSAPP"),
     )
 
 
-def test_fluxo_automatico_ate_conclusao():
+def test_fluxo_automatico_reutiliza_ciclo_do_orquestrador():
     atual = ordem()
-    atual = transicionar(atual, EstadoDistribuicao.PREPARANDO)
-    atual = transicionar(atual, EstadoDistribuicao.PRONTO)
-    atual = transicionar(atual, EstadoDistribuicao.ENVIANDO, incrementar_tentativa=True)
-    atual = transicionar(atual, EstadoDistribuicao.ENTREGUE, evidence_id="evidence-001")
-    atual = transicionar(atual, EstadoDistribuicao.CONCLUIDO)
+    atual = transicionar(atual, EstadoDistribuicao.EXECUTING, incrementar_tentativa=True)
+    atual = transicionar(atual, EstadoDistribuicao.SUCCEEDED, evidence_id="evidence-001")
 
-    assert atual.state is EstadoDistribuicao.CONCLUIDO
+    assert atual.state is EstadoDistribuicao.SUCCEEDED
     assert atual.attempt_count == 1
     assert atual.evidence_id == "evidence-001"
 
 
-def test_falha_transitoria_permite_retry_sem_perder_ordem():
-    atual = transicionar(ordem(), EstadoDistribuicao.PREPARANDO)
-    atual = transicionar(atual, EstadoDistribuicao.PRONTO)
-    atual = transicionar(atual, EstadoDistribuicao.ENVIANDO, incrementar_tentativa=True)
-    atual = transicionar(atual, EstadoDistribuicao.ERRO_RETRY, erro="canal indisponível")
-    atual = transicionar(atual, EstadoDistribuicao.ENVIANDO, incrementar_tentativa=True)
+def test_falha_transitoria_permite_retry_sem_novo_estado():
+    atual = transicionar(ordem(), EstadoDistribuicao.EXECUTING, incrementar_tentativa=True)
+    atual = transicionar(
+        atual,
+        EstadoDistribuicao.FAILED_RETRYABLE,
+        erro="canal indisponível",
+    )
+    atual = transicionar(
+        atual,
+        EstadoDistribuicao.EXECUTING,
+        incrementar_tentativa=True,
+    )
 
-    assert atual.state is EstadoDistribuicao.ENVIANDO
+    assert atual.state is EstadoDistribuicao.EXECUTING
     assert atual.attempt_count == 2
-    assert atual.last_error is None
+    assert atual.last_error == "canal indisponível"
 
 
-def test_fallback_manual_eh_caminho_explicito():
-    atual = transicionar(ordem(), EstadoDistribuicao.PREPARANDO)
-    atual = transicionar(atual, EstadoDistribuicao.PRONTO)
-    atual = transicionar(atual, EstadoDistribuicao.FALLBACK_MANUAL, fallback_required=True)
-    atual = transicionar(atual, EstadoDistribuicao.ENTREGUE, evidence_id="manual-evidence-001")
-    atual = transicionar(atual, EstadoDistribuicao.CONCLUIDO)
+def test_fallback_manual_eh_marca_de_politica_sem_novo_estado():
+    atual = encaminhar_para_fallback_manual(
+        ordem(),
+        motivo="canal automático indisponível",
+    )
 
-    assert atual.state is EstadoDistribuicao.CONCLUIDO
+    assert atual.state is EstadoDistribuicao.PENDING
     assert atual.fallback_required is True
-    assert atual.evidence_id == "manual-evidence-001"
+    assert atual.last_error == "canal automático indisponível"
 
 
 def test_transicao_invalida_e_rejeitada():
     try:
-        transicionar(ordem(), EstadoDistribuicao.CONCLUIDO)
+        transicionar(ordem(), EstadoDistribuicao.SUCCEEDED)
     except ValueError as exc:
         assert "transição não permitida" in str(exc)
     else:
@@ -69,9 +72,21 @@ def test_ordem_exige_identidade_minima():
             document_id="doc-test-001",
             document_version="sha256:test",
             recipient_id="recipient-test-001",
-            channel=CanalDistribuicao.EMAIL,
+            channel="EMAIL",
         )
     except ValueError as exc:
         assert "obrigatórios" in str(exc)
     else:
         raise AssertionError("ordem sem intent_id deveria ser rejeitada")
+
+
+def test_canal_e_extensivel_sem_edicao_do_nucleo():
+    ordem_futura = OrdemDistribuicao(
+        intent_id="intent-test-002",
+        document_id="doc-test-002",
+        document_version="sha256:test-2",
+        recipient_id="recipient-test-002",
+        channel="CANAL_FUTURO",
+    )
+
+    assert ordem_futura.channel == "CANAL_FUTURO"
