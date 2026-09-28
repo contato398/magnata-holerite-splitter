@@ -79,6 +79,12 @@ from .execucao_prestacao import (
 )
 from magnata_os.documental.importacao_lote.contratos import CandidatoFuncionario
 from magnata_os.documental.modulo01.armazenamento import ArquivoNaoEncontrado
+from magnata_os.central.localizacao import (
+    DecisaoLocalizacao,
+    FonteNomeada,
+    ResultadoLocalizacao,
+    localizar_documento,
+)
 from magnata_os.documental.modulo01.dominio import Documento
 from .fonte_candidatos_por_necessidade import FonteCandidatosDocumentaisPorNecessidade
 from .fonte_cliente_direto_documento import FonteClienteDiretoDocumento
@@ -125,6 +131,7 @@ EVENTO_BLOB_FALHA_LEITURA = 'blob_falha_leitura'
 EVENTO_MIME_NAO_SUPORTADO = 'mime_nao_suportado'
 EVENTO_PDF_ILEGIVEL = 'pdf_ilegivel'
 EVENTO_CORREDOR_FALHOU = 'corredor_falhou'
+EVENTO_LOCALIZACAO_SEM_DOCUMENTO = 'localizacao_sem_documento'
 
 
 # ==== AQUISIÇÃO CANÔNICA (COM CORREDOR) ====
@@ -208,6 +215,16 @@ class ContextoComposicaoPrestacao:
     ausência de evidência contextual, tratada como
     `sem_evidencia_documental_real` → REVISAR, nunca um fallback
     silencioso."""
+
+    fontes_localizacao: Tuple[FonteNomeada, ...] = ()
+    """Fontes de localização em ordem de prioridade
+    (`magnata_os/central/localizacao.py`). Quando informadas, a
+    aquisição por necessidade usa `localizar_documento` sobre elas --
+    com rastro por fonte, falha de fonte isolada na própria necessidade
+    e desempate por versão onde a fonte declara critério (e-mail: o mais
+    recente vale). Mutuamente exclusiva com
+    `fonte_candidatos_por_necessidade`, que continua aceita e passa
+    pela mesma localização como fonte única, sem critério de versão."""
 
     # ---- Gate J1: fontes de resolução de dimensões do corredor ----
     # Antes do J1 a aquisição fixava as 3 fontes abaixo em `None` e
@@ -701,7 +718,8 @@ def adquirir_por_necessidades(
     processamento físico é reaproveitado."""
     inventario_adquirido = InventarioPrestacaoEmMemoria()
     resultados: list = []
-    if contexto.fonte_candidatos_por_necessidade is None:
+    fontes = _fontes_localizacao(contexto)
+    if not fontes:
         return inventario_adquirido, tuple(resultados)
     if not (contexto.repositorio_documentos and contexto.armazenamento_arquivos):
         # `candidatos_para` devolve `Documento`; ainda precisamos do
@@ -713,7 +731,7 @@ def adquirir_por_necessidades(
     corredor_por_chave: dict = {}
 
     for necessidade in necessidades:
-        candidatos = contexto.fonte_candidatos_por_necessidade.candidatos_para(necessidade)
+        candidatos = _candidatos_localizados(necessidade, fontes)
         for documento_bruto in candidatos:
             if documento_bruto.hash_sha256 not in texto_por_hash:
                 texto_por_hash[documento_bruto.hash_sha256] = _ler_e_extrair_texto(
@@ -766,6 +784,66 @@ def adquirir_por_necessidades(
             )
 
     return inventario_adquirido, tuple(resultados)
+
+
+def _fontes_localizacao(contexto: 'ContextoComposicaoPrestacao') -> Tuple[FonteNomeada, ...]:
+    if contexto.fontes_localizacao and contexto.fonte_candidatos_por_necessidade is not None:
+        raise ValueError(
+            'informe fontes_localizacao OU fonte_candidatos_por_necessidade, nunca as duas'
+        )
+    if contexto.fontes_localizacao:
+        return tuple(contexto.fontes_localizacao)
+    if contexto.fonte_candidatos_por_necessidade is not None:
+        return (FonteNomeada('fonte_candidatos_por_necessidade', contexto.fonte_candidatos_por_necessidade),)
+    return ()
+
+
+def _candidatos_localizados(
+    necessidade: NecessidadeDocumentoPrestacao, fontes: Tuple[FonteNomeada, ...],
+) -> Tuple[Documento, ...]:
+    """Quais documentos da localização seguem para o corredor:
+
+    - LOCALIZADO: só os registros do conteúdo selecionado (registros
+      distintos com o mesmo hash seguem todos, cada um com sua
+      proveniência) -- quando houve desempate por versão, o conteúdo
+      substituído nunca é processado nem distribuído;
+    - AMBIGUO: todos; o corredor confere cada um pelo conteúdo e a
+      âncora/elegibilidade decidem (documento que não confere vai para
+      revisão, como sempre);
+    - NAO_LOCALIZADO / INDETERMINADO: nenhum -- a necessidade fica sem
+      evidência (REVISAR) e só ela: as demais necessidades seguem.
+
+    Toda necessidade sem documento gera um evento com a decisão e o
+    rastro da busca (só ids, hashes e nomes de fonte)."""
+    resultado = localizar_documento(necessidade, fontes)
+    if resultado.decisao is DecisaoLocalizacao.LOCALIZADO:
+        return resultado.documentos_do_conteudo_selecionado
+    if resultado.decisao is DecisaoLocalizacao.AMBIGUO:
+        return resultado.candidatos
+    _registrar_localizacao_sem_documento(necessidade, resultado)
+    return ()
+
+
+def _registrar_localizacao_sem_documento(
+    necessidade: NecessidadeDocumentoPrestacao, resultado: ResultadoLocalizacao,
+) -> None:
+    evidencia = resultado.como_evidencia()
+    _logger.warning(
+        '%s decisao=%s cliente=%s competencia=%s tipo_documental=%s',
+        EVENTO_LOCALIZACAO_SEM_DOCUMENTO,
+        resultado.decisao.value,
+        necessidade.cliente.entidade_id, necessidade.competencia.entidade_id,
+        necessidade.tipo_documental,
+        extra={
+            'evento': EVENTO_LOCALIZACAO_SEM_DOCUMENTO,
+            'decisao': resultado.decisao.value,
+            'cliente': necessidade.cliente.entidade_id,
+            'competencia': necessidade.competencia.entidade_id,
+            'tipo_documental': necessidade.tipo_documental,
+            'colaborador': necessidade.colaborador.entidade_id if necessidade.colaborador else None,
+            'consultas': evidencia['consultas'],
+        },
+    )
 
 
 # ==== EVOLUÇÃO DO CONTRATO DO CICLO DE PRESTAÇÃO V1 -- INCREMENTO 5 ====

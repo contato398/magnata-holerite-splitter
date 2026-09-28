@@ -97,14 +97,32 @@ def test_nenhum_candidato_sem_falha_eh_nao_localizado_nas_fontes_consultadas():
     assert all(c.status is StatusConsultaFonte.CONSULTADA for c in resultado.consultas)
 
 
-def test_mesmo_conteudo_repetido_eh_deduplicado_por_hash():
+def test_mesmo_conteudo_em_registros_distintos_eh_um_conteudo_so_e_preserva_os_registros():
     resultado = localizar_documento(
         NECESSIDADE,
         [FonteNomeada("a", Fixa(documento("d2", "a" * 64), documento("d1", "a" * 64), documento("d1", "a" * 64)))],
     )
 
     assert resultado.decisao is DecisaoLocalizacao.LOCALIZADO
-    assert [d.documento_id for d in resultado.candidatos] == ["d1"]
+    assert resultado.documento_selecionado.documento_id == "d1"
+    assert [d.documento_id for d in resultado.candidatos] == ["d1", "d2"]
+    assert [d.documento_id for d in resultado.documentos_do_conteudo_selecionado] == ["d1", "d2"]
+
+
+def test_desempate_por_versao_considera_o_conteudo_e_nao_cada_registro():
+    resultado = localizar_documento(
+        NECESSIDADE,
+        [
+            FonteNomeada(
+                "email",
+                Fixa(documento("d1", "a" * 64), documento("d1-copia", "a" * 64), documento("d2", "b" * 64)),
+                data_versao=por_data({"d1": T0, "d1-copia": T0 + timedelta(days=2), "d2": T0 + timedelta(days=1)}),
+            )
+        ],
+    )
+
+    assert resultado.decisao is DecisaoLocalizacao.LOCALIZADO
+    assert {d.documento_id for d in resultado.documentos_do_conteudo_selecionado} == {"d1", "d1-copia"}
 
 
 def test_conteudos_distintos_sao_ambiguos_e_exigem_acao_humana():

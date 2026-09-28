@@ -131,7 +131,21 @@ Decisões registradas nesta etapa:
 5. **Downloads repetidos do mesmo arquivo** (situação comum no computador da operação) não geram ambiguidade: conteúdo idêntico tem o mesmo hash, a entrada já barra o segundo registro como duplicado e a localização deduplica por hash. Só geraria `AMBIGUO` se o arquivo tivesse sido regravado com bytes diferentes (ex.: "imprimir como PDF").
 6. **Evidência sem dado pessoal**: `como_evidencia()` só carrega ids, hashes, nomes de fonte e o tipo da exceção — nunca a mensagem da exceção nem o nome do arquivo.
 
-Ainda **não** ligado ao ciclo de Prestação (`composicao_ciclo_persistente_prestacao.py` continua recebendo `fonte_candidatos_por_necessidade` diretamente). A ligação muda o comportamento do ciclo — `INDETERMINADO`/`AMBIGUO` precisam de um destino definido (pendência humana) — e é o próximo passo da Fase 3, não desta entrega.
+### Ligação ao ciclo de Prestação (`composicao_ciclo_persistente_prestacao.py`)
+
+`adquirir_por_necessidades` passa a buscar pela localização central. Aprovado pelo operador em 2026-09-28. O ciclo persistente ainda não é chamado por nenhum código de produção (verificado por busca no repositório), então isto muda o motor, não a operação atual.
+
+| Situação | Antes | Depois |
+|---|---|---|
+| Onde procurar | 1 fonte (`fonte_candidatos_por_necessidade`) ou nenhuma | `fontes_localizacao` em ordem de prioridade; a fonte única antiga continua aceita e passa pela mesma localização |
+| Duas versões de e-mail válidas | as duas seguiam para o corredor e ambas podiam entrar na ordem de envio | só a do e-mail mais recente é processada |
+| Fonte com erro | a exceção marcava a execução inteira como FALHA | só aquela necessidade fica sem documento; as demais seguem |
+| Necessidade sem documento | nenhum registro do motivo | evento `localizacao_sem_documento` com decisão (`NAO_LOCALIZADO`/`INDETERMINADO`) e rastro (só ids, hashes, nomes de fonte e tipo do erro) |
+| Documento que não confere | revisão | igual (o corredor e a elegibilidade não mudaram) |
+
+Preservado: registros distintos com o mesmo hash continuam todos processados, cada um com sua proveniência (decisão anterior protegida por `test_dois_documentos_mesmo_hash_documento_id_diferente_preservam_propria_provenencia`).
+
+Fora desta etapa: nova tentativa automática de fonte que falhou; fonte de busca no e-mail por necessidade (sem ela, a regra "o e-mail mais recente vale" ainda não tem onde agir); exibição das pendências no painel; ligação do ciclo em produção.
 
 ## Entrega
 
