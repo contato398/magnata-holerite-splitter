@@ -109,6 +109,28 @@ Ordem de resolução:
 
 A resposta da busca deve registrar onde procurou, quais candidatos encontrou e por que um documento foi selecionado ou bloqueado.
 
+### Capacidade implementada: `magnata_os/central/localizacao.py`
+
+`localizar_documento(necessidade, fontes)` consulta fontes nomeadas em ordem de prioridade e devolve `ResultadoLocalizacao` com decisão, motivo, candidatos e o rastro por fonte (`CONSULTADA`, `FALHOU`, `NAO_CONSULTADA`). Cada fonte segue o formato já existente de `FonteCandidatosDocumentaisPorNecessidade` (`candidatos_para`), então `FonteCandidatosDocumentoInventarioInterna` já é uma fonte válida. A capacidade é genérica na necessidade: não conhece Prestação, tipo documental, cliente ou colaborador.
+
+Localizar não é validar: a capacidade nunca decide se o candidato satisfaz a necessidade de negócio (isso continua no corredor de classificação).
+
+| Decisão | Quando | Segue automático? |
+|---|---|---|
+| `LOCALIZADO` | exatamente 1 conteúdo (hash) na primeira fonte com candidatos, sem falha em fonte anterior | sim |
+| `AMBIGUO` | 2+ conteúdos distintos, ou mesmo `documento_id` com hashes diferentes | não — Plano C |
+| `NAO_LOCALIZADO` | nenhuma fonte tem candidato e nenhuma falhou (ausência **nas fontes consultadas**, nunca global) | não seleciona; quem chama decide o próximo passo |
+| `INDETERMINADO` | alguma fonte de prioridade maior que a do candidato falhou, ou nenhum candidato com alguma falha | não — Plano C |
+
+Decisões registradas nesta etapa:
+
+1. **Primeira fonte com candidato encerra a busca.** As seguintes ficam no rastro como `NAO_CONSULTADA`. Consequência aceita: ambiguidade entre fontes diferentes não é detectada; dentro da mesma fonte, sim.
+2. **Falha de fonte prioritária bloqueia seleção de candidato inferior** (`INDETERMINADO`). A fonte que falhou poderia ter um documento diferente; escolher o candidato de menor prioridade seria adivinhação silenciosa.
+3. **Mesmo hash = mesmo conteúdo**: deduplicado, preferindo o menor `documento_id` (determinístico).
+4. **Evidência sem dado pessoal**: `como_evidencia()` só carrega ids, hashes, nomes de fonte e o tipo da exceção — nunca a mensagem da exceção nem o nome do arquivo.
+
+Ainda **não** ligado ao ciclo de Prestação (`composicao_ciclo_persistente_prestacao.py` continua recebendo `fonte_candidatos_por_necessidade` diretamente). A ligação muda o comportamento do ciclo — `INDETERMINADO`/`AMBIGUO` precisam de um destino definido (pendência humana) — e é o próximo passo da Fase 3, não desta entrega.
+
 ## Entrega
 
 ### Plano A — automático
