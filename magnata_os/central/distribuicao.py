@@ -88,7 +88,11 @@ def transicionar(
     fallback_required: bool | None = None,
     incrementar_tentativa: bool = False,
 ) -> OrdemDistribuicao:
-    """Aplica somente transições já autorizadas pelo ciclo do Orquestrador."""
+    """Aplica somente transições já autorizadas pelo ciclo do Orquestrador.
+
+    Se a transição não fornece novo erro, preserva o último erro conhecido;
+    isso mantém a evidência de uma falha transitória durante o retry.
+    """
 
     if novo_estado not in _TRANSICOES_PERMITIDAS[ordem.state]:
         raise ValueError(
@@ -100,7 +104,7 @@ def transicionar(
         ordem,
         state=novo_estado,
         attempt_count=ordem.attempt_count + (1 if incrementar_tentativa else 0),
-        last_error=erro,
+        last_error=erro if erro is not None else ordem.last_error,
         evidence_id=evidence_id if evidence_id is not None else ordem.evidence_id,
         fallback_required=(
             fallback_required
