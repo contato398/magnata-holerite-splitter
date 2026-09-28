@@ -17,6 +17,7 @@ from .localizacao import (
     FonteNomeada,
     ResultadoLocalizacao,
     StatusConsultaFonte,
+    data_recebimento_email,
     localizar_documento,
 )
 from .snapshot import SnapshotCentral, construir_snapshot_central
@@ -32,6 +33,7 @@ __all__ = [
     "SnapshotCentral",
     "StatusConsultaFonte",
     "construir_snapshot_central",
+    "data_recebimento_email",
     "encaminhar_para_fallback_manual",
     "localizar_documento",
     "transicionar",

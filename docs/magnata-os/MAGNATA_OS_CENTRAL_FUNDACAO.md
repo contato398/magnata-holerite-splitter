@@ -117,8 +117,8 @@ Localizar não é validar: a capacidade nunca decide se o candidato satisfaz a n
 
 | Decisão | Quando | Segue automático? |
 |---|---|---|
-| `LOCALIZADO` | exatamente 1 conteúdo (hash) na primeira fonte com candidatos, sem falha em fonte anterior | sim |
-| `AMBIGUO` | 2+ conteúdos distintos, ou mesmo `documento_id` com hashes diferentes | não — Plano C |
+| `LOCALIZADO` | exatamente 1 conteúdo (hash) na primeira fonte com candidatos, ou o mais recente quando a fonte declara critério de versão (e-mail); sem falha em fonte anterior | sim |
+| `AMBIGUO` | 2+ conteúdos distintos, ou mesmo `documento_id` com hashes diferentes, sem desempate por versão possível | não — Plano C |
 | `NAO_LOCALIZADO` | nenhuma fonte tem candidato e nenhuma falhou (ausência **nas fontes consultadas**, nunca global) | não seleciona; quem chama decide o próximo passo |
 | `INDETERMINADO` | alguma fonte de prioridade maior que a do candidato falhou, ou nenhum candidato com alguma falha | não — Plano C |
 
@@ -127,7 +127,9 @@ Decisões registradas nesta etapa:
 1. **Primeira fonte com candidato encerra a busca.** As seguintes ficam no rastro como `NAO_CONSULTADA`. Consequência aceita: ambiguidade entre fontes diferentes não é detectada; dentro da mesma fonte, sim.
 2. **Falha de fonte prioritária bloqueia seleção de candidato inferior** (`INDETERMINADO`). A fonte que falhou poderia ter um documento diferente; escolher o candidato de menor prioridade seria adivinhação silenciosa.
 3. **Mesmo hash = mesmo conteúdo**: deduplicado, preferindo o menor `documento_id` (determinístico).
-4. **Evidência sem dado pessoal**: `como_evidencia()` só carrega ids, hashes, nomes de fonte e o tipo da exceção — nunca a mensagem da exceção nem o nome do arquivo.
+4. **Desempate por versão só onde a operação confirmou a regra.** Regra de negócio confirmada pelo operador (2026-09-28): *quando o documento chega por e-mail, se vier um segundo e-mail, é o segundo que vale*. A fonte declara o critério (`FonteNomeada.data_versao`); para e-mail, `data_recebimento_email` usa a data de chegada do e-mail gravada no lote (`recebido_em_origem`) — nunca `Documento.recebido_em`, que é o horário de registro no sistema e pode inverter a ordem numa captura de backlog. Sem data em algum candidato, ou empate na data mais recente, continua `AMBIGUO`. O documento substituído continua no resultado e na evidência. Fontes sem critério declarado nunca desempatam.
+5. **Downloads repetidos do mesmo arquivo** (situação comum no computador da operação) não geram ambiguidade: conteúdo idêntico tem o mesmo hash, a entrada já barra o segundo registro como duplicado e a localização deduplica por hash. Só geraria `AMBIGUO` se o arquivo tivesse sido regravado com bytes diferentes (ex.: "imprimir como PDF").
+6. **Evidência sem dado pessoal**: `como_evidencia()` só carrega ids, hashes, nomes de fonte e o tipo da exceção — nunca a mensagem da exceção nem o nome do arquivo.
 
 Ainda **não** ligado ao ciclo de Prestação (`composicao_ciclo_persistente_prestacao.py` continua recebendo `fonte_candidatos_por_necessidade` diretamente). A ligação muda o comportamento do ciclo — `INDETERMINADO`/`AMBIGUO` precisam de um destino definido (pendência humana) — e é o próximo passo da Fase 3, não desta entrega.
 

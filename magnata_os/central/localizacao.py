@@ -38,16 +38,28 @@ Regras (fail-closed, nunca silenciosas):
   `documento_id` com hashes diferentes: `AMBIGUO` -- vira exceção
   humana (Plano C), nunca escolha silenciosa;
 - mesmo conteúdo (hash) repetido na fonte é deduplicado; exatamente um
-  conteúdo: `LOCALIZADO`, com o documento selecionado.
+  conteúdo: `LOCALIZADO`, com o documento selecionado;
+- desempate por versão: só quando a FONTE declara um critério de versão
+  (`FonteNomeada.data_versao`). Conteúdos distintos viram `LOCALIZADO`
+  pelo mais recente se TODOS têm data e o mais recente é único; sem data
+  em algum candidato ou empate na data mais recente, continua `AMBIGUO`.
+  Os candidatos substituídos continuam no resultado e na evidência.
+  Critério em uso: e-mail -- "o segundo e-mail é o que vale" (regra de
+  negócio confirmada pela operação), via `data_recebimento_email`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Generic, Mapping, Protocol, Sequence, Tuple, TypeVar
+from datetime import datetime
+from typing import Callable, Generic, Mapping, Optional, Protocol, Sequence, Tuple, TypeVar
 
 from magnata_os.documental.modulo01.dominio import Documento
+from magnata_os.documental.modulo01.repositorio_esteira import RepositorioLotes
+
+
+ORIGEM_EMAIL = "email"  # mesmo valor de adapters.email_captura.ORIGEM_EMAIL
 
 
 N = TypeVar("N")
@@ -62,10 +74,15 @@ class FonteCandidatos(Protocol[N_contra]):
 
 @dataclass(frozen=True)
 class FonteNomeada(Generic[N]):
-    """Fonte com identificador estável para o rastro da busca."""
+    """Fonte com identificador estável para o rastro da busca.
+
+    `data_versao`, quando informado, declara que nesta fonte o documento
+    mais recente substitui os anteriores e diz qual é a data de cada um
+    (`None` = data desconhecida, que impede o desempate)."""
 
     nome: str
     fonte: FonteCandidatos[N]
+    data_versao: Optional[Callable[[Documento], Optional[datetime]]] = None
 
     def __post_init__(self) -> None:
         if not self.nome or not self.nome.strip():
@@ -156,6 +173,8 @@ def localizar_documento(
     encontrados: Tuple[Documento, ...] = ()
     fonte_com_candidatos: str | None = None
 
+    fonte_por_nome = {f.nome: f for f in fontes}
+
     for indice, fonte in enumerate(fontes):
         try:
             candidatos = tuple(fonte.fonte.candidatos_para(necessidade))
@@ -203,6 +222,24 @@ def localizar_documento(
         )
 
     if _conteudo_conflitante(unicos):
+        data_versao = fonte_por_nome[fonte_com_candidatos].data_versao
+        if data_versao is not None:
+            mais_recente, motivo_desempate = _desempatar_por_versao(unicos, data_versao)
+            if mais_recente is not None:
+                return ResultadoLocalizacao(
+                    DecisaoLocalizacao.LOCALIZADO,
+                    f"{len(unicos)} conteúdos em '{fonte_com_candidatos}'; {motivo_desempate}",
+                    rastro,
+                    unicos,
+                    documento_selecionado=mais_recente,
+                    fonte_selecionada=fonte_com_candidatos,
+                )
+            return ResultadoLocalizacao(
+                DecisaoLocalizacao.AMBIGUO,
+                f"{len(unicos)} conteúdos distintos em '{fonte_com_candidatos}'; {motivo_desempate}",
+                rastro,
+                unicos,
+            )
         return ResultadoLocalizacao(
             DecisaoLocalizacao.AMBIGUO,
             f"{len(unicos)} conteúdos distintos em '{fonte_com_candidatos}'",
@@ -233,3 +270,48 @@ def _deduplicar_por_hash(documentos: Tuple[Documento, ...]) -> Tuple[Documento, 
 
 def _conteudo_conflitante(unicos: Tuple[Documento, ...]) -> bool:
     return len({d.hash_sha256 for d in unicos}) > 1
+
+
+def _desempatar_por_versao(
+    unicos: Tuple[Documento, ...],
+    data_versao: Callable[[Documento], Optional[datetime]],
+) -> Tuple[Optional[Documento], str]:
+    datas = [(data_versao(d), d) for d in unicos]
+    sem_data = [d.documento_id for data, d in datas if data is None]
+    if sem_data:
+        return None, f"desempate por versão impossível: sem data em {', '.join(sem_data)}"
+    maior = max(data for data, _ in datas)
+    no_topo = [d for data, d in datas if data == maior]
+    if len(no_topo) > 1:
+        return None, "desempate por versão impossível: mesma data mais recente"
+    return no_topo[0], f"mais recente vale: {no_topo[0].documento_id}"
+
+
+def data_recebimento_email(
+    repositorio_lotes: RepositorioLotes,
+) -> Callable[[Documento], Optional[datetime]]:
+    """Critério de versão para fontes de e-mail: a data em que o E-MAIL
+    chegou (`recebido_em_origem`, gravado no lote pela captura).
+
+    Nunca usa `Documento.recebido_em`: esse é o horário em que o sistema
+    registrou o arquivo, e uma captura de backlog pode registrar e-mails
+    antigos depois dos novos. Documento sem lote, lote que não é de
+    e-mail ou data ausente/inválida devolvem `None` (sem desempate)."""
+
+    def _data(documento: Documento) -> Optional[datetime]:
+        if not documento.lote_id:
+            return None
+        lote = repositorio_lotes.buscar_por_id(documento.lote_id)
+        if lote is None or lote.origem != ORIGEM_EMAIL:
+            return None
+        valor = lote.metadados.get("recebido_em_origem")
+        if not isinstance(valor, str):
+            return None
+        try:
+            data = datetime.fromisoformat(valor)
+        except ValueError:
+            return None
+        # Data sem fuso não é comparável com data com fuso: sem desempate.
+        return data if data.tzinfo is not None else None
+
+    return _data
