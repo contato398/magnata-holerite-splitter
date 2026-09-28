@@ -1,8 +1,9 @@
 """Contrato central de distribuição do Magnata OS.
 
 A distribuição não cria uma segunda máquina de estados: reutiliza o ciclo
-canônico de execução do Grande Orquestrador. Canais são extensíveis e não
-carregam regra de negócio.
+canônico de execução do Grande Orquestrador. A Ordem é genérica para 1..N
+documentos e 1..N destinatários; canais e assinatura são políticas/capacidades,
+não tipos de documento.
 """
 
 from __future__ import annotations
@@ -15,7 +16,6 @@ from magnata_os.orquestrador.repositorio_acoes_execucao_plano_postgres import (
 )
 
 
-# Alias explícito: a Central não pode inventar um segundo ciclo operacional.
 EstadoDistribuicao = EstadoAcaoExecucaoPlano
 CanalDistribuicao = str
 
@@ -25,10 +25,12 @@ class OrdemDistribuicao:
     """Intenção idempotente de distribuição, independente do canal."""
 
     intent_id: str
-    document_id: str
-    document_version: str
-    recipient_id: str
+    document_ids: tuple[str, ...]
+    document_versions: tuple[str, ...]
+    recipient_ids: tuple[str, ...]
     channel: CanalDistribuicao
+    signature_required: bool = False
+    receipt_required: bool = False
     state: EstadoDistribuicao = EstadoDistribuicao.PENDING
     attempt_count: int = 0
     last_error: str | None = None
@@ -38,12 +40,24 @@ class OrdemDistribuicao:
     updated_at: datetime | None = None
 
     def __post_init__(self) -> None:
-        if not self.intent_id or not self.document_id or not self.recipient_id:
-            raise ValueError("intent_id, document_id e recipient_id são obrigatórios")
-        if not self.document_version:
-            raise ValueError("document_version é obrigatória")
+        if not self.intent_id:
+            raise ValueError("intent_id é obrigatório")
+        if not self.document_ids:
+            raise ValueError("ao menos 1 documento é obrigatório")
+        if len(self.document_ids) != len(self.document_versions):
+            raise ValueError("document_ids e document_versions devem ter o mesmo tamanho")
+        if not self.recipient_ids:
+            raise ValueError("ao menos 1 destinatário é obrigatório")
+        if any(not value for value in self.document_ids):
+            raise ValueError("document_id vazio não é permitido")
+        if any(not value for value in self.document_versions):
+            raise ValueError("document_version vazia não é permitida")
+        if any(not value for value in self.recipient_ids):
+            raise ValueError("recipient_id vazio não é permitido")
         if not str(self.channel).strip():
             raise ValueError("channel é obrigatório")
+        if not isinstance(self.signature_required, bool) or not isinstance(self.receipt_required, bool):
+            raise ValueError("signature_required e receipt_required devem ser booleanos")
         if self.attempt_count < 0:
             raise ValueError("attempt_count não pode ser negativo")
         if self.created_at is None:
@@ -102,11 +116,7 @@ def encaminhar_para_fallback_manual(
     *,
     motivo: str,
 ) -> OrdemDistribuicao:
-    """Marca fallback sem inventar um novo estado de execução.
-
-    O Orquestrador continua dono do estado; a camada de política/painel pode
-    oferecer a ação manual assistida conforme a marca persistida.
-    """
+    """Marca fallback sem inventar um novo estado de execução."""
 
     motivo_limpo = (motivo or "").strip()
     if not motivo_limpo:
