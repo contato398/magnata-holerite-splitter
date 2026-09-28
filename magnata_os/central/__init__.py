@@ -11,11 +11,14 @@ from .distribuicao import (
     encaminhar_para_fallback_manual,
     transicionar,
 )
+from .snapshot import SnapshotCentral, construir_snapshot_central
 
 __all__ = [
     "CanalDistribuicao",
     "EstadoDistribuicao",
     "OrdemDistribuicao",
+    "SnapshotCentral",
+    "construir_snapshot_central",
     "encaminhar_para_fallback_manual",
     "transicionar",
 ]
