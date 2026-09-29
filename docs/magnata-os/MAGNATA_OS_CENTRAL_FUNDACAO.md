@@ -147,6 +147,10 @@ Preservado: registros distintos com o mesmo hash continuam todos processados, ca
 
 Fora desta etapa: nova tentativa automática de fonte que falhou; fonte de busca no e-mail por necessidade (sem ela, a regra "o e-mail mais recente vale" ainda não tem onde agir); exibição das pendências no painel; ligação do ciclo em produção.
 
+### PDF composto, busca por conteúdo e diagnóstico
+
+A localização encontra um documento que está dentro de um PDF com vários documentos, mesmo sem índice e com nome de arquivo inútil. O PDF é separado por colaborador em Documentos derivados reais, e `diagnosticar_prestacao` mostra, por necessidade, o que foi achado, o que faltou e por quê. As decisões e os gates pendentes estão em [`docs/decisoes/localizacao-documental-pdf-composto-v1.md`](../decisoes/localizacao-documental-pdf-composto-v1.md).
+
 ## Entrega
 
 ### Plano A — automático
