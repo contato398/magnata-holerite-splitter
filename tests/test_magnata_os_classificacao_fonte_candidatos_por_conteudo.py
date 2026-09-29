@@ -111,3 +111,49 @@ def test_evidencia_da_localizacao_nao_carrega_cpf():
 
     assert "90000000001" not in repr(evidencia)
     assert cpf_sintetico(90000000001) not in repr(evidencia)
+
+
+def test_arquivo_ilegivel_impede_escolha_mesmo_quando_ha_achado():
+    documentos, armazenamento, entrada = ambiente()
+    registrar(entrada, [f"CPF {cpf_sintetico(90000000001)}"])
+    documentos.salvar(Documento(
+        documento_id="d-sem-blob", arquivo_original="x", nome_original="x.pdf", mime_type="application/pdf",
+        tamanho=1, hash_sha256=hashlib.sha256(b"y").hexdigest(), origem="email", recebido_em=T0, lote_id=None,
+        status="REGISTRADO", correlation_id="c", criado_em=T0, atualizado_em=T0,
+    ))
+    fonte = FonteCandidatosPorConteudo(documentos, armazenamento, CANDIDATOS)
+
+    resultado = localizar_documento(necessidade(), [FonteNomeada("conteudo", fonte)])
+
+    assert resultado.decisao is DecisaoLocalizacao.INDETERMINADO
+    assert resultado.consultas[0].detalhes["documentos_encontrados"] == 1
+
+
+def test_leitura_que_falhou_e_tentada_de_novo_na_proxima_consulta():
+    documentos, armazenamento, entrada = ambiente()
+    alvo = registrar(entrada, [f"CPF {cpf_sintetico(90000000001)}"])
+
+    class _FalhaUmaVez:
+        def __init__(self, base):
+            self.base, self.falhou = base, False
+
+        def abrir_leitura(self, h):
+            if not self.falhou:
+                self.falhou = True
+                raise ConnectionError("instavel")
+            return self.base.abrir_leitura(h)
+
+    fonte = FonteCandidatosPorConteudo(documentos, _FalhaUmaVez(armazenamento), CANDIDATOS)
+
+    with pytest.raises(BuscaPorConteudoIncompleta):
+        fonte.candidatos_para(necessidade())
+    assert fonte.candidatos_para(necessidade()) == (alvo,)
+
+
+def test_documentos_derivados_nunca_sao_devolvidos_direto():
+    documentos, armazenamento, entrada = ambiente()
+    original = registrar(entrada, [f"CPF {cpf_sintetico(90000000001)}", f"CPF {cpf_sintetico(90000000002)}"])
+    entrada.registrar_entrada(pdf_com_paginas([f"CPF {cpf_sintetico(90000000001)}"]), "d.pdf", "application/pdf", "derivado_separacao")
+    fonte = FonteCandidatosPorConteudo(documentos, armazenamento, CANDIDATOS)
+
+    assert fonte.candidatos_para(necessidade()) == (original,)

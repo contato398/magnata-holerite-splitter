@@ -212,13 +212,13 @@ def _corredor_que_le_o_texto_real(chamadas, competencia=COMPETENCIA):
     return _fake
 
 
-def _cenario(*, esperados, com_separacao=True):
+def _cenario(*, esperados, com_separacao=True, paginas=None):
     documentos, historico, armazenamento = (
         RepositorioDocumentosEmMemoria(), RepositorioHistoricoEmMemoria(), ArmazenamentoArquivosEmMemoria(),
     )
     entrada = AdaptadorEntradaDuravel(documentos, historico, armazenamento)
     composto = entrada.registrar_entrada(
-        pdf_com_paginas(PAGINAS), "digitalizacao_0042.pdf", "application/pdf", "email", lote_id="lote-email-1",
+        pdf_com_paginas(paginas or PAGINAS), "digitalizacao_0042.pdf", "application/pdf", "email", lote_id="lote-email-1",
     )
     candidatos = tuple(CandidatoFuncionario(colab(i), cpf(i), f"sintetico {i}") for i in range(1, N + 2))
     contexto = ContextoComposicaoPrestacao(
@@ -406,3 +406,73 @@ def test_diagnostico_fonte_quebrada_e_fonte_indisponivel_e_sem_fonte():
 
     assert _situacoes(_diagnosticar(quebrado)) == {colab(5): "FONTE_INDISPONIVEL"}
     assert _situacoes(_diagnosticar(sem_fonte)) == {colab(5): "SEM_FONTE"}
+
+
+# ---- regressões da revisão adversarial ----
+
+def _texto_de(deps, documento_id):
+    documento = deps["repositorio_documentos"].buscar_por_id(documento_id)
+    with deps["armazenamento"].abrir_leitura(documento.hash_sha256) as arquivo:
+        return "\n".join(extrair_texto_pdf_por_pagina(arquivo.read()))
+
+
+def test_pagina_sem_cpf_ou_com_cpf_sem_formatacao_nunca_entra_na_parte_de_outra_pessoa():
+    """Resumo geral da folha (sem CPF) e holerite de outra pessoa com CPF
+    sem formatação vinham grudados na parte do colaborador anterior por
+    carry-forward -- e seriam enviados a ele."""
+    paginas = [
+        f"RECIBO\nColaborador sintetico 1\nCPF {cpf(1)}",
+        f"RECIBO\nColaborador sintetico 2\nCPF {normalizar_cpf(cpf(2))}",  # sem formatação
+        "RESUMO GERAL DA FOLHA\nColaborador sintetico 1 1000,00\nColaborador sintetico 2 2000,00",
+        f"RECIBO\nColaborador sintetico 3\nCPF {cpf(3)}\noutro CPF {cpf(4)}",  # 2 CPFs
+        f"RECIBO\nColaborador sintetico 5\nCPF {cpf(5)}",
+    ]
+    contexto, resolver, deps, conexao, _, _ = _cenario(esperados=[colab(1)], paginas=paginas)
+    chamadas = []
+
+    resultados = _executar(contexto, resolver, deps, chamadas)
+
+    assert [r.funcionario_id for r in resultados] == [colab(1)]
+    texto = _texto_de(deps, chamadas[0][0])
+    assert cpf(1) in texto
+    assert "RESUMO GERAL" not in texto
+    assert normalizar_cpf(cpf(2)) not in texto and "sintetico 2" not in texto
+    derivados = [d for d in deps["repositorio_documentos"].listar_todos() if d.origem == ORIGEM_DERIVADO_SEPARACAO]
+    # só colab-1 e colab-5 viram partes; página com 2 CPFs fica sem grupo
+    assert len(derivados) == 2
+
+
+def test_rodar_de_novo_nao_acumula_eventos_no_historico():
+    contexto, resolver, deps, _, _, historico = _cenario(esperados=[colab(i) for i in range(1, N + 1)])
+    _executar(contexto, resolver, deps, [])
+    eventos_primeira = len(historico.listar_todos())
+
+    _executar(contexto, resolver, deps, [])
+
+    assert len(historico.listar_todos()) == eventos_primeira
+    assert not [e for e in historico.listar_todos() if e.evento == "TENTATIVA_DUPLICADA"]
+
+
+def test_diagnostico_nao_grava_nada_nos_repositorios_reais():
+    contexto, resolver, deps, conexao, _, historico = _cenario(esperados=[colab(i) for i in range(1, N + 1)])
+    documentos_antes = len(deps["repositorio_documentos"].listar_todos())
+    eventos_antes = len(historico.listar_todos())
+
+    diagnostico = _diagnosticar(contexto)
+
+    assert set(_situacoes(diagnostico).values()) == {"PRONTO"}
+    assert len(deps["repositorio_documentos"].listar_todos()) == documentos_antes
+    assert len(historico.listar_todos()) == eventos_antes
+    assert conexao.linhas == {}
+
+
+def test_diagnostico_depois_do_ciclo_reaproveita_derivados_reais():
+    contexto, resolver, deps, _, _, historico = _cenario(esperados=[colab(2)])
+    _executar(contexto, resolver, deps, [])
+    eventos = len(historico.listar_todos())
+
+    diagnostico = _diagnosticar(contexto)
+
+    elegiveis = diagnostico.clientes[0].necessidades[0].documentos_elegiveis
+    assert len(elegiveis) == 1 and deps["repositorio_documentos"].buscar_por_id(elegiveis[0]) is not None
+    assert len(historico.listar_todos()) == eventos

@@ -29,12 +29,19 @@ completamente inútil"). Limites que preservam a intenção da regra:
     atendida por esta fonte nesta etapa.
 Registrado em `docs/magnata-os/MAGNATA_OS_CENTRAL_FUNDACAO.md`.
 
-Falha de leitura de um arquivo não é silenciosa: se nenhum documento
-bate e algum arquivo não pôde ser lido, a fonte levanta
-`BuscaPorConteudoIncompleta` e a localização registra INDETERMINADO
-("não consegui olhar tudo"), nunca "não existe". PDF sem texto
+Falha de leitura de um arquivo não é silenciosa: se QUALQUER arquivo
+não pôde ser lido, a fonte levanta `BuscaPorConteudoIncompleta` e a
+localização registra INDETERMINADO ("não consegui olhar tudo") -- nem
+"não existe", nem uma escolha feita por cima da lacuna (o arquivo
+ilegível poderia ser uma versão corrigida). A falha de leitura não é
+guardada em cache: a próxima necessidade tenta ler de novo. PDF sem texto
 extraível (imagem sem OCR) não é falha de leitura: é contado em
 `resumo_ultima_consulta()` como não pesquisável.
+
+Documentos DERIVADOS (`origem == 'derivado_separacao'`) não são
+devolvidos: a fonte devolve o PDF original, e a aquisição o troca pela
+parte do colaborador. Assim um derivado antigo (de um agrupamento
+anterior) nunca concorre com o atual.
 
 Custo: varre `listar_todos()` a cada necessidade (texto cacheado por
 hash). Aceitável para o volume atual; o índice persistente (J3) é o
@@ -44,6 +51,7 @@ from __future__ import annotations
 
 from typing import Dict, Mapping, Optional, Sequence, Tuple
 
+from magnata_os.documental.derivacao_documental import ORIGEM_DERIVADO_SEPARACAO
 from magnata_os.documental.importacao_lote.dominio import extrair_cpfs_distintos_de_texto
 from magnata_os.documental.modulo01.dominio import Documento
 
@@ -88,7 +96,7 @@ class FonteCandidatosPorConteudo:
         encontrados = []
         analisados = sem_texto = ilegiveis = 0
         for documento in self._repositorio.listar_todos():
-            if documento.mime_type != 'application/pdf':
+            if documento.mime_type != 'application/pdf' or documento.origem == ORIGEM_DERIVADO_SEPARACAO:
                 continue
             analisados += 1
             paginas = self._paginas(documento)
@@ -98,7 +106,7 @@ class FonteCandidatosPorConteudo:
             if paginas is None:
                 sem_texto += 1
                 continue
-            if any(cpfs_alvo.intersection(extrair_cpfs_distintos_de_texto(p)) for p in paginas):
+            if cpfs_alvo.intersection(paginas):
                 encontrados.append(documento)
 
         self._resumo = {
@@ -107,7 +115,7 @@ class FonteCandidatosPorConteudo:
             'documentos_ilegiveis': ilegiveis,
             'documentos_encontrados': len(encontrados),
         }
-        if not encontrados and ilegiveis:
+        if ilegiveis:
             raise BuscaPorConteudoIncompleta(f'{ilegiveis} arquivo(s) não puderam ser lidos')
         return tuple(sorted(encontrados, key=lambda d: d.documento_id))
 
@@ -116,15 +124,19 @@ class FonteCandidatosPorConteudo:
         return dict(self._resumo)
 
     def _paginas(self, documento: Documento) -> object:
-        if documento.hash_sha256 not in self._paginas_por_hash:
-            self._paginas_por_hash[documento.hash_sha256] = self._ler(documento)
-        return self._paginas_por_hash[documento.hash_sha256]
-
-    def _ler(self, documento: Documento) -> object:
+        """CPFs presentes no documento (frozenset), None se sem texto,
+        `_ILEGIVEL` se a leitura falhou (não cacheado)."""
+        if documento.hash_sha256 in self._paginas_por_hash:
+            return self._paginas_por_hash[documento.hash_sha256]
         try:
             with self._armazenamento.abrir_leitura(documento.hash_sha256) as arquivo:
                 conteudo = arquivo.read()
         except Exception:
             return _ILEGIVEL
         paginas: Optional[Tuple[str, ...]] = extrair_paginas_seguro(conteudo)
-        return paginas
+        cpfs = (
+            None if paginas is None
+            else frozenset(cpf for pagina in paginas for cpf in extrair_cpfs_distintos_de_texto(pagina))
+        )
+        self._paginas_por_hash[documento.hash_sha256] = cpfs
+        return cpfs

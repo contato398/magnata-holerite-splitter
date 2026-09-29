@@ -102,7 +102,8 @@ def test_pdf_de_12_paginas_vira_12_documentos_derivados_com_proveniencia():
     assert setimo.indices_paginas == (6,)
     assert setimo.documento.origem == ORIGEM_DERIVADO_SEPARACAO
     assert setimo.documento.lote_id == "lote-1"
-    assert setimo.documento.nome_original == "holerites_setembro_pag7.pdf"
+    assert setimo.documento.nome_original == f"documento_{pai.hash_sha256[:12]}_pag7.pdf"
+    assert "holerites" not in setimo.documento.nome_original  # nome neutro, nunca herdado do original
     assert len({d.documento.hash_sha256 for d in derivados}) == 12
     assert setimo.documento.hash_sha256 != pai.hash_sha256
 

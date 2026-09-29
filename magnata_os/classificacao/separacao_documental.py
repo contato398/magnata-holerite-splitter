@@ -310,3 +310,31 @@ def indice_cpf_de_candidatos(candidatos: Sequence[object]) -> Dict[str, Tuple[st
         for cpf, ids in por_cpf.items()
         if len(ids) == 1
     }
+
+
+def estrategia_por_cpf_colaborador_estrita(
+    indice_cpf_para_colaborador: Mapping[str, Tuple[str, Optional[str]]],
+) -> IdentificadorDePagina:
+    """Variante ESTRITA de `estrategia_por_cpf_colaborador` para gerar
+    documentos derivados que serão ENVIADOS a uma pessoa: a página só
+    entra no grupo de um colaborador se contiver exatamente 1 CPF
+    distinto e ele for desse colaborador.
+
+    - página sem CPF (resumo geral da folha, capa, CPF sem formatação
+      ou quebrado pela extração) -> ENTIDADE_DESCONHECIDA: nunca herda o
+      grupo anterior por carry-forward -- herdar colocaria dados de outra
+      pessoa no PDF de alguém;
+    - página com 2+ CPFs distintos -> ENTIDADE_DESCONHECIDA: nunca vai
+      para o primeiro conhecido.
+    Custo aceito: a página de continuação sem CPF de um documento de
+    várias páginas fica fora da parte derivada (vai para
+    `indices_sem_grupo`, contada no evento), em vez de arriscar misturar
+    pessoas."""
+    def identificar(texto_pagina: str) -> IdentificacaoPagina:
+        cpfs_pagina = extrair_cpfs_distintos_de_texto(texto_pagina)
+        if len(cpfs_pagina) == 1 and cpfs_pagina[0] in indice_cpf_para_colaborador:
+            colaborador_id, nome = indice_cpf_para_colaborador[cpfs_pagina[0]]
+            return IdentificacaoPagina(SituacaoPaginaSeparacao.ENTIDADE_CONHECIDA, colaborador_id, nome)
+        return IdentificacaoPagina(SituacaoPaginaSeparacao.ENTIDADE_DESCONHECIDA)
+
+    return identificar

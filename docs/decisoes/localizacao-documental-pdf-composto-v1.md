@@ -47,11 +47,29 @@ A proveniência (id e hash do original, páginas, entidade e estratégia) fica n
 
 Uma consulta "filhos de um original" exigiria uma tabela ou índice próprio. Isso é migration e, portanto, um gate humano. Não foi feito.
 
-O nome do derivado é `<nome do original>_pag<N>.pdf`. Não acrescenta dado pessoal, mas repete o que o remetente já tinha colocado no nome.
+O nome do derivado é neutro: `documento_<12 primeiros caracteres do hash do original>_pag<N>.pdf`. Esse nome vira o nome do anexo enviado, e o nome do original pode conter nomes de outras pessoas, por isso nunca é herdado.
+
+Um derivado que já existe no repositório (mesmo hash) é reaproveitado sem nova chamada de entrada, e a derivação fica em cache por execução. Rodar o ciclo de novo não acumula eventos `TENTATIVA_DUPLICADA` no histórico.
+
+### D2b — Separação ESTRITA para documentos que serão enviados
+
+A separação já existente (`estrategia_por_cpf_colaborador`) usa carry-forward: uma página sem CPF herda o grupo da página anterior. Para gerar um documento que será **enviado** a uma pessoa, isso é inseguro. Uma página de resumo geral da folha, ou o holerite de outra pessoa com CPF sem formatação, iria parar no PDF do colaborador anterior. A revisão adversarial desta etapa confirmou esse risco com um teste.
+
+**Decisão.** A derivação usa `estrategia_por_cpf_colaborador_estrita`: a página só entra no grupo de alguém se tiver exatamente 1 CPF, e esse CPF for daquela pessoa. Página sem CPF ou com 2 ou mais CPFs fica fora de todos os grupos. A quantidade dessas páginas é registrada no evento `documento_composto_separado`.
+
+**Custo aceito.** A página de continuação sem CPF de um holerite de várias páginas não entra na parte derivada.
+
+**Risco residual, anterior a esta etapa.** Um PDF com o CPF formatado de A e o CPF de B **sem formatação** conta só 1 CPF e segue inteiro, como documento de A. O extrator de CPF só reconhece o formato `XXX.XXX.XXX-XX`. Endurecer a detecção de CPF sem formatação é o próximo passo.
 
 ### D3 — Quando não há parte do colaborador, o composto segue inalterado
 
 O composto vai para o corredor como antes e cai em revisão. Pelas regras de elegibilidade ele nunca é distribuído: todas as execuções precisam confirmar o colaborador da necessidade. O motivo fica registrado no evento `documento_composto_nao_separado`.
+
+### D3b — Diagnóstico é somente leitura; busca por conteúdo nunca escolhe por cima de lacuna
+
+`diagnosticar_prestacao` simula a derivação em memória, sobre o armazenamento real e só para leitura (`_ArmazenamentoSobreposto`). Nenhum Documento, blob ou evento é gravado. Derivados que já existem são reaproveitados por hash.
+
+Na fonte por conteúdo, qualquer arquivo ilegível leva a busca a `INDETERMINADO`, mesmo quando outro documento bate. O arquivo ilegível poderia ser uma versão corrigida. A falha de leitura não fica em cache: a próxima necessidade tenta ler de novo. Documentos derivados nunca são devolvidos diretamente pela fonte, que devolve sempre o original. Assim um derivado de um agrupamento anterior nunca concorre com o atual.
 
 ### D4 — Executor: isolar sem mascarar
 

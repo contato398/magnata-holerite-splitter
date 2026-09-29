@@ -112,7 +112,7 @@ class ConsultaFonte:
     status: StatusConsultaFonte
     documento_ids: Tuple[str, ...] = ()
     erro_tipo: str | None = None
-    detalhes: Mapping[str, int] = field(default_factory=dict)
+    detalhes: Mapping[str, int] = field(default_factory=dict, hash=False)
     """Contagens opcionais da própria fonte (ex.: documentos analisados,
     sem texto, ilegíveis), via `resumo_ultima_consulta()` quando a fonte
     oferece. Só números -- nunca identificador pessoal."""

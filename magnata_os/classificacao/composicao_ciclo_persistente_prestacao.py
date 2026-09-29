@@ -91,7 +91,7 @@ from magnata_os.documental.modulo01.dominio import Documento
 from .evidencia_estrutural_documental import analisar_estrutura_documento
 from .fonte_candidatos_por_necessidade import FonteCandidatosDocumentaisPorNecessidade
 from .separacao_documental import (
-    estrategia_por_cpf_colaborador,
+    estrategia_por_cpf_colaborador_estrita,
     indice_cpf_de_candidatos,
     separar_por_carry_forward,
 )
@@ -142,7 +142,7 @@ EVENTO_CORREDOR_FALHOU = 'corredor_falhou'
 EVENTO_LOCALIZACAO_SEM_DOCUMENTO = 'localizacao_sem_documento'
 EVENTO_DOCUMENTO_COMPOSTO_SEPARADO = 'documento_composto_separado'
 EVENTO_DOCUMENTO_COMPOSTO_NAO_SEPARADO = 'documento_composto_nao_separado'
-ESTRATEGIA_SEPARACAO_CPF = 'cpf_colaborador'
+ESTRATEGIA_SEPARACAO_CPF = 'cpf_colaborador_estrita'
 
 
 # ==== AQUISIÇÃO CANÔNICA (COM CORREDOR) ====
@@ -752,13 +752,13 @@ def adquirir_por_necessidades(
     texto_por_hash: dict = {}
     corredor_por_chave: dict = {}
 
-    paginas_por_hash: dict = {}
+    cache_compostos: dict = {}
 
     for necessidade in necessidades:
         candidatos = _expandir_documentos_compostos(
             contexto, necessidade,
             _candidatos_localizados(necessidade, fontes, registro_localizacoes),
-            paginas_por_hash,
+            cache_compostos,
         )
         for documento_bruto in candidatos:
             if documento_bruto.hash_sha256 not in texto_por_hash:
@@ -860,7 +860,7 @@ def _expandir_documentos_compostos(
     contexto: 'ContextoComposicaoPrestacao',
     necessidade: NecessidadeDocumentoPrestacao,
     candidatos: Tuple[Documento, ...],
-    paginas_por_hash: dict,
+    cache_compostos: dict,
 ) -> Tuple[Documento, ...]:
     """Troca cada candidato que é um PDF COMPOSTO (2+ CPFs distintos)
     pelo Documento derivado que contém só as páginas do colaborador da
@@ -890,7 +890,7 @@ def _expandir_documentos_compostos(
     vistos: set = set()
     for documento in candidatos:
         final = _parte_do_colaborador(
-            contexto, entrada, indice, necessidade, documento, paginas_por_hash,
+            contexto, entrada, indice, necessidade, documento, cache_compostos,
         ) or documento
         if final.documento_id not in vistos:
             vistos.add(final.documento_id)
@@ -904,29 +904,36 @@ def _parte_do_colaborador(
     indice: Mapping[str, Tuple[str, None]],
     necessidade: NecessidadeDocumentoPrestacao,
     documento: Documento,
-    paginas_por_hash: dict,
+    cache_compostos: dict,
 ) -> Optional[Documento]:
     if documento.mime_type != 'application/pdf':
         return None
-    if documento.hash_sha256 not in paginas_por_hash:
-        paginas_por_hash[documento.hash_sha256] = _ler_bytes_e_paginas(contexto, documento)
-    lido = paginas_por_hash[documento.hash_sha256]
+    if documento.hash_sha256 not in cache_compostos:
+        cache_compostos[documento.hash_sha256] = _ler_bytes_e_paginas(contexto, documento)
+    lido = cache_compostos[documento.hash_sha256]
     if lido is None:
         return None
     conteudo, paginas = lido
     if analisar_estrutura_documento(paginas).quantidade_cpfs_distintos < 2:
         return None
 
-    separacao = separar_por_carry_forward(paginas, estrategia_por_cpf_colaborador(indice))
-    try:
-        derivados = derivar_documentos(
-            documento, conteudo,
-            [GrupoPaginas(g.entidade_id, g.indices_paginas) for g in separacao.grupos],
-            ESTRATEGIA_SEPARACAO_CPF, entrada,
-        )
-    except Exception as exc:
-        _registrar_composto(EVENTO_DOCUMENTO_COMPOSTO_NAO_SEPARADO, documento, necessidade,
-                            motivo='falha_ao_derivar', erro_tipo=type(exc).__name__)
+    chave_derivados = ('derivados', documento.hash_sha256)
+    if chave_derivados not in cache_compostos:
+        separacao = separar_por_carry_forward(paginas, estrategia_por_cpf_colaborador_estrita(indice))
+        try:
+            derivados = derivar_documentos(
+                documento, conteudo,
+                [GrupoPaginas(g.entidade_id, g.indices_paginas) for g in separacao.grupos],
+                ESTRATEGIA_SEPARACAO_CPF, entrada,
+                buscar_por_hash=getattr(contexto.repositorio_documentos, 'buscar_por_hash', None),
+            )
+        except Exception as exc:
+            _registrar_composto(EVENTO_DOCUMENTO_COMPOSTO_NAO_SEPARADO, documento, necessidade,
+                                motivo='falha_ao_derivar', erro_tipo=type(exc).__name__)
+            derivados = None
+        cache_compostos[chave_derivados] = (derivados, separacao)
+    derivados, separacao = cache_compostos[chave_derivados]
+    if derivados is None:
         return None
 
     parte = next(
@@ -1612,7 +1619,7 @@ class DiagnosticoNecessidade:
     situacao: SituacaoNecessidade
     documentos_avaliados: Tuple[str, ...] = ()
     documentos_elegiveis: Tuple[str, ...] = ()
-    localizacao: Optional[Mapping[str, object]] = None
+    localizacao: Optional[Mapping[str, object]] = dataclasses.field(default=None, hash=False)
 
     def como_dict(self) -> Mapping[str, object]:
         n = self.necessidade
@@ -1664,9 +1671,68 @@ class DiagnosticoPrestacao:
         }
 
 
+class _ArmazenamentoSobreposto:
+    """Leitura cai no armazenamento real; escrita fica só em memória.
+    Usado pelo diagnóstico para simular a derivação de PDFs compostos
+    sem gravar nada no armazenamento, no repositório nem no histórico
+    reais."""
+
+    def __init__(self, base: object) -> None:
+        from magnata_os.documental.modulo01.armazenamento import ArmazenamentoArquivosEmMemoria
+
+        self._base = base
+        self._memoria = ArmazenamentoArquivosEmMemoria()
+
+    def armazenar(self, hash_sha256, conteudo, mime_type, nome_original, tamanho):
+        return self._memoria.armazenar(hash_sha256, conteudo, mime_type, nome_original, tamanho)
+
+    def existe(self, hash_sha256):
+        return self._memoria.existe(hash_sha256) or self._base.existe(hash_sha256)
+
+    def abrir_leitura(self, hash_sha256):
+        if self._memoria.existe(hash_sha256):
+            return self._memoria.abrir_leitura(hash_sha256)
+        return self._base.abrir_leitura(hash_sha256)
+
+    def referencia(self, hash_sha256):
+        if self._memoria.existe(hash_sha256):
+            return self._memoria.referencia(hash_sha256)
+        return self._base.referencia(hash_sha256)
+
+    def remover(self, hash_sha256):
+        raise PermissionError('diagnóstico é somente leitura')
+
+
+def _contexto_somente_leitura(contexto: 'ContextoComposicaoPrestacao') -> 'ContextoComposicaoPrestacao':
+    """Mesmo contexto, mas derivados de PDF composto são registrados só
+    em memória (derivados JÁ existentes no repositório real continuam
+    sendo reaproveitados por hash, em leitura). O diagnóstico mostra o
+    que o ciclo faria, sem efeito durável."""
+    if contexto.entrada_documentos_derivados is None or contexto.armazenamento_arquivos is None:
+        return contexto
+    from magnata_os.documental.modulo01.adaptador_entrada_duravel import AdaptadorEntradaDuravel
+    from magnata_os.documental.modulo01.repositorio import (
+        RepositorioDocumentosEmMemoria,
+        RepositorioHistoricoEmMemoria,
+    )
+
+    armazenamento = _ArmazenamentoSobreposto(contexto.armazenamento_arquivos)
+    entrada = AdaptadorEntradaDuravel(
+        RepositorioDocumentosEmMemoria(), RepositorioHistoricoEmMemoria(), armazenamento,
+    )
+    return dataclasses.replace(
+        contexto, armazenamento_arquivos=armazenamento, entrada_documentos_derivados=entrada,
+    )
+
+
 def diagnosticar_prestacao(contexto: 'ContextoComposicaoPrestacao') -> DiagnosticoPrestacao:
+    """Somente leitura: nenhum Documento, blob ou evento de histórico é
+    gravado nos repositórios reais do contexto (ver
+    `_contexto_somente_leitura`). Os ids de derivados ainda não
+    registrados são efêmeros, desta simulação."""
     if contexto.politica_competencia is not None:
         verificar_politica_sem_override_por_tipo(contexto.politica_competencia)
+    contexto = _contexto_somente_leitura(contexto)
     ano_str, mes_str = contexto.competencia_base.split('-')
     ciclo_contexto = ContextoCicloPrestacao(competencia_base=(int(ano_str), int(mes_str)))
 

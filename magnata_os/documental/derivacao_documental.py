@@ -28,9 +28,9 @@ de `classificacao/separacao_documental.py`).
 
 from __future__ import annotations
 
-import os
+import hashlib
 from dataclasses import dataclass
-from typing import Optional, Protocol, Sequence, Tuple
+from typing import Callable, Optional, Protocol, Sequence, Tuple
 
 from .fatiamento_pdf import fatiar_pdf
 from .modulo01.dominio import Documento
@@ -73,11 +73,17 @@ def derivar_documentos(
     grupos: Sequence[GrupoPaginas],
     estrategia: str,
     entrada: EntradaDocumental,
+    buscar_por_hash: Optional[Callable[[str], Optional[Documento]]] = None,
 ) -> Tuple[DocumentoDerivado, ...]:
     """Registra um Documento derivado por grupo. Um único grupo que cobre
     todas as páginas não é derivado (seria o próprio original): devolve
     tupla vazia. Falha ao fatiar ou registrar é propagada -- quem chama
-    decide o isolamento; nunca um derivado parcial silencioso."""
+    decide o isolamento; nunca um derivado parcial silencioso.
+
+    `buscar_por_hash` (ex.: `RepositorioDocumentos.buscar_por_hash`):
+    derivado já registrado é reaproveitado sem nova chamada de entrada --
+    rodar o ciclo de novo não acumula eventos `TENTATIVA_DUPLICADA` no
+    histórico."""
     if not grupos:
         return ()
     total_paginas = _total_paginas_cobertas(grupos)
@@ -88,9 +94,13 @@ def derivar_documentos(
     for grupo in grupos:
         conteudo = fatiar_pdf(conteudo_pai, grupo.indices_paginas)
         paginas_base_1 = [i + 1 for i in grupo.indices_paginas]
+        existente = buscar_por_hash(hashlib.sha256(conteudo).hexdigest()) if buscar_por_hash else None
+        if existente is not None:
+            derivados.append(DocumentoDerivado(grupo.entidade_id, tuple(grupo.indices_paginas), existente))
+            continue
         documento = entrada.registrar_entrada(
             conteudo,
-            _nome_derivado(documento_pai.nome_original, paginas_base_1),
+            _nome_derivado(documento_pai.hash_sha256, paginas_base_1),
             'application/pdf',
             ORIGEM_DERIVADO_SEPARACAO,
             correlation_id=documento_pai.correlation_id,
@@ -107,16 +117,18 @@ def derivar_documentos(
     return tuple(derivados)
 
 
-def _nome_derivado(nome_pai: str, paginas_base_1: Sequence[int]) -> str:
-    base, _ = os.path.splitext(nome_pai or 'documento')
-    if paginas_base_1 == list(range(paginas_base_1[0], paginas_base_1[-1] + 1)):
+def _nome_derivado(hash_pai: str, paginas_base_1: Sequence[int]) -> str:
+    """Nome NEUTRO, só com identificador técnico: o nome do original
+    pode conter nomes de pessoas, e este nome vira o nome do anexo
+    enviado ao destinatário."""
+    if list(paginas_base_1) == list(range(paginas_base_1[0], paginas_base_1[-1] + 1)):
         faixa = (
             f'{paginas_base_1[0]}' if len(paginas_base_1) == 1
             else f'{paginas_base_1[0]}-{paginas_base_1[-1]}'
         )
     else:
         faixa = '_'.join(str(p) for p in paginas_base_1)
-    return f'{base}_pag{faixa}.pdf'
+    return f'documento_{hash_pai[:12]}_pag{faixa}.pdf'
 
 
 def _total_paginas_cobertas(grupos: Sequence[GrupoPaginas]) -> int:
