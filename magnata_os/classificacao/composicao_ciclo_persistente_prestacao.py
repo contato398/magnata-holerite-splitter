@@ -809,7 +809,7 @@ def adquirir_por_necessidades(
             texto_documento = texto_por_hash[documento_bruto.hash_sha256]
             if texto_documento is None:
                 if registro_descartes is not None:
-                    registro_descartes.setdefault(necessidade, []).append(documento_bruto.documento_id)
+                    registro_descartes.setdefault(necessidade, []).append((documento_bruto.documento_id, 'leitura'))
                 continue
 
             chave_cache = (
@@ -844,7 +844,7 @@ def adquirir_por_necessidades(
             resultados_corredor = corredor_por_chave[chave_cache]
             if not resultados_corredor:
                 if registro_descartes is not None:
-                    registro_descartes.setdefault(necessidade, []).append(documento_bruto.documento_id)
+                    registro_descartes.setdefault(necessidade, []).append((documento_bruto.documento_id, 'corredor'))
                 continue
 
             resultados.append(
@@ -1737,6 +1737,9 @@ class SituacaoNecessidade(str, enum.Enum):
     """Documento achado e resolvido, mas de outro colaborador/mês/cliente/tipo."""
     EM_REVISAO = 'EM_REVISAO'
     """Documento achado, mas o corredor não conseguiu resolvê-lo com segurança."""
+    ERRO_DE_LEITURA = 'ERRO_DE_LEITURA'
+    """Candidato achado, mas o arquivo não pôde ser lido (blob ausente,
+    falha de leitura, PDF sem texto e sem OCR) -- nunca AUSENTE."""
     AUSENTE = 'AUSENTE'
     """Nenhum documento nas fontes consultadas."""
     FONTE_INDISPONIVEL = 'FONTE_INDISPONIVEL'
@@ -1905,7 +1908,7 @@ def _diagnosticar_necessidade(
     resultados_aquisicao: Tuple[ResultadoAquisicaoPorNecessidade, ...],
     localizacao: Optional[ResultadoLocalizacao],
     sem_fonte: bool,
-    descartados: Tuple[str, ...] = (),
+    descartados: Tuple[Tuple[str, str], ...] = (),
 ) -> DiagnosticoNecessidade:
     """`descartados`: candidatos que nunca chegaram a um resultado
     (arquivo ilegível, PDF sem texto, falha do corredor). Com qualquer
@@ -1935,6 +1938,8 @@ def _diagnosticar_necessidade(
         if any(_tipo_resolvido_atende_necessidade(res, necessidade) for res in resolvidos):
             # documento do tipo pedido, mas de outro mês/cliente/pessoa
             situacao = SituacaoNecessidade.ENCONTRADO_NAO_ELEGIVEL
+        elif any(motivo == 'leitura' for _, motivo in descartados):
+            situacao = SituacaoNecessidade.ERRO_DE_LEITURA
         elif (
             not descartados
             and resolvidos and len(resolvidos) == sum(len(r.resultados_corredor) for r in da_necessidade)
@@ -1946,8 +1951,10 @@ def _diagnosticar_necessidade(
             situacao = SituacaoNecessidade.EM_REVISAO
     elif localizacao is not None and localizacao.decisao is DecisaoLocalizacao.INDETERMINADO:
         situacao = SituacaoNecessidade.FONTE_INDISPONIVEL
+    elif any(motivo == 'leitura' for _, motivo in descartados):
+        situacao = SituacaoNecessidade.ERRO_DE_LEITURA
     elif localizacao is not None and localizacao.candidatos:
-        # achou, mas nenhum candidato produziu resultado (ex.: PDF sem texto)
+        # achou, mas nenhum candidato produziu resultado (falha do corredor)
         situacao = SituacaoNecessidade.EM_REVISAO
     else:
         situacao = SituacaoNecessidade.AUSENTE

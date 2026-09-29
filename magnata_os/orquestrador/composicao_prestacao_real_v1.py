@@ -19,7 +19,7 @@ dos adapters já existentes, onde não existe fonte interna equivalente.
 | documentos derivados de PDF composto | porta oficial `AdaptadorEntradaDuravel` -- interno |
 | unidade/posto | alocação histórica Postgres, com o snapshot Airtable só como fonte corrente -- interno primeiro |
 | clientes ativos, colaboradores esperados, vínculos, candidatos a colaborador (CPF), cliente direto por CNPJ | Airtable somente leitura -- ponte (não há fonte interna equivalente hoje) |
-| localização | busca por conteúdo; "e-mail mais recente vale" aplicado depois da conferência; índice J3 alimentado (leitura como fonte: próxima etapa) |
+| localização | índice J3 com frescor (quando disponível) + busca por conteúdo; "e-mail mais recente vale" aplicado depois da conferência |
 
 Nenhuma leitura de ambiente aqui além de `compor_a_partir_do_ambiente`,
 que só REUTILIZA os compositores já existentes (conexão Postgres, S3,
@@ -44,6 +44,7 @@ from magnata_os.classificacao.competencia_esperada_prestacao import (
 )
 from magnata_os.classificacao.composicao_ciclo_persistente_prestacao import ContextoComposicaoPrestacao
 from magnata_os.classificacao.contratos import ReferenciaCanonica
+from magnata_os.classificacao.fonte_candidatos_indice_com_frescor import FonteIndiceComFrescor
 from magnata_os.classificacao.fonte_candidatos_por_conteudo import FonteCandidatosPorConteudo
 from magnata_os.classificacao.holerite_obrigatorio_prestacao import TIPO_HOLERITE
 
@@ -114,6 +115,8 @@ class DependenciasPrestacaoReal:
     """Conexão a fechar ao final (`fechar_dependencias`)."""
     motor_ocr: Optional[object] = None
     """Porta `MotorOcr`; `None` enquanto nenhum motor estiver instalado."""
+    repositorio_estados_esteira: Optional[object] = None
+    """Só para a coleta de e-mail (pipeline do Módulo 01)."""
 
 
 def parse_competencia(competencia: str) -> Tuple[int, int]:
@@ -186,17 +189,17 @@ def montar_contexto_prestacao(
     # todos os documentos da pessoa/cliente, de todos os tipos e meses);
     # "o e-mail mais recente vale" é aplicado DEPOIS da conferência, entre
     # os elegíveis da mesma necessidade (`data_versao_documento`).
-    # O índice J3 é alimentado mas ainda NÃO é lido como primeira fonte:
-    # um acerto no índice encerraria a busca e uma versão corrigida,
-    # reenviada depois, nunca seria vista. Lê-lo com segurança exige um
-    # sinal de frescor (próxima etapa, registrada no ADR D7).
+    # Com índice J3 disponível, ele é lido COM FRESCOR: candidatos do
+    # índice + busca por conteúdo só entre documentos registrados depois
+    # deles -- versão corrigida reenviada nunca fica invisível
+    # (`fonte_candidatos_indice_com_frescor.py`).
+    conteudo = FonteCandidatosPorConteudo(
+        d.repositorio_documentos, d.armazenamento, candidatos, fonte_cliente_direto, motor_ocr=d.motor_ocr,
+    )
     fontes = (
-        FonteNomeada(
-            'conteudo',
-            FonteCandidatosPorConteudo(
-                d.repositorio_documentos, d.armazenamento, candidatos, fonte_cliente_direto, motor_ocr=d.motor_ocr,
-            ),
-        ),
+        (FonteNomeada('indice_com_frescor', FonteIndiceComFrescor(d.indice_documental, d.repositorio_documentos, conteudo)),)
+        if d.indice_documental is not None
+        else (FonteNomeada('conteudo', conteudo),)
     )
 
     return ContextoComposicaoPrestacao(
@@ -244,7 +247,10 @@ def compor_dependencias_a_partir_do_ambiente(conexao=None) -> DependenciasPresta
         RepositorioDocumentosPostgres,
         RepositorioHistoricoPostgres,
     )
-    from magnata_os.documental.modulo01.adapters.postgres_repositorio_esteira import RepositorioLotesPostgres
+    from magnata_os.documental.modulo01.adapters.postgres_repositorio_esteira import (
+        RepositorioEstadosEsteiraPostgres,
+        RepositorioLotesPostgres,
+    )
     from .ciclo_producao_v1 import _compor_armazenamento_a_partir_do_ambiente
 
     from magnata_os.classificacao.adapters.postgres_execucoes_prestacao import RepositorioExecucoesPrestacaoPostgres
@@ -264,6 +270,7 @@ def compor_dependencias_a_partir_do_ambiente(conexao=None) -> DependenciasPresta
         fonte_unidade_posto_historica=RepositorioAlocacaoPostgres(conexao),
         cnpj_proprio=os.environ.get('MAGNATA_CNPJ_PROPRIO', '').strip() or None,
         conexao=conexao,
+        repositorio_estados_esteira=RepositorioEstadosEsteiraPostgres(conexao),
     )
 
 

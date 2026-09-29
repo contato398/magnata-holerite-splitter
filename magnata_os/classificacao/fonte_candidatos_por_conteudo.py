@@ -99,7 +99,12 @@ class FonteCandidatosPorConteudo:
         self._clientes_por_hash: Dict[str, frozenset] = {}
         self._resumo: Mapping[str, int] = {}
 
-    def candidatos_para(self, necessidade: NecessidadeDocumentoPrestacao) -> Tuple[Documento, ...]:
+    def candidatos_para(
+        self, necessidade: NecessidadeDocumentoPrestacao, criados_apos: Optional[object] = None,
+    ) -> Tuple[Documento, ...]:
+        """`criados_apos` (datetime): só examina documentos registrados
+        depois desse instante -- usado pelo índice com frescor para olhar
+        apenas o que chegou depois do que já está indexado."""
         self._resumo = {}
         if necessidade.colaborador is not None:
             cpfs_alvo = self._cpfs_por_colaborador.get(necessidade.colaborador.entidade_id)
@@ -115,6 +120,8 @@ class FonteCandidatosPorConteudo:
         analisados = sem_texto = ilegiveis = 0
         for documento in self._repositorio.listar_todos():
             if documento.mime_type != 'application/pdf' or documento.origem == ORIGEM_DERIVADO_SEPARACAO:
+                continue
+            if criados_apos is not None and not documento.criado_em > criados_apos:
                 continue
             analisados += 1
             paginas = self._paginas(documento)

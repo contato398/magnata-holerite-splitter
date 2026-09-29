@@ -347,8 +347,16 @@ def test_pacote_incompleto_nao_gera_ordem_e_diz_o_que_falta():
 
 def test_linha_de_comando_exige_preset_e_mensagem_para_ir_ate_pending():
     assert _parse_args(["--cliente", "rec1", "--competencia", "2026-09"]).ate_pending is False
+    for invalido in (
+        ["--ate-pending"],
+        ["--ate-pending", "--preset", "DOCUMENTO_UNITARIO_COM_ASSINATURA", "--mensagem", "x"],
+        ["--coletar-email"],
+        ["--coletar-email", "--gmail-label", "Documentos"],
+    ):
+        with pytest.raises(SystemExit):
+            _parse_args(["--cliente", "rec1", "--competencia", "2026-09", *invalido])
     with pytest.raises(SystemExit):
-        _parse_args(["--cliente", "rec1", "--competencia", "2026-09", "--ate-pending"])
+        _parse_args(["--cliente", "rec1", "--competencia", "09/2026"])
 
 
 def test_documento_institucional_de_outro_cliente_nunca_atende_este_cliente():
@@ -456,7 +464,7 @@ def test_candidato_ilegivel_nunca_vira_ausente():
     with patch.object(modulo_composicao, "_ler_e_extrair_texto", _falha_so_no_fgts):
         relatorio = _rodar(deps)
 
-    assert _situacoes_cliente(relatorio)["FGTS"] == "EM_REVISAO"
+    assert _situacoes_cliente(relatorio)["FGTS"] == "ERRO_DE_LEITURA"  # nunca AUSENTE
 
 
 # ---- OCR ----
@@ -497,3 +505,125 @@ def test_holerites_escaneados_so_sao_achados_com_motor_de_ocr():
     assert set(holerites_sem.values()) == {"AUSENTE"}
     assert holerites_com == {colab(i): "PRONTO" for i in range(1, N + 1)}
     assert motor.chamadas >= 1
+
+
+# ---- índice J3 lido com frescor ----
+
+def test_indice_acelera_mas_versao_corrigida_enviada_depois_nunca_fica_invisivel():
+    import dataclasses
+
+    from magnata_os.classificacao.inventario_prestacao_memoria import InventarioPrestacaoEmMemoria
+    from magnata_os.documental.extracao_texto import extrair_texto_pdf
+
+    datas = [AGORA + timedelta(days=i) for i in range(len(TIPOS_CLIENTE))]
+    indice = InventarioPrestacaoEmMemoria()
+    deps = dataclasses.replace(_dependencias(PAGINAS, datas_email=datas), indice_documental=indice)
+    executar, _ = _executar_ate_pending(deps)
+
+    with _com_corredor_fake():
+        executar_prestacao_cliente_competencia(
+            cliente_id=CLIENTE.entidade_id, competencia_base="2026-09", dependencias=deps,
+            ate_pending=True, executar_ate_pending=executar, instante=AGORA,
+        )
+    assert {i.tipo_documental for i in indice.listar(CLIENTE, ReferenciaCanonica("COMPETENCIA", "2026-09"))} >= {"FGTS", "Holerite"}
+
+    # FGTS corrigido chega depois, num e-mail mais novo
+    deps.repositorio_lotes.salvar(_lote_email("lote-correcao", AGORA + timedelta(days=30)))
+    AdaptadorEntradaDuravel(deps.repositorio_documentos, deps.repositorio_historico, deps.armazenamento).registrar_entrada(
+        pdf_com_paginas(["TIPO: FGTS\nEmpresa CNPJ 11.111.111/0001-11\nCompetencia 09/2026\nversao corrigida"]),
+        "reenvio.pdf", "application/pdf", "email", lote_id="lote-correcao",
+    )
+
+    relatorio = _rodar(deps)
+
+    fgts = next(n for n in relatorio["clientes"][0]["necessidades"] if n["tipo_documental"] == "FGTS")
+    assert fgts["situacao"] == "PRONTO" and len(fgts["documentos_elegiveis"]) == 1
+    documento = deps.repositorio_documentos.buscar_por_id(fgts["documentos_elegiveis"][0])
+    assert "corrigida" in extrair_texto_pdf(deps.armazenamento.abrir_leitura(documento.hash_sha256).read())
+    consulta = fgts["localizacao"]["consultas"][0]
+    assert consulta["fonte"] == "indice_com_frescor" and consulta["detalhes"]["documentos_do_indice"] >= 1
+    # com índice, a busca por conteúdo só examinou o que chegou depois
+    assert consulta["detalhes"]["documentos_analisados"] < len(deps.repositorio_documentos.listar_todos())
+
+
+# ---- aquisição multifonte: coleta de e-mail antes da busca ----
+
+from magnata_os.documental.modulo01.adapters.email_captura import AnexoEmailRecebido, MensagemEmailRecebida  # noqa: E402
+from magnata_os.documental.modulo01.repositorio_esteira import RepositorioEstadosEsteiraEmMemoria  # noqa: E402
+from magnata_os.orquestrador.coleta_fontes_externas_v1 import compor_coletor_email  # noqa: E402
+
+
+class _CaixaDeEmailFake:
+    """Mesma superfície de `FonteMensagensEmail` (Gmail somente leitura)."""
+
+    def __init__(self, mensagens):
+        self.mensagens = mensagens
+
+    def buscar_novas_mensagens(self):
+        return self.mensagens
+
+
+def _mensagem(paginas, dia):
+    return MensagemEmailRecebida(
+        message_id=f"msg-{dia}", remetente="contabilidade@exemplo.invalid", assunto="documentos",
+        recebido_em=AGORA + timedelta(days=dia),
+        anexos=(AnexoEmailRecebido("arquivo.pdf", "application/pdf", pdf_com_paginas(paginas)),),
+    )
+
+
+def test_holerites_que_so_existem_no_email_sao_coletados_e_encontrados():
+    import dataclasses
+
+    deps = dataclasses.replace(_dependencias(["capa sem ninguem"]), repositorio_estados_esteira=RepositorioEstadosEsteiraEmMemoria())
+    caixa = _CaixaDeEmailFake([_mensagem(PAGINAS, 1)])
+    coletor = compor_coletor_email(deps, caixa)
+
+    with _com_corredor_fake():
+        relatorio = executar_prestacao_cliente_competencia(
+            cliente_id=CLIENTE.entidade_id, competencia_base="2026-09", dependencias=deps,
+            coletores=[("email", coletor)],
+        )
+
+    assert relatorio["coleta"] == [{"fonte": "email", "status": "OK", "documentos_novos": 1,
+                                    "documentos_repetidos": 0, "erro_tipo": None}]
+    holerites = {n["colaborador"]: n["situacao"] for n in relatorio["clientes"][0]["necessidades"] if n["colaborador"]}
+    assert holerites == {colab(i): "PRONTO" for i in range(1, N + 1)}
+
+    # coletar de novo não duplica nada (idempotência por hash)
+    total = len(deps.repositorio_documentos.listar_todos())
+    with _com_corredor_fake():
+        relatorio = executar_prestacao_cliente_competencia(
+            cliente_id=CLIENTE.entidade_id, competencia_base="2026-09", dependencias=deps,
+            coletores=[("email", coletor)],
+        )
+    assert relatorio["coleta"][0]["documentos_repetidos"] == 1
+    assert len(deps.repositorio_documentos.listar_todos()) == total
+
+
+def test_fonte_externa_que_falha_nao_derruba_as_outras_nem_permite_dizer_ausente_ou_enviar():
+    deps = _dependencias(PAGINAS, colaboradores=N + 1)  # colab-04 não está em lugar nenhum
+    executar, conexao = _executar_ate_pending(deps)
+
+    def _gmail_fora_do_ar():
+        raise TimeoutError("gmail indisponivel")
+
+    ok = _CaixaDeEmailFake([])
+    import dataclasses
+    deps = dataclasses.replace(deps, repositorio_estados_esteira=RepositorioEstadosEsteiraEmMemoria())
+
+    with _com_corredor_fake():
+        relatorio = executar_prestacao_cliente_competencia(
+            cliente_id=CLIENTE.entidade_id, competencia_base="2026-09", dependencias=deps,
+            ate_pending=True, executar_ate_pending=executar, instante=AGORA,
+            coletores=[("email", _gmail_fora_do_ar), ("outra_caixa", compor_coletor_email(deps, ok))],
+        )
+
+    assert [(c["fonte"], c["status"], c["erro_tipo"]) for c in relatorio["coleta"]] == [
+        ("email", "FALHOU", "TimeoutError"), ("outra_caixa", "OK", None),
+    ]
+    assert relatorio["busca_incompleta"] is True
+    situacoes = {n["colaborador"]: n["situacao"] for n in relatorio["clientes"][0]["necessidades"] if n["colaborador"]}
+    assert situacoes[colab(N + 1)] == "FONTE_INDISPONIVEL"  # nunca AUSENTE
+    assert relatorio["ordens"] == [] and relatorio["ordens_motivo"] == "coleta_de_fonte_externa_falhou"
+    assert conexao.linhas == {}
+    assert "gmail indisponivel" not in repr(relatorio)

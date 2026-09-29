@@ -23,10 +23,11 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import datetime, timezone
-from typing import Callable, Mapping, Optional
+from typing import Callable, Mapping, Optional, Sequence, Tuple
 
 from magnata_os.classificacao.composicao_ciclo_persistente_prestacao import diagnosticar_prestacao
 
+from .coleta_fontes_externas_v1 import coletar, compor_coletor_email, compor_fonte_gmail
 from .composicao_prestacao_real_v1 import (
     DependenciasPrestacaoReal,
     compor_dependencias_a_partir_do_ambiente,
@@ -48,6 +49,7 @@ def executar_prestacao_cliente_competencia(
     ate_pending: bool = False,
     executar_ate_pending: Optional[Callable[..., tuple]] = None,
     instante: Optional[datetime] = None,
+    coletores: Sequence[Tuple[str, Callable[[], object]]] = (),
 ) -> Mapping[str, object]:
     """Diagnóstico sempre; Ordens até PENDING só com `ate_pending` e só se
     o pacote do cliente estiver PRONTO (a mesma regra do caminho
@@ -55,6 +57,8 @@ def executar_prestacao_cliente_competencia(
     recebe o contexto e devolve os resultados do núcleo (injeção: em
     produção, `executar_prestacao_contato_ate_pending_shadow_v1` já
     composto com seus repositórios)."""
+    coleta = coletar(coletores)
+    coleta_incompleta = any(r.status != 'OK' for r in coleta)
     contexto = montar_contexto_prestacao(
         cliente_id=cliente_id,
         competencia_base=competencia_base,
@@ -63,7 +67,14 @@ def executar_prestacao_cliente_competencia(
     )
     diagnostico = diagnosticar_prestacao(contexto)
     relatorio = {'modo': 'ate_pending' if ate_pending else 'diagnostico', **diagnostico.como_dict()}
+    relatorio['coleta'] = [r.como_dict() for r in coleta]
+    if coleta_incompleta:
+        _marcar_busca_incompleta(relatorio)
     if not ate_pending:
+        return relatorio
+    if coleta_incompleta:
+        relatorio['ordens'] = []
+        relatorio['ordens_motivo'] = 'coleta_de_fonte_externa_falhou'
         return relatorio
 
     if executar_ate_pending is None:
@@ -83,6 +94,18 @@ def executar_prestacao_cliente_competencia(
         for r in resultados
     ]
     return relatorio
+
+
+def _marcar_busca_incompleta(relatorio) -> None:
+    """Uma fonte externa falhou: nenhuma ausência pode ser afirmada e
+    nenhuma Ordem pode sair (o documento, ou uma versão corrigida, pode
+    estar na fonte que falhou)."""
+    relatorio['busca_incompleta'] = True
+    for cliente in relatorio.get('clientes', []):
+        cliente['ordem_pronta'] = False
+        for necessidade in cliente.get('necessidades', []):
+            if necessidade['situacao'] == 'AUSENTE':
+                necessidade['situacao'] = 'FONTE_INDISPONIVEL'
 
 
 def _compor_executar_ate_pending_a_partir_do_ambiente(*, preset_id: str, mensagem: str, dependencias):
@@ -138,9 +161,15 @@ def _parse_args(argv):
     parser.add_argument('--ate-pending', action='store_true', help='gerar Ordens até PENDING (sem transporte)')
     parser.add_argument('--preset', help='obrigatório com --ate-pending (decisão de negócio)')
     parser.add_argument('--mensagem', help='obrigatório com --ate-pending')
+    parser.add_argument('--coletar-email', action='store_true',
+                        help='antes de buscar, captura e-mails novos (Gmail somente leitura) -- gate: Fase 2 do e-mail')
+    parser.add_argument('--gmail-label', help='obrigatório com --coletar-email')
+    parser.add_argument('--gmail-token', help='caminho do token OAuth somente leitura; obrigatório com --coletar-email')
     args = parser.parse_args(argv)
     if args.ate_pending and not (args.preset and args.mensagem):
         parser.error('--ate-pending exige --preset e --mensagem')
+    if args.coletar_email and not (args.gmail_label and args.gmail_token):
+        parser.error('--coletar-email exige --gmail-label e --gmail-token')
     if args.ate_pending and args.preset not in PRESETS_SEM_ASSINATURA:
         parser.error(f'--preset deve ser um de {sorted(PRESETS_SEM_ASSINATURA)}')
     try:
@@ -162,10 +191,18 @@ def main(argv=None) -> int:
                 preset_id=args.preset, mensagem=args.mensagem, dependencias=dependencias,
             ) if args.ate_pending else None
         )
+        coletores = []
+        if args.coletar_email:
+            def _coletor_email():
+                # composto dentro do coletor: falha de credencial/rede vira
+                # FALHOU isolado no relatório, nunca exceção do comando todo
+                fonte = compor_fonte_gmail(args.gmail_label, args.gmail_token)
+                return compor_coletor_email(dependencias, fonte)()
+            coletores.append(('email', _coletor_email))
         relatorio = executar_prestacao_cliente_competencia(
             cliente_id=args.cliente, competencia_base=args.competencia, dependencias=dependencias,
             competencia_snapshot_airtable_comprovada=snapshot,
-            ate_pending=args.ate_pending, executar_ate_pending=executar,
+            ate_pending=args.ate_pending, executar_ate_pending=executar, coletores=coletores,
         )
     finally:
         fechar_dependencias(dependencias)
