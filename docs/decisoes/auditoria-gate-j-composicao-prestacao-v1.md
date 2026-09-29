@@ -481,3 +481,9 @@ dependiam do relógio.
 5. **Canal:** os presets atuais são de WhatsApp. Outro canal é outro
    preset e outro executor; nada na Ordem nem no núcleo depende do canal
    além do valor opaco.
+
+## Atualização 2026-09-29 — J2, J3 e J4
+
+- **J2, decidido** pelo operador na missão "Prestação → esteira documental inteligente": fontes internas primeiro; Airtable só como ponte somente leitura pelos adapters existentes. A decisão fica registrada em `localizacao-documental-pdf-composto-v1.md` D6.
+- **J3, pronto até o gate.** O produtor e a leitura do índice estão na PR #196. A migration 0011, o rollback e o adapter Postgres estão na PR #197, testados contra um Postgres real efêmero. Faltam o manifesto de autorização humana e a aplicação da migration.
+- **J4, composição pronta.** Os arquivos são `orquestrador/composicao_prestacao_real_v1.py` e o ponto de entrada `orquestrador/prestacao_cliente_competencia_v1.py`, que faz diagnóstico somente leitura e, com `--ate-pending`, gera Ordens até PENDING sem transporte. O item 8 (índice interno) foi coberto pela J3. O §1 ("zero Ordens para Holerite") mudou: Holerite passa a ser achado por conteúdo, inclusive dentro de PDF composto. Rodar contra a produção continua sendo gate humano.
