@@ -25,8 +25,9 @@ completamente inútil"). Limites que preservam a intenção da regra:
   - cliente, competência e tipo continuam validados de forma
     independente pelo corredor e pela elegibilidade -- um documento do
     colaborador certo com mês/cliente/tipo errado é descartado lá;
-  - necessidade sem colaborador (tipos de granularidade cliente) não é
-    atendida por esta fonte nesta etapa.
+  - necessidade sem colaborador (Extrato, FGTS, guias) é correlacionada
+    pelo CNPJ do cliente (CNPJ exato via `fonte_cliente_direto`, a mesma
+    porta do corredor); sem essa porta, não é atendida.
 Registrado em `docs/magnata-os/MAGNATA_OS_CENTRAL_FUNDACAO.md`.
 
 Falha de leitura de um arquivo não é silenciosa: se QUALQUER arquivo
@@ -68,14 +69,23 @@ _ILEGIVEL = object()
 
 
 class FonteCandidatosPorConteudo:
+    """Colaborador: CPF do colaborador em alguma página. Cliente (necessidade
+    sem colaborador -- Extrato, FGTS, guias): alguma página cujo CNPJ
+    resolve EXATAMENTE para o cliente da necessidade via
+    `fonte_cliente_direto` (mesma porta que o corredor usa para documentos
+    de granularidade cliente). Sem `fonte_cliente_direto`, necessidades de
+    cliente não são atendidas por esta fonte."""
+
     def __init__(
         self,
         repositorio_documentos: object,
         armazenamento_arquivos: object,
         candidatos_colaborador: Sequence[object],
+        fonte_cliente_direto: Optional[object] = None,
     ) -> None:
         self._repositorio = repositorio_documentos
         self._armazenamento = armazenamento_arquivos
+        self._fonte_cliente_direto = fonte_cliente_direto
         self._cpfs_por_colaborador: Dict[str, frozenset] = {}
         self._indice = indice_cpf_de_candidatos(candidatos_colaborador)
         for cpf, (colaborador_id, _) in self._indice.items():
@@ -83,14 +93,20 @@ class FonteCandidatosPorConteudo:
                 self._cpfs_por_colaborador.get(colaborador_id, frozenset()) | {cpf}
             )
         self._paginas_por_hash: Dict[str, object] = {}
+        self._cpfs_por_hash: Dict[str, frozenset] = {}
+        self._clientes_por_hash: Dict[str, frozenset] = {}
         self._resumo: Mapping[str, int] = {}
 
     def candidatos_para(self, necessidade: NecessidadeDocumentoPrestacao) -> Tuple[Documento, ...]:
         self._resumo = {}
-        if necessidade.colaborador is None:
-            return ()
-        cpfs_alvo = self._cpfs_por_colaborador.get(necessidade.colaborador.entidade_id)
-        if not cpfs_alvo:
+        if necessidade.colaborador is not None:
+            cpfs_alvo = self._cpfs_por_colaborador.get(necessidade.colaborador.entidade_id)
+            if not cpfs_alvo:
+                return ()
+            corresponde = lambda documento, paginas: bool(cpfs_alvo & self._cpfs(documento, paginas))  # noqa: E731
+        elif self._fonte_cliente_direto is not None:
+            corresponde = lambda documento, paginas: necessidade.cliente in self._clientes(documento, paginas)  # noqa: E731
+        else:
             return ()
 
         encontrados = []
@@ -106,7 +122,7 @@ class FonteCandidatosPorConteudo:
             if paginas is None:
                 sem_texto += 1
                 continue
-            if cpfs_alvo.intersection(paginas):
+            if corresponde(documento, paginas):
                 encontrados.append(documento)
 
         self._resumo = {
@@ -123,9 +139,29 @@ class FonteCandidatosPorConteudo:
         """Contagens da última consulta, para o rastro da localização."""
         return dict(self._resumo)
 
+    def _cpfs(self, documento: Documento, paginas: Tuple[str, ...]) -> frozenset:
+        if documento.hash_sha256 not in self._cpfs_por_hash:
+            self._cpfs_por_hash[documento.hash_sha256] = frozenset(
+                cpf for pagina in paginas for cpf in cpfs_da_pagina(pagina, self._indice)
+            )
+        return self._cpfs_por_hash[documento.hash_sha256]
+
+    def _clientes(self, documento: Documento, paginas: Tuple[str, ...]) -> frozenset:
+        """Clientes comprovados por CNPJ exato em alguma página. Falha da
+        porta de cliente propaga (a localização registra a fonte como
+        FALHOU -> INDETERMINADO), nunca vira "nenhum cliente"."""
+        if documento.hash_sha256 not in self._clientes_por_hash:
+            clientes = set()
+            for pagina in paginas:
+                cliente = self._fonte_cliente_direto.resolver_cliente_direto(pagina)
+                if cliente is not None:
+                    clientes.add(cliente)
+            self._clientes_por_hash[documento.hash_sha256] = frozenset(clientes)
+        return self._clientes_por_hash[documento.hash_sha256]
+
     def _paginas(self, documento: Documento) -> object:
-        """CPFs presentes no documento (frozenset), None se sem texto,
-        `_ILEGIVEL` se a leitura falhou (não cacheado)."""
+        """Texto por página, None se sem texto, `_ILEGIVEL` se a leitura
+        falhou (não cacheado: a próxima consulta tenta de novo)."""
         if documento.hash_sha256 in self._paginas_por_hash:
             return self._paginas_por_hash[documento.hash_sha256]
         try:
@@ -134,9 +170,5 @@ class FonteCandidatosPorConteudo:
         except Exception:
             return _ILEGIVEL
         paginas: Optional[Tuple[str, ...]] = extrair_paginas_seguro(conteudo)
-        cpfs = (
-            None if paginas is None
-            else frozenset(cpf for pagina in paginas for cpf in cpfs_da_pagina(pagina, self._indice))
-        )
-        self._paginas_por_hash[documento.hash_sha256] = cpfs
-        return cpfs
+        self._paginas_por_hash[documento.hash_sha256] = paginas
+        return paginas

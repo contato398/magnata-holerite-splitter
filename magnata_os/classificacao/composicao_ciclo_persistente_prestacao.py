@@ -1836,16 +1836,22 @@ def _diagnosticar_necessidade(
         hashes = {r.hash_sha256 for r in da_necessidade if r.documento_id in elegiveis}
         situacao = SituacaoNecessidade.CONFLITO if len(hashes) > 1 else SituacaoNecessidade.PRONTO
     elif da_necessidade:
-        resolvido_de_outro = any(
-            execucao.resultado_corredor.estado == EstadoCorredorDocumentoPrestacao.RESOLVIDO_E_AVANCOU
+        resolvidos = [
+            execucao.resultado_corredor.resolucao_semantica
+            for r in da_necessidade for execucao in r.resultados_corredor
+            if execucao.resultado_corredor.estado == EstadoCorredorDocumentoPrestacao.RESOLVIDO_E_AVANCOU
             and execucao.resultado_corredor.resolucao_semantica is not None
             and not execucao.resultado_corredor.resolucao_semantica.necessita_revisao_humana
-            for r in da_necessidade for execucao in r.resultados_corredor
-        )
-        situacao = (
-            SituacaoNecessidade.ENCONTRADO_NAO_ELEGIVEL if resolvido_de_outro
-            else SituacaoNecessidade.EM_REVISAO
-        )
+        ]
+        if any(_tipo_resolvido_atende_necessidade(res, necessidade) for res in resolvidos):
+            # documento do tipo pedido, mas de outro mês/cliente/pessoa
+            situacao = SituacaoNecessidade.ENCONTRADO_NAO_ELEGIVEL
+        elif resolvidos and len(resolvidos) == sum(len(r.resultados_corredor) for r in da_necessidade):
+            # todos os candidatos foram entendidos e são de OUTROS tipos:
+            # o documento pedido não está entre eles
+            situacao = SituacaoNecessidade.AUSENTE
+        else:
+            situacao = SituacaoNecessidade.EM_REVISAO
     elif localizacao is not None and localizacao.decisao is DecisaoLocalizacao.INDETERMINADO:
         situacao = SituacaoNecessidade.FONTE_INDISPONIVEL
     elif localizacao is not None and localizacao.candidatos:
