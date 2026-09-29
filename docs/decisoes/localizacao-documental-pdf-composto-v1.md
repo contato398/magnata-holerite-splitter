@@ -134,6 +134,43 @@ A busca por conteúdo de cliente devolve todos os documentos daquele cliente. Po
 
 Se algum candidato nunca chegou a um resultado (arquivo ilegível, PDF sem texto ou falha do corredor), a necessidade **nunca** é dada como AUSENTE: o resultado é EM_REVISAO, porque o documento pedido pode ser justamente o que falhou.
 
+### D10 — OCR sob demanda: critério objetivo e porta, sem motor instalado
+
+O repositório não tem OCR: não há motor, nem biblioteca, nem binário no ambiente. `documental/ocr.py` define três peças:
+- a porta `MotorOcr`;
+- o critério `CriterioOcr`: uma página com menos de N caracteres úteis na extração normal precisa de OCR;
+- `extrair_paginas_com_ocr`, que roda o OCR só nas páginas deficientes, só se houver motor, e só aceita o resultado quando ele traz mais texto. Falha ou resposta desalinhada do motor nunca inventa texto.
+
+A porta está ligada à extração por página, à aquisição, à separação de PDF composto, à busca por conteúdo e à composição J4. Sem motor, o comportamento é idêntico ao anterior. PDF textual nunca passa por OCR, para evitar custo e falso positivo. Instalar ou contratar um motor real é gate humano (dependência nova e possível custo).
+
+### D11 — Índice J3 lido com frescor
+
+`FonteIndiceComFrescor` junta dois conjuntos:
+- os candidatos do índice;
+- a busca por conteúdo, só entre documentos registrados (`criado_em`) **depois** do mais recente desses candidatos.
+
+Uma versão corrigida reenviada sempre entra na disputa, e a regra de versão aplicada depois da conferência decide qual vale. O índice só acelera, nunca é fonte única. Sem índice para a necessidade, a busca por conteúdo é completa.
+
+### D12 — Aquisição multifonte: coleta antes da busca, com falha isolada
+
+`coleta_fontes_externas_v1` roda os coletores antes da localização. Hoje o único coletor é o e-mail, que reutiliza a captura do Módulo 01 (Gmail somente leitura, idempotente por hash, sobre os mesmos repositórios).
+
+Quando um coletor falha, fica `FALHOU` com o tipo do erro e os demais seguem. A busca é marcada como **incompleta**:
+- nenhuma necessidade é dada como AUSENTE (vira FONTE_INDISPONIVEL);
+- `ordem_pronta` fica falso e nenhuma Ordem sai, porque o documento, ou uma versão corrigida dele, pode estar na fonte que falhou.
+
+Ativar a coleta real de e-mail é a "Fase 2" do e-mail (gate humano, `fase1-gmail-readonly-inerte.md`).
+
+A captura existente também avança a esteira (registro e classificação), porque é o caminho canônico de entrada. Não foi criado um caminho paralelo que registrasse sem classificar.
+
+### D13 — Diagnóstico ERRO_DE_LEITURA
+
+Um candidato achado cujo arquivo não pôde ser lido (blob ausente, falha de leitura, ou PDF sem texto e sem OCR) resulta em `ERRO_DE_LEITURA`. Falha do corredor continua `EM_REVISAO`. Nenhum dos dois casos é AUSENTE.
+
+### D14 — Dependências acíclicas verificadas
+
+Um teste AST garante que `documental/` e `classificacao/` nunca importam `magnata_os.orquestrador`, e que `central/` nunca importa o domínio da Prestação. A divisão fica assim: a Prestação produz necessidades e Ordens, o Orquestrador coordena, o canal executa. Não existe caminho para "Prestação pergunta ao Orquestrador que pergunta à Prestação".
+
 ### Ponto de entrada
 
 ```
@@ -141,7 +178,8 @@ python -m magnata_os.orquestrador.prestacao_cliente_competencia_v1 --cliente rec
 ```
 
 - **Sem opções extras:** faz só o diagnóstico, somente leitura.
-- **Com `--ate-pending --preset <sem assinatura> --mensagem "..."`:** gera as Ordens até PENDING pelo caminho que já existe, e só quando o pacote está PRONTO. Não há transporte.
+- **Com `--ate-pending --preset <sem assinatura> --mensagem "..."`:** gera as Ordens até PENDING pelo caminho que já existe, e só quando o pacote está PRONTO e a busca está completa. Não há transporte.
+- **Com `--coletar-email --gmail-label <label> --gmail-token <arquivo>`:** captura antes os e-mails novos (Gmail somente leitura).
 
 Rodar contra o ambiente real é um gate humano (produção).
 
@@ -152,9 +190,10 @@ Rodar contra o ambiente real é um gate humano (produção).
 | J3 — índice persistente (PR #197 pronta: migration, rollback, adapter e testes em Postgres real) | manifesto de autorização humana, depois aplicação da migration no banco real |
 | Rodar a Prestação real (`prestacao_cliente_competencia_v1`, composição J4 pronta) contra Postgres/S3/Airtable de produção | acesso à produção |
 | Separar PDF composto com documentos de vários clientes | decisão de regra para páginas de continuação sem CNPJ |
+| Motor de OCR real (tesseract local ou serviço) | nova dependência de sistema e possível custo |
+| Coleta real de e-mail (`--coletar-email`) | "Fase 2" do e-mail: autorização de fase (CLAUDE.md §6) e token OAuth somente leitura |
 | Distribuir documentos institucionais ao cliente (hoje só colaborador recebe Ordem) | decisão de negócio (destinatário, canal e preset do cliente) |
 | Fonte Gmail por necessidade (busca com `q=`) | credencial Gmail e ativação (`fase1-gmail-readonly-inerte.md`) |
 | Fonte Airtable com download de anexo | acesso externo; o adapter precisa ingerir por hash |
-| OCR | nova dependência de sistema (tesseract ou similar) e possível custo |
 | Autorização humana real para pacotes com N documentos | hoje só existe para 1 documento sem assinatura (`materializar_documento_pre_canario_operador_real_v1`) |
 | Transporte real | três barreiras de `autorizacao_transporte_real.py`, inalteradas |
