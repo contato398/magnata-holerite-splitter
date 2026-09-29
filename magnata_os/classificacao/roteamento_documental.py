@@ -306,6 +306,10 @@ def extrair_paginas_seguro(conteudo_pdf: bytes, motor_ocr: Optional[object] = No
     extracao = extrair_paginas_com_ocr(conteudo_pdf, motor_ocr)
     if extracao is None or not extracao.tem_texto:
         return None
+    if extracao.ocr_falhou and extracao.paginas_sem_texto:
+        # motor falhou e há página sem texto: entregar o resto como se
+        # fosse o documento inteiro esconderia a parte não lida
+        return None
     return extracao.paginas
 
 

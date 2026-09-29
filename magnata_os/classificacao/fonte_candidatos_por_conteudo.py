@@ -56,7 +56,7 @@ from magnata_os.documental.derivacao_documental import ORIGEM_DERIVADO_SEPARACAO
 from magnata_os.documental.modulo01.dominio import Documento
 
 from .ciclo_prestacao import NecessidadeDocumentoPrestacao
-from .roteamento_documental import extrair_paginas_seguro
+from magnata_os.documental.ocr import extrair_paginas_com_ocr
 from .separacao_documental import cpfs_da_pagina, indice_cpf_de_candidatos
 
 
@@ -121,7 +121,7 @@ class FonteCandidatosPorConteudo:
         for documento in self._repositorio.listar_todos():
             if documento.mime_type != 'application/pdf' or documento.origem == ORIGEM_DERIVADO_SEPARACAO:
                 continue
-            if criados_apos is not None and not documento.criado_em > criados_apos:
+            if criados_apos is not None and documento.criado_em < criados_apos:
                 continue
             analisados += 1
             paginas = self._paginas(documento)
@@ -178,6 +178,14 @@ class FonteCandidatosPorConteudo:
                 conteudo = arquivo.read()
         except Exception:
             return _ILEGIVEL
-        paginas: Optional[Tuple[str, ...]] = extrair_paginas_seguro(conteudo, self._motor_ocr)
+        extracao = extrair_paginas_com_ocr(conteudo, self._motor_ocr)
+        if extracao is not None and extracao.ocr_falhou and extracao.paginas_sem_texto:
+            # o motor de OCR falhou e sobrou página sem texto: o documento
+            # NÃO foi examinado -- ilegível (busca incompleta), nunca "sem
+            # texto", e não fica em cache (a próxima consulta tenta de novo)
+            return _ILEGIVEL
+        paginas: Optional[Tuple[str, ...]] = (
+            extracao.paginas if extracao is not None and extracao.tem_texto else None
+        )
         self._paginas_por_hash[documento.hash_sha256] = paginas
         return paginas

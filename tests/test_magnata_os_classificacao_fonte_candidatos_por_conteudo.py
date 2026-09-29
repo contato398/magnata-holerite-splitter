@@ -157,3 +157,27 @@ def test_documentos_derivados_nunca_sao_devolvidos_direto():
     fonte = FonteCandidatosPorConteudo(documentos, armazenamento, CANDIDATOS)
 
     assert fonte.candidatos_para(necessidade()) == (original,)
+
+
+def test_indice_com_frescor_examina_o_que_chegou_perto_do_corte():
+    """Revisão adversarial: com corte "apertado" (registro do candidato
+    indexado), um documento registrado pouco ANTES dele ficaria invisível."""
+    from datetime import timedelta
+    import dataclasses
+
+    from magnata_os.classificacao.fonte_candidatos_indice_com_frescor import FonteIndiceComFrescor
+    from magnata_os.classificacao.inventario_prestacao_memoria import InventarioPrestacaoEmMemoria
+    from magnata_os.classificacao.prestacao_readiness import ItemInventarioPrestacao
+
+    documentos, armazenamento, entrada = ambiente()
+    indexado = registrar(entrada, [f"CPF {cpf_sintetico(90000000001)} v1"])
+    paralelo = registrar(entrada, [f"CPF {cpf_sintetico(90000000001)} v2"])
+    # o paralelo foi registrado 1 minuto ANTES do indexado
+    documentos.salvar(dataclasses.replace(paralelo, criado_em=indexado.criado_em - timedelta(minutes=1)))
+    indice = InventarioPrestacaoEmMemoria()
+    n = necessidade()
+    indice.adicionar(ItemInventarioPrestacao(indexado.documento_id, n.tipo_documental, n.cliente, n.competencia, n.colaborador))
+
+    fonte = FonteIndiceComFrescor(indice, documentos, FonteCandidatosPorConteudo(documentos, armazenamento, CANDIDATOS))
+
+    assert {d.documento_id for d in fonte.candidatos_para(n)} == {indexado.documento_id, paralelo.documento_id}

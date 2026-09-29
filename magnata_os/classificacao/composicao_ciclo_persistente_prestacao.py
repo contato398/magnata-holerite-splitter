@@ -809,7 +809,8 @@ def adquirir_por_necessidades(
             texto_documento = texto_por_hash[documento_bruto.hash_sha256]
             if texto_documento is None:
                 if registro_descartes is not None:
-                    registro_descartes.setdefault(necessidade, []).append((documento_bruto.documento_id, 'leitura'))
+                    motivo = 'leitura' if documento_bruto.mime_type == 'application/pdf' else 'mime'
+                    registro_descartes.setdefault(necessidade, []).append((documento_bruto.documento_id, motivo))
                 continue
 
             chave_cache = (

@@ -585,7 +585,7 @@ def test_holerites_que_so_existem_no_email_sao_coletados_e_encontrados():
         )
 
     assert relatorio["coleta"] == [{"fonte": "email", "status": "OK", "documentos_novos": 1,
-                                    "documentos_repetidos": 0, "erro_tipo": None}]
+                                    "documentos_repetidos": 0, "arquivos_com_erro": 0, "erro_tipo": None}]
     holerites = {n["colaborador"]: n["situacao"] for n in relatorio["clientes"][0]["necessidades"] if n["colaborador"]}
     assert holerites == {colab(i): "PRONTO" for i in range(1, N + 1)}
 
@@ -596,8 +596,10 @@ def test_holerites_que_so_existem_no_email_sao_coletados_e_encontrados():
             cliente_id=CLIENTE.entidade_id, competencia_base="2026-09", dependencias=deps,
             coletores=[("email", coletor)],
         )
-    assert relatorio["coleta"][0]["documentos_repetidos"] == 1
+    # mensagem já capturada nem é baixada de novo (sem lote novo, sem evento duplicado)
+    assert relatorio["coleta"][0]["documentos_novos"] == 0 and relatorio["coleta"][0]["documentos_repetidos"] == 0
     assert len(deps.repositorio_documentos.listar_todos()) == total
+    assert len(deps.repositorio_lotes.listar_todos()) == 1
 
 
 def test_fonte_externa_que_falha_nao_derruba_as_outras_nem_permite_dizer_ausente_ou_enviar():
@@ -627,3 +629,40 @@ def test_fonte_externa_que_falha_nao_derruba_as_outras_nem_permite_dizer_ausente
     assert relatorio["ordens"] == [] and relatorio["ordens_motivo"] == "coleta_de_fonte_externa_falhou"
     assert conexao.linhas == {}
     assert "gmail indisponivel" not in repr(relatorio)
+
+
+def test_anexo_que_nao_entrou_torna_a_coleta_parcial_e_bloqueia_ordens():
+    import dataclasses
+    from types import SimpleNamespace
+
+    deps = dataclasses.replace(_dependencias(PAGINAS), repositorio_estados_esteira=RepositorioEstadosEsteiraEmMemoria())
+    executar, conexao = _executar_ate_pending(deps)
+
+    def _coletor_com_anexo_falho():
+        return SimpleNamespace(resumos_lote=(SimpleNamespace(quantidade_sucesso=0, quantidade_duplicados=0, quantidade_erro=1),))
+
+    with _com_corredor_fake():
+        relatorio = executar_prestacao_cliente_competencia(
+            cliente_id=CLIENTE.entidade_id, competencia_base="2026-09", dependencias=deps,
+            ate_pending=True, executar_ate_pending=executar, instante=AGORA,
+            coletores=[("email", _coletor_com_anexo_falho)],
+        )
+
+    assert relatorio["coleta"][0]["status"] == "PARCIAL" and relatorio["coleta"][0]["arquivos_com_erro"] == 1
+    assert relatorio["busca_incompleta"] is True and relatorio["ordens"] == []
+    assert conexao.linhas == {}
+
+
+def test_motor_de_ocr_que_falha_nunca_vira_ausente():
+    import dataclasses
+
+    class _MotorQuebrado:
+        def extrair_paginas(self, conteudo_pdf):
+            raise TimeoutError("ocr fora do ar")
+
+    deps = dataclasses.replace(_dependencias(["p1", "p2", "p3"]), motor_ocr=_MotorQuebrado())
+
+    relatorio = _rodar(deps)
+
+    situacoes = {n["situacao"] for n in relatorio["clientes"][0]["necessidades"] if n["colaborador"]}
+    assert situacoes == {"FONTE_INDISPONIVEL"}  # busca por conteúdo incompleta, nunca AUSENTE

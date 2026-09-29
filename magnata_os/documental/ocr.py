@@ -9,10 +9,11 @@ capacidade: define só
   (nova dependência de sistema e possível custo);
 - `CriterioOcr`: QUANDO o OCR é necessário, de forma objetiva: página
   cuja extração textual normal tem menos que `minimo_caracteres`
-  caracteres úteis (PDF escaneado / imagem). PDF textual nunca passa por
-  OCR -- evita custo e falso positivo;
+  caracteres úteis (PDF escaneado / imagem). PDF em que todas as páginas
+  têm texto nunca passa por OCR -- evita custo e falso positivo;
 - `extrair_paginas_com_ocr`: extração normal primeiro; OCR só nas páginas
-  deficientes, só se houver motor; o OCR substitui uma página apenas
+  deficientes, só se houver motor (páginas com texto nunca são
+  substituídas; um PDF textual inteiro nunca chama o motor); o OCR substitui uma página apenas
   quando devolve MAIS texto útil que a extração normal. Nunca lança:
   falha do motor mantém a extração normal e fica registrada no
   resultado (`ocr_falhou`), nunca vira texto inventado.
