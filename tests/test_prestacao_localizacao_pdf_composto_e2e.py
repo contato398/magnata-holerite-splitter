@@ -34,7 +34,11 @@ from magnata_os.classificacao.contratos import (
     PerfilAplicabilidadeResolucao, ReferenciaCanonica, RegraAplicabilidadeDimensao,
     ResolucaoDimensao, ResultadoResolucaoSemantico,
 )
+from magnata_os.classificacao.fonte_candidatos_documento_inventario_interna import (
+    FonteCandidatosDocumentoInventarioInterna,
+)
 from magnata_os.classificacao.fonte_candidatos_por_conteudo import FonteCandidatosPorConteudo
+from magnata_os.classificacao.inventario_prestacao_memoria import InventarioPrestacaoEmMemoria
 from magnata_os.classificacao.holerite_obrigatorio_prestacao import TIPO_HOLERITE
 from magnata_os.classificacao.orquestrador_corredor_readonly import ResultadoExecucaoCorredorPrestacao
 from magnata_os.classificacao.prestacao_readiness import ItemInventarioPrestacao, RequisitoDocumentalPrestacao
@@ -212,7 +216,7 @@ def _corredor_que_le_o_texto_real(chamadas, competencia=COMPETENCIA):
     return _fake
 
 
-def _cenario(*, esperados, com_separacao=True, paginas=None):
+def _cenario(*, esperados, com_separacao=True, paginas=None, indice=None):
     documentos, historico, armazenamento = (
         RepositorioDocumentosEmMemoria(), RepositorioHistoricoEmMemoria(), ArmazenamentoArquivosEmMemoria(),
     )
@@ -234,9 +238,13 @@ def _cenario(*, esperados, com_separacao=True, paginas=None):
         armazenamento_arquivos=armazenamento,
         candidatos_colaborador=candidatos,
         fontes_localizacao=(
+            (FonteNomeada("indice_documental", FonteCandidatosDocumentoInventarioInterna(indice, documentos)),)
+            if indice is not None else ()
+        ) + (
             FonteNomeada("conteudo", FonteCandidatosPorConteudo(documentos, armazenamento, candidatos)),
         ),
         entrada_documentos_derivados=entrada if com_separacao else None,
+        indice_documental=indice,
     )
     contatos = RepositorioContatoColaboradorEmMemoria()
     for i in range(1, N + 2):
@@ -495,3 +503,57 @@ def test_cpf_sem_formatacao_de_outra_pessoa_nao_deixa_o_pdf_passar_como_document
     assert composto.documento_id not in {doc_id for doc_id, _ in chamadas}
     texto = _texto_de(deps, chamadas[0][0])
     assert normalizar_cpf(cpf(2)) not in texto
+
+
+# ---- J3: índice documental ----
+
+def _fontes_da_localizacao(contexto, colaborador_id):
+    diagnostico = _diagnosticar(contexto)
+    necessidade = next(
+        d for c in diagnostico.clientes for d in c.necessidades if d.necessidade.colaborador.entidade_id == colaborador_id
+    )
+    return necessidade.localizacao["fonte_selecionada"], necessidade.situacao.value
+
+
+def test_primeira_execucao_acha_por_conteudo_e_alimenta_o_indice_segunda_acha_pelo_indice():
+    indice = InventarioPrestacaoEmMemoria()
+    contexto, resolver, deps, _, _, _ = _cenario(esperados=[colab(4)], indice=indice)
+
+    assert _fontes_da_localizacao(contexto, colab(4)) == ("conteudo", "PRONTO")
+    assert indice.listar(CLIENTE, COMPETENCIA) == ()  # diagnóstico não grava índice
+
+    _executar(contexto, resolver, deps, [])
+
+    itens = indice.listar(CLIENTE, COMPETENCIA)
+    assert [(i.colaborador.entidade_id, i.tipo_documental) for i in itens] == [(colab(4), TIPO_HOLERITE)]
+    derivado = deps["repositorio_documentos"].buscar_por_id(itens[0].documento_id)
+    assert derivado.origem == ORIGEM_DERIVADO_SEPARACAO
+    assert _fontes_da_localizacao(contexto, colab(4)) == ("indice_documental", "PRONTO")
+
+
+def test_indice_so_recebe_documento_elegivel():
+    indice = InventarioPrestacaoEmMemoria()
+    contexto, resolver, deps, _, _, _ = _cenario(esperados=[colab(4)], indice=indice)
+
+    with patch.object(modulo_composicao, "executar_documento_readonly",
+                      _corredor_que_le_o_texto_real([], ReferenciaCanonica("COMPETENCIA", "2026-08"))):
+        executar_prestacao_ate_distribuicao_documental_shadow(
+            contexto=contexto, resolver_parametros_ordem=resolver, materializador=None, porta_assinatura=None,
+            ator_referencia="ator:teste", proveniencia="teste", instante=AGORA, **deps,
+        )
+
+    assert indice.listar(CLIENTE, COMPETENCIA) == ()
+
+
+def test_falha_ao_gravar_indice_nao_derruba_o_ciclo_e_fica_registrada(caplog):
+    class _IndiceQuebrado(InventarioPrestacaoEmMemoria):
+        def adicionar_muitos(self, itens):
+            raise ConnectionError("fora do ar")
+
+    contexto, resolver, deps, conexao, _, _ = _cenario(esperados=[colab(4)], indice=_IndiceQuebrado())
+
+    with caplog.at_level(logging.ERROR, logger=modulo_composicao.__name__):
+        resultados = _executar(contexto, resolver, deps, [])
+
+    assert [r.funcionario_id for r in resultados] == [colab(4)]
+    assert any(getattr(r, "evento", None) == modulo_composicao.EVENTO_INDICE_DOCUMENTAL_FALHOU for r in caplog.records)

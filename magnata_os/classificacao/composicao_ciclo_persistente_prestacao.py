@@ -142,6 +142,7 @@ EVENTO_CORREDOR_FALHOU = 'corredor_falhou'
 EVENTO_LOCALIZACAO_SEM_DOCUMENTO = 'localizacao_sem_documento'
 EVENTO_DOCUMENTO_COMPOSTO_SEPARADO = 'documento_composto_separado'
 EVENTO_DOCUMENTO_COMPOSTO_NAO_SEPARADO = 'documento_composto_nao_separado'
+EVENTO_INDICE_DOCUMENTAL_FALHOU = 'indice_documental_falhou'
 ESTRATEGIA_SEPARACAO_CPF = 'cpf_colaborador_estrita'
 
 
@@ -262,6 +263,18 @@ class ContextoComposicaoPrestacao:
 
     fonte_vinculos: Optional[FonteVinculosPrestacao] = None
     """COLABORADOR -> CLIENTE na competência (granularidade colaborador)."""
+
+    indice_documental: Optional[object] = None
+    """J3 -- índice documento <-> cliente/competência/tipo/colaborador
+    (qualquer objeto com `adicionar_muitos(itens)`, ex.:
+    `InventarioPrestacaoEmMemoria` ou o repositório Postgres do índice).
+    Depois da aquisição, cada documento ELEGÍVEL (conferido pelo corredor
+    contra a necessidade) é registrado aqui; a mesma estrutura, lida por
+    `FonteCandidatosDocumentoInventarioInterna`, vira a primeira fonte de
+    localização -- na próxima execução o documento é achado pelo índice,
+    sem varrer conteúdo. Falha ao gravar o índice é registrada em evento
+    e não derruba o ciclo (o índice acelera; não decide). `None`: nada é
+    registrado (comportamento anterior)."""
 
     entrada_documentos_derivados: Optional[object] = None
     """Porta oficial de entrada (`registrar_entrada`, ex.:
@@ -1116,6 +1129,41 @@ def avaliar_candidatos_ancora(
     return ResultadoAvaliacaoCandidatosAncora(ancora=escolhido)
 
 
+def _alimentar_indice_documental(
+    contexto: 'ContextoComposicaoPrestacao',
+    resultados_aquisicao: Tuple[ResultadoAquisicaoPorNecessidade, ...],
+) -> None:
+    """Produtor do J3: só documentos ELEGÍVEIS entram no índice -- o
+    corredor já confirmou, pelo conteúdo, cliente, competência, tipo e
+    colaborador da necessidade. Nunca indexa candidato em revisão, de
+    outra pessoa ou de outro mês. Idempotente pela identidade lógica do
+    item (documento, cliente, colaborador)."""
+    indice = contexto.indice_documental
+    if indice is None:
+        return
+    itens = tuple(
+        ItemInventarioPrestacao(
+            documento_id=resultado.documento_id,
+            tipo_documental=resultado.necessidade.tipo_documental,
+            cliente=resultado.necessidade.cliente,
+            competencia=resultado.necessidade.competencia,
+            colaborador=resultado.necessidade.colaborador,
+        )
+        for resultado in resultados_aquisicao
+        if _elegivel_para_distribuicao(resultado, registrar_evento=False)
+    )
+    if not itens:
+        return
+    try:
+        indice.adicionar_muitos(itens)
+    except Exception as exc:
+        _logger.error(
+            '%s itens=%d exception_type=%s', EVENTO_INDICE_DOCUMENTAL_FALHOU, len(itens), type(exc).__name__,
+            extra={'evento': EVENTO_INDICE_DOCUMENTAL_FALHOU, 'itens': len(itens),
+                   'exception_type': type(exc).__name__},
+        )
+
+
 @dataclasses.dataclass
 class _RegistroCiclo:
     """Coleta opcional (só diagnóstico): necessidades descobertas por
@@ -1169,6 +1217,8 @@ def _descobrir_adquirir_e_recalcular_readiness(
         contexto, tuple(necessidades), ciclo_contexto,
         registro.localizacoes if registro is not None else None,
     )
+
+    _alimentar_indice_documental(contexto, resultados_aquisicao)
 
     candidatos_por_bucket: dict = {}
     for resultado_aquisicao in resultados_aquisicao:
@@ -1240,7 +1290,9 @@ def _tipo_resolvido_atende_necessidade(
     return _canonico(tipo_resolvido.entidade_id) == _canonico(necessidade.tipo_documental)
 
 
-def _elegivel_para_distribuicao(resultado: ResultadoAquisicaoPorNecessidade) -> bool:
+def _elegivel_para_distribuicao(
+    resultado: ResultadoAquisicaoPorNecessidade, registrar_evento: bool = True,
+) -> bool:
     """Gate J1 (achado da revisão adversarial): `adquirir_por_
     necessidades` registra 1 resultado por (necessidade, candidato)
     QUALQUER que seja o estado do corredor -- correto para a avaliação
@@ -1284,7 +1336,7 @@ def _elegivel_para_distribuicao(resultado: ResultadoAquisicaoPorNecessidade) -> 
             elegivel = False
             break
 
-    if not elegivel:
+    if not elegivel and registrar_evento:
         _logger.warning(
             '%s documento_id=%s cliente=%s competencia=%s',
             EVENTO_DOCUMENTO_INELEGIVEL_DISTRIBUICAO,
@@ -1709,6 +1761,7 @@ def _contexto_somente_leitura(contexto: 'ContextoComposicaoPrestacao') -> 'Conte
     em memória (derivados JÁ existentes no repositório real continuam
     sendo reaproveitados por hash, em leitura). O diagnóstico mostra o
     que o ciclo faria, sem efeito durável."""
+    contexto = dataclasses.replace(contexto, indice_documental=None)
     if contexto.entrada_documentos_derivados is None or contexto.armazenamento_arquivos is None:
         return contexto
     from magnata_os.documental.modulo01.adaptador_entrada_duravel import AdaptadorEntradaDuravel
@@ -1775,7 +1828,9 @@ def _diagnosticar_necessidade(
 
     da_necessidade = [r for r in resultados_aquisicao if r.necessidade == necessidade]
     avaliados = tuple(r.documento_id for r in da_necessidade)
-    elegiveis = tuple(r.documento_id for r in da_necessidade if _elegivel_para_distribuicao(r))
+    elegiveis = tuple(
+        r.documento_id for r in da_necessidade if _elegivel_para_distribuicao(r, registrar_evento=False)
+    )
 
     if elegiveis:
         hashes = {r.hash_sha256 for r in da_necessidade if r.documento_id in elegiveis}
