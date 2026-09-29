@@ -457,3 +457,43 @@ def test_candidato_ilegivel_nunca_vira_ausente():
         relatorio = _rodar(deps)
 
     assert _situacoes_cliente(relatorio)["FGTS"] == "EM_REVISAO"
+
+
+# ---- OCR ----
+
+class _MotorOcrFake:
+    """Simula o OCR de PDFs escaneados: para cada arquivo (por hash),
+    devolve o texto que as imagens das páginas conteriam -- inclusive
+    para as partes fatiadas do original, como um motor real faria."""
+
+    def __init__(self, original, textos):
+        import hashlib
+
+        from magnata_os.documental.fatiamento_pdf import fatiar_pdf
+
+        self.chamadas = 0
+        self.por_hash = {hashlib.sha256(original).hexdigest(): tuple(textos)}
+        for i, texto in enumerate(textos):
+            self.por_hash[hashlib.sha256(fatiar_pdf(original, [i])).hexdigest()] = (texto,)
+
+    def extrair_paginas(self, conteudo_pdf):
+        import hashlib
+
+        self.chamadas += 1
+        return self.por_hash[hashlib.sha256(conteudo_pdf).hexdigest()]
+
+
+def test_holerites_escaneados_so_sao_achados_com_motor_de_ocr():
+    import dataclasses
+
+    escaneado = ["p1", "p2", "p3"]  # páginas-imagem: só um resíduo curto de texto, abaixo do critério de OCR
+    motor = _MotorOcrFake(pdf_com_paginas(escaneado), tuple(PAGINAS))
+
+    sem_ocr = _rodar(_dependencias(escaneado))
+    com_ocr = _rodar(dataclasses.replace(_dependencias(escaneado), motor_ocr=motor))
+
+    holerites_sem = {n["colaborador"]: n["situacao"] for n in sem_ocr["clientes"][0]["necessidades"] if n["colaborador"]}
+    holerites_com = {n["colaborador"]: n["situacao"] for n in com_ocr["clientes"][0]["necessidades"] if n["colaborador"]}
+    assert set(holerites_sem.values()) == {"AUSENTE"}
+    assert holerites_com == {colab(i): "PRONTO" for i in range(1, N + 1)}
+    assert motor.chamadas >= 1

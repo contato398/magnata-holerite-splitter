@@ -112,6 +112,8 @@ class DependenciasPrestacaoReal:
     mesma se ela estiver cadastrada como cliente)."""
     conexao: Optional[object] = None
     """Conexão a fechar ao final (`fechar_dependencias`)."""
+    motor_ocr: Optional[object] = None
+    """Porta `MotorOcr`; `None` enquanto nenhum motor estiver instalado."""
 
 
 def parse_competencia(competencia: str) -> Tuple[int, int]:
@@ -191,7 +193,9 @@ def montar_contexto_prestacao(
     fontes = (
         FonteNomeada(
             'conteudo',
-            FonteCandidatosPorConteudo(d.repositorio_documentos, d.armazenamento, candidatos, fonte_cliente_direto),
+            FonteCandidatosPorConteudo(
+                d.repositorio_documentos, d.armazenamento, candidatos, fonte_cliente_direto, motor_ocr=d.motor_ocr,
+            ),
         ),
     )
 
@@ -211,6 +215,7 @@ def montar_contexto_prestacao(
         tipos_obrigatorios_por_colaborador=(TIPO_HOLERITE,),
         fontes_localizacao=fontes,
         data_versao_documento=data_recebimento_email(d.repositorio_lotes),
+        motor_ocr=d.motor_ocr,
         candidatos_colaborador=candidatos,
         fonte_vinculos=FonteVinculosPrestacaoAirtableShadow(leitor),
         indice_documental=d.indice_documental,

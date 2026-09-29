@@ -264,6 +264,12 @@ class ContextoComposicaoPrestacao:
     fonte_vinculos: Optional[FonteVinculosPrestacao] = None
     """COLABORADOR -> CLIENTE na competência (granularidade colaborador)."""
 
+    motor_ocr: Optional[object] = None
+    """Porta `MotorOcr` (`magnata_os/documental/ocr.py`). Com ela, PDF
+    sem texto útil (escaneado) passa por OCR antes de ser dado como
+    ilegível; PDF textual nunca passa. `None`: sem OCR (nenhum motor
+    instalado hoje -- dependência nova é decisão humana)."""
+
     data_versao_documento: Optional[object] = None
     """Regra de versão APÓS a conferência (ex.: `data_recebimento_email`
     -- "o segundo e-mail é o que vale"): quando 2+ documentos DISTINTOS
@@ -516,7 +522,17 @@ def _ler_e_extrair_texto(
         )
         return None
 
-    texto_documento = extrair_texto_seguro(conteudo_bytes)
+    if contexto.motor_ocr is not None:
+        # Com motor, o critério POR PÁGINA decide (`documental/ocr.py`):
+        # um escaneado com resíduo de texto (carimbo, número de página)
+        # não é "texto suficiente" -- esperar o texto sumir por completo
+        # deixaria esse caso sem OCR.
+        paginas_ocr = extrair_paginas_seguro(conteudo_bytes, contexto.motor_ocr)
+        texto_documento = (
+            ''.join(pagina + '\n' for pagina in paginas_ocr) if paginas_ocr is not None else None
+        )
+    else:
+        texto_documento = extrair_texto_seguro(conteudo_bytes)
     if texto_documento is None:
         # PDF corrompido/ilegível (ex.: escaneado sem OCR) -- mesma
         # distinção honesta já feita por `extrair_texto_seguro`: nunca
@@ -1035,7 +1051,7 @@ def _ler_bytes_e_paginas(
             conteudo = arquivo.read()
     except Exception:
         return None
-    paginas = extrair_paginas_seguro(conteudo)
+    paginas = extrair_paginas_seguro(conteudo, contexto.motor_ocr)
     return (conteudo, paginas) if paginas is not None else None
 
 

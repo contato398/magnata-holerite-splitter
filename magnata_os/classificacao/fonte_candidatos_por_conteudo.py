@@ -82,7 +82,9 @@ class FonteCandidatosPorConteudo:
         armazenamento_arquivos: object,
         candidatos_colaborador: Sequence[object],
         fonte_cliente_direto: Optional[object] = None,
+        motor_ocr: Optional[object] = None,
     ) -> None:
+        self._motor_ocr = motor_ocr
         self._repositorio = repositorio_documentos
         self._armazenamento = armazenamento_arquivos
         self._fonte_cliente_direto = fonte_cliente_direto
@@ -169,6 +171,6 @@ class FonteCandidatosPorConteudo:
                 conteudo = arquivo.read()
         except Exception:
             return _ILEGIVEL
-        paginas: Optional[Tuple[str, ...]] = extrair_paginas_seguro(conteudo)
+        paginas: Optional[Tuple[str, ...]] = extrair_paginas_seguro(conteudo, self._motor_ocr)
         self._paginas_por_hash[documento.hash_sha256] = paginas
         return paginas
