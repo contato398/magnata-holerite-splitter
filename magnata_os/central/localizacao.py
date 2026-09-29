@@ -52,7 +52,7 @@ Regras (fail-closed, nunca silenciosas):
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
 from typing import Callable, Generic, Mapping, Optional, Protocol, Sequence, Tuple, TypeVar
@@ -112,6 +112,10 @@ class ConsultaFonte:
     status: StatusConsultaFonte
     documento_ids: Tuple[str, ...] = ()
     erro_tipo: str | None = None
+    detalhes: Mapping[str, int] = field(default_factory=dict)
+    """Contagens opcionais da própria fonte (ex.: documentos analisados,
+    sem texto, ilegíveis), via `resumo_ultima_consulta()` quando a fonte
+    oferece. Só números -- nunca identificador pessoal."""
 
 
 @dataclass(frozen=True)
@@ -163,6 +167,7 @@ class ResultadoLocalizacao:
                     "status": c.status.value,
                     "documento_ids": list(c.documento_ids),
                     "erro_tipo": c.erro_tipo,
+                    "detalhes": dict(c.detalhes),
                 }
                 for c in self.consultas
             ],
@@ -192,7 +197,10 @@ def localizar_documento(
             candidatos = tuple(fonte.fonte.candidatos_para(necessidade))
         except Exception as exc:  # a falha vira rastro, nunca some
             consultas.append(
-                ConsultaFonte(fonte.nome, StatusConsultaFonte.FALHOU, erro_tipo=type(exc).__name__)
+                ConsultaFonte(
+                    fonte.nome, StatusConsultaFonte.FALHOU, erro_tipo=type(exc).__name__,
+                    detalhes=_resumo_da_fonte(fonte.fonte),
+                )
             )
             falhas.append(fonte.nome)
             continue
@@ -201,6 +209,7 @@ def localizar_documento(
                 fonte.nome,
                 StatusConsultaFonte.CONSULTADA,
                 documento_ids=tuple(d.documento_id for d in candidatos),
+                detalhes=_resumo_da_fonte(fonte.fonte),
             )
         )
         if candidatos:
@@ -262,6 +271,16 @@ def localizar_documento(
         documento_selecionado=por_hash[hash_mais_recente][0],
         fonte_selecionada=fonte_com_candidatos,
     )
+
+
+def _resumo_da_fonte(fonte: object) -> Mapping[str, int]:
+    resumo = getattr(fonte, "resumo_ultima_consulta", None)
+    if not callable(resumo):
+        return {}
+    try:
+        return {str(k): int(v) for k, v in dict(resumo()).items()}
+    except Exception:  # resumo é só observabilidade; nunca derruba a busca
+        return {}
 
 
 def _sem_repeticao(documentos: Tuple[Documento, ...]) -> Tuple[Documento, ...]:

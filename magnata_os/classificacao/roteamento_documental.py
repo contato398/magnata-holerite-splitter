@@ -90,7 +90,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Tuple
 
-from magnata_os.documental.extracao_texto import extrair_texto_pdf
+from magnata_os.documental.extracao_texto import extrair_texto_pdf, extrair_texto_pdf_por_pagina
 
 from .classificador_documental import (
     EstadoClassificacao,
@@ -293,6 +293,22 @@ def extrair_texto_seguro(conteudo_pdf: bytes) -> Optional[str]:
     if not texto or not texto.strip():
         return None
     return texto
+
+
+def extrair_paginas_seguro(conteudo_pdf: bytes) -> Optional[Tuple[str, ...]]:
+    """Versão por página de `extrair_texto_seguro`, com a mesma regra:
+    PDF corrompido, vazio ou sem nenhum texto extraível (ex.: escaneado
+    sem OCR) retorna None -- nunca lança, nunca devolve páginas vazias
+    como se fossem classificáveis."""
+    if not conteudo_pdf:
+        return None
+    try:
+        paginas = extrair_texto_pdf_por_pagina(conteudo_pdf)
+    except Exception:
+        return None
+    if not any(pagina.strip() for pagina in paginas):
+        return None
+    return paginas
 
 
 def _decisao_revisao(

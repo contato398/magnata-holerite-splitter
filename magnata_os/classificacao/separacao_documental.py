@@ -71,6 +71,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from ..documental.importacao_lote.dominio import (
     extrair_cnpjs_de_texto,
     extrair_cpfs_distintos_de_texto,
+    normalizar_cpf,
 )
 
 
@@ -284,3 +285,28 @@ def estrategia_por_cpf_colaborador(
         return IdentificacaoPagina(SituacaoPaginaSeparacao.SEM_MARCADOR)
 
     return identificar
+
+
+def indice_cpf_de_candidatos(candidatos: Sequence[object]) -> Dict[str, Tuple[str, None]]:
+    """Índice CPF -> (colaborador_id, None) para `estrategia_por_cpf_
+    colaborador`, montado a partir de `CandidatoFuncionario` (func_id,
+    cpf, nome_normalizado) já presentes no contexto.
+
+    - CPF é chave TRANSITÓRIA em memória -- o índice nunca é logado nem
+      devolvido em DTO; o que sai da separação é só `colaborador_id`.
+    - `nome` é sempre None: nome real de pessoa nunca entra em grupo.
+    - CPF associado a mais de um colaborador é DESCARTADO (ambíguo --
+      mesma regra de `resolver_funcionario`): a página vira entidade
+      desconhecida, nunca atribuída por adivinhação."""
+    por_cpf: Dict[str, set] = {}
+    for candidato in candidatos:
+        cpf = normalizar_cpf(getattr(candidato, 'cpf', None) or '')
+        colaborador_id = getattr(candidato, 'func_id', None)
+        if len(cpf) != 11 or not colaborador_id:
+            continue
+        por_cpf.setdefault(cpf, set()).add(colaborador_id)
+    return {
+        cpf: (next(iter(ids)), None)
+        for cpf, ids in por_cpf.items()
+        if len(ids) == 1
+    }

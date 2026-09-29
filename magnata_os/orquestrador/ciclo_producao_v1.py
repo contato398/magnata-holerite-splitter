@@ -117,28 +117,43 @@ def executar_um_ciclo_producao(
         repositorio_autorizacoes = RepositorioAutorizacoesGatePostgres(conexao_postgres)
 
         resultados = []
+        falhas_por_par = []
         pares = repositorio_acoes.listar_pares_elegiveis(
             instante=instante, limite=max_pares_por_ciclo,
         )
         for event_id, preview_id in pares:
-            for _ in range(max_acoes_por_par):
-                resultado = executar_proxima_acao_persistente(
-                    repositorio_acoes=repositorio_acoes,
-                    repositorio_autorizacoes=repositorio_autorizacoes,
-                    armazenamento=armazenamento,
-                    porta_execucao=porta_execucao,
-                    event_id=event_id,
-                    preview_id=preview_id,
-                    claim_referencia=claim_referencia,
-                    instante=instante,
+            # Isolamento por par (destinatário): uma exceção num par (ex.:
+            # envelope adulterado, autorização ausente, falha de leitura
+            # do arquivo) nunca impede os pares seguintes de rodar neste
+            # ciclo. A falha continua NÃO silenciosa: é logada aqui e a
+            # primeira é relançada ao final do ciclo (depois do
+            # observador), então o disparo termina com erro.
+            try:
+                for _ in range(max_acoes_por_par):
+                    resultado = executar_proxima_acao_persistente(
+                        repositorio_acoes=repositorio_acoes,
+                        repositorio_autorizacoes=repositorio_autorizacoes,
+                        armazenamento=armazenamento,
+                        porta_execucao=porta_execucao,
+                        event_id=event_id,
+                        preview_id=preview_id,
+                        claim_referencia=claim_referencia,
+                        instante=instante,
+                    )
+                    resultados.append(resultado)
+                    logger.info(
+                        '[CICLO_PRODUCAO] acao_execucao_id=%s situacao=%s',
+                        resultado.acao_execucao_id, resultado.situacao,
+                    )
+                    if resultado.situacao == 'SEM_ACAO_ELEGIVEL':
+                        break
+            except Exception as exc:
+                falhas_por_par.append(exc)
+                logger.error(
+                    '[CICLO_PRODUCAO] par falhou event_id=%s preview_id=%s classe=%s -- seguindo para o proximo par',
+                    event_id, preview_id, type(exc).__name__,
                 )
-                resultados.append(resultado)
-                logger.info(
-                    '[CICLO_PRODUCAO] acao_execucao_id=%s situacao=%s',
-                    resultado.acao_execucao_id, resultado.situacao,
-                )
-                if resultado.situacao == 'SEM_ACAO_ELEGIVEL':
-                    break
+                _desfazer_transacao_pendente(conexao_postgres)
 
         repositorio_conclusao = RepositorioConclusaoObrigacaoAssinaturaPostgres(conexao_postgres)
         observacoes = []
@@ -182,6 +197,13 @@ def executar_um_ciclo_producao(
                 acao_execucao_id, estado,
             )
 
+        if falhas_por_par:
+            logger.error(
+                '[CICLO_PRODUCAO] ciclo terminou com %d par(es) em falha de %d',
+                len(falhas_por_par), len(pares),
+            )
+            raise falhas_por_par[0]
+
         return ResultadoCicloProducao(
             lock_adquirido=True,
             acoes_processadas=tuple(resultados),
@@ -189,6 +211,21 @@ def executar_um_ciclo_producao(
         )
     finally:
         _liberar_lock(conexao_postgres)
+
+
+def _desfazer_transacao_pendente(conexao) -> None:
+    """Depois de uma falha num par, desfaz transação aberta e não
+    confirmada daquele par para que a conexão siga utilizável pelos
+    próximos (erro de SQL deixa a transação abortada no Postgres).
+    O advisory lock é de SESSÃO e não é afetado por rollback. Conexão
+    sem `rollback` (fakes) ou rollback que falha: segue -- o próximo par
+    falhará sozinho e também ficará registrado."""
+    rollback = getattr(conexao, 'rollback', None)
+    if callable(rollback):
+        try:
+            rollback()
+        except Exception:
+            logger.error('[CICLO_PRODUCAO] rollback apos falha de par tambem falhou')
 
 
 # ---------------------------------------------------------------------

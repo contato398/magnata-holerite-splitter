@@ -50,6 +50,7 @@ verdade)."""
 from __future__ import annotations
 
 import dataclasses
+import enum
 import logging
 from datetime import datetime, timezone
 from typing import Mapping, Optional, Protocol, Sequence, Tuple
@@ -85,8 +86,15 @@ from magnata_os.central.localizacao import (
     ResultadoLocalizacao,
     localizar_documento,
 )
+from magnata_os.documental.derivacao_documental import GrupoPaginas, derivar_documentos
 from magnata_os.documental.modulo01.dominio import Documento
+from .evidencia_estrutural_documental import analisar_estrutura_documento
 from .fonte_candidatos_por_necessidade import FonteCandidatosDocumentaisPorNecessidade
+from .separacao_documental import (
+    estrategia_por_cpf_colaborador,
+    indice_cpf_de_candidatos,
+    separar_por_carry_forward,
+)
 from .fonte_cliente_direto_documento import FonteClienteDiretoDocumento
 from .fonte_clientes_prestacao import FonteClientesPrestacao
 from .fonte_colaboradores_esperados_prestacao import (
@@ -111,7 +119,7 @@ from .prestacao_readiness import (
     RequisitoDocumentalPrestacao,
 )
 from .resolucao_documento_prestacao import EstadoCorredorDocumentoPrestacao
-from .roteamento_documental import extrair_texto_seguro
+from .roteamento_documental import extrair_paginas_seguro, extrair_texto_seguro
 from .vinculo_unidade_prestacao import FonteUnidadePostoPrestacao
 from .vinculos_prestacao import FonteVinculosPrestacao
 
@@ -132,6 +140,9 @@ EVENTO_MIME_NAO_SUPORTADO = 'mime_nao_suportado'
 EVENTO_PDF_ILEGIVEL = 'pdf_ilegivel'
 EVENTO_CORREDOR_FALHOU = 'corredor_falhou'
 EVENTO_LOCALIZACAO_SEM_DOCUMENTO = 'localizacao_sem_documento'
+EVENTO_DOCUMENTO_COMPOSTO_SEPARADO = 'documento_composto_separado'
+EVENTO_DOCUMENTO_COMPOSTO_NAO_SEPARADO = 'documento_composto_nao_separado'
+ESTRATEGIA_SEPARACAO_CPF = 'cpf_colaborador'
 
 
 # ==== AQUISIÇÃO CANÔNICA (COM CORREDOR) ====
@@ -251,6 +262,16 @@ class ContextoComposicaoPrestacao:
 
     fonte_vinculos: Optional[FonteVinculosPrestacao] = None
     """COLABORADOR -> CLIENTE na competência (granularidade colaborador)."""
+
+    entrada_documentos_derivados: Optional[object] = None
+    """Porta oficial de entrada (`registrar_entrada`, ex.:
+    `AdaptadorEntradaDuravel`) usada para registrar os Documentos
+    DERIVADOS de um PDF composto (vários colaboradores no mesmo arquivo).
+    Com ela, um candidato com 2+ CPFs é separado por colaborador
+    (`separacao_documental`, índice montado de `candidatos_colaborador`)
+    e só a parte do colaborador da necessidade segue para o corredor --
+    ver `_expandir_documentos_compostos`. `None`: comportamento anterior
+    (o PDF composto segue inteiro e vai para revisão)."""
 
     fonte_unidade_posto: Optional[FonteUnidadePostoPrestacao] = None
     """COLABORADOR -> UNIDADE_POSTO na competência (hoje exigido pelo
@@ -669,6 +690,7 @@ def adquirir_por_necessidades(
     contexto: 'ContextoComposicaoPrestacao',
     necessidades: Tuple[NecessidadeDocumentoPrestacao, ...],
     ciclo_para_corredor: ContextoCicloPrestacao,
+    registro_localizacoes: Optional[dict] = None,
 ) -> Tuple[InventarioPrestacaoEmMemoria, Tuple[ResultadoAquisicaoPorNecessidade, ...]]:
     """Para CADA necessidade, consulta `contexto.fonte_candidatos_por_
     necessidade.candidatos_para(necessidade)` -- NUNCA `repositorio_
@@ -730,8 +752,14 @@ def adquirir_por_necessidades(
     texto_por_hash: dict = {}
     corredor_por_chave: dict = {}
 
+    paginas_por_hash: dict = {}
+
     for necessidade in necessidades:
-        candidatos = _candidatos_localizados(necessidade, fontes)
+        candidatos = _expandir_documentos_compostos(
+            contexto, necessidade,
+            _candidatos_localizados(necessidade, fontes, registro_localizacoes),
+            paginas_por_hash,
+        )
         for documento_bruto in candidatos:
             if documento_bruto.hash_sha256 not in texto_por_hash:
                 texto_por_hash[documento_bruto.hash_sha256] = _ler_e_extrair_texto(
@@ -799,7 +827,9 @@ def _fontes_localizacao(contexto: 'ContextoComposicaoPrestacao') -> Tuple[FonteN
 
 
 def _candidatos_localizados(
-    necessidade: NecessidadeDocumentoPrestacao, fontes: Tuple[FonteNomeada, ...],
+    necessidade: NecessidadeDocumentoPrestacao,
+    fontes: Tuple[FonteNomeada, ...],
+    registro_localizacoes: Optional[dict] = None,
 ) -> Tuple[Documento, ...]:
     """Quais documentos da localização seguem para o corredor:
 
@@ -816,12 +846,130 @@ def _candidatos_localizados(
     Toda necessidade sem documento gera um evento com a decisão e o
     rastro da busca (só ids, hashes e nomes de fonte)."""
     resultado = localizar_documento(necessidade, fontes)
+    if registro_localizacoes is not None:
+        registro_localizacoes[necessidade] = resultado
     if resultado.decisao is DecisaoLocalizacao.LOCALIZADO:
         return resultado.documentos_do_conteudo_selecionado
     if resultado.decisao is DecisaoLocalizacao.AMBIGUO:
         return resultado.candidatos
     _registrar_localizacao_sem_documento(necessidade, resultado)
     return ()
+
+
+def _expandir_documentos_compostos(
+    contexto: 'ContextoComposicaoPrestacao',
+    necessidade: NecessidadeDocumentoPrestacao,
+    candidatos: Tuple[Documento, ...],
+    paginas_por_hash: dict,
+) -> Tuple[Documento, ...]:
+    """Troca cada candidato que é um PDF COMPOSTO (2+ CPFs distintos)
+    pelo Documento derivado que contém só as páginas do colaborador da
+    necessidade.
+
+    Por que antes do corredor: com o PDF inteiro, o corredor vê N
+    pessoas no mesmo texto (COLABORADOR em CONFLITO -> revisão) e a
+    elegibilidade exige que TODA execução confirme o colaborador -- o
+    documento pedido nunca seria encontrado, e distribuir o PDF inteiro
+    enviaria dados de outras pessoas. O derivado é um Documento real
+    (bytes, hash e proveniência próprios, DEC-ENT-015), então âncora e
+    elegibilidade seguem inalteradas.
+
+    Registra TODOS os derivados do composto (as outras partes servem a
+    outras necessidades; idempotente por hash). Sem porta de entrada,
+    sem colaborador na necessidade, sem índice de CPF, sem texto por
+    página ou sem parte do colaborador: o candidato segue inalterado
+    (comportamento anterior) e o motivo fica em evento."""
+    entrada = contexto.entrada_documentos_derivados
+    if entrada is None or necessidade.colaborador is None:
+        return candidatos
+    indice = indice_cpf_de_candidatos(contexto.candidatos_colaborador)
+    if not indice:
+        return candidatos
+
+    expandidos: list = []
+    vistos: set = set()
+    for documento in candidatos:
+        final = _parte_do_colaborador(
+            contexto, entrada, indice, necessidade, documento, paginas_por_hash,
+        ) or documento
+        if final.documento_id not in vistos:
+            vistos.add(final.documento_id)
+            expandidos.append(final)
+    return tuple(expandidos)
+
+
+def _parte_do_colaborador(
+    contexto: 'ContextoComposicaoPrestacao',
+    entrada: object,
+    indice: Mapping[str, Tuple[str, None]],
+    necessidade: NecessidadeDocumentoPrestacao,
+    documento: Documento,
+    paginas_por_hash: dict,
+) -> Optional[Documento]:
+    if documento.mime_type != 'application/pdf':
+        return None
+    if documento.hash_sha256 not in paginas_por_hash:
+        paginas_por_hash[documento.hash_sha256] = _ler_bytes_e_paginas(contexto, documento)
+    lido = paginas_por_hash[documento.hash_sha256]
+    if lido is None:
+        return None
+    conteudo, paginas = lido
+    if analisar_estrutura_documento(paginas).quantidade_cpfs_distintos < 2:
+        return None
+
+    separacao = separar_por_carry_forward(paginas, estrategia_por_cpf_colaborador(indice))
+    try:
+        derivados = derivar_documentos(
+            documento, conteudo,
+            [GrupoPaginas(g.entidade_id, g.indices_paginas) for g in separacao.grupos],
+            ESTRATEGIA_SEPARACAO_CPF, entrada,
+        )
+    except Exception as exc:
+        _registrar_composto(EVENTO_DOCUMENTO_COMPOSTO_NAO_SEPARADO, documento, necessidade,
+                            motivo='falha_ao_derivar', erro_tipo=type(exc).__name__)
+        return None
+
+    parte = next(
+        (d.documento for d in derivados if d.entidade_id == necessidade.colaborador.entidade_id), None,
+    )
+    _registrar_composto(
+        EVENTO_DOCUMENTO_COMPOSTO_SEPARADO if parte else EVENTO_DOCUMENTO_COMPOSTO_NAO_SEPARADO,
+        documento, necessidade,
+        motivo='parte_do_colaborador_encontrada' if parte else 'sem_parte_do_colaborador',
+        derivados=len(derivados), paginas_sem_grupo=len(separacao.indices_sem_grupo),
+        documento_derivado_id=parte.documento_id if parte else None,
+    )
+    return parte
+
+
+def _ler_bytes_e_paginas(
+    contexto: 'ContextoComposicaoPrestacao', documento: Documento,
+) -> Optional[Tuple[bytes, Tuple[str, ...]]]:
+    """Falhas de leitura aqui só desligam a separação para este
+    documento; o caminho normal (`_ler_e_extrair_texto`) continua
+    registrando o evento de falha de sempre."""
+    try:
+        with contexto.armazenamento_arquivos.abrir_leitura(documento.hash_sha256) as arquivo:
+            conteudo = arquivo.read()
+    except Exception:
+        return None
+    paginas = extrair_paginas_seguro(conteudo)
+    return (conteudo, paginas) if paginas is not None else None
+
+
+def _registrar_composto(evento: str, documento: Documento, necessidade: NecessidadeDocumentoPrestacao, **dados) -> None:
+    _logger.info(
+        '%s documento_id=%s motivo=%s', evento, documento.documento_id, dados.get('motivo'),
+        extra={
+            'evento': evento,
+            'documento_id': documento.documento_id,
+            'hash_sha256': documento.hash_sha256,
+            'cliente': necessidade.cliente.entidade_id,
+            'competencia': necessidade.competencia.entidade_id,
+            'colaborador': necessidade.colaborador.entidade_id if necessidade.colaborador else None,
+            **dados,
+        },
+    )
 
 
 def _registrar_localizacao_sem_documento(
@@ -960,8 +1108,18 @@ def avaliar_candidatos_ancora(
     return ResultadoAvaliacaoCandidatosAncora(ancora=escolhido)
 
 
+@dataclasses.dataclass
+class _RegistroCiclo:
+    """Coleta opcional (só diagnóstico): necessidades descobertas por
+    cliente/competência e o resultado da localização de cada uma."""
+
+    necessidades_por_vinculo: dict = dataclasses.field(default_factory=dict)
+    localizacoes: dict = dataclasses.field(default_factory=dict)
+
+
 def _descobrir_adquirir_e_recalcular_readiness(
     contexto: 'ContextoComposicaoPrestacao', ciclo_contexto: ContextoCicloPrestacao,
+    registro: Optional[_RegistroCiclo] = None,
 ) -> Tuple[Tuple[ResultadoAquisicaoPorNecessidade, ...], ResultadoCicloPrestacao]:
     """Extraído de `executar_ciclo_prestacao_persistente` (antigos
     passos 3-7: descoberta -> aquisição por necessidade -> seleção de
@@ -994,9 +1152,14 @@ def _descobrir_adquirir_e_recalcular_readiness(
     necessidades: list = []
     for resultado_cliente in resultado_descoberta.resultados_por_cliente:
         necessidades.extend(resultado_cliente.necessidades)
+        if registro is not None:
+            registro.necessidades_por_vinculo[
+                (resultado_cliente.cliente, resultado_cliente.competencia)
+            ] = tuple(resultado_cliente.necessidades)
 
     inventario_adquirido, resultados_aquisicao = adquirir_por_necessidades(
         contexto, tuple(necessidades), ciclo_contexto,
+        registro.localizacoes if registro is not None else None,
     )
 
     candidatos_por_bucket: dict = {}
@@ -1415,3 +1578,158 @@ def executar_ciclo_prestacao_persistente(
             pass  # Já falhou, não mascarar a exceção original
 
         raise
+
+
+
+# ==== DIAGNÓSTICO DA PRESTAÇÃO (somente leitura) ====
+# Responde, por cliente e por necessidade: o que procuramos, onde, o que
+# achamos, o que foi descartado e por quê, e se a Ordem pode sair. Não
+# cria Ordem, não autoriza, não envia -- só reaproveita a mesma
+# descoberta -> localização -> aquisição -> readiness do ciclo real, então
+# o diagnóstico nunca diverge do que o ciclo faria.
+
+
+class SituacaoNecessidade(str, enum.Enum):
+    PRONTO = 'PRONTO'
+    """Há documento elegível (confere cliente, competência, colaborador e tipo)."""
+    CONFLITO = 'CONFLITO'
+    """Mais de um documento elegível e distinto para a mesma necessidade."""
+    ENCONTRADO_NAO_ELEGIVEL = 'ENCONTRADO_NAO_ELEGIVEL'
+    """Documento achado e resolvido, mas de outro colaborador/mês/cliente/tipo."""
+    EM_REVISAO = 'EM_REVISAO'
+    """Documento achado, mas o corredor não conseguiu resolvê-lo com segurança."""
+    AUSENTE = 'AUSENTE'
+    """Nenhum documento nas fontes consultadas."""
+    FONTE_INDISPONIVEL = 'FONTE_INDISPONIVEL'
+    """Alguma fonte falhou: ausência não pode ser afirmada."""
+    SEM_FONTE = 'SEM_FONTE'
+    """Nenhuma fonte de localização configurada."""
+
+
+@dataclasses.dataclass(frozen=True)
+class DiagnosticoNecessidade:
+    necessidade: NecessidadeDocumentoPrestacao
+    situacao: SituacaoNecessidade
+    documentos_avaliados: Tuple[str, ...] = ()
+    documentos_elegiveis: Tuple[str, ...] = ()
+    localizacao: Optional[Mapping[str, object]] = None
+
+    def como_dict(self) -> Mapping[str, object]:
+        n = self.necessidade
+        return {
+            'cliente': n.cliente.entidade_id,
+            'competencia': n.competencia.entidade_id,
+            'tipo_documental': n.tipo_documental,
+            'colaborador': n.colaborador.entidade_id if n.colaborador else None,
+            'situacao': self.situacao.value,
+            'documentos_avaliados': list(self.documentos_avaliados),
+            'documentos_elegiveis': list(self.documentos_elegiveis),
+            'localizacao': dict(self.localizacao) if self.localizacao is not None else None,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class DiagnosticoCliente:
+    cliente: ReferenciaCanonica
+    competencia: ReferenciaCanonica
+    estado_pacote: EstadoPacotePrestacao
+    necessidades: Tuple[DiagnosticoNecessidade, ...]
+
+    @property
+    def ordem_pronta(self) -> bool:
+        """Mesma regra do caminho até PENDING: só pacote PRONTO gera Ordem."""
+        return self.estado_pacote == EstadoPacotePrestacao.PRONTO
+
+    def como_dict(self) -> Mapping[str, object]:
+        return {
+            'cliente': self.cliente.entidade_id,
+            'competencia': self.competencia.entidade_id,
+            'estado_pacote': self.estado_pacote.value,
+            'ordem_pronta': self.ordem_pronta,
+            'necessidades': [d.como_dict() for d in self.necessidades],
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class DiagnosticoPrestacao:
+    competencia_base: str
+    clientes: Tuple[DiagnosticoCliente, ...]
+
+    def como_dict(self) -> Mapping[str, object]:
+        """Somente ids, hashes, contagens e nomes de fonte -- consumível
+        pelo futuro painel; nunca CPF, nome de pessoa ou nome de arquivo."""
+        return {
+            'competencia_base': self.competencia_base,
+            'clientes': [c.como_dict() for c in self.clientes],
+        }
+
+
+def diagnosticar_prestacao(contexto: 'ContextoComposicaoPrestacao') -> DiagnosticoPrestacao:
+    if contexto.politica_competencia is not None:
+        verificar_politica_sem_override_por_tipo(contexto.politica_competencia)
+    ano_str, mes_str = contexto.competencia_base.split('-')
+    ciclo_contexto = ContextoCicloPrestacao(competencia_base=(int(ano_str), int(mes_str)))
+
+    registro = _RegistroCiclo()
+    resultados_aquisicao, resultado_ciclo = _descobrir_adquirir_e_recalcular_readiness(
+        contexto, ciclo_contexto, registro,
+    )
+    sem_fonte = not _fontes_localizacao(contexto)
+
+    clientes = []
+    for resultado_cliente in resultado_ciclo.resultados_por_cliente:
+        necessidades = registro.necessidades_por_vinculo.get(
+            (resultado_cliente.cliente, resultado_cliente.competencia), (),
+        )
+        diagnosticos = tuple(
+            _diagnosticar_necessidade(
+                necessidade, resultados_aquisicao, registro.localizacoes.get(necessidade), sem_fonte,
+            )
+            for necessidade in necessidades
+        )
+        clientes.append(DiagnosticoCliente(
+            cliente=resultado_cliente.cliente,
+            competencia=resultado_cliente.competencia,
+            estado_pacote=resultado_cliente.pacote.estado,
+            necessidades=diagnosticos,
+        ))
+    return DiagnosticoPrestacao(competencia_base=contexto.competencia_base, clientes=tuple(clientes))
+
+
+def _diagnosticar_necessidade(
+    necessidade: NecessidadeDocumentoPrestacao,
+    resultados_aquisicao: Tuple[ResultadoAquisicaoPorNecessidade, ...],
+    localizacao: Optional[ResultadoLocalizacao],
+    sem_fonte: bool,
+) -> DiagnosticoNecessidade:
+    evidencia = localizacao.como_evidencia() if localizacao is not None else None
+    if sem_fonte:
+        return DiagnosticoNecessidade(necessidade, SituacaoNecessidade.SEM_FONTE)
+
+    da_necessidade = [r for r in resultados_aquisicao if r.necessidade == necessidade]
+    avaliados = tuple(r.documento_id for r in da_necessidade)
+    elegiveis = tuple(r.documento_id for r in da_necessidade if _elegivel_para_distribuicao(r))
+
+    if elegiveis:
+        hashes = {r.hash_sha256 for r in da_necessidade if r.documento_id in elegiveis}
+        situacao = SituacaoNecessidade.CONFLITO if len(hashes) > 1 else SituacaoNecessidade.PRONTO
+    elif da_necessidade:
+        resolvido_de_outro = any(
+            execucao.resultado_corredor.estado == EstadoCorredorDocumentoPrestacao.RESOLVIDO_E_AVANCOU
+            and execucao.resultado_corredor.resolucao_semantica is not None
+            and not execucao.resultado_corredor.resolucao_semantica.necessita_revisao_humana
+            for r in da_necessidade for execucao in r.resultados_corredor
+        )
+        situacao = (
+            SituacaoNecessidade.ENCONTRADO_NAO_ELEGIVEL if resolvido_de_outro
+            else SituacaoNecessidade.EM_REVISAO
+        )
+    elif localizacao is not None and localizacao.decisao is DecisaoLocalizacao.INDETERMINADO:
+        situacao = SituacaoNecessidade.FONTE_INDISPONIVEL
+    elif localizacao is not None and localizacao.candidatos:
+        # achou, mas nenhum candidato produziu resultado (ex.: PDF sem texto)
+        situacao = SituacaoNecessidade.EM_REVISAO
+    else:
+        situacao = SituacaoNecessidade.AUSENTE
+
+    return DiagnosticoNecessidade(necessidade, situacao, avaliados, elegiveis, evidencia)
