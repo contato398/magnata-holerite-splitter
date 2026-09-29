@@ -30,6 +30,7 @@ from magnata_os.classificacao.composicao_ciclo_persistente_prestacao import diag
 from .composicao_prestacao_real_v1 import (
     DependenciasPrestacaoReal,
     compor_dependencias_a_partir_do_ambiente,
+    fechar_dependencias,
     montar_contexto_prestacao,
     parse_competencia,
 )
@@ -140,6 +141,14 @@ def _parse_args(argv):
     args = parser.parse_args(argv)
     if args.ate_pending and not (args.preset and args.mensagem):
         parser.error('--ate-pending exige --preset e --mensagem')
+    if args.ate_pending and args.preset not in PRESETS_SEM_ASSINATURA:
+        parser.error(f'--preset deve ser um de {sorted(PRESETS_SEM_ASSINATURA)}')
+    try:
+        parse_competencia(args.competencia)
+        if args.snapshot_airtable_comprovado:
+            parse_competencia(args.snapshot_airtable_comprovado)
+    except ValueError as exc:
+        parser.error(str(exc))
     return args
 
 
@@ -147,16 +156,19 @@ def main(argv=None) -> int:
     args = _parse_args(argv)
     snapshot = parse_competencia(args.snapshot_airtable_comprovado) if args.snapshot_airtable_comprovado else None
     dependencias = compor_dependencias_a_partir_do_ambiente()
-    executar = (
-        _compor_executar_ate_pending_a_partir_do_ambiente(
-            preset_id=args.preset, mensagem=args.mensagem, dependencias=dependencias,
-        ) if args.ate_pending else None
-    )
-    relatorio = executar_prestacao_cliente_competencia(
-        cliente_id=args.cliente, competencia_base=args.competencia, dependencias=dependencias,
-        competencia_snapshot_airtable_comprovada=snapshot,
-        ate_pending=args.ate_pending, executar_ate_pending=executar,
-    )
+    try:
+        executar = (
+            _compor_executar_ate_pending_a_partir_do_ambiente(
+                preset_id=args.preset, mensagem=args.mensagem, dependencias=dependencias,
+            ) if args.ate_pending else None
+        )
+        relatorio = executar_prestacao_cliente_competencia(
+            cliente_id=args.cliente, competencia_base=args.competencia, dependencias=dependencias,
+            competencia_snapshot_airtable_comprovada=snapshot,
+            ate_pending=args.ate_pending, executar_ate_pending=executar,
+        )
+    finally:
+        fechar_dependencias(dependencias)
     print(json.dumps(relatorio, ensure_ascii=False, indent=2, default=str))
     return 0
 

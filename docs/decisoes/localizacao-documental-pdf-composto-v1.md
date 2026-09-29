@@ -108,6 +108,10 @@ Por que fica na borda (`orquestrador/`) e não em `classificacao/`: a composiç�
 
 `_alimentar_indice_documental` registra no índice só documentos que o corredor conferiu contra a necessidade (cliente, competência, tipo e colaborador). Na próxima execução, o documento é achado pelo índice antes da busca por conteúdo. O diagnóstico nunca grava no índice. Falha ao gravar gera o evento `indice_documental_falhou` e não derruba o ciclo: o índice acelera a localização, mas não decide.
 
+**O índice ainda não é LIDO como primeira fonte na composição real (revisão adversarial).** Um acerto no índice encerra a busca, e uma versão corrigida reenviada depois nunca seria vista: a v1 ficaria "congelada". Para ler o índice com segurança é preciso um sinal de frescor, por exemplo reconsultar o conteúdo quando houver lote mais novo que o registro no índice. Isso fica como próxima etapa. Enquanto isso, o índice é alimentado e a localização usa a busca por conteúdo.
+
+**Identidade do item no índice.** É `(documento, cliente, colaborador)`, a mesma identidade lógica canônica que já existia. O mesmo documento válido para outra competência não gera segunda linha. Isso custa uma busca mais lenta, não correção.
+
 A tabela (migration 0011) e o adapter Postgres estão numa PR própria (#197), testados contra um Postgres real efêmero. O manifesto em `.magnata/migration-authorizations/` é, pelo formato do projeto, uma **autorização humana específica**, e por isso não foi escrito pelo agente. Até lá, a composição real roda sem índice persistente, só com a busca por conteúdo.
 
 ### D8 — Necessidades do CLIENTE atendidas por conteúdo; separação de PDF composto por cliente fica para depois
@@ -118,9 +122,17 @@ Documento institucional nunca vira Ordem de colaborador: a partição por colabo
 
 **Não feito nesta etapa: separar um PDF com documentos de VÁRIOS clientes.** A página de continuação de um documento institucional costuma não repetir o CNPJ, então separar de forma estrita cortaria documentos. Sem separação, um PDF desse tipo cai em revisão, nunca em escolha silenciosa.
 
+### D8b — "O e-mail mais recente vale" é aplicado DEPOIS da conferência
+
+A busca por conteúdo devolve todos os documentos da pessoa ou do cliente, de todos os tipos e meses. Na primeira versão da composição real, a regra de versão rodava na localização, antes da conferência. O documento mais novo de qualquer tipo vencia e os demais viravam AUSENTE. A revisão adversarial reproduziu esse erro.
+
+**Decisão.** A regra (`ContextoComposicaoPrestacao.data_versao_documento`) roda na aquisição, só entre documentos **elegíveis** da **mesma** necessidade e com conteúdos distintos. Se todos têm data e o mais recente é único, os anteriores saem, com o evento `versao_substituida`. Se falta data em algum, ou há empate, a necessidade fica em CONFLITO. Com CONFLITO, `ordem_pronta` fica falso e nada sai até uma pessoa decidir.
+
 ### D9 — Diagnóstico: "achado mas não elegível" só para o tipo pedido
 
 A busca por conteúdo de cliente devolve todos os documentos daquele cliente. Por isso, `ENCONTRADO_NAO_ELEGIVEL` passou a significar apenas "achei um documento **do tipo pedido**, mas de outro mês, cliente ou pessoa". Quando todos os candidatos foram entendidos e são de outros tipos, o resultado é `AUSENTE`.
+
+Se algum candidato nunca chegou a um resultado (arquivo ilegível, PDF sem texto ou falha do corredor), a necessidade **nunca** é dada como AUSENTE: o resultado é EM_REVISAO, porque o documento pedido pode ser justamente o que falhou.
 
 ### Ponto de entrada
 

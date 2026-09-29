@@ -19,7 +19,7 @@ dos adapters já existentes, onde não existe fonte interna equivalente.
 | documentos derivados de PDF composto | porta oficial `AdaptadorEntradaDuravel` -- interno |
 | unidade/posto | alocação histórica Postgres, com o snapshot Airtable só como fonte corrente -- interno primeiro |
 | clientes ativos, colaboradores esperados, vínculos, candidatos a colaborador (CPF), cliente direto por CNPJ | Airtable somente leitura -- ponte (não há fonte interna equivalente hoje) |
-| localização | índice documental (J3, quando informado) -> busca por conteúdo com "e-mail mais recente vale" |
+| localização | busca por conteúdo; "e-mail mais recente vale" aplicado depois da conferência; índice J3 alimentado (leitura como fonte: próxima etapa) |
 
 Nenhuma leitura de ambiente aqui além de `compor_a_partir_do_ambiente`,
 que só REUTILIZA os compositores já existentes (conexão Postgres, S3,
@@ -44,7 +44,6 @@ from magnata_os.classificacao.competencia_esperada_prestacao import (
 )
 from magnata_os.classificacao.composicao_ciclo_persistente_prestacao import ContextoComposicaoPrestacao
 from magnata_os.classificacao.contratos import ReferenciaCanonica
-from magnata_os.classificacao.fonte_candidatos_documento_inventario_interna import FonteCandidatosDocumentoInventarioInterna
 from magnata_os.classificacao.fonte_candidatos_por_conteudo import FonteCandidatosPorConteudo
 from magnata_os.classificacao.holerite_obrigatorio_prestacao import TIPO_HOLERITE
 
@@ -107,6 +106,12 @@ class DependenciasPrestacaoReal:
     armazenamento: object
     fonte_unidade_posto_historica: object
     indice_documental: Optional[object] = None
+    cnpj_proprio: Optional[str] = None
+    """CNPJ da própria Magnata, ignorado ao identificar o cliente de um
+    documento (evita que documento emitido pela Magnata resolva para ela
+    mesma se ela estiver cadastrada como cliente)."""
+    conexao: Optional[object] = None
+    """Conexão a fechar ao final (`fechar_dependencias`)."""
 
 
 def parse_competencia(competencia: str) -> Tuple[int, int]:
@@ -173,19 +178,22 @@ def montar_contexto_prestacao(
         raise ValueError(f'sem competência esperada para o cliente {cliente.entidade_id}')
 
     candidatos = tuple(leitor.listar_funcionarios())
-    fonte_cliente_direto = FonteClienteDiretoDocumentoAirtableShadow(leitor)
+    fonte_cliente_direto = FonteClienteDiretoDocumentoAirtableShadow(leitor, cnpj_excluido=d.cnpj_proprio)
 
-    fontes = []
-    if d.indice_documental is not None:
-        fontes.append(FonteNomeada(
-            'indice_documental',
-            FonteCandidatosDocumentoInventarioInterna(d.indice_documental, d.repositorio_documentos),
-        ))
-    fontes.append(FonteNomeada(
-        'conteudo',
-        FonteCandidatosPorConteudo(d.repositorio_documentos, d.armazenamento, candidatos, fonte_cliente_direto),
-        data_versao=data_recebimento_email(d.repositorio_lotes),
-    ))
+    # Localização: busca por conteúdo SEM critério de versão (ela devolve
+    # todos os documentos da pessoa/cliente, de todos os tipos e meses);
+    # "o e-mail mais recente vale" é aplicado DEPOIS da conferência, entre
+    # os elegíveis da mesma necessidade (`data_versao_documento`).
+    # O índice J3 é alimentado mas ainda NÃO é lido como primeira fonte:
+    # um acerto no índice encerraria a busca e uma versão corrigida,
+    # reenviada depois, nunca seria vista. Lê-lo com segurança exige um
+    # sinal de frescor (próxima etapa, registrada no ADR D7).
+    fontes = (
+        FonteNomeada(
+            'conteudo',
+            FonteCandidatosPorConteudo(d.repositorio_documentos, d.armazenamento, candidatos, fonte_cliente_direto),
+        ),
+    )
 
     return ContextoComposicaoPrestacao(
         competencia_base=f'{ano:04d}-{mes:02d}',
@@ -201,7 +209,8 @@ def montar_contexto_prestacao(
         repositorio_documentos=d.repositorio_documentos,
         armazenamento_arquivos=d.armazenamento,
         tipos_obrigatorios_por_colaborador=(TIPO_HOLERITE,),
-        fontes_localizacao=tuple(fontes),
+        fontes_localizacao=fontes,
+        data_versao_documento=data_recebimento_email(d.repositorio_lotes),
         candidatos_colaborador=candidatos,
         fonte_vinculos=FonteVinculosPrestacaoAirtableShadow(leitor),
         indice_documental=d.indice_documental,
@@ -238,6 +247,7 @@ def compor_dependencias_a_partir_do_ambiente(conexao=None) -> DependenciasPresta
     chave_airtable = os.environ.get('AIRTABLE_API_KEY', '').strip()
     if not chave_airtable:
         raise RuntimeError('AIRTABLE_API_KEY ausente -- ponte somente leitura do Airtable é obrigatória nesta fase')
+    armazenamento = _compor_armazenamento_a_partir_do_ambiente()  # antes da conexão: falha sem conexão aberta
     conexao = conexao if conexao is not None else abrir_conexao()
     return DependenciasPrestacaoReal(
         leitor_airtable=LeitorAirtableSomenteLeitura(chave_airtable),
@@ -245,6 +255,14 @@ def compor_dependencias_a_partir_do_ambiente(conexao=None) -> DependenciasPresta
         repositorio_historico=RepositorioHistoricoPostgres(conexao),
         repositorio_lotes=RepositorioLotesPostgres(conexao),
         repositorio_execucoes_prestacao=RepositorioExecucoesPrestacaoPostgres(conexao),
-        armazenamento=_compor_armazenamento_a_partir_do_ambiente(),
+        armazenamento=armazenamento,
         fonte_unidade_posto_historica=RepositorioAlocacaoPostgres(conexao),
+        cnpj_proprio=os.environ.get('MAGNATA_CNPJ_PROPRIO', '').strip() or None,
+        conexao=conexao,
     )
+
+
+def fechar_dependencias(dependencias: DependenciasPrestacaoReal) -> None:
+    conexao = dependencias.conexao
+    if conexao is not None:
+        conexao.close()

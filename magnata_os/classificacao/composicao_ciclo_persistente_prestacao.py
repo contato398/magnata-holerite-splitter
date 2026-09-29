@@ -264,6 +264,17 @@ class ContextoComposicaoPrestacao:
     fonte_vinculos: Optional[FonteVinculosPrestacao] = None
     """COLABORADOR -> CLIENTE na competência (granularidade colaborador)."""
 
+    data_versao_documento: Optional[object] = None
+    """Regra de versão APÓS a conferência (ex.: `data_recebimento_email`
+    -- "o segundo e-mail é o que vale"): quando 2+ documentos DISTINTOS
+    são elegíveis para a MESMA necessidade e todos têm data, só o mais
+    recente segue (os demais são descartados da aquisição, com evento).
+    Aplicada aqui, e não na localização, porque a busca por conteúdo
+    devolve todos os documentos da pessoa/cliente, de todos os tipos e
+    meses -- escolher o mais recente ANTES da conferência descartaria o
+    documento certo. Sem data em algum, ou empate: todos seguem (a
+    necessidade fica em CONFLITO, nunca escolha silenciosa)."""
+
     indice_documental: Optional[object] = None
     """J3 -- índice documento <-> cliente/competência/tipo/colaborador
     (qualquer objeto com `adicionar_muitos(itens)`, ex.:
@@ -704,6 +715,7 @@ def adquirir_por_necessidades(
     necessidades: Tuple[NecessidadeDocumentoPrestacao, ...],
     ciclo_para_corredor: ContextoCicloPrestacao,
     registro_localizacoes: Optional[dict] = None,
+    registro_descartes: Optional[dict] = None,
 ) -> Tuple[InventarioPrestacaoEmMemoria, Tuple[ResultadoAquisicaoPorNecessidade, ...]]:
     """Para CADA necessidade, consulta `contexto.fonte_candidatos_por_
     necessidade.candidatos_para(necessidade)` -- NUNCA `repositorio_
@@ -780,6 +792,8 @@ def adquirir_por_necessidades(
                 )
             texto_documento = texto_por_hash[documento_bruto.hash_sha256]
             if texto_documento is None:
+                if registro_descartes is not None:
+                    registro_descartes.setdefault(necessidade, []).append(documento_bruto.documento_id)
                 continue
 
             chave_cache = (
@@ -813,6 +827,8 @@ def adquirir_por_necessidades(
 
             resultados_corredor = corredor_por_chave[chave_cache]
             if not resultados_corredor:
+                if registro_descartes is not None:
+                    registro_descartes.setdefault(necessidade, []).append(documento_bruto.documento_id)
                 continue
 
             resultados.append(
@@ -824,7 +840,52 @@ def adquirir_por_necessidades(
                 )
             )
 
-    return inventario_adquirido, tuple(resultados)
+    return inventario_adquirido, _aplicar_regra_de_versao(contexto, tuple(resultados))
+
+
+EVENTO_VERSAO_SUBSTITUIDA = 'versao_substituida'
+
+
+def _aplicar_regra_de_versao(
+    contexto: 'ContextoComposicaoPrestacao',
+    resultados: Tuple[ResultadoAquisicaoPorNecessidade, ...],
+) -> Tuple[ResultadoAquisicaoPorNecessidade, ...]:
+    """Ver `ContextoComposicaoPrestacao.data_versao_documento`. Só age
+    entre ELEGÍVEIS da mesma necessidade com conteúdos distintos; nunca
+    mexe em resultados não elegíveis (seguem para âncora/diagnóstico)."""
+    data_versao = contexto.data_versao_documento
+    if data_versao is None or contexto.repositorio_documentos is None:
+        return resultados
+    elegiveis_por_necessidade: dict = {}
+    for resultado in resultados:
+        if _elegivel_para_distribuicao(resultado, registrar_evento=False):
+            elegiveis_por_necessidade.setdefault(resultado.necessidade, []).append(resultado)
+
+    descartar: set = set()
+    for necessidade, elegiveis in elegiveis_por_necessidade.items():
+        if len({r.hash_sha256 for r in elegiveis}) < 2:
+            continue
+        datas = {}
+        for r in elegiveis:
+            documento = contexto.repositorio_documentos.buscar_por_id(r.documento_id)
+            datas[r.documento_id] = data_versao(documento) if documento is not None else None
+        if any(d is None for d in datas.values()):
+            continue
+        maior = max(datas.values())
+        hashes_no_topo = {r.hash_sha256 for r in elegiveis if datas[r.documento_id] == maior}
+        if len(hashes_no_topo) != 1:
+            continue
+        for r in elegiveis:
+            if r.hash_sha256 not in hashes_no_topo:
+                descartar.add(id(r))
+                _logger.info(
+                    '%s documento_id=%s', EVENTO_VERSAO_SUBSTITUIDA, r.documento_id,
+                    extra={'evento': EVENTO_VERSAO_SUBSTITUIDA, 'documento_id': r.documento_id,
+                           'cliente': necessidade.cliente.entidade_id,
+                           'competencia': necessidade.competencia.entidade_id,
+                           'tipo_documental': necessidade.tipo_documental},
+                )
+    return tuple(r for r in resultados if id(r) not in descartar)
 
 
 def _fontes_localizacao(contexto: 'ContextoComposicaoPrestacao') -> Tuple[FonteNomeada, ...]:
@@ -1171,6 +1232,7 @@ class _RegistroCiclo:
 
     necessidades_por_vinculo: dict = dataclasses.field(default_factory=dict)
     localizacoes: dict = dataclasses.field(default_factory=dict)
+    descartes: dict = dataclasses.field(default_factory=dict)
 
 
 def _descobrir_adquirir_e_recalcular_readiness(
@@ -1216,6 +1278,7 @@ def _descobrir_adquirir_e_recalcular_readiness(
     inventario_adquirido, resultados_aquisicao = adquirir_por_necessidades(
         contexto, tuple(necessidades), ciclo_contexto,
         registro.localizacoes if registro is not None else None,
+        registro.descartes if registro is not None else None,
     )
 
     _alimentar_indice_documental(contexto, resultados_aquisicao)
@@ -1697,8 +1760,12 @@ class DiagnosticoCliente:
 
     @property
     def ordem_pronta(self) -> bool:
-        """Mesma regra do caminho até PENDING: só pacote PRONTO gera Ordem."""
-        return self.estado_pacote == EstadoPacotePrestacao.PRONTO
+        """Pacote PRONTO (mesma regra do caminho até PENDING) e nenhuma
+        necessidade em CONFLITO -- com 2 documentos válidos e distintos
+        para a mesma necessidade, nada sai até uma pessoa decidir."""
+        return self.estado_pacote == EstadoPacotePrestacao.PRONTO and not any(
+            d.situacao == SituacaoNecessidade.CONFLITO for d in self.necessidades
+        )
 
     def como_dict(self) -> Mapping[str, object]:
         return {
@@ -1804,6 +1871,7 @@ def diagnosticar_prestacao(contexto: 'ContextoComposicaoPrestacao') -> Diagnosti
         diagnosticos = tuple(
             _diagnosticar_necessidade(
                 necessidade, resultados_aquisicao, registro.localizacoes.get(necessidade), sem_fonte,
+                descartados=tuple(registro.descartes.get(necessidade, ())),
             )
             for necessidade in necessidades
         )
@@ -1821,7 +1889,12 @@ def _diagnosticar_necessidade(
     resultados_aquisicao: Tuple[ResultadoAquisicaoPorNecessidade, ...],
     localizacao: Optional[ResultadoLocalizacao],
     sem_fonte: bool,
+    descartados: Tuple[str, ...] = (),
 ) -> DiagnosticoNecessidade:
+    """`descartados`: candidatos que nunca chegaram a um resultado
+    (arquivo ilegível, PDF sem texto, falha do corredor). Com qualquer
+    um deles, a necessidade nunca é dada como AUSENTE -- o documento
+    pedido pode ser exatamente o que falhou (EM_REVISAO)."""
     evidencia = localizacao.como_evidencia() if localizacao is not None else None
     if sem_fonte:
         return DiagnosticoNecessidade(necessidade, SituacaoNecessidade.SEM_FONTE)
@@ -1846,7 +1919,10 @@ def _diagnosticar_necessidade(
         if any(_tipo_resolvido_atende_necessidade(res, necessidade) for res in resolvidos):
             # documento do tipo pedido, mas de outro mês/cliente/pessoa
             situacao = SituacaoNecessidade.ENCONTRADO_NAO_ELEGIVEL
-        elif resolvidos and len(resolvidos) == sum(len(r.resultados_corredor) for r in da_necessidade):
+        elif (
+            not descartados
+            and resolvidos and len(resolvidos) == sum(len(r.resultados_corredor) for r in da_necessidade)
+        ):
             # todos os candidatos foram entendidos e são de OUTROS tipos:
             # o documento pedido não está entre eles
             situacao = SituacaoNecessidade.AUSENTE

@@ -117,20 +117,39 @@ def _documentos_do_cliente(cnpj=CNPJ_CLIENTE, tipos=TIPOS_CLIENTE):
     return [[f"TIPO: {tipo}\nEmpresa CNPJ {cnpj}\nCompetencia 09/2026"] for tipo in tipos]
 
 
-def _dependencias(paginas, colaboradores=N, documentos_cliente=None):
+def _dependencias(paginas, colaboradores=N, documentos_cliente=None, datas_email=None):
+    """`datas_email`: uma data por documento institucional -> cada um chega
+    num lote de e-mail próprio com `recebido_em_origem` (como a captura
+    real grava)."""
     documentos, historico, armazenamento = (
         RepositorioDocumentosEmMemoria(), RepositorioHistoricoEmMemoria(), ArmazenamentoArquivosEmMemoria(),
     )
     entrada = AdaptadorEntradaDuravel(documentos, historico, armazenamento)
+    lotes = RepositorioLotesEmMemoria()
     entrada.registrar_entrada(pdf_com_paginas(paginas), "scan_0001.pdf", "application/pdf", "email")
     for i, paginas_cliente in enumerate(_documentos_do_cliente() if documentos_cliente is None else documentos_cliente):
-        entrada.registrar_entrada(pdf_com_paginas(paginas_cliente), f"scan_{i + 2:04d}.pdf", "application/pdf", "email")
+        lote_id = None
+        if datas_email is not None:
+            lote_id = f"lote-email-{i}"
+            lotes.salvar(_lote_email(lote_id, datas_email[i]))
+        entrada.registrar_entrada(
+            pdf_com_paginas(paginas_cliente), f"scan_{i + 2:04d}.pdf", "application/pdf", "email", lote_id=lote_id,
+        )
     return DependenciasPrestacaoReal(
         leitor_airtable=_LeitorAirtableFake(colaboradores),
         repositorio_documentos=documentos, repositorio_historico=historico,
-        repositorio_lotes=RepositorioLotesEmMemoria(),
+        repositorio_lotes=lotes,
         repositorio_execucoes_prestacao=_RepositorioExecucoesPrestacao(),
         armazenamento=armazenamento, fonte_unidade_posto_historica=_UnidadePostoHistoricaVazia(),
+    )
+
+
+def _lote_email(lote_id, data):
+    from magnata_os.documental.modulo01.dominio_esteira import LoteDocumental, SituacaoEsteira
+    return LoteDocumental(
+        lote_id=lote_id, origem="email", recebido_em=data, quantidade_arquivos=1,
+        situacao=SituacaoEsteira.CONCLUIDO, correlation_id="teste", criado_em=data, atualizado_em=data,
+        metadados={"recebido_em_origem": data.isoformat()},
     )
 
 
@@ -243,7 +262,8 @@ def test_contexto_usa_fontes_reais_restritas_a_um_cliente():
     assert contexto.fonte_clientes.listar_ativos() == (CLIENTE,)
     assert contexto.competencias_por_cliente == {CLIENTE: ReferenciaCanonica("COMPETENCIA", "2026-09")}
     assert [f.nome for f in contexto.fontes_localizacao] == ["conteudo"]
-    assert contexto.fontes_localizacao[0].data_versao is not None  # e-mail mais recente vale
+    assert contexto.fontes_localizacao[0].data_versao is None  # versão só depois da conferência
+    assert contexto.data_versao_documento is not None  # e-mail mais recente vale, entre elegíveis
     assert contexto.entrada_documentos_derivados is not None
     assert len(contexto.candidatos_colaborador) == N
 
@@ -358,3 +378,82 @@ def test_documento_institucional_nunca_vira_ordem_de_colaborador():
         )
 
     assert sorted(o["funcionario_id"] for o in relatorio["ordens"]) == [colab(i) for i in range(1, N + 1)]
+
+
+# ---- regressões da revisão adversarial (etapa J3/J4) ----
+
+from datetime import timedelta  # noqa: E402
+
+
+def _situacoes_cliente(relatorio):
+    return {n["tipo_documental"]: n["situacao"] for n in relatorio["clientes"][0]["necessidades"] if n["colaborador"] is None}
+
+
+def _rodar(deps):
+    with _com_corredor_fake():
+        return executar_prestacao_cliente_competencia(
+            cliente_id=CLIENTE.entidade_id, competencia_base="2026-09", dependencias=deps,
+        )
+
+
+def test_email_mais_recente_nao_apaga_documentos_de_outros_tipos():
+    """Antes: com datas reais de e-mail, só o documento mais novo (de
+    qualquer tipo) sobrevivia à localização e os outros 4 viravam AUSENTE."""
+    datas = [AGORA + timedelta(days=i) for i in range(len(TIPOS_CLIENTE))]
+    deps = _dependencias(PAGINAS, datas_email=datas)
+
+    assert set(_situacoes_cliente(_rodar(deps)).values()) == {"PRONTO"}
+
+
+def test_versao_corrigida_por_email_posterior_substitui_a_anterior_so_entre_elegiveis():
+    fgts_v1 = ["TIPO: FGTS\nEmpresa CNPJ 11.111.111/0001-11\nCompetencia 09/2026\nversao 1"]
+    fgts_v2 = ["TIPO: FGTS\nEmpresa CNPJ 11.111.111/0001-11\nCompetencia 09/2026\nversao 2 corrigida"]
+    documentos = _documentos_do_cliente(tipos=[t for t in TIPOS_CLIENTE if t != "FGTS"]) + [fgts_v1, fgts_v2]
+    datas = [AGORA] * 4 + [AGORA + timedelta(days=1), AGORA + timedelta(days=2)]
+    deps = _dependencias(PAGINAS, documentos_cliente=documentos, datas_email=datas)
+
+    relatorio = _rodar(deps)
+
+    fgts = next(n for n in relatorio["clientes"][0]["necessidades"] if n["tipo_documental"] == "FGTS")
+    assert fgts["situacao"] == "PRONTO"
+    assert len(fgts["documentos_elegiveis"]) == 1
+    texto = deps.armazenamento.abrir_leitura(
+        deps.repositorio_documentos.buscar_por_id(fgts["documentos_elegiveis"][0]).hash_sha256
+    ).read()
+    from magnata_os.documental.extracao_texto import extrair_texto_pdf
+    assert "corrigida" in extrair_texto_pdf(texto)
+    assert relatorio["clientes"][0]["ordem_pronta"] is True
+
+
+def test_duas_versoes_sem_data_ficam_em_conflito_e_nada_sai():
+    fgts_a = ["TIPO: FGTS\nEmpresa CNPJ 11.111.111/0001-11\nCompetencia 09/2026\nA"]
+    fgts_b = ["TIPO: FGTS\nEmpresa CNPJ 11.111.111/0001-11\nCompetencia 09/2026\nB"]
+    documentos = _documentos_do_cliente(tipos=[t for t in TIPOS_CLIENTE if t != "FGTS"]) + [fgts_a, fgts_b]
+    deps = _dependencias(PAGINAS, documentos_cliente=documentos)
+
+    relatorio = _rodar(deps)
+
+    assert _situacoes_cliente(relatorio)["FGTS"] == "CONFLITO"
+    assert relatorio["clientes"][0]["ordem_pronta"] is False
+
+
+def test_candidato_ilegivel_nunca_vira_ausente():
+    """Antes: o PDF do FGTS falhava na leitura, os outros documentos do
+    cliente eram de outros tipos, e o diagnóstico dizia AUSENTE."""
+    deps = _dependencias(PAGINAS)
+    fgts = next(
+        d for d in deps.repositorio_documentos.listar_todos()
+        if "FGTS" in __import__("magnata_os.documental.extracao_texto", fromlist=["x"]).extrair_texto_pdf(
+            deps.armazenamento.abrir_leitura(d.hash_sha256).read())
+        and "DCTF" not in __import__("magnata_os.documental.extracao_texto", fromlist=["x"]).extrair_texto_pdf(
+            deps.armazenamento.abrir_leitura(d.hash_sha256).read())
+    )
+    original = modulo_composicao._ler_e_extrair_texto
+
+    def _falha_so_no_fgts(contexto, documento):
+        return None if documento.documento_id == fgts.documento_id else original(contexto, documento)
+
+    with patch.object(modulo_composicao, "_ler_e_extrair_texto", _falha_so_no_fgts):
+        relatorio = _rodar(deps)
+
+    assert _situacoes_cliente(relatorio)["FGTS"] == "EM_REVISAO"
