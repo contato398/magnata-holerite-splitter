@@ -59,7 +59,7 @@ A separação já existente (`estrategia_por_cpf_colaborador`) usa carry-forward
 
 **Custo aceito.** A página de continuação sem CPF de um holerite de várias páginas não entra na parte derivada.
 
-**Risco residual, anterior a esta etapa.** Um PDF com o CPF formatado de A e o CPF de B **sem formatação** conta só 1 CPF e segue inteiro, como documento de A. O extrator de CPF só reconhece o formato `XXX.XXX.XXX-XX`. Endurecer a detecção de CPF sem formatação é o próximo passo.
+**Risco residual fechado (etapa J3/J4).** Antes, um PDF com o CPF formatado de A e o CPF de B **sem formatação** contava só 1 CPF e seguia inteiro, como documento de A. Agora `cpfs_da_pagina` também conta os 11 dígitos sem formatação, mas **só** quando eles pertencem a um colaborador conhecido do índice. Qualquer sequência de 11 dígitos não serve, porque PIS/NIT e matrícula também têm 11 dígitos e bloqueariam páginas legítimas. A página de um CPF sem formatação passa a ser corretamente atribuída a essa pessoa.
 
 ### D3 — Quando não há parte do colaborador, o composto segue inalterado
 
@@ -91,12 +91,56 @@ O teste também prova:
 
 O corredor é o único ponto substituído, na mesma convenção dos testes de integração existentes. O fake lê o texto real do PDF recebido e só resolve quando há exatamente um CPF.
 
-## 5. O que continua bloqueado por gate material
+## 5. Etapa J3/J4 — índice documental e "Prestação do cliente X, competência Y"
+
+### D6 — J2 decidido pelo operador: interno primeiro, Airtable só como ponte somente leitura
+
+A missão aprovada diz "Airtable apenas como bridge transitório onde necessário". A composição real (`orquestrador/composicao_prestacao_real_v1.py`) usa:
+
+- **Fontes internas:** requisitos canônicos em código (`CADASTRO_REQUISITOS_PRESTACAO_V2`), política de competência V1, Postgres (documentos, histórico, lotes, execuções), S3, porta oficial de entrada e alocação histórica para unidade/posto.
+- **Airtable, só leitura e pelos adapters que já existem:** clientes ativos, colaboradores esperados, vínculos, candidatos a colaborador (CPF) e cliente por CNPJ. Hoje não há fonte interna equivalente para nenhum deles. O CPF não serve como fonte interna porque a identidade interna guarda só HMAC.
+- **Snapshot Funcionário→Local de hoje:** só vale para uma competência se o operador declarar explicitamente (`--snapshot-airtable-comprovado`). Nunca é presumido.
+- **Leitor Airtable com cache por execução:** a busca por conteúdo resolveria cliente página a página.
+
+Por que fica na borda (`orquestrador/`) e não em `classificacao/`: a composição importa adapters do Airtable, e o domínio continua sem essa dependência.
+
+### D7 — J3: o índice só recebe documento elegível; a persistência é gate humano
+
+`_alimentar_indice_documental` registra no índice só documentos que o corredor conferiu contra a necessidade (cliente, competência, tipo e colaborador). Na próxima execução, o documento é achado pelo índice antes da busca por conteúdo. O diagnóstico nunca grava no índice. Falha ao gravar gera o evento `indice_documental_falhou` e não derruba o ciclo: o índice acelera a localização, mas não decide.
+
+A tabela (migration 0011) e o adapter Postgres estão numa PR própria (#197), testados contra um Postgres real efêmero. O manifesto em `.magnata/migration-authorizations/` é, pelo formato do projeto, uma **autorização humana específica**, e por isso não foi escrito pelo agente. Até lá, a composição real roda sem índice persistente, só com a busca por conteúdo.
+
+### D8 — Necessidades do CLIENTE atendidas por conteúdo; separação de PDF composto por cliente fica para depois
+
+A busca por conteúdo passou a atender Extrato, FGTS, DCTFWeb e guias pelo **CNPJ exato** do cliente, usando a mesma porta `fonte_cliente_direto` que o corredor usa. Documento de outro cliente nunca é candidato. O corredor e a elegibilidade continuam conferindo tipo e competência.
+
+Documento institucional nunca vira Ordem de colaborador: a partição por colaborador que já existia (J1b) descarta esses documentos, e há teste que cobre isso.
+
+**Não feito nesta etapa: separar um PDF com documentos de VÁRIOS clientes.** A página de continuação de um documento institucional costuma não repetir o CNPJ, então separar de forma estrita cortaria documentos. Sem separação, um PDF desse tipo cai em revisão, nunca em escolha silenciosa.
+
+### D9 — Diagnóstico: "achado mas não elegível" só para o tipo pedido
+
+A busca por conteúdo de cliente devolve todos os documentos daquele cliente. Por isso, `ENCONTRADO_NAO_ELEGIVEL` passou a significar apenas "achei um documento **do tipo pedido**, mas de outro mês, cliente ou pessoa". Quando todos os candidatos foram entendidos e são de outros tipos, o resultado é `AUSENTE`.
+
+### Ponto de entrada
+
+```
+python -m magnata_os.orquestrador.prestacao_cliente_competencia_v1 --cliente recXXX --competencia 2026-09
+```
+
+- **Sem opções extras:** faz só o diagnóstico, somente leitura.
+- **Com `--ate-pending --preset <sem assinatura> --mensagem "..."`:** gera as Ordens até PENDING pelo caminho que já existe, e só quando o pacote está PRONTO. Não há transporte.
+
+Rodar contra o ambiente real é um gate humano (produção).
+
+## 6. O que continua bloqueado por gate material
 
 | Item | Gate |
 |---|---|
-| J3 — índice persistente documento ↔ cliente/competência/tipo/colaborador | migration nova (`modulo01/`), manifesto de autorização e aprovação humana |
-| Ligar o ciclo da Prestação em produção (composition root real, J4) | produção |
+| J3 — índice persistente (PR #197 pronta: migration, rollback, adapter e testes em Postgres real) | manifesto de autorização humana, depois aplicação da migration no banco real |
+| Rodar a Prestação real (`prestacao_cliente_competencia_v1`, composição J4 pronta) contra Postgres/S3/Airtable de produção | acesso à produção |
+| Separar PDF composto com documentos de vários clientes | decisão de regra para páginas de continuação sem CNPJ |
+| Distribuir documentos institucionais ao cliente (hoje só colaborador recebe Ordem) | decisão de negócio (destinatário, canal e preset do cliente) |
 | Fonte Gmail por necessidade (busca com `q=`) | credencial Gmail e ativação (`fase1-gmail-readonly-inerte.md`) |
 | Fonte Airtable com download de anexo | acesso externo; o adapter precisa ingerir por hash |
 | OCR | nova dependência de sistema (tesseract ou similar) e possível custo |
