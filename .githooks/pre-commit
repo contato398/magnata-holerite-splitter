@@ -561,6 +561,10 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   "test_autorizacao_operador_real_v1.py"
   "test_materializar_documento_pre_canario_operador_real_v1.py"
   "test_materializar_documento_pre_canario_operador_real_v1_real.py"
+  # ROTEAMENTO POR CANAL PLANO A (WHATSAPP) / PLANO B (E-MAIL) -- teste
+  # nominal do combinador puro de `ResolverParametrosOrdemPrestacao`
+  # (ver .magnata/patterns.sh para o detalhamento completo).
+  "test_resolver_parametros_ordem_prestacao_fallback_canal_v1.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

@@ -1283,6 +1283,23 @@ ALLOWED_PATHS=(
   "^test_autorizacao_operador_real_v1\.py$"
   "^test_materializar_documento_pre_canario_operador_real_v1\.py$"
   "^test_materializar_documento_pre_canario_operador_real_v1_real\.py$"
+
+  # Roteamento por canal Plano A (WhatsApp) / Plano B (e-mail) para
+  # `ResolverParametrosOrdemPrestacao` (fecha o gap de roteamento por
+  # canal identificado ao investigar esta missão -- o elo Prestação
+  # PENDING -> contrato de distribuição genérico já existia em `main`,
+  # ver docstring do módulo/ADR). Combinador puro, zero I/O, zero
+  # transporte: tenta Plano A, cai para Plano B se `None`, `None` se
+  # nenhum resolver -- fail-closed, mesma disciplina de
+  # `resolver_contato_colaborador_para_ordem`. Plugável direto em
+  # `executar_prestacao_ate_distribuicao_documental_shadow` sem
+  # alteração no composition root nem no núcleo genérico. ZERO
+  # alteração em app.py, ZERO migration, ZERO transporte real. Resolução
+  # real de e-mail por colaborador permanece pendência declarada (ver
+  # ADR), não decidida em silêncio aqui.
+  "^magnata_os/orquestrador/resolver_parametros_ordem_prestacao_fallback_canal_v1\.py$"
+  "^test_resolver_parametros_ordem_prestacao_fallback_canal_v1\.py$"
+  "^docs/decisoes/prestacao-distribuicao-canal-fallback-v1\.md$"
 )
 
 # ============================================================================
