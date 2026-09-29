@@ -438,8 +438,9 @@ def test_pagina_sem_cpf_ou_com_cpf_sem_formatacao_nunca_entra_na_parte_de_outra_
     assert "RESUMO GERAL" not in texto
     assert normalizar_cpf(cpf(2)) not in texto and "sintetico 2" not in texto
     derivados = [d for d in deps["repositorio_documentos"].listar_todos() if d.origem == ORIGEM_DERIVADO_SEPARACAO]
-    # só colab-1 e colab-5 viram partes; página com 2 CPFs fica sem grupo
-    assert len(derivados) == 2
+    # colab-1, colab-2 (CPF sem formatação, mas conhecido e único na página)
+    # e colab-5 viram partes; página com 2 CPFs e o resumo ficam sem grupo
+    assert len(derivados) == 3
 
 
 def test_rodar_de_novo_nao_acumula_eventos_no_historico():
@@ -476,3 +477,21 @@ def test_diagnostico_depois_do_ciclo_reaproveita_derivados_reais():
     elegiveis = diagnostico.clientes[0].necessidades[0].documentos_elegiveis
     assert len(elegiveis) == 1 and deps["repositorio_documentos"].buscar_por_id(elegiveis[0]) is not None
     assert len(historico.listar_todos()) == eventos
+
+
+def test_cpf_sem_formatacao_de_outra_pessoa_nao_deixa_o_pdf_passar_como_documento_de_um_so():
+    """Antes: A formatado + B sem pontuação contava 1 CPF, e o PDF inteiro
+    seguia como documento de A (risco residual registrado na etapa anterior)."""
+    paginas = [
+        f"RECIBO\nColaborador sintetico 1\nCPF {cpf(1)}",
+        f"RECIBO\nColaborador sintetico 2\nCPF {normalizar_cpf(cpf(2))}",
+    ]
+    contexto, resolver, deps, _, composto, _ = _cenario(esperados=[colab(1)], paginas=paginas)
+    chamadas = []
+
+    resultados = _executar(contexto, resolver, deps, chamadas)
+
+    assert [r.funcionario_id for r in resultados] == [colab(1)]
+    assert composto.documento_id not in {doc_id for doc_id, _ in chamadas}
+    texto = _texto_de(deps, chamadas[0][0])
+    assert normalizar_cpf(cpf(2)) not in texto

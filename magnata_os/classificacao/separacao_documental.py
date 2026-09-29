@@ -312,6 +312,28 @@ def indice_cpf_de_candidatos(candidatos: Sequence[object]) -> Dict[str, Tuple[st
     }
 
 
+_CPF_SEM_FORMATACAO_RE = _re.compile(r'(?<!\d)\d{11}(?!\d)')
+
+
+def cpfs_da_pagina(texto_pagina: str, indice_cpf_para_colaborador: Mapping[str, object]) -> Tuple[str, ...]:
+    """CPFs distintos de uma página, normalizados: todos os formatados
+    (`XXX.XXX.XXX-XX`) MAIS os de 11 dígitos sem formatação que sejam de
+    um colaborador CONHECIDO do índice.
+
+    Por que só os conhecidos sem formatação: 11 dígitos soltos também
+    podem ser PIS/NIT, matrícula ou código de barras -- contar qualquer
+    um bloquearia páginas legítimas. Um CPF conhecido sem formatação, ao
+    contrário, é evidência forte de que outra pessoa está na página (o
+    caso "CPF de B sem pontuação ao lado do de A" que deixava o PDF
+    passar como documento só de A). Ordem de primeira ocorrência;
+    transitório -- nunca logado nem devolvido em DTO."""
+    vistos = list(extrair_cpfs_distintos_de_texto(texto_pagina))
+    for candidato in _CPF_SEM_FORMATACAO_RE.findall(texto_pagina or ''):
+        if candidato in indice_cpf_para_colaborador and candidato not in vistos:
+            vistos.append(candidato)
+    return tuple(vistos)
+
+
 def estrategia_por_cpf_colaborador_estrita(
     indice_cpf_para_colaborador: Mapping[str, Tuple[str, Optional[str]]],
 ) -> IdentificadorDePagina:
@@ -325,13 +347,14 @@ def estrategia_por_cpf_colaborador_estrita(
       grupo anterior por carry-forward -- herdar colocaria dados de outra
       pessoa no PDF de alguém;
     - página com 2+ CPFs distintos -> ENTIDADE_DESCONHECIDA: nunca vai
-      para o primeiro conhecido.
+      para o primeiro conhecido. Conta também o CPF SEM formatação de um
+      colaborador conhecido (`cpfs_da_pagina`).
     Custo aceito: a página de continuação sem CPF de um documento de
     várias páginas fica fora da parte derivada (vai para
     `indices_sem_grupo`, contada no evento), em vez de arriscar misturar
     pessoas."""
     def identificar(texto_pagina: str) -> IdentificacaoPagina:
-        cpfs_pagina = extrair_cpfs_distintos_de_texto(texto_pagina)
+        cpfs_pagina = cpfs_da_pagina(texto_pagina, indice_cpf_para_colaborador)
         if len(cpfs_pagina) == 1 and cpfs_pagina[0] in indice_cpf_para_colaborador:
             colaborador_id, nome = indice_cpf_para_colaborador[cpfs_pagina[0]]
             return IdentificacaoPagina(SituacaoPaginaSeparacao.ENTIDADE_CONHECIDA, colaborador_id, nome)

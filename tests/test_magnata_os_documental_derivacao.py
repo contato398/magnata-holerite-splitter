@@ -153,3 +153,12 @@ def test_bytes_do_derivado_batem_com_o_hash_registrado():
 
     with armazenamento.abrir_leitura(derivado.documento.hash_sha256) as arquivo:
         assert hashlib.sha256(arquivo.read()).hexdigest() == derivado.documento.hash_sha256
+
+
+def test_cpfs_da_pagina_conta_cpf_sem_formatacao_so_se_for_de_colaborador_conhecido():
+    from magnata_os.classificacao.separacao_documental import cpfs_da_pagina
+
+    indice = {"90000000002": ("colab-2", None)}
+    texto = f"CPF {cpf_sintetico(90000000001)} / 90000000002 / PIS 12345678901"
+
+    assert cpfs_da_pagina(texto, indice) == ("90000000001", "90000000002")

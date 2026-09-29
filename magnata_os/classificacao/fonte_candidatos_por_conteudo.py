@@ -52,12 +52,11 @@ from __future__ import annotations
 from typing import Dict, Mapping, Optional, Sequence, Tuple
 
 from magnata_os.documental.derivacao_documental import ORIGEM_DERIVADO_SEPARACAO
-from magnata_os.documental.importacao_lote.dominio import extrair_cpfs_distintos_de_texto
 from magnata_os.documental.modulo01.dominio import Documento
 
 from .ciclo_prestacao import NecessidadeDocumentoPrestacao
 from .roteamento_documental import extrair_paginas_seguro
-from .separacao_documental import indice_cpf_de_candidatos
+from .separacao_documental import cpfs_da_pagina, indice_cpf_de_candidatos
 
 
 class BuscaPorConteudoIncompleta(Exception):
@@ -78,7 +77,8 @@ class FonteCandidatosPorConteudo:
         self._repositorio = repositorio_documentos
         self._armazenamento = armazenamento_arquivos
         self._cpfs_por_colaborador: Dict[str, frozenset] = {}
-        for cpf, (colaborador_id, _) in indice_cpf_de_candidatos(candidatos_colaborador).items():
+        self._indice = indice_cpf_de_candidatos(candidatos_colaborador)
+        for cpf, (colaborador_id, _) in self._indice.items():
             self._cpfs_por_colaborador[colaborador_id] = (
                 self._cpfs_por_colaborador.get(colaborador_id, frozenset()) | {cpf}
             )
@@ -136,7 +136,7 @@ class FonteCandidatosPorConteudo:
         paginas: Optional[Tuple[str, ...]] = extrair_paginas_seguro(conteudo)
         cpfs = (
             None if paginas is None
-            else frozenset(cpf for pagina in paginas for cpf in extrair_cpfs_distintos_de_texto(pagina))
+            else frozenset(cpf for pagina in paginas for cpf in cpfs_da_pagina(pagina, self._indice))
         )
         self._paginas_por_hash[documento.hash_sha256] = cpfs
         return cpfs

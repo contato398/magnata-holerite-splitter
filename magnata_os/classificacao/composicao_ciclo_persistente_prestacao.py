@@ -88,9 +88,9 @@ from magnata_os.central.localizacao import (
 )
 from magnata_os.documental.derivacao_documental import GrupoPaginas, derivar_documentos
 from magnata_os.documental.modulo01.dominio import Documento
-from .evidencia_estrutural_documental import analisar_estrutura_documento
 from .fonte_candidatos_por_necessidade import FonteCandidatosDocumentaisPorNecessidade
 from .separacao_documental import (
+    cpfs_da_pagina,
     estrategia_por_cpf_colaborador_estrita,
     indice_cpf_de_candidatos,
     separar_por_carry_forward,
@@ -914,7 +914,8 @@ def _parte_do_colaborador(
     if lido is None:
         return None
     conteudo, paginas = lido
-    if analisar_estrutura_documento(paginas).quantidade_cpfs_distintos < 2:
+    pessoas = {cpf for pagina in paginas for cpf in cpfs_da_pagina(pagina, indice)}
+    if len(pessoas) < 2:
         return None
 
     chave_derivados = ('derivados', documento.hash_sha256)
