@@ -51,6 +51,24 @@ export class AutenticacaoAusente extends Error {
   }
 }
 
+/**
+ * Erro do fluxo de login (POST /auth/login) -- corpo de erro desse
+ * endpoint especifico usa `{erro: '<codigo>'}` (auth_bp), forma
+ * diferente de `{codigo, mensagem, detalhes}` usada pelos endpoints da
+ * esteira (CLASSE_POR_CODIGO abaixo), entao nao reaproveita ApiError.
+ * `codigoErro` e sempre um dos valores conhecidos de auth_bp
+ * (id_token_ausente/identidade_invalida/nao_autorizado/
+ * provedor_indisponivel) -- nunca a mensagem tecnica original.
+ */
+export class ErroLogin extends Error {
+  constructor(codigoErro, statusHttp) {
+    super(`login_falhou:${codigoErro}`);
+    this.name = 'ErroLogin';
+    this.codigoErro = codigoErro;
+    this.statusHttp = statusHttp;
+  }
+}
+
 const CLASSE_POR_CODIGO = {
   [CodigoErro.DOCUMENTO_NAO_ENCONTRADO]: DocumentoNaoEncontrado,
   [CodigoErro.LOTE_NAO_ENCONTRADO]: LoteNaoEncontrado,
@@ -137,6 +155,35 @@ export async function verificarSessaoAtual() {
   } catch (excecaoRede) {
     return { autenticado: false };
   }
+}
+
+/**
+ * POST /auth/login com `{id_token}` (id token do Google Identity
+ * Services, ver src/auth/googleIdentity.js) -- nunca envia
+ * email/perfil autodeclarado, o backend so aceita o id_token (ver
+ * magnata_os/autenticacao/adapters/blueprint_login.py::login()).
+ * Lanca `ErroLogin` em qualquer resposta nao-2xx -- nunca devolve um
+ * sucesso fingido. */
+export async function autenticarComIdToken(idToken) {
+  const resp = await fetch('/auth/login', {
+    method: 'POST',
+    credentials: CREDENCIAIS_MESMA_ORIGEM,
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ id_token: idToken }),
+  });
+
+  let corpo = null;
+  try {
+    corpo = await resp.json();
+  } catch (excecaoParse) {
+    corpo = null;
+  }
+
+  if (!resp.ok) {
+    throw new ErroLogin((corpo && corpo.erro) || 'erro_desconhecido', resp.status);
+  }
+
+  return { autenticado: true, email: corpo.email, perfil: corpo.perfil, csrfToken: corpo.csrf_token };
 }
 
 export const apiClient = {

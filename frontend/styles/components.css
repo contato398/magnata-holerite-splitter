@@ -88,6 +88,8 @@
 .tela-login img { height: 32px; }
 .tela-login h1 { font-size: var(--fonte-tamanho-lg); margin: 0; }
 .tela-login p { color: var(--cor-texto-secundario, inherit); margin: 0; }
+.gis-botao-login { min-height: 40px; }
+.tela-login #area-estado-login:empty { display: none; }
 
 .btn-atualizar {
   display: inline-flex; align-items: center; gap: var(--espaco-2);

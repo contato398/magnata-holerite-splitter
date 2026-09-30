@@ -14,6 +14,7 @@ import { Perfil } from './api/autorizacao.js';
 import { ROTAS, rotaPorId } from './nav.js';
 import { Sidebar, NavMobile } from './components/Sidebar.js';
 import { Header } from './components/Header.js';
+import { TelaLogin } from './components/TelaLogin.js';
 import { tempoRelativoDeIso } from './utils/format.js';
 
 /**
@@ -29,19 +30,6 @@ function modoMockAtivo() {
   } catch (excecao) {
     return false;
   }
-}
-
-function TelaLogin({ raiz }) {
-  mount(raiz, h('div', { className: 'tela-login', role: 'main' }, [
-    h('img', { className: 'header-logo-horizontal', src: 'assets/brand/magnata-logo-horizontal.svg', alt: 'Grupo Magnata' }),
-    h('h1', {}, 'Sessão não autenticada'),
-    h('p', {}, 'Este painel exige login administrativo (mesma sessão de /auth/login) antes de mostrar qualquer dado da esteira documental.'),
-    h('p', {}, [
-      'Entre pelo fluxo de login administrativo do Magnata OS e recarregue esta página. ',
-      h('span', { className: 'somente-leitor-tela' }, '(botão de login com Google ainda não incorporado a esta tela -- ver pendência registrada.)'),
-    ]),
-    h('button', { className: 'btn-atualizar', onClick: () => location.reload() }, 'Já entrei — recarregar'),
-  ]));
 }
 
 import { DashboardView } from './views/DashboardView.js';
@@ -63,8 +51,10 @@ const VIEWS = {
  * continuam injetaveis explicitamente (usado por testes e pelo modo
  * `?mock=1`) -- quando omitidos, `iniciarApp` decide sozinho: checa
  * `/auth/me` (verificarSessaoAtual) e usa a API real se houver sessao
- * valida, ou mostra a tela de login se nao houver. Devolve `null`
- * quando a tela de login e mostrada (nenhum store criado ainda).
+ * valida, ou mostra a tela de login (TelaLogin.js) se nao houver.
+ * Sem sessao, devolve uma Promise que so resolve (com o `store`) depois
+ * que a pessoa completa o login com sucesso -- nunca monta o painel
+ * antes disso.
  */
 export async function iniciarApp(raiz, opcoes = {}) {
   let { apiClient, perfilInicial, perfilEditavel, emailAutenticado = null } = opcoes;
@@ -77,8 +67,19 @@ export async function iniciarApp(raiz, opcoes = {}) {
     } else {
       const sessao = await verificarSessaoAtual();
       if (!sessao.autenticado) {
-        TelaLogin({ raiz });
-        return null;
+        return new Promise((resolve) => {
+          TelaLogin({
+            raiz,
+            aoAutenticar: (sessaoLogin) => {
+              resolve(montarPainel(raiz, {
+                apiClient: apiClientReal,
+                perfilInicial: sessaoLogin.perfil,
+                perfilEditavel: false,
+                emailAutenticado: sessaoLogin.email || null,
+              }));
+            },
+          });
+        });
       }
       apiClient = apiClientReal;
       perfilInicial = sessao.perfil;
@@ -90,6 +91,10 @@ export async function iniciarApp(raiz, opcoes = {}) {
     perfilEditavel = perfilEditavel ?? true;
   }
 
+  return montarPainel(raiz, { apiClient, perfilInicial, perfilEditavel, emailAutenticado });
+}
+
+function montarPainel(raiz, { apiClient, perfilInicial, perfilEditavel, emailAutenticado }) {
   const store = createStore({
     perfil: perfilInicial,
     rotaId: idDaRota(location.hash) || 'resumo',
