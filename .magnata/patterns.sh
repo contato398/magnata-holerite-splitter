@@ -27,6 +27,7 @@ AUTHORIZED_BRANCHES=(
   "^feat/selecao-envio-operador-v1$"
   "^feat/prestacao-compor-ordem-selecionada-shadow-v1$"
   "^feat/prestacao-compor-ordem-selecionada-assinatura-wiring-v1$"
+  "^feat/interpretar-ordem-operador-v1$"
   "^fix/[a-z0-9][a-z0-9-]*$"
   "^claude/macro-6a-[a-z0-9-]*$"
 )
@@ -1371,6 +1372,25 @@ ALLOWED_PATHS=(
   # (alteração, não arquivo novo) e tests/test_composicao_prestacao_
   # real_ocr_wiring.py já cai no prefixo de tests/ existente.
   "^docs/decisoes/ocr-motor-google-vision-wiring-v1\.md$"
+
+  # Excecao exata e restrita (interprete de ordem em linguagem natural do
+  # operador, branch feat/interpretar-ordem-operador-v1) — traduz texto
+  # livre em portugues (regex/heuristica determinista, ZERO dependencia
+  # de API de LLM externa) para SelecaoEnvioOperador (selecao_envio_
+  # operador_v1.py, INTOCADO) OU para uma pendencia de esclarecimento
+  # explicita quando ha qualquer duvida real (nome ambiguo, documento
+  # nao encontrado/nao pronto, competencia ausente e nao inferivel,
+  # destinatario nao identificado) -- nunca uma adivinhacao. So estes
+  # caminhos exatos, por igualdade de string completa; nao libera
+  # "^magnata_os/orquestrador/" nem "^scripts/" nem "^test_"/"^tests/"
+  # de forma ampla. ZERO alteracao em app.py, ZERO migration, ZERO
+  # transporte real, ZERO import de porta_execucao/transporte_real_
+  # habilitado/autorizacao_transporte_real.
+  "^magnata_os/orquestrador/interpretar_ordem_operador_v1\.py$"
+  "^scripts/interpretar_ordem_operador_cli\.py$"
+  "^test_interpretar_ordem_operador_v1\.py$"
+  "^tests/test_scripts_interpretar_ordem_operador_cli\.py$"
+  "^docs/decisoes/interpretar-ordem-operador-v1\.md$"
 )
 
 # ============================================================================

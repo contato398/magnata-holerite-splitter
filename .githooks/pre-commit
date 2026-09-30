@@ -569,6 +569,11 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # que expõe dados reais para o painel operacional (ver
   # .magnata/patterns.sh para o detalhamento completo).
   "test_magnata_os_documental_modulo01_blueprint_esteira.py"
+  # INTÉRPRETE DE ORDEM EM LINGUAGEM NATURAL DO OPERADOR V1 -- teste
+  # nominal do núcleo puro (interpretar_ordem_operador_v1.py) (ver
+  # .magnata/patterns.sh e docs/decisoes/interpretar-ordem-operador-v1.md
+  # para o detalhamento completo).
+  "test_interpretar_ordem_operador_v1.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
