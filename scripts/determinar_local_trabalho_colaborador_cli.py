@@ -87,6 +87,15 @@ def determinar_local_trabalho(
     )
     persistido = repositorio_colaboradores.salvar(atualizado)
     if evento is not None:
+        # Histórico append-only real (item 2 da correção do PR #215) --
+        # o log estruturado abaixo continua existindo (não é removido),
+        # mas deixa de ser a ÚNICA fonte de verdade: o evento agora
+        # também é gravado numa tabela que nunca é editada/apagada
+        # (`rh_admissao_historico_correcao_local_trabalho`, migration
+        # 0003). Gravado DEPOIS de `salvar` persistir o novo
+        # `local_trabalho` -- ver limitação declarada no ADR §6 (duas
+        # escritas em transações separadas, não atômicas entre si).
+        repositorio_colaboradores.registrar_evento_correcao_local_trabalho(evento)
         _logger.info(
             'cadastro_colaborador_local_trabalho_corrigido colaborador_id=%s',
             colaborador_id,

@@ -11,6 +11,7 @@ import pytest
 from magnata_os.rh_admissao.dominio_cadastro_colaborador import (
     CadastroColaboradorError,
     Colaborador,
+    EventoCorrecaoLocalTrabalho,
     LocalTrabalhoJaDefinidoError,
     SituacaoCadastroColaborador,
 )
@@ -24,6 +25,7 @@ _AGORA = datetime(2026, 9, 30, 12, 0, 0, tzinfo=timezone.utc)
 class _RepositorioColaboradoresEmMemoria:
     def __init__(self, colaboradores=()) -> None:
         self._por_id: Dict[str, Colaborador] = {c.colaborador_id: c for c in colaboradores}
+        self.historico_correcoes: list = []
 
     def salvar(self, colaborador: Colaborador) -> Colaborador:
         self._por_id[colaborador.colaborador_id] = colaborador
@@ -34,6 +36,19 @@ class _RepositorioColaboradoresEmMemoria:
 
     def listar(self) -> Tuple[Colaborador, ...]:
         return tuple(self._por_id.values())
+
+    def registrar_evento_correcao_local_trabalho(
+        self, evento: EventoCorrecaoLocalTrabalho,
+    ) -> EventoCorrecaoLocalTrabalho:
+        # Dublê append-only: só adiciona -- nunca edita/remove um evento
+        # já registrado (mesma disciplina do adapter Postgres real).
+        self.historico_correcoes.append(evento)
+        return evento
+
+    def listar_historico_correcao_local_trabalho(
+        self, colaborador_id: str,
+    ) -> Tuple[EventoCorrecaoLocalTrabalho, ...]:
+        return tuple(e for e in self.historico_correcoes if e.colaborador_id == colaborador_id)
 
 
 def _pendente(colaborador_id='colab-1'):
@@ -93,6 +108,38 @@ def test_local_trabalho_ja_definido_com_motivo_e_corrigido():
     assert persistido.local_trabalho == 'Escala B - Dias Impares'
     assert evento is not None
     assert evento.motivo_correcao == 'Colaborador transferido de posto'
+
+
+def test_correcao_grava_evento_no_historico_append_only():
+    """Item 2 da correção do PR #215: a correção não vai só para log --
+    também é registrada na tabela/mecanismo append-only, via o método
+    novo da porta `RepositorioColaboradores`."""
+    repo = _RepositorioColaboradoresEmMemoria([_completo()])
+    determinar_local_trabalho(
+        repo, colaborador_id='colab-1', local_trabalho='Escala B - Dias Impares',
+        determinado_por='operador.rh@magnataservicos.com.br',
+        motivo_correcao='Colaborador transferido de posto', agora=_AGORA,
+    )
+
+    historico = repo.listar_historico_correcao_local_trabalho('colab-1')
+    assert len(historico) == 1
+    assert historico[0].local_trabalho_anterior == 'Escala A - Dias Pares'
+    assert historico[0].local_trabalho_novo == 'Escala B - Dias Impares'
+    assert historico[0].motivo_correcao == 'Colaborador transferido de posto'
+    assert historico[0].determinado_por == 'operador.rh@magnataservicos.com.br'
+
+
+def test_determinacao_normal_sem_correcao_nao_grava_historico():
+    """Preencher um `local_trabalho` ainda `None` não é correção --
+    nenhum evento deve ir para o histórico append-only (mesmo critério
+    já validado no domínio: só correção real gera evento)."""
+    repo = _RepositorioColaboradoresEmMemoria([_pendente()])
+    determinar_local_trabalho(
+        repo, colaborador_id='colab-1', local_trabalho='Escala A - Dias Pares',
+        determinado_por='operador.rh@magnataservicos.com.br', agora=_AGORA,
+    )
+
+    assert repo.listar_historico_correcao_local_trabalho('colab-1') == ()
 
 
 # ---- main(): ConfiguracaoBancoAusente (fail-closed sem DATABASE_URL) ----

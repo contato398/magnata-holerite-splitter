@@ -11,7 +11,11 @@ from typing import Dict, Optional, Tuple
 
 import pytest
 
-from magnata_os.rh_admissao.dominio_cadastro_colaborador import Colaborador, SituacaoCadastroColaborador
+from magnata_os.rh_admissao.dominio_cadastro_colaborador import (
+    Colaborador,
+    EventoCorrecaoLocalTrabalho,
+    SituacaoCadastroColaborador,
+)
 from magnata_os.rh_admissao.gatilho_admissao import (
     DadosColaboradorKitAdmissao,
     DeterminacaoLocalTrabalho,
@@ -43,6 +47,21 @@ class RepositorioColaboradoresEmMemoria:
 
     def listar(self) -> Tuple[Colaborador, ...]:
         return tuple(self._por_id.values())
+
+    def registrar_evento_correcao_local_trabalho(
+        self, evento: EventoCorrecaoLocalTrabalho,
+    ) -> EventoCorrecaoLocalTrabalho:
+        # O wiring automático (`processar_kit_admissao_com_cadastro`)
+        # nunca corrige local_trabalho já definido (só o canal manual
+        # faz isso) -- este dublê existe só para conformidade estrutural
+        # com o Protocol `RepositorioColaboradores`, nunca exercitado
+        # neste arquivo de teste.
+        raise NotImplementedError('wiring automatico nunca registra correcao')
+
+    def listar_historico_correcao_local_trabalho(
+        self, colaborador_id: str,
+    ) -> Tuple[EventoCorrecaoLocalTrabalho, ...]:
+        return ()
 
 
 def _dados(colaborador_id='colab-1'):

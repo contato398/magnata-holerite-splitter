@@ -92,12 +92,14 @@ class SituacaoCadastroColaborador(str, enum.Enum):
 class EventoCorrecaoLocalTrabalho:
     """Registro append-only (nunca editado/apagado) de UMA correção de
     `local_trabalho` já definido. Não é o *event store* oficial do
-    Módulo 01 (`documentos`/`eventos_documentais`) -- é o rastro mínimo
-    desta missão, hoje emitido via log estruturado
-    (`EVENTO_CADASTRO_COLABORADOR_LOCAL_TRABALHO_CORRIGIDO`) pelo
-    chamador (CLI de determinação manual). Promovê-lo a uma tabela
-    própria é trabalho futuro, não decidido nem construído aqui (ver
-    ADR §5)."""
+    Módulo 01 (`documentos`/`eventos_documentais`) -- é o rastro
+    próprio desta missão. Persistido numa tabela append-only real
+    (`rh_admissao_historico_correcao_local_trabalho`, migration 0003,
+    via `RepositorioColaboradores.registrar_evento_correcao_local_
+    trabalho`) pelo chamador (CLI de determinação manual) -- o log
+    estruturado (`EVENTO_CADASTRO_COLABORADOR_LOCAL_TRABALHO_
+    CORRIGIDO`) continua existindo também, mas deixou de ser a única
+    fonte de verdade (ver ADR §4/§6)."""
 
     colaborador_id: str
     local_trabalho_anterior: str

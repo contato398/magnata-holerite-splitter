@@ -1401,6 +1401,20 @@ ALLOWED_PATHS=(
   "^tests/test_scripts_determinar_local_trabalho_colaborador_cli\.py$"
   "^test_repositorio_colaboradores_postgres_real\.py$"
   "^docs/decisoes/cadastro-colaborador-persistente-v1\.md$"
+
+  # Correção pré-merge do PR #215 (mesma branch
+  # feat/cadastro-colaborador-persistente-v1, mesma missão acima):
+  # cifra de CPF em repouso (Fernet, mesmo padrão já aprovado para
+  # telefone) + histórico append-only real de correção de local de
+  # trabalho. Migrations NOVAS (0002/0003), não edição de 0001 -- ver
+  # docs/decisoes/cadastro-colaborador-persistente-v1.md §3.1. Mesma
+  # restrição das linhas acima: só estes caminhos exatos.
+  "^magnata_os/rh_admissao/configuracao_cpf_colaborador\.py$"
+  "^magnata_os/rh_admissao/migrations/0002_cifrar_cpf_colaboradores\.sql$"
+  "^magnata_os/rh_admissao/migrations/0002_cifrar_cpf_colaboradores_rollback\.sql$"
+  "^magnata_os/rh_admissao/migrations/0003_criar_historico_correcao_local_trabalho\.sql$"
+  "^magnata_os/rh_admissao/migrations/0003_criar_historico_correcao_local_trabalho_rollback\.sql$"
+  "^tests/test_magnata_os_rh_admissao_adapters_repositorio_colaboradores_postgres\.py$"
 )
 
 # ============================================================================
