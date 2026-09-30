@@ -1,0 +1,97 @@
+/**
+ * Design tokens -- Magnata OS Central Documental (Modulo 01, Fase 5).
+ *
+ * As duas cores institucionais (--cor-marinho / --cor-dourado) vem
+ * EXATAMENTE da identidade extraida em MAGNATA_OS_IDENTIDADE_VISUAL.md
+ * -- nunca alteradas aqui. Toda cor neutra (cinzas, fundo) e uma
+ * escolha de UI desta fase, NAO faz parte da marca -- ver a secao "Uso
+ * institucional no painel" do documento de identidade.
+ */
+
+:root {
+  /* ---- Cores institucionais (extraidas da marca -- nao alterar) ---- */
+  --cor-marinho: #041b36;
+  --cor-marinho-600: #0b2c52;
+  --cor-marinho-400: #274b74;
+  --cor-dourado: #fdc82a;
+  --cor-dourado-600: #e6ac0a;
+  --cor-dourado-100: #fff3d6;
+
+  /* ---- Neutros complementares (UI, nao fazem parte da marca) ---- */
+  --cor-fundo: #f6f7f9;
+  --cor-superficie: #ffffff;
+  --cor-superficie-alt: #fbfbfc;
+  --cor-borda: #e2e5ea;
+  --cor-borda-forte: #c9ced6;
+  --cor-texto: #1c2430;
+  --cor-texto-secundario: #5b6472;
+  --cor-texto-terciario: #8a919d;
+  --cor-texto-sobre-marinho: #f4f6fa;
+  --cor-texto-sobre-dourado: #241a02;
+
+  /* ---- Semanticas de situacao (derivadas dos neutros + institucionais) ---- */
+  --cor-situacao-aguardando: #6b7280;
+  --cor-situacao-processamento: #2f6fed;
+  --cor-situacao-revisao: #b7791f;
+  --cor-situacao-pronto: #0e9f6e;
+  --cor-situacao-concluido: #0e9f6e;
+  --cor-situacao-erro: #d64545;
+  --cor-situacao-bloqueado: #c02323;
+  --cor-acao-humana: var(--cor-dourado-600);
+  --cor-acao-automatica: #2f6fed;
+
+  /* ---- Tipografia ---- */
+  --fonte-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --fonte-tamanho-xs: 0.75rem;
+  --fonte-tamanho-sm: 0.8125rem;
+  --fonte-tamanho-md: 0.9375rem;
+  --fonte-tamanho-lg: 1.125rem;
+  --fonte-tamanho-xl: 1.5rem;
+  --fonte-tamanho-xxl: 1.875rem;
+
+  /* ---- Espacamento ---- */
+  --espaco-1: 4px;
+  --espaco-2: 8px;
+  --espaco-3: 12px;
+  --espaco-4: 16px;
+  --espaco-5: 24px;
+  --espaco-6: 32px;
+  --espaco-7: 48px;
+
+  /* ---- Forma ---- */
+  --raio-sm: 6px;
+  --raio-md: 10px;
+  --raio-lg: 16px;
+  --raio-pill: 999px;
+  --sombra-card: 0 1px 2px rgba(4, 27, 54, 0.06), 0 1px 3px rgba(4, 27, 54, 0.08);
+  --sombra-elevada: 0 4px 16px rgba(4, 27, 54, 0.12);
+
+  /* ---- Layout ---- */
+  --largura-sidebar: 240px;
+  --largura-sidebar-colapsada: 72px;
+  --altura-header: 64px;
+  --largura-coluna-esteira: 280px;
+
+  /* ---- Breakpoints (documentativos -- usados nas media queries de base.css) ---- */
+  --bp-mobile: 640px;
+  --bp-tablet: 1024px;
+  --bp-desktop: 1280px;
+
+  --transicao-rapida: 150ms ease;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --cor-fundo: #0d1420;
+    --cor-superficie: #131c2b;
+    --cor-superficie-alt: #101724;
+    --cor-borda: #24304433;
+    --cor-borda: #263349;
+    --cor-borda-forte: #34435c;
+    --cor-texto: #eef1f6;
+    --cor-texto-secundario: #aab3c2;
+    --cor-texto-terciario: #7c8595;
+    --sombra-card: 0 1px 2px rgba(0, 0, 0, 0.24), 0 1px 3px rgba(0, 0, 0, 0.32);
+    --sombra-elevada: 0 4px 20px rgba(0, 0, 0, 0.45);
+  }
+}

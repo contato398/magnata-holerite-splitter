@@ -565,6 +565,9 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # nominal do combinador puro de `ResolverParametrosOrdemPrestacao`
   # (ver .magnata/patterns.sh para o detalhamento completo).
   "test_resolver_parametros_ordem_prestacao_fallback_canal_v1.py"
+  # PAINEL FASE 5 -- DADOS REAIS -- teste nominal do blueprint HTTP da
+  # esteira (ver .magnata/patterns.sh para o detalhamento completo).
+  "test_magnata_os_documental_modulo01_blueprint_esteira.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {

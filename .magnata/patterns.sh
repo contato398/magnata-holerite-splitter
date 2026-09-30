@@ -1300,6 +1300,25 @@ ALLOWED_PATHS=(
   "^magnata_os/orquestrador/resolver_parametros_ordem_prestacao_fallback_canal_v1\.py$"
   "^test_resolver_parametros_ordem_prestacao_fallback_canal_v1\.py$"
   "^docs/decisoes/prestacao-distribuicao-canal-fallback-v1\.md$"
+
+  # Recuperacao da Fase 5 (painel operacional da esteira do Modulo 01)
+  # com dados reais -- branch fix/magnata-os-painel-fase5-dados-reais-v1.
+  # Conclui a auditoria de docs/magnata-os/central-command/FASE5_AUDITORIA.md:
+  # (1) expoe a API HTTP real (blueprint_esteira.py, adapter novo, reusa
+  # exigir_sessao_com_perfil de auth_bp -- nenhuma autenticacao nova);
+  # (2) o painel Vanilla JS recuperado da branch orfa
+  # origin/feat/magnata-os-documental-modulo01-fase5-painel passa a
+  # consumir a API real (apiAdapter.js) em vez de so mockAdapter.js.
+  # `frontend/CLAUDE.md` e `frontend/assets/brand/` continuam intocados
+  # e protegidos -- nao liberados por este bloco (ver PROTECTED_FILES).
+  "^magnata_os/documental/modulo01/adapters/blueprint_esteira\.py$"
+  "^magnata_os/documental/modulo01/adapters/api_contexto\.py$"
+  "^test_magnata_os_documental_modulo01_blueprint_esteira\.py$"
+  "^docs/decisoes/painel-fase5-dados-reais-v1\.md$"
+  "^frontend/index\.html$"
+  "^frontend/src/"
+  "^frontend/styles/"
+  "^frontend/tests/"
 )
 
 # ============================================================================

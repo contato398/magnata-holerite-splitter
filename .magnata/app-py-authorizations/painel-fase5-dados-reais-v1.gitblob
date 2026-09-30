@@ -1,0 +1,32 @@
+# Autorização humana específica -- Wiring mínimo do blueprint HTTP da
+# esteira (Módulo 01, Fase 5 -- "Trazer o painel operacional da Fase 5
+# de volta à vida com dados reais").
+# Base: 6ed60f9 (origin/main, após o merge do PR #199).
+# Branch: fix/magnata-os-painel-fase5-dados-reais-v1
+# Data: 2026-09-30
+#
+# Autorização: texto da missão recebida por este agente, item 2 ("Exponha
+# a API real, sem tocar app.py"): "Crie um blueprint Flask novo (mesmo
+# padrão de auth_bp/secullum_bp/sync_bp/ingestao_bp -- veja como eles são
+# registrados em app.py linhas ~74-82, mas NÃO edite app.py além de
+# adicionar o registro do blueprint novo, que é o mínimo necessário e o
+# mesmo padrão já usado 4 vezes)."
+#
+# Escopo autorizado (nominal): importar `esteira_bp` de
+# `magnata_os/documental/modulo01/adapters/blueprint_esteira.py` e chamar
+# `app.register_blueprint(esteira_bp)` logo após o registro de
+# `ingestao_bp` -- nenhuma outra linha de app.py tocada. Nenhuma rota
+# legada, credencial, migration ou lógica de negócio nova entra em
+# app.py; toda a lógica do endpoint vive no blueprint, fora deste
+# arquivo.
+#
+# IMPORTANTE -- este blob documenta a base para a checagem automática do
+# pre-commit hook (mesmo mecanismo já usado nas autorizações anteriores
+# desta lista), não substitui a revisão humana do diff de app.py no PR
+# desta branch antes de qualquer merge -- ver PR aberto e
+# docs/decisoes/ correspondente.
+#
+# Somente este blob exato é válido. Qualquer alteração subsequente
+# (inclusive reordenar, adicionar linha ou trocar comentário) invalida
+# esta autorização e exige um novo blob nominal.
+e4bd4e4cdf3db8e9029cca8ac66fa1417e3976be  app.py
