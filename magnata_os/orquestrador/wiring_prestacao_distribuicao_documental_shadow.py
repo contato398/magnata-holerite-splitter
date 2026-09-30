@@ -94,6 +94,12 @@ from .obrigacao_assinatura import PortaObrigacaoAssinatura
 from .politica_preset_distribuicao_documental import resolver_preset
 from .repositorio_acoes_execucao_plano_postgres import RepositorioAcoesExecucaoPlanoPostgres
 from .repositorio_execucoes import RepositorioExecucoes
+from .selecao_envio_operador_v1 import (
+    ItemSelecaoValidada,
+    SelecaoEnvioOperador,
+    SelecaoEnvioOperadorError,
+    validar_selecao_contra_linhas_diagnostico,
+)
 from .wiring_distribuicao_documental_shadow import (
     DistribuicaoDocumentalError,
     EventoCanonicoNaoAguardaGate,
@@ -125,6 +131,9 @@ __all__ = [
     'ParametrosOrdemPrestacao',
     'ResolverParametrosOrdemPrestacao',
     'executar_prestacao_ate_distribuicao_documental_shadow',
+    'PresetDaOrdemDivergeDaSelecaoOperador',
+    'filtrar_trios_por_selecao_operador',
+    'executar_prestacao_selecionada_ate_distribuicao_documental_shadow',
 ]
 
 
@@ -373,5 +382,194 @@ def executar_prestacao_ate_distribuicao_documental_shadow(
                 },
             )
             continue  # isolamento: erro de domínio de 1 cliente nunca contamina os demais
+        resultados.append(resultado)
+    return tuple(resultados)
+
+
+# ---------------------------------------------------------------------
+# Camada de seleção/curadoria do operador (necessidade de negócio: o
+# operador precisa de autonomia total para escolher quais documentos
+# enviar, para quantos colaboradores, e se exige assinatura digital +
+# comprovante -- nunca "tudo que está PRONTO vira Ordem
+# automaticamente"). Ver `selecao_envio_operador_v1.py` para o
+# contrato/validação puros; esta seção só liga a seleção JÁ VALIDADA ao
+# ponto real onde a Ordem é composta, sem duplicar nenhuma regra de
+# elegibilidade/isolamento por cliente já existente acima.
+# ---------------------------------------------------------------------
+
+class PresetDaOrdemDivergeDaSelecaoOperador(PrestacaoDistribuicaoDocumentalError):
+    """`resolver_parametros_ordem` devolveu um `preset_id` cujo
+    `exigir_assinatura`/`exigir_comprovante` não bate com o
+    `exigir_assinatura_digital_e_comprovante` que o operador escolheu
+    para este colaborador -- fail-closed antes de materializar
+    QUALQUER coisa. A decisão de exigir (ou não) assinatura é do
+    operador (`SelecaoEnvioOperador`); o `resolver_parametros_ordem` só
+    tem liberdade de escolher COMO satisfazer essa decisão (qual
+    `preset_id` exato), nunca de contrariá-la silenciosamente."""
+
+
+def _linhas_dos_trios(
+    trios: Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...],
+) -> Tuple[dict, ...]:
+    """Mesmas colunas de `selecao_envio_operador_v1._linhas_do_
+    diagnostico` (cliente_id/competencia_id/tipo_documental/
+    colaborador_id/situacao), mas extraídas dos trios JÁ elegíveis
+    devolvidos por `resultados_aquisicao_prontos_por_colaborador` --
+    aqui tudo que aparece já é, por construção daquela função,
+    `PRONTO`. Serve só para reaproveitar `validar_selecao_contra_
+    linhas_diagnostico` (1 única regra de casamento seleção<->realidade,
+    nunca 2 implementações divergentes) na composição real."""
+    linhas = []
+    for cliente, competencia, resultados in trios:
+        for resultado in resultados:
+            colaborador = resultado.necessidade.colaborador
+            linhas.append({
+                'cliente_id': cliente.entidade_id,
+                'competencia_id': competencia.entidade_id,
+                'tipo_documental': resultado.necessidade.tipo_documental,
+                'colaborador_id': colaborador.entidade_id if colaborador is not None else None,
+                'situacao': 'PRONTO',
+            })
+    return tuple(linhas)
+
+
+def filtrar_trios_por_selecao_operador(
+    trios: Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...]], ...],
+    selecao_operador: SelecaoEnvioOperador,
+) -> Tuple[Tuple[ReferenciaCanonica, ReferenciaCanonica, Tuple[ResultadoAquisicaoPorNecessidade, ...], ItemSelecaoValidada], ...]:
+    """Filtra os trios de `resultados_aquisicao_prontos_por_colaborador`
+    (1 trio = 1 cliente+competência+colaborador, todos já elegíveis)
+    para só os que o operador selecionou -- e, dentro de cada trio,
+    para só os `tipo_documental` que o operador escolheu para aquele
+    colaborador (permitindo N documentos para 1 colaborador sem
+    obrigar o pacote inteiro do cliente).
+
+    Fail-closed (reaproveita `validar_selecao_contra_linhas_
+    diagnostico`, nunca uma segunda regra): uma seleção que aponte para
+    um colaborador/tipo_documental que não está entre os trios prontos
+    desta execução é rejeitada com erro claro -- nunca ignorada em
+    silêncio. Isso cobre o caso em que o diagnóstico usado pelo
+    operador para montar a seleção ficou desatualizado em relação aos
+    dados reais no momento da composição.
+
+    Trio sem nenhuma correspondência na seleção é simplesmente omitido
+    do retorno -- é exatamente o comportamento "só o que o operador
+    selecionou vira Ordem; o resto continua diagnosticado, mas não
+    entra"."""
+    validados = validar_selecao_contra_linhas_diagnostico(_linhas_dos_trios(trios), selecao_operador)
+    itens_validados_por_colaborador = {
+        (v.cliente_id, v.competencia_id, v.colaborador_id): v for v in validados
+    }
+
+    saida = []
+    for cliente, competencia, resultados in trios:
+        colaboradores = {r.necessidade.colaborador.entidade_id for r in resultados if r.necessidade.colaborador}
+        if len(colaboradores) != 1:
+            continue  # trio sem colaborador único não é alvo desta seleção (nível cliente, fora de escopo)
+        (colaborador_id,) = colaboradores
+        item_validado = itens_validados_por_colaborador.get((cliente.entidade_id, competencia.entidade_id, colaborador_id))
+        if item_validado is None:
+            continue  # não selecionado pelo operador -- fica diagnosticado, mas não vira Ordem
+        resultados_selecionados = tuple(
+            r for r in resultados if r.necessidade.tipo_documental in item_validado.tipos_documentais
+        )
+        if not resultados_selecionados:
+            continue
+        saida.append((cliente, competencia, resultados_selecionados, item_validado))
+    return tuple(saida)
+
+
+def executar_prestacao_selecionada_ate_distribuicao_documental_shadow(
+    *,
+    contexto: ContextoComposicaoPrestacao,
+    selecao_operador: SelecaoEnvioOperador,
+    resolver_parametros_ordem: ResolverParametrosOrdemPrestacao,
+    repositorio_documentos: RepositorioDocumentos,
+    armazenamento: ArmazenamentoArquivos,
+    materializador: Optional[MaterializadorArquivoLegado],
+    porta_assinatura: Optional[PortaObrigacaoAssinatura],
+    repositorio_execucoes: RepositorioExecucoes,
+    repositorio_autorizacoes: RepositorioAutorizacoesGate,
+    repositorio_acoes: RepositorioAcoesExecucaoPlanoPostgres,
+    ator_referencia: str,
+    proveniencia: str,
+    instante: datetime,
+    repositorio_conclusao: Optional[RepositorioConclusaoObrigacaoAssinaturaPostgres] = None,
+) -> Tuple[ResultadoDistribuicaoDocumentalShadow, ...]:
+    """Entrypoint que o operador de fato usa (via CLI, ver
+    `scripts/selecao_envio_operador_cli.py`): só o que
+    `selecao_operador` escolheu vira Ordem -- tudo mais que está PRONTO
+    continua diagnosticado, mas não é distribuído. `executar_
+    prestacao_ate_distribuicao_documental_shadow` (acima, INTOCADA)
+    continua existindo para composição direta sem curadoria (ex.: prova
+    de ponta a ponta, scripts internos) -- este é o elo aditivo, nunca
+    uma substituição.
+
+    Padrão seguro por default: `selecao_operador.itens == ()` (seleção
+    ausente/vazia) devolve `()` imediatamente, SEM tocar
+    `resultados_aquisicao_prontos_por_colaborador`/`resolver_parametros_
+    ordem` -- nunca "sem seleção, manda tudo".
+
+    Mesma disciplina de isolamento por cliente da função acima
+    (`PrestacaoDistribuicaoDocumentalError`/`DistribuicaoDocumentalError`
+    de 1 colaborador nunca interrompe os demais); e mesma garantia de
+    modo sombra (nenhuma linha aqui chama transporte real nem toca as 3
+    barreiras de produção)."""
+    if not selecao_operador.itens:
+        return ()
+
+    trios = resultados_aquisicao_prontos_por_colaborador(contexto)
+    trios_selecionados = filtrar_trios_por_selecao_operador(trios, selecao_operador)
+
+    resultados: list = []
+    for cliente, competencia, resultados_aquisicao, item_validado in trios_selecionados:
+        parametros = resolver_parametros_ordem(cliente, competencia, resultados_aquisicao)
+        if parametros is None:
+            continue  # fail-closed: sem parâmetros resolvidos, zero Ordem para este colaborador
+        try:
+            preset = resolver_preset(parametros.preset_id)
+            exigido = item_validado.exigir_assinatura_digital_e_comprovante
+            if preset.exigir_assinatura != exigido or preset.exigir_comprovante != exigido:
+                colaborador = resultados_aquisicao[0].necessidade.colaborador
+                colaborador_id = colaborador.entidade_id if colaborador is not None else None
+                raise PresetDaOrdemDivergeDaSelecaoOperador(
+                    f'preset_id={parametros.preset_id!r} (exigir_assinatura={preset.exigir_assinatura}, '
+                    f'exigir_comprovante={preset.exigir_comprovante}) diverge da seleção do operador '
+                    f'(exigir_assinatura_digital_e_comprovante={exigido}) para cliente={cliente.entidade_id!r} '
+                    f'competencia={competencia.entidade_id!r} colaborador={colaborador_id!r}'
+                )
+            resultado = materializar_prestacao_distribuicao_documental_shadow(
+                resultados_aquisicao=resultados_aquisicao,
+                destinatario=parametros.destinatario,
+                preset_id=parametros.preset_id,
+                tipo_documento=parametros.tipo_documento,
+                mensagem_texto=parametros.mensagem_texto,
+                repositorio_documentos=repositorio_documentos,
+                armazenamento=armazenamento,
+                materializador=materializador,
+                porta_assinatura=porta_assinatura,
+                repositorio_execucoes=repositorio_execucoes,
+                repositorio_autorizacoes=repositorio_autorizacoes,
+                repositorio_acoes=repositorio_acoes,
+                ator_referencia=ator_referencia,
+                proveniencia=proveniencia,
+                instante=instante,
+                repositorio_conclusao=repositorio_conclusao,
+            )
+        except (PrestacaoDistribuicaoDocumentalError, DistribuicaoDocumentalError) as exc:
+            colaborador = resultados_aquisicao[0].necessidade.colaborador
+            colaborador_id = colaborador.entidade_id if colaborador is not None else None
+            _logger.error(
+                '%s cliente=%s competencia=%s colaborador=%s exception_type=%s',
+                EVENTO_CLIENTE_FALHOU_DISTRIBUICAO_DOCUMENTAL,
+                cliente.entidade_id, competencia.entidade_id, colaborador_id, type(exc).__name__,
+                extra={
+                    'evento': EVENTO_CLIENTE_FALHOU_DISTRIBUICAO_DOCUMENTAL,
+                    'cliente': cliente.entidade_id, 'competencia': competencia.entidade_id,
+                    'colaborador': colaborador_id,
+                    'exception_type': type(exc).__name__,
+                },
+            )
+            continue
         resultados.append(resultado)
     return tuple(resultados)
