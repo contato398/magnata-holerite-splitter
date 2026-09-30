@@ -12,11 +12,17 @@
 </head>
 <body>
   <div id="raiz"></div>
+  <!-- Config publica (Client ID OAuth do Google, nunca segredo) -- ver
+       src/config.js. Carregada ANTES do modulo abaixo, script classico
+       (nao ES module) de proposito: so define window.MAGNATA_CONFIG,
+       cada deploy sobrescreve este arquivo com o valor real. -->
+  <script src="src/runtime-config.js"></script>
   <script type="module">
     import { iniciarApp } from './src/app.js';
-    // Por padrao roda contra a API real (checa /auth/me antes de mostrar
-    // qualquer dado -- ver app.js). Acrescente ?mock=1 na URL para o modo
-    // demonstracao com dado simulado, sem servidor Flask.
+    // Por padrao roda contra a API real (checa /auth/me e mostra a tela
+    // de login quando nao ha sessao -- ver app.js/components/TelaLogin.js).
+    // Acrescente ?mock=1 na URL para o modo demonstracao com dado
+    // simulado, sem servidor real.
     iniciarApp(document.getElementById('raiz'));
   </script>
 </body>

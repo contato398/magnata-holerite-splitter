@@ -28,8 +28,14 @@ const ARQUIVOS_FONTE = [
   '../src/components/EsteiraColuna.js', '../src/components/EsteiraBoard.js', '../src/components/DocumentoCard.js',
   '../src/components/Filtros.js', '../src/components/Paginacao.js',
   '../src/components/PainelDetalheDocumento.js', '../src/components/PainelDetalheLote.js', '../src/components/EstadosUI.js',
+  '../src/components/TelaLogin.js',
   '../src/views/DashboardView.js', '../src/views/DocumentosView.js', '../src/views/BloqueiosView.js',
   '../src/views/AcoesHumanasView.js', '../src/views/ParadosView.js', '../src/views/viewHelpers.js',
+  // Fase 5 "login real" -- config.js so LE window.MAGNATA_CONFIG (nunca
+  // fetch), googleIdentity.js so insere um <script> do SDK do Google
+  // (nunca fetch()/XMLHttpRequest -- ver o proprio arquivo), runtime-config.js
+  // so define a variavel global (nenhum codigo de rede).
+  '../src/config.js', '../src/auth/googleIdentity.js', '../src/runtime-config.js',
 ];
 
 // Termos cuja presenca indicaria acoplamento de CODIGO com o backend

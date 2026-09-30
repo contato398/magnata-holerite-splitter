@@ -1336,6 +1336,19 @@ ALLOWED_PATHS=(
   "^magnata_os/documental/modulo01/adapters/api_contexto\.py$"
   "^test_magnata_os_documental_modulo01_blueprint_esteira\.py$"
   "^docs/decisoes/painel-fase5-dados-reais-v1\.md$"
+
+  # Painel Operacional (Fase 5) -- tela de login real, V1
+  # (fix/magnata-os-painel-fase5-login-real-v1). Só o documento de
+  # decisão precisa de entrada aqui -- os arquivos de código novos
+  # (frontend/src/components/TelaLogin.js, frontend/src/auth/,
+  # frontend/src/config.js, frontend/src/runtime-config.js,
+  # frontend/tests/app.test.js, frontend/tests/telaLogin.test.js) já
+  # caem nos prefixos genéricos "^frontend/src/"/"^frontend/tests/"
+  # liberados acima, nenhuma entrada nova necessária para eles.
+  # ALTERAÇÃO EM app.py: nenhuma -- auth_bp já estava registrado
+  # (painel-fase5-backend-v1), esta missão só consome as rotas
+  # existentes do frontend.
+  "^docs/decisoes/painel-fase5-login-real-v1\.md$"
 )
 
 # ============================================================================
