@@ -1300,6 +1300,23 @@ ALLOWED_PATHS=(
   "^magnata_os/orquestrador/resolver_parametros_ordem_prestacao_fallback_canal_v1\.py$"
   "^test_resolver_parametros_ordem_prestacao_fallback_canal_v1\.py$"
   "^docs/decisoes/prestacao-distribuicao-canal-fallback-v1\.md$"
+
+  # Recuperação da Fase 5 (painel operacional da esteira do Módulo 01)
+  # com dados reais -- parte frontend (branch
+  # fix/magnata-os-painel-fase5-frontend-v1), separada da parte backend
+  # (que registra o blueprint em app.py) por exigência do CLAUDE.md §7.
+  # Painel Vanilla JS recuperado da branch órfã
+  # origin/feat/magnata-os-documental-modulo01-fase5-painel, agora
+  # consumindo dados reais via apiAdapter.js (a API em si só existe
+  # depois que a branch backend for autorizada e mesclada -- até lá,
+  # ?mock=1 continua disponível para desenvolvimento/demonstração).
+  # frontend/CLAUDE.md e frontend/assets/brand/ continuam intocados e
+  # protegidos -- não liberados por este bloco.
+  "^frontend/index\.html$"
+  "^frontend/src/"
+  "^frontend/styles/"
+  "^frontend/tests/"
+  "^docs/decisoes/painel-fase5-frontend-v1\.md$"
 )
 
 # ============================================================================
