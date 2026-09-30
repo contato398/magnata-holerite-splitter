@@ -23,6 +23,7 @@ AUTHORIZED_BRANCHES=(
   "^feat/magnata-os-claude-powerpack$"
   "^feat/magnata-os-etapa6-governanca$"
   "^feat/magnata-os-etapa6-estabilizacao$"
+  "^feat/selecao-envio-operador-v1$"
   "^fix/[a-z0-9][a-z0-9-]*$"
   "^claude/macro-6a-[a-z0-9-]*$"
 )
