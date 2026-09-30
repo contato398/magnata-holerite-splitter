@@ -47,20 +47,50 @@ Responsabilidade ESTRITA desta CLI (nunca mais que isto):
        shadow_v1` e imprimir o resultado (ou o erro fail-closed, nunca
        silencioso).
 
-**LIMITE CONHECIDO, DECLARADO (não escondido):** assim como
-`--ate-pending` em `prestacao_cliente_competencia_v1.py`, esta CLI só
-aceita presets SEM assinatura (`PRESETS_SEM_ASSINATURA`, reaproveitado
-de lá, não duplicado) -- presets com assinatura exigem compositores de
-`materializador`/`porta_assinatura` a partir do ambiente que ainda não
-existem neste repositório (mesmo gap já documentado naquele módulo).
-Um item de `--selecao` com `exigir_assinatura_digital_e_comprovante:
-true`, combinado com o preset sem assinatura desta CLI, é REJEITADO
+**PRESETS COM ASSINATURA -- WIRING, não construção (ver
+`docs/decisoes/prestacao-compor-ordem-selecionada-assinatura-wiring-v1.md`):**
+esta CLI aceita qualquer `preset_id` conhecido de
+`politica_preset_distribuicao_documental.resolver_preset` -- inclusive
+`DOCUMENTO_UNITARIO_COM_ASSINATURA`/`PACOTE_2_DOCUMENTOS_1_LINK_COM_ASSINATURA`.
+`materializador`/`porta_assinatura`/`repositorio_conclusao` já existem
+como componentes REAIS neste repositório (`MaterializadorArquivoLegadoAirtable`,
+`AdapterObrigacaoAssinaturaLegadoHttp`, `RepositorioConclusaoObrigacaoAssinaturaPostgres`)
+e já são compostos a partir do ambiente por `distribuir_documento_v1.py`
+(`_compor_materializador_a_partir_do_ambiente`/`_compor_obrigacao_
+assinatura_a_partir_do_ambiente`/`_compor_repositorio_conclusao_a_
+partir_do_ambiente`, reaproveitados aqui, nunca duplicados) -- esta CLI
+só passa a chamá-los quando `resolver_preset(preset_id).exigir_
+assinatura` for `True`, exatamente como `distribuir_documento_v1.py`
+já faz para a Ordem não selecionada.
+
+Um item de `--selecao` cujo `exigir_assinatura_digital_e_comprovante`
+diverge do que o `--preset` desta execução exige continua REJEITADO
 (isolado, fail-closed) por `PresetDaOrdemDivergeDaSelecaoOperador` --
 nunca sai uma Ordem silenciosamente diferente do que o operador pediu;
-os demais colaboradores da mesma seleção continuam normalmente. Ligar
-esta CLI a presets com assinatura é pendência futura separada, quando a
-composição real de `materializador`/`porta_assinatura` a partir do
-ambiente existir -- registrado aqui, não escondido como "pronto".
+os demais colaboradores da mesma seleção continuam normalmente. Como
+antes, cada execução desta CLI usa 1 único `--preset` para toda a
+seleção informada -- misturar colaboradores com e sem exigência de
+assinatura na MESMA chamada continua exigindo 2 chamadas (1 por
+preset), cada uma isolando quem não corresponde ao preset escolhido.
+
+Continua estritamente SEM transporte real e SEM autorização humana
+real: o ramo com assinatura chama o motor de assinatura de verdade
+(`criar_ou_recuperar`, `disparar_whatsapp=false` no adapter legado) --
+isto NÃO é WhatsApp real, é a mesma criação de obrigação/link que
+`distribuir_documento_v1.py` já faz em produção para presets com
+assinatura; a autorização que precede essa chamada continua sendo
+`autorizar_preview_assinatura_shadow` (sintética), nunca decisão
+humana real. Não existe, nem antes nem depois desta mudança, uma
+barreira de "assinatura real" separada das 3 barreiras de transporte
+real -- a única barreira aqui é a credencial de ambiente
+(`AIRTABLE_API_KEY`/`ORQUESTRADOR_ASSINATURA_BASE_URL`/
+`ORQUESTRADOR_ASSINATURA_API_KEY`) exigida fail-closed pelos próprios
+compositores reaproveitados; sem elas configuradas, a CLI nunca chega a
+tentar a chamada real (`RuntimeError` explícito). Rodar esta CLI com
+essas credenciais reais configuradas e um preset com assinatura JÁ
+CRIA uma obrigação de assinatura real (Airtable/app.py) -- gate humano
+igual a qualquer outra ação externa real (CLAUDE.md §6), nunca decidido
+por este módulo.
 
 Rodar contra o ambiente real (Postgres/S3/Airtable de produção) é gate
 humano (CLAUDE.md §6/§12-I) -- este módulo não decide isso; ele só
@@ -100,8 +130,11 @@ from magnata_os.orquestrador.composicao_prestacao_real_v1 import (  # noqa: E402
     parse_competencia,
 )
 from magnata_os.orquestrador.distribuir_documento_v1 import (  # noqa: E402
+    _compor_materializador_a_partir_do_ambiente,
+    _compor_obrigacao_assinatura_a_partir_do_ambiente,
     _compor_repositorio_acoes_a_partir_do_ambiente,
     _compor_repositorio_autorizacoes_a_partir_do_ambiente,
+    _compor_repositorio_conclusao_a_partir_do_ambiente,
     _compor_repositorio_execucoes_a_partir_do_ambiente,
 )
 from magnata_os.orquestrador.executar_prestacao_selecionada_contato_ate_pending_shadow_v1 import (  # noqa: E402
@@ -109,8 +142,9 @@ from magnata_os.orquestrador.executar_prestacao_selecionada_contato_ate_pending_
     compor_repositorio_contato_a_partir_do_ambiente,
     executar_prestacao_selecionada_contato_ate_pending_shadow_v1,
 )
-from magnata_os.orquestrador.prestacao_cliente_competencia_v1 import (  # noqa: E402
-    PRESETS_SEM_ASSINATURA,
+from magnata_os.orquestrador.politica_preset_distribuicao_documental import (  # noqa: E402
+    PresetDistribuicaoDocumentalDesconhecido,
+    resolver_preset,
 )
 from magnata_os.orquestrador.selecao_envio_operador_v1 import (  # noqa: E402
     ItemSelecaoEnvioOperador,
@@ -157,13 +191,16 @@ def _parse_args(argv) -> argparse.Namespace:
                         help='AAAA-MM: SÓ se o vínculo Funcionário->Local de hoje vale para essa competência')
     parser.add_argument('--selecao', required=True, help='caminho do JSON da seleção do operador')
     parser.add_argument('--preset', required=True,
-                        help=f'obrigatório (decisão de negócio) -- um de {sorted(PRESETS_SEM_ASSINATURA)}')
+                        help='obrigatório (decisão de negócio) -- qualquer preset_id conhecido de '
+                             'politica_preset_distribuicao_documental (com ou sem assinatura)')
     parser.add_argument('--mensagem', required=True, help='obrigatório (decisão de negócio)')
     parser.add_argument('--tipo-documento', default='PRESTACAO_CONTAS',
                         help='tipo_documento da Ordem (default: PRESTACAO_CONTAS)')
     args = parser.parse_args(argv)
-    if args.preset not in PRESETS_SEM_ASSINATURA:
-        parser.error(f'--preset deve ser um de {sorted(PRESETS_SEM_ASSINATURA)}')
+    try:
+        resolver_preset(args.preset)
+    except PresetDistribuicaoDocumentalDesconhecido as exc:
+        parser.error(str(exc))
     try:
         parse_competencia(args.competencia)
         if args.snapshot_airtable_comprovado:
@@ -207,6 +244,19 @@ def executar(
     repositorio_autorizacoes = _compor_repositorio_autorizacoes_a_partir_do_ambiente()
     repositorio_acoes = _compor_repositorio_acoes_a_partir_do_ambiente()
 
+    # Compositores reais (`distribuir_documento_v1.py`, intocados, só
+    # reaproveitados) só são chamados quando o PRESET desta execução
+    # exige assinatura -- mesmo gate condicional já usado por
+    # `distribuir_documento_v1.main` para a Ordem não selecionada. Sem
+    # assinatura, nenhuma credencial de Airtable/motor de assinatura é
+    # sequer olhada (fail-closed por omissão, nunca por exceção tardia).
+    preset = resolver_preset(preset_id)
+    materializador = _compor_materializador_a_partir_do_ambiente() if preset.exigir_assinatura else None
+    porta_assinatura = _compor_obrigacao_assinatura_a_partir_do_ambiente() if preset.exigir_assinatura else None
+    repositorio_conclusao = (
+        _compor_repositorio_conclusao_a_partir_do_ambiente() if preset.exigir_assinatura else None
+    )
+
     resultados = executar_prestacao_selecionada_contato_ate_pending_shadow_v1(
         contexto=contexto, selecao_operador=selecao,
         repositorio_contato=repositorio_contato, chave_fernet=chave_fernet,
@@ -214,12 +264,13 @@ def executar(
         montar_mensagem_texto=lambda cliente, competencia: mensagem,
         repositorio_documentos=dependencias.repositorio_documentos,
         armazenamento=dependencias.armazenamento,
-        materializador=None, porta_assinatura=None,
+        materializador=materializador, porta_assinatura=porta_assinatura,
         repositorio_execucoes=repositorio_execucoes,
         repositorio_autorizacoes=repositorio_autorizacoes,
         repositorio_acoes=repositorio_acoes,
         ator_referencia=f'cli:{PROVENIENCIA}', proveniencia=PROVENIENCIA,
         instante=instante or datetime.now(timezone.utc),
+        repositorio_conclusao=repositorio_conclusao,
     )
 
     itens_selecionados = sum(len(item.tipos_documentais) and 1 or 0 for item in selecao.itens)
@@ -276,6 +327,15 @@ def main(argv=None) -> int:
         return 2
     except (PrestacaoDistribuicaoDocumentalError, DistribuicaoDocumentalError) as exc:
         print(f'COMPOSICAO_REJEITADA: {type(exc).__name__}: {exc}')
+        return 2
+    except RuntimeError as exc:
+        # Config ausente para materializador/porta_assinatura (só surge
+        # com preset com assinatura) -- mesmo fail-closed de
+        # `compor_dependencias_a_partir_do_ambiente`, aqui porque a
+        # falta só é descoberta dentro de `executar()` (o preset só é
+        # resolvido depois que as dependências de contexto já foram
+        # compostas).
+        print(f'CONFIGURACAO_AUSENTE: {exc}')
         return 2
     except ValueError as exc:
         print(f'PARAMETRO_INVALIDO: {exc}')
