@@ -1349,6 +1349,24 @@ ALLOWED_PATHS=(
   # (painel-fase5-backend-v1), esta missão só consome as rotas
   # existentes do frontend.
   "^docs/decisoes/painel-fase5-login-real-v1\.md$"
+
+  # Excecao exata e restrita (motor real de OCR via Google Cloud Vision
+  # API REST, branch fix/ocr-motor-google-vision-v1) — implementa a
+  # porta MotorOcr ja existente (magnata_os/documental/ocr.py, NAO
+  # alterada), sem nenhuma chamada de rede real em teste (cliente HTTP
+  # injetavel). So estes 3 caminhos exatos — nao libera
+  # "^magnata_os/documental/" nem "^tests/" de forma ampla.
+  "^magnata_os/documental/ocr_google_vision\.py$"
+  "^tests/test_magnata_os_documental_ocr_google_vision\.py$"
+  "^docs/decisoes/ocr-motor-google-vision-v1\.md$"
+
+  # Ativação (wiring) do motor real de OCR na composição real
+  # (branch fix/ocr-motor-google-vision-v1, mesmo commit/PR do motor
+  # acima). Só o documento de decisão precisa de entrada nova aqui --
+  # magnata_os/orquestrador/composicao_prestacao_real_v1.py já existia
+  # (alteração, não arquivo novo) e tests/test_composicao_prestacao_
+  # real_ocr_wiring.py já cai no prefixo de tests/ existente.
+  "^docs/decisoes/ocr-motor-google-vision-wiring-v1\.md$"
 )
 
 # ============================================================================
