@@ -27,6 +27,7 @@ AUTHORIZED_BRANCHES=(
   "^feat/selecao-envio-operador-v1$"
   "^feat/prestacao-compor-ordem-selecionada-shadow-v1$"
   "^feat/prestacao-compor-ordem-selecionada-assinatura-wiring-v1$"
+  "^feat/cadastro-colaborador-persistente-v1$"
   "^fix/[a-z0-9][a-z0-9-]*$"
   "^claude/macro-6a-[a-z0-9-]*$"
 )
@@ -1371,6 +1372,35 @@ ALLOWED_PATHS=(
   # (alteração, não arquivo novo) e tests/test_composicao_prestacao_
   # real_ocr_wiring.py já cai no prefixo de tests/ existente.
   "^docs/decisoes/ocr-motor-google-vision-wiring-v1\.md$"
+
+  # Excecao exata e restrita (Cadastro de Colaborador PERSISTENTE V1,
+  # branch feat/cadastro-colaborador-persistente-v1) — domínio puro,
+  # porta, adapter Postgres (PREPARADO, NUNCA aplicado -- migration
+  # 0001 fica em magnata_os/rh_admissao/migrations/, fora do prefixo
+  # protegido de modulo01/migrations/), wiring que ENVOLVE (nunca
+  # altera) gatilho_admissao.py, CLI de determinação manual do local de
+  # trabalho, fonte do diretorio_nomes para interpretar_ordem_operador_
+  # v1.py, e os testes nominais correspondentes. So estes caminhos
+  # exatos, por igualdade de string completa; nao libera
+  # "^magnata_os/rh_admissao/" nem "^scripts/" nem "^tests/"/"^test_"
+  # de forma ampla. ZERO alteracao em app.py, ZERO aplicacao real de
+  # migration, ZERO transporte real, ZERO import de
+  # autorizacao_transporte_real.
+  "^magnata_os/rh_admissao/dominio_cadastro_colaborador\.py$"
+  "^magnata_os/rh_admissao/repositorio_colaboradores\.py$"
+  "^magnata_os/rh_admissao/wiring_cadastro_colaborador\.py$"
+  "^magnata_os/rh_admissao/diretorio_nomes_colaboradores\.py$"
+  "^magnata_os/rh_admissao/adapters/__init__\.py$"
+  "^magnata_os/rh_admissao/adapters/repositorio_colaboradores_postgres\.py$"
+  "^magnata_os/rh_admissao/migrations/0001_criar_tabela_colaboradores\.sql$"
+  "^magnata_os/rh_admissao/migrations/0001_criar_tabela_colaboradores_rollback\.sql$"
+  "^scripts/determinar_local_trabalho_colaborador_cli\.py$"
+  "^tests/test_magnata_os_rh_admissao_dominio_cadastro_colaborador\.py$"
+  "^tests/test_magnata_os_rh_admissao_wiring_cadastro_colaborador\.py$"
+  "^tests/test_magnata_os_rh_admissao_diretorio_nomes_colaboradores\.py$"
+  "^tests/test_scripts_determinar_local_trabalho_colaborador_cli\.py$"
+  "^test_repositorio_colaboradores_postgres_real\.py$"
+  "^docs/decisoes/cadastro-colaborador-persistente-v1\.md$"
 )
 
 # ============================================================================

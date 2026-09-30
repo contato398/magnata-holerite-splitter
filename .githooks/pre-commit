@@ -569,6 +569,10 @@ ARQUIVOS_TESTE_NOMINALMENTE_AUTORIZADOS=(
   # que expõe dados reais para o painel operacional (ver
   # .magnata/patterns.sh para o detalhamento completo).
   "test_magnata_os_documental_modulo01_blueprint_esteira.py"
+  # CADASTRO DE COLABORADOR PERSISTENTE V1 -- teste nominal do adapter
+  # Postgres real do cadastro de colaborador (ver .magnata/patterns.sh
+  # para o detalhamento completo).
+  "test_repositorio_colaboradores_postgres_real.py"
 )
 
 is_arquivo_teste_nominalmente_autorizado() {
