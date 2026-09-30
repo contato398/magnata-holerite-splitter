@@ -1,0 +1,10 @@
+# Autorização humana específica — app.py — Painel Fase 5 (backend) — 2026-09-30
+# Confirmada pelo operador em mensagem distinta da que apresentou as
+# linhas abaixo, já apresentadas antes da confirmação.
+# Escopo autorizado: só o registro do blueprint `esteira_bp`
+# (magnata_os/documental/modulo01/adapters/blueprint_esteira.py) --
+# 2 linhas (import + register_blueprint), mesmo padrão já usado para
+# auth_bp/secullum_bp/sync_bp/ingestao_bp. Nenhuma outra linha de
+# app.py foi tocada. Não autoriza nenhuma outra alteração futura em
+# app.py -- o hash abaixo invalida qualquer mudança posterior.
+e4bd4e4cdf3db8e9029cca8ac66fa1417e3976be  app.py

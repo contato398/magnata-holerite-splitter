@@ -1303,10 +1303,10 @@ ALLOWED_PATHS=(
 
   # Recuperação da Fase 5 (painel operacional da esteira do Módulo 01)
   # com dados reais -- parte frontend (branch
-  # fix/magnata-os-painel-fase5-frontend-v1), separada da parte backend
-  # (que registra o blueprint em app.py) por exigência do CLAUDE.md §7.
-  # Painel Vanilla JS recuperado da branch órfã
-  # origin/feat/magnata-os-documental-modulo01-fase5-painel, agora
+  # fix/magnata-os-painel-fase5-frontend-v1, já mesclada em main),
+  # separada da parte backend (que registra o blueprint em app.py) por
+  # exigência do CLAUDE.md §7. Painel Vanilla JS recuperado da branch
+  # órfã origin/feat/magnata-os-documental-modulo01-fase5-painel, agora
   # consumindo dados reais via apiAdapter.js (a API em si só existe
   # depois que a branch backend for autorizada e mesclada -- até lá,
   # ?mock=1 continua disponível para desenvolvimento/demonstração).
@@ -1317,6 +1317,25 @@ ALLOWED_PATHS=(
   "^frontend/styles/"
   "^frontend/tests/"
   "^docs/decisoes/painel-fase5-frontend-v1\.md$"
+
+  # Recuperação da Fase 5 -- parte backend (branch
+  # fix/magnata-os-app-py-registro-blueprint-esteira-v1), separada da
+  # parte frontend por exigência do CLAUDE.md §7 (app.py só em branch
+  # dedicada, nunca misturada com trabalho não relacionado a ele).
+  # Conclui a auditoria de
+  # docs/magnata-os/central-command/FASE5_AUDITORIA.md: expõe a API
+  # HTTP real (blueprint_esteira.py, adapter novo, reusa
+  # exigir_sessao_com_perfil de auth_bp -- nenhuma autenticação nova).
+  # ALTERAÇÃO EM app.py NESTA BRANCH: só o registro do blueprint (2
+  # linhas), mesmo padrão já usado para auth_bp/secullum_bp/sync_bp/
+  # ingestao_bp -- autorizada por blob exato em
+  # .magnata/app-py-authorizations/painel-fase5-backend-v1.gitblob,
+  # confirmada pelo operador em mensagem distinta da que apresentou as
+  # linhas.
+  "^magnata_os/documental/modulo01/adapters/blueprint_esteira\.py$"
+  "^magnata_os/documental/modulo01/adapters/api_contexto\.py$"
+  "^test_magnata_os_documental_modulo01_blueprint_esteira\.py$"
+  "^docs/decisoes/painel-fase5-dados-reais-v1\.md$"
 )
 
 # ============================================================================
