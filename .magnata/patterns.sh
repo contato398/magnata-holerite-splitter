@@ -25,6 +25,7 @@ AUTHORIZED_BRANCHES=(
   "^feat/magnata-os-etapa6-estabilizacao$"
   "^feat/prestacao-diagnostico-real-cli-v1$"
   "^feat/selecao-envio-operador-v1$"
+  "^feat/prestacao-compor-ordem-selecionada-shadow-v1$"
   "^fix/[a-z0-9][a-z0-9-]*$"
   "^claude/macro-6a-[a-z0-9-]*$"
 )
