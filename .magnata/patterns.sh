@@ -1336,6 +1336,15 @@ ALLOWED_PATHS=(
   "^magnata_os/documental/modulo01/adapters/api_contexto\.py$"
   "^test_magnata_os_documental_modulo01_blueprint_esteira\.py$"
   "^docs/decisoes/painel-fase5-dados-reais-v1\.md$"
+  # Excecao exata e restrita (motor real de OCR via Google Cloud Vision
+  # API REST, branch fix/ocr-motor-google-vision-v1) — implementa a
+  # porta MotorOcr ja existente (magnata_os/documental/ocr.py, NAO
+  # alterada), sem nenhuma chamada de rede real em teste (cliente HTTP
+  # injetavel). So estes 3 caminhos exatos — nao libera
+  # "^magnata_os/documental/" nem "^tests/" de forma ampla.
+  "^magnata_os/documental/ocr_google_vision\.py$"
+  "^tests/test_magnata_os_documental_ocr_google_vision\.py$"
+  "^docs/decisoes/ocr-motor-google-vision-v1\.md$"
 )
 
 # ============================================================================
