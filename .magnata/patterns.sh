@@ -1435,6 +1435,18 @@ ALLOWED_PATHS=(
   "^magnata_os/rh_admissao/migrations/0003_criar_historico_correcao_local_trabalho\.sql$"
   "^magnata_os/rh_admissao/migrations/0003_criar_historico_correcao_local_trabalho_rollback\.sql$"
   "^tests/test_magnata_os_rh_admissao_adapters_repositorio_colaboradores_postgres\.py$"
+
+  # Excecao exata e restrita (branch
+  # fix/teste-conectividade-whatsapp-real-v1) — CLI one-shot de teste
+  # de conectividade do transporte WhatsApp real (1 numero, 1
+  # mensagem, sem evento/documento/assinatura por tras). So consome
+  # (por import) autorizacao_transporte_real.py e
+  # composicao_transporte_evolution_legado.py, ja existentes e
+  # INTOCADOS. Nao libera "^scripts/" nem "^test_" de forma ampla, nao
+  # toca app.py, nao cria/aplica migration.
+  "^scripts/testar_conectividade_whatsapp_real_cli\.py$"
+  "^test_testar_conectividade_whatsapp_real_cli\.py$"
+  "^docs/decisoes/teste-conectividade-whatsapp-real-v1\.md$"
 )
 
 # ============================================================================
