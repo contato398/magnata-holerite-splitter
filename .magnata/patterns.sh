@@ -1447,6 +1447,14 @@ ALLOWED_PATHS=(
   "^scripts/testar_conectividade_whatsapp_real_cli\.py$"
   "^test_testar_conectividade_whatsapp_real_cli\.py$"
   "^docs/decisoes/teste-conectividade-whatsapp-real-v1\.md$"
+
+  # Excecao exata e restrita (branch fix/s3-endpoint-customizado-r2-v1)
+  # -- suporte opcional a endpoint S3 customizado (Cloudflare R2 ou
+  # qualquer compativel) em _compor_armazenamento_a_partir_do_ambiente,
+  # ciclo_producao_v1.py (ja listado acima) e seu teste (ja listado
+  # acima) nao precisam de entrada nova aqui -- so o documento de
+  # decisao, que e arquivo novo.
+  "^docs/decisoes/suporte-endpoint-s3-customizado-v1\.md$"
 )
 
 # ============================================================================
