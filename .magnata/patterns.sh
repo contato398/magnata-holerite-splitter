@@ -1455,6 +1455,22 @@ ALLOWED_PATHS=(
   # acima) nao precisam de entrada nova aqui -- so o documento de
   # decisao, que e arquivo novo.
   "^docs/decisoes/suporte-endpoint-s3-customizado-v1\.md$"
+
+  # Excecao exata e restrita (branch fix/ingestao-documentos-lote-real-v1)
+  # -- CLI manual de ingestao REAL em lote de conteudo de documento
+  # (Airtable -> S3/R2 + Postgres), motivada pelos 133 registros de
+  # Documento orfaos (metadado sem binario) encontrados pela primeira
+  # execucao real de prestacao_diagnostico_real_cli.py. So estes 4
+  # caminhos novos (nucleo, adapter de leitura de anexo, CLI e teste) e
+  # o documento de decisao, ja listado acima nesta mesma secao. Nao
+  # libera "^scripts/", "^test_" nem "^magnata_os/documental/importacao_
+  # lote/" de forma ampla; nao toca app.py, nao cria/aplica migration,
+  # nao referencia cron/scheduler/render.yaml.
+  "^magnata_os/documental/importacao_lote/ingestao_documentos_lote_real\.py$"
+  "^magnata_os/documental/importacao_lote/adapters/airtable_anexos_prestacao\.py$"
+  "^scripts/ingerir_documentos_lote_real_cli\.py$"
+  "^test_ingestao_documentos_lote_real\.py$"
+  "^docs/decisoes/ingestao-documento-lote-real-v1\.md$"
 )
 
 # ============================================================================
