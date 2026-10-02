@@ -48,6 +48,26 @@ export class AutenticacaoAusente extends Error {
   constructor() {
     super('Sessao ausente ou expirada -- faca login novamente.');
     this.name = 'AutenticacaoAusente';
+    // `mensagem` (nao so `message`) para quem exibe o erro via o mesmo
+    // helper usado para ApiError (renderErroApi, viewHelpers.js) poder
+    // mostrar um texto especifico em vez do fallback generico.
+    this.mensagem = this.message;
+  }
+}
+
+/**
+ * Erro de CSRF (`{erro: 'csrf_invalido'}`, 403 -- ver
+ * `exigir_csrf` em blueprint_login.py) numa chamada de ESCRITA
+ * (`POST /ingestao-lote`, primeira escrita exposta por este adapter).
+ * Mesma forma de corpo de erro de `/auth/logout` -- não é um ApiError
+ * do contrato Python (que usa `{codigo, mensagem, detalhes}`), por
+ * isso não entra em CLASSE_POR_CODIGO abaixo, igual a `ErroLogin`.
+ */
+export class FalhaSegurancaRequisicao extends Error {
+  constructor() {
+    super('Não foi possível confirmar sua sessão para esta ação. Recarregue a página e tente novamente.');
+    this.name = 'FalhaSegurancaRequisicao';
+    this.mensagem = this.message; // mesmo motivo de AutenticacaoAusente.mensagem, acima
   }
 }
 
@@ -145,6 +165,64 @@ async function requisitar(caminho, params = {}) {
   throw new ErroInternoNaoExposto();
 }
 
+/**
+ * POST de escrita contra o blueprint da esteira, com proteção CSRF
+ * (`exigir_csrf`, blueprint_login.py) -- toda rota de escrita exposta
+ * por este adapter passa por aqui, nunca por `requisitar()` (só GET).
+ * Busca um token CSRF fresco via `/auth/me` antes de cada chamada
+ * (mesmo token que `verificarSessaoAtual`/login já devolvem -- nunca
+ * um mecanismo de CSRF novo) -- simples e suficiente para a única
+ * rota de escrita de hoje; se este adapter ganhar mais rotas de
+ * escrita, vale cachear o token na sessão do painel em vez de buscar
+ * de novo a cada chamada (não feito aqui, para não expandir escopo).
+ */
+async function requisitarPost(caminho, corpo) {
+  const sessao = await verificarSessaoAtual();
+  if (!sessao.autenticado) {
+    throw new AutenticacaoAusente();
+  }
+
+  const resp = await fetch(`${BASE_URL}${caminho}`, {
+    method: 'POST',
+    credentials: CREDENCIAIS_MESMA_ORIGEM,
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'X-CSRF-Token': sessao.csrf_token || '',
+    },
+    body: JSON.stringify(corpo),
+  });
+
+  if (resp.status === 401) {
+    throw new AutenticacaoAusente();
+  }
+
+  let corpoResp = null;
+  try {
+    corpoResp = await resp.json();
+  } catch (excecaoParse) {
+    corpoResp = null;
+  }
+
+  if (resp.ok) {
+    return corpoResp;
+  }
+
+  if (corpoResp && corpoResp.erro === 'csrf_invalido') {
+    throw new FalhaSegurancaRequisicao();
+  }
+
+  if (corpoResp && corpoResp.codigo) {
+    const Classe = CLASSE_POR_CODIGO[corpoResp.codigo] || ApiError;
+    if (Classe === ApiError) {
+      throw new ApiError(corpoResp.codigo, corpoResp.mensagem, corpoResp.detalhes || null);
+    }
+    throw new Classe(corpoResp.mensagem, corpoResp.detalhes || null);
+  }
+
+  throw new ErroInternoNaoExposto();
+}
+
 /** Usado por app.js antes de montar o painel -- nunca lanca, so
  * devolve `{autenticado, email, perfil}` ou `{autenticado:false}`. */
 export async function verificarSessaoAtual() {
@@ -236,5 +314,17 @@ export const apiClient = {
     return requisitar('/parados', {
       tempo_minimo_segundos: tempoMinimoSegundos, ...paramsDePaginacao(paginacao), ...paramsDeOrdenacao(ordenacao),
     });
+  },
+
+  /**
+   * POST /magnata-os/documental/ingestao-lote -- dispara a ingestao
+   * real em lote (PR #221) para 1 cliente + 1 competencia, a partir do
+   * painel (nunca do Shell/terminal). SINCRONA: a Promise so resolve
+   * quando o backend terminar de processar TODOS os documentos
+   * encontrados -- pode demorar (ver limitacao declarada em
+   * docs/decisoes/painel-ingestao-documentos-lote-ui-v1.md).
+   */
+  async ingerirDocumentosLote(_sujeito, { clienteId, competenciaBase } = {}) {
+    return requisitarPost('/ingestao-lote', { cliente: clienteId, competencia: competenciaBase });
   },
 };

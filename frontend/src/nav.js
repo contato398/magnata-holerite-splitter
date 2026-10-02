@@ -11,6 +11,7 @@ export const ROTAS = Object.freeze([
   { id: 'bloqueios', rota: '#/bloqueios', titulo: 'Bloqueios', subtitulo: 'Documentos que precisam de desbloqueio', icone: 'cadeado' },
   { id: 'acoes-humanas', rota: '#/acoes-humanas', titulo: 'Ações humanas', subtitulo: 'Documentos que precisam de você', icone: 'pessoa' },
   { id: 'parados', rota: '#/parados', titulo: 'Parados', subtitulo: 'Documentos parados há mais tempo', icone: 'relogio' },
+  { id: 'ingestao-lote', rota: '#/ingestao-lote', titulo: 'Ingestão de documentos', subtitulo: 'Importar documentos de um cliente/competência', icone: 'pacote' },
 ]);
 
 export function rotaPorId(id) {

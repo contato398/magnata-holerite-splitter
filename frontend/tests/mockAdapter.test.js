@@ -216,3 +216,38 @@ describe('mockAdapter -- erro interno nao vaza detalhes ("erro")', () => {
     assertTrue(resumo.total_documentos > 0);
   });
 });
+
+describe('mockAdapter -- ingerirDocumentosLote (exige OPERACIONAL/GESTOR)', () => {
+  it('AUDITOR NAO consegue disparar ingestao ("sem permissão")', async () => {
+    await assertRejects(
+      () => mockApiClient.ingerirDocumentosLote(AUDITOR, { clienteId: 'recX', competenciaBase: '2026-09' }),
+      PermissaoNegada,
+    );
+  });
+
+  it('OPERACIONAL e GESTOR conseguem disparar, resumo devolve as mesmas chaves do contrato real', async () => {
+    const resp1 = await mockApiClient.ingerirDocumentosLote(OPERACIONAL, { clienteId: 'recX', competenciaBase: '2026-09' });
+    assertEqual(resp1.cliente_id, 'recX');
+    assertEqual(resp1.competencia_base, '2026-09');
+    assertTrue(typeof resp1.documentos_ingeridos === 'number');
+    assertTrue(typeof resp1.total_falhas === 'number');
+    assertTrue(Array.isArray(resp1.falhas));
+
+    const resp2 = await mockApiClient.ingerirDocumentosLote(GESTOR, { clienteId: 'recY', competenciaBase: '2026-10' });
+    assertEqual(resp2.cliente_id, 'recY');
+  });
+
+  it('cliente ausente e FiltroInvalido ("erro")', async () => {
+    await assertRejects(
+      () => mockApiClient.ingerirDocumentosLote(GESTOR, { clienteId: '', competenciaBase: '2026-09' }),
+      FiltroInvalido,
+    );
+  });
+
+  it('competencia fora do formato AAAA-MM e FiltroInvalido', async () => {
+    await assertRejects(
+      () => mockApiClient.ingerirDocumentosLote(GESTOR, { clienteId: 'recX', competenciaBase: '2026/09' }),
+      FiltroInvalido,
+    );
+  });
+});

@@ -12,8 +12,8 @@
  * AutenticacaoAusente, e mapeamento de `codigo` de erro para a
  * subclasse certa de ApiError.
  */
-import { describe, it, assertEqual, assertTrue, assertRejects } from './test-harness.js';
-import { apiClient, verificarSessaoAtual, AutenticacaoAusente } from '../src/api/apiAdapter.js';
+import { describe, it, assertEqual, assertTrue, assertRejects, assertDeepEqual } from './test-harness.js';
+import { apiClient, verificarSessaoAtual, AutenticacaoAusente, FalhaSegurancaRequisicao } from '../src/api/apiAdapter.js';
 import {
   DocumentoNaoEncontrado, FiltroInvalido, PermissaoNegada, ErroInternoNaoExposto,
 } from '../src/api/errors.js';
@@ -160,6 +160,79 @@ describe('apiAdapter -- transporte HTTP', () => {
       assertEqual(sessao.autenticado, true);
       assertEqual(sessao.perfil, 'GESTOR');
       assertTrue(chamadas[0].url.startsWith('/auth/me'));
+    } finally {
+      restaurar();
+    }
+  });
+});
+
+describe('apiAdapter -- ingerirDocumentosLote (POST de escrita, CSRF)', () => {
+  function instalarFetchComSessao(respostaPost) {
+    return instalarFetchFalso((url) => {
+      if (String(url).startsWith('/auth/me')) {
+        return { status: 200, corpo: { autenticado: true, email: 'gestor@exemplo.com', perfil: 'GESTOR', csrf_token: 'test' } };
+      }
+      return respostaPost;
+    });
+  }
+
+  it('busca token CSRF fresco via /auth/me e envia no header X-CSRF-Token do POST', async () => {
+    const { chamadas, restaurar } = instalarFetchComSessao({
+      status: 200,
+      corpo: { cliente_id: 'recX', competencia_base: '2026-09', documentos_ingeridos: 2, documentos_ja_existentes: 1, total_falhas: 0, falhas: [] },
+    });
+    try {
+      const resumo = await apiClient.ingerirDocumentosLote({}, { clienteId: 'recX', competenciaBase: '2026-09' });
+      assertEqual(resumo.documentos_ingeridos, 2);
+      assertEqual(chamadas.length, 2);
+      const chamadaPost = chamadas[1];
+      assertTrue(chamadaPost.url.startsWith('/magnata-os/documental/ingestao-lote'));
+      assertEqual(chamadaPost.opcoes.method, 'POST');
+      assertEqual(chamadaPost.opcoes.credentials, 'same-origin');
+      assertEqual(chamadaPost.opcoes.headers['X-CSRF-Token'], 'test');
+      assertDeepEqual(JSON.parse(chamadaPost.opcoes.body), { cliente: 'recX', competencia: '2026-09' });
+    } finally {
+      restaurar();
+    }
+  });
+
+  it('{erro: csrf_invalido} (403) vira FalhaSegurancaRequisicao, nunca um ApiError generico', async () => {
+    const { restaurar } = instalarFetchComSessao({ status: 403, corpo: { erro: 'csrf_invalido' } });
+    try {
+      await assertRejects(
+        () => apiClient.ingerirDocumentosLote({}, { clienteId: 'recX', competenciaBase: '2026-09' }),
+        (erro) => erro instanceof FalhaSegurancaRequisicao,
+        'deveria lancar FalhaSegurancaRequisicao',
+      );
+    } finally {
+      restaurar();
+    }
+  });
+
+  it('403 com codigo PERMISSAO_NEGADA vira PermissaoNegada (perfil sem acesso a ingestao)', async () => {
+    const { restaurar } = instalarFetchComSessao({
+      status: 403, corpo: { codigo: 'PERMISSAO_NEGADA', mensagem: 'sem permissao', detalhes: null },
+    });
+    try {
+      await assertRejects(
+        () => apiClient.ingerirDocumentosLote({}, { clienteId: 'recX', competenciaBase: '2026-09' }),
+        (erro) => erro instanceof PermissaoNegada,
+        'deveria lancar PermissaoNegada',
+      );
+    } finally {
+      restaurar();
+    }
+  });
+
+  it('sem sessao autenticada (/auth/me devolve autenticado:false), nunca chega a fazer o POST', async () => {
+    const { chamadas, restaurar } = instalarFetchFalso({ status: 200, corpo: { autenticado: false } });
+    try {
+      await assertRejects(
+        () => apiClient.ingerirDocumentosLote({}, { clienteId: 'recX', competenciaBase: '2026-09' }),
+        (erro) => erro instanceof AutenticacaoAusente,
+        'deveria lancar AutenticacaoAusente',
+      );
+      assertEqual(chamadas.length, 1, 'nao deveria ter chamado o POST sem sessao');
     } finally {
       restaurar();
     }

@@ -1471,6 +1471,22 @@ ALLOWED_PATHS=(
   "^scripts/ingerir_documentos_lote_real_cli\.py$"
   "^test_ingestao_documentos_lote_real\.py$"
   "^docs/decisoes/ingestao-documento-lote-real-v1\.md$"
+
+  # Excecao exata e restrita (branch fix/painel-ingestao-documentos-lote-ui-v1)
+  # -- expoe a ingestao real em lote (acima) no painel operacional via
+  # HTTP/clique, eliminando a dependencia de Shell/terminal (decisao de
+  # produto ja tomada). So o modulo novo de fronteira HTTP/autorizacao
+  # (nao duplica o nucleo de ingestao) e seu teste nominal; a rota em
+  # si entra no blueprint JA autorizado
+  # (modulo01/adapters/blueprint_esteira.py, listado acima nesta mesma
+  # secao) e o frontend novo entra nos prefixos
+  # "^frontend/src/"/"^frontend/tests/" JA liberados -- nenhuma entrada
+  # nova necessaria para eles. Nao libera
+  # "^magnata_os/documental/importacao_lote/" nem "^test_" de forma
+  # ampla; nao toca app.py, nao cria/aplica migration.
+  "^magnata_os/documental/importacao_lote/servico_ingestao_lote_http\.py$"
+  "^test_servico_ingestao_lote_http\.py$"
+  "^docs/decisoes/painel-ingestao-documentos-lote-ui-v1\.md$"
 )
 
 # ============================================================================
