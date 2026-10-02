@@ -249,3 +249,110 @@ def test_sem_database_url_devolve_503_nunca_dado_mockado(monkeypatch):
         resp = cliente.get('/magnata-os/documental/esteira/resumo')
         assert resp.status_code == 503
         assert resp.get_json()['codigo'] == 'BANCO_NAO_CONFIGURADO'
+
+
+# ============================================================================
+# POST /ingestao-lote -- painel aciona a ingestao real em lote (PR #221)
+# sem Shell/terminal. `executar_ingestao_lote_http` e sempre monkeypatchada
+# aqui -- nenhum teste deste blueprint toca Airtable/S3/Postgres real
+# (cobertura do nucleo em si fica em test_servico_ingestao_lote_http.py).
+# ============================================================================
+
+def _resumo_fake(**kwargs):
+    return {
+        'cliente_id': kwargs.get('cliente_id'),
+        'competencia_base': kwargs.get('competencia_base'),
+        'anexos_encontrados': 3,
+        'documentos_ingeridos': 2,
+        'documentos_ja_existentes': 1,
+        'registros_sem_anexo': [],
+        'total_falhas': 0,
+        'falhas': [],
+    }
+
+
+def test_ingestao_lote_sem_sessao_401(app_com_dado):
+    cliente = app_com_dado.test_client()
+    resp = cliente.post('/magnata-os/documental/ingestao-lote', json={'cliente': 'recX', 'competencia': '2026-09'})
+    assert resp.status_code == 401
+
+
+def test_ingestao_lote_sem_csrf_403(app_com_dado, monkeypatch):
+    import magnata_os.documental.modulo01.adapters.blueprint_esteira as blueprint_mod
+    monkeypatch.setattr(blueprint_mod, 'executar_ingestao_lote_http', lambda *a, **kw: _resumo_fake(cliente_id=a[1], competencia_base=a[2]))
+
+    cliente = app_com_dado.test_client()
+    _logar(cliente)
+    resp = cliente.post('/magnata-os/documental/ingestao-lote', json={'cliente': 'recX', 'competencia': '2026-09'})
+    assert resp.status_code == 403
+    assert resp.get_json()['erro'] == 'csrf_invalido'
+
+
+def test_ingestao_lote_com_sessao_e_csrf_chama_o_nucleo_e_devolve_resumo(app_com_dado, monkeypatch):
+    import magnata_os.documental.modulo01.adapters.blueprint_esteira as blueprint_mod
+    capturado = {}
+
+    def _fake_executar(sujeito, cliente_id, competencia_base):
+        capturado['sujeito'] = sujeito
+        capturado['cliente_id'] = cliente_id
+        capturado['competencia_base'] = competencia_base
+        return _resumo_fake(cliente_id=cliente_id, competencia_base=competencia_base)
+
+    monkeypatch.setattr(blueprint_mod, 'executar_ingestao_lote_http', _fake_executar)
+
+    cliente = app_com_dado.test_client()
+    dados_login = _logar(cliente)
+    resp = cliente.post(
+        '/magnata-os/documental/ingestao-lote',
+        json={'cliente': 'recCLIENTE123', 'competencia': '2026-09'},
+        headers={'X-CSRF-Token': dados_login['csrf_token']},
+    )
+    assert resp.status_code == 200
+    corpo = resp.get_json()
+    assert corpo['documentos_ingeridos'] == 2
+    assert corpo['documentos_ja_existentes'] == 1
+    assert capturado['cliente_id'] == 'recCLIENTE123'
+    assert capturado['competencia_base'] == '2026-09'
+    # nenhum dado pessoal na resposta
+    assert 'cpf' not in resp.get_data(as_text=True).lower()
+
+
+def test_ingestao_lote_propaga_erro_de_parametro_do_nucleo(app_com_dado, monkeypatch):
+    import magnata_os.documental.modulo01.adapters.blueprint_esteira as blueprint_mod
+    from magnata_os.documental.importacao_lote.servico_ingestao_lote_http import ParametrosIngestaoInvalidos
+
+    def _fake_executar(sujeito, cliente_id, competencia_base):
+        raise ParametrosIngestaoInvalidos('competência deve ser AAAA-MM')
+
+    monkeypatch.setattr(blueprint_mod, 'executar_ingestao_lote_http', _fake_executar)
+
+    cliente = app_com_dado.test_client()
+    dados_login = _logar(cliente)
+    resp = cliente.post(
+        '/magnata-os/documental/ingestao-lote',
+        json={'cliente': 'recX', 'competencia': 'invalida'},
+        headers={'X-CSRF-Token': dados_login['csrf_token']},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()['codigo'] == 'PARAMETROS_INGESTAO_INVALIDOS'
+
+
+def test_ingestao_lote_perfil_auditor_403(monkeypatch):
+    _EMAIL_AUDITOR = 'auditor@exemplo.com'
+    for app in _app_teste(monkeypatch, _fake_verificar(_EMAIL_AUDITOR)):
+        # sobrescreve a allowlist (lida do ambiente a cada login, nunca
+        # cacheada entre chamadas -- ver allowlist.py) para incluir o
+        # AUDITOR, alem do GESTOR/OPERACIONAL ja setados por `_app_teste`.
+        monkeypatch.setenv(
+            'MAGNATA_ADMIN_ALLOWLIST',
+            f'{_EMAIL_GESTOR}:GESTOR,{_EMAIL_OPERACIONAL}:OPERACIONAL,{_EMAIL_AUDITOR}:AUDITOR',
+        )
+        cliente = app.test_client()
+        dados_login = _logar(cliente, _EMAIL_AUDITOR)
+        resp = cliente.post(
+            '/magnata-os/documental/ingestao-lote',
+            json={'cliente': 'recX', 'competencia': '2026-09'},
+            headers={'X-CSRF-Token': dados_login['csrf_token']},
+        )
+        assert resp.status_code == 403
+        assert resp.get_json()['codigo'] == 'PERMISSAO_NEGADA'

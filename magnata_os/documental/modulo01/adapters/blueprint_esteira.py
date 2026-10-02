@@ -32,7 +32,7 @@ from typing import Callable, Optional
 
 from flask import Blueprint, jsonify, request
 
-from magnata_os.autenticacao.adapters.blueprint_login import exigir_sessao_com_perfil
+from magnata_os.autenticacao.adapters.blueprint_login import exigir_csrf, exigir_sessao_com_perfil
 from magnata_os.autenticacao.identidade import Perfil
 
 from ..dominio_esteira import EtapaEsteira, SituacaoEsteira
@@ -47,6 +47,16 @@ from ..api import handlers
 from ..api.erros import ApiError, ErroInternoNaoExposto, tratar_erro_para_resposta
 from ..api.filtros import FiltroDocumentos, FiltroLotes, Ordenacao, Paginacao
 from ..api.serializacao import para_json
+
+# Ingestao em lote (painel operacional, "eliminar dependencia de Shell/
+# terminal") -- nucleo e composicao de dependencias reais vivem em
+# `importacao_lote/servico_ingestao_lote_http.py` (mesmo modulo do
+# nucleo de ingestao em si, PR #221); esta rota so traduz HTTP <-> essa
+# funcao, igual a todas as outras rotas deste blueprint traduzem HTTP
+# <-> handlers.py. Ver docs/decisoes/painel-ingestao-documentos-lote-ui-v1.md.
+from magnata_os.documental.importacao_lote.servico_ingestao_lote_http import (
+    executar_ingestao_lote_http,
+)
 
 esteira_bp = Blueprint('magnata_os_documental_esteira', __name__, url_prefix='/magnata-os/documental')
 
@@ -312,3 +322,31 @@ def parados(sujeito):
     except ApiError as erro:
         return _resposta_erro(erro)
     return jsonify(para_json(resultado)), 200
+
+
+@esteira_bp.route('/ingestao-lote', methods=['POST'])
+@exigir_sessao_com_perfil(_QUALQUER_PERFIL_AUTENTICADO)
+@exigir_csrf
+def ingestao_lote(sujeito):
+    """Dispara, a partir de um clique no painel (nunca do Shell/
+    terminal -- decisao de produto, ver docs/decisoes/
+    painel-ingestao-documentos-lote-ui-v1.md), a MESMA ingestao real em
+    lote do PR #221 (`scripts/ingerir_documentos_lote_real_cli.py`),
+    para 1 cliente + 1 competencia. Primeira rota de ESCRITA deste
+    blueprint -- por isso e a primeira a usar `exigir_csrf` (mecanismo
+    ja existente em blueprint_login.py, nunca antes aplicado; GET
+    continua sem CSRF, convencao padrao).
+
+    SINCRONA E BLOQUEANTE (limitacao declarada, aceita para V1): a
+    resposta HTTP so volta quando TODOS os documentos do cliente+
+    competencia tiverem sido processados -- pode demorar minutos para
+    um lote grande. Nenhum worker assincrono/fila foi construido nesta
+    missao."""
+    corpo = request.get_json(silent=True) or {}
+    cliente_id = corpo.get('cliente')
+    competencia_base = corpo.get('competencia')
+    try:
+        resultado = executar_ingestao_lote_http(sujeito, cliente_id, competencia_base)
+    except ApiError as erro:
+        return _resposta_erro(erro)
+    return jsonify(resultado), 200
