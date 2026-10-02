@@ -37,6 +37,7 @@ import { DocumentosView } from './views/DocumentosView.js';
 import { BloqueiosView } from './views/BloqueiosView.js';
 import { AcoesHumanasView } from './views/AcoesHumanasView.js';
 import { ParadosView } from './views/ParadosView.js';
+import { IngestaoLoteView } from './views/IngestaoLoteView.js';
 
 const VIEWS = {
   resumo: DashboardView,
@@ -44,6 +45,7 @@ const VIEWS = {
   bloqueios: BloqueiosView,
   'acoes-humanas': AcoesHumanasView,
   parados: ParadosView,
+  'ingestao-lote': IngestaoLoteView,
 };
 
 /**

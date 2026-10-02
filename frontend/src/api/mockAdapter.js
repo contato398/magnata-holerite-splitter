@@ -253,4 +253,33 @@ export const mockApiClient = {
       return paginar(documentos, paginacao);
     });
   },
+
+  /**
+   * POST /magnata-os/documental/ingestao-lote (simulado) -- nunca toca
+   * rede/Airtable/S3 real, so devolve um resumo sintetico apos a mesma
+   * latencia simulada dos outros metodos. Existe so para o modo
+   * `?mock=1` (demonstracao local) nao deixar este botao morto; a
+   * ingestao de verdade e sempre a rota HTTP real (apiAdapter.js).
+   */
+  async ingerirDocumentosLote(sujeito, { clienteId, competenciaBase } = {}) {
+    return protegerErros(() => {
+      exigirPerfil(sujeito.perfil, PERMISSAO_FILA_OPERACIONAL);
+      if (!clienteId || !String(clienteId).trim()) {
+        throw new FiltroInvalido('O campo "cliente" (id do registro Airtable) é obrigatório.');
+      }
+      if (!/^\d{4}-\d{2}$/.test(competenciaBase || '')) {
+        throw new FiltroInvalido(`competência deve ser AAAA-MM (recebido: ${competenciaBase})`);
+      }
+      return {
+        cliente_id: clienteId,
+        competencia_base: competenciaBase,
+        anexos_encontrados: 3,
+        documentos_ingeridos: 2,
+        documentos_ja_existentes: 1,
+        registros_sem_anexo: [],
+        total_falhas: 0,
+        falhas: [],
+      };
+    });
+  },
 };
