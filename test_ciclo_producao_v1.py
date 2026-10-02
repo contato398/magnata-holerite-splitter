@@ -536,6 +536,70 @@ def test_compor_armazenamento_a_partir_do_ambiente_falha_sem_bucket():
             ciclo._compor_armazenamento_a_partir_do_ambiente()
 
 
+def test_compor_armazenamento_sem_endpoint_customizado_e_identico_a_antes():
+    """Sem `ORQUESTRADOR_S3_ENDPOINT_URL`, `boto3.client('s3')` é chamado
+    sem `endpoint_url` nem `region_name` -- exatamente como antes desta
+    mudança (retrocompatibilidade, AWS S3 real)."""
+    with patch.dict(
+        'os.environ',
+        {'ORQUESTRADOR_S3_BUCKET': 'bucket-teste'},
+        clear=False,
+    ):
+        import os as _os
+        _os.environ.pop('ORQUESTRADOR_S3_ENDPOINT_URL', None)
+        _os.environ.pop('ORQUESTRADOR_S3_REGION', None)
+        with patch('boto3.client') as _client:
+            _client.return_value = SimpleNamespace()
+            ciclo._compor_armazenamento_a_partir_do_ambiente()
+    _client.assert_called_once_with('s3')
+
+
+def test_compor_armazenamento_com_endpoint_customizado_usa_region_default():
+    """Com `ORQUESTRADOR_S3_ENDPOINT_URL` presente e sem
+    `ORQUESTRADOR_S3_REGION`, `region_name` default é `'us-east-1'` --
+    mesmo default implícito que a AWS já assume hoje."""
+    with patch.dict(
+        'os.environ',
+        {
+            'ORQUESTRADOR_S3_BUCKET': 'bucket-teste',
+            'ORQUESTRADOR_S3_ENDPOINT_URL': 'https://minha-conta.r2.cloudflarestorage.com',
+        },
+        clear=False,
+    ):
+        import os as _os
+        _os.environ.pop('ORQUESTRADOR_S3_REGION', None)
+        with patch('boto3.client') as _client:
+            _client.return_value = SimpleNamespace()
+            ciclo._compor_armazenamento_a_partir_do_ambiente()
+    _client.assert_called_once_with(
+        's3',
+        endpoint_url='https://minha-conta.r2.cloudflarestorage.com',
+        region_name='us-east-1',
+    )
+
+
+def test_compor_armazenamento_com_endpoint_customizado_usa_region_configurada():
+    """Com `ORQUESTRADOR_S3_ENDPOINT_URL` e `ORQUESTRADOR_S3_REGION`
+    presentes, o valor configurado é passado como `region_name`."""
+    with patch.dict(
+        'os.environ',
+        {
+            'ORQUESTRADOR_S3_BUCKET': 'bucket-teste',
+            'ORQUESTRADOR_S3_ENDPOINT_URL': 'https://minha-conta.r2.cloudflarestorage.com',
+            'ORQUESTRADOR_S3_REGION': 'auto',
+        },
+        clear=False,
+    ):
+        with patch('boto3.client') as _client:
+            _client.return_value = SimpleNamespace()
+            ciclo._compor_armazenamento_a_partir_do_ambiente()
+    _client.assert_called_once_with(
+        's3',
+        endpoint_url='https://minha-conta.r2.cloudflarestorage.com',
+        region_name='auto',
+    )
+
+
 def test_compor_obrigacao_assinatura_a_partir_do_ambiente_falha_sem_config():
     with patch.dict('os.environ', {}, clear=False):
         import os as _os
