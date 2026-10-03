@@ -28,6 +28,8 @@ from src.services.secullum_ponto import (
     _minutos_para_hhmm,
     _normalizar_texto,
     _primeira_entrada_minutos,
+    _montar_alerta,
+    _resumo_funcionario,
     _so_digitos,
     _status_dia_escala,
     _tag_declarada,
@@ -35,6 +37,7 @@ from src.services.secullum_ponto import (
     _trabalhou,
     detectar_inconsistencia_escala,
     periodo_folha,
+    varrer_pendencias,
 )
 
 
@@ -361,6 +364,68 @@ def test_avaliar_bonus_assiduidade_zelo_perdido():
     resultado = _avaliar_bonus_assiduidade(dias_status, dias, zelo_perdido={'2026-06-01'})
     assert resultado['elegivel'] is False
     assert any('falta de zelo' in m for m in resultado['motivos'])
+
+
+def test_avaliar_bonus_assiduidade_perde_por_batida_impar():
+    # Dia trabalhado (Normais > 0) mas com batida ímpar -- entra no ramo de
+    # _analisar_batidas mesmo sem Faltas/zelo_perdido.
+    dias_status = {'2026-06-01': 'trabalho'}
+    dias = {'2026-06-01': {'Entrada 1': '07:00', 'Normais': '08:00'}}
+    resultado = _avaliar_bonus_assiduidade(dias_status, dias)
+    assert resultado['elegivel'] is False
+    assert any('Batida Ímpar' in m and 'faltou a saída' in m for m in resultado['motivos'])
+
+
+def test_avaliar_bonus_assiduidade_perde_por_saida_antecipada():
+    dias_status = {'2026-06-01': 'trabalho'}
+    dias = {'2026-06-01': {'Entrada 1': '07:00', 'Saída 1': '15:50', 'Adian.': '00:10'}}
+    resultado = _avaliar_bonus_assiduidade(dias_status, dias)
+    assert resultado['elegivel'] is False
+    assert any('Saída antecipada' in m for m in resultado['motivos'])
+
+
+# ── _montar_alerta ───────────────────────────────────────────────────────────
+
+def test_montar_alerta_titulo_e_deterministico_para_deduplicacao():
+    alerta1 = _montar_alerta('Batida Ímpar', 'FULANO DA SILVA', '12345678901', '2026-06-01', 'obs')
+    alerta2 = _montar_alerta('Batida Ímpar', 'FULANO DA SILVA', '12345678901', '2026-06-01', 'obs diferente')
+    assert alerta1['titulo'] == alerta2['titulo'] == '[Ponto] Batida Ímpar — FULANO DA SILVA — 2026-06-01'
+    assert alerta1['cpf'] == '12345678901' and alerta1['obs'] == 'obs'
+
+
+# ── _resumo_funcionario ──────────────────────────────────────────────────────
+
+def test_resumo_funcionario_extrai_campos_cadastrais_completos():
+    f = {
+        'Nome': 'FULANO DA SILVA', 'Cpf': '123.456.789-01', 'NumeroFolha': '347',
+        'Admissao': '2026-05-04T00:00:00', 'Demissao': '',
+        'Horario': {'Descricao': '07h-19h', 'Numero': 5},
+    }
+    resumo = _resumo_funcionario(f)
+    assert resumo['nome'] == 'FULANO DA SILVA'
+    assert resumo['cpf'] == '12345678901'
+    assert resumo['n_folha'] == '347'
+    assert resumo['tem_admissao'] is True and resumo['admissao'] == '2026-05-04'
+    assert resumo['tem_demissao'] is False and resumo['demissao'] is None
+    assert resumo['tem_horario'] is True and resumo['horario_desc'] == '07h-19h'
+    assert resumo['total_batidas'] is None and resumo['grupo'] is None
+
+
+def test_resumo_funcionario_sem_numero_folha_cai_no_numero():
+    f = {'Nome': 'X', 'Cpf': '1', 'Numero': '999', 'Horario': {}}
+    resumo = _resumo_funcionario(f)
+    assert resumo['n_folha'] == '999'
+    assert resumo['tem_horario'] is False
+
+
+# ── varrer_pendencias (cálculo próprio desabilitado desde v2.73) ────────────
+
+def test_varrer_pendencias_esta_desabilitado_e_nunca_chama_rede():
+    resultado = varrer_pendencias('2026-06-01', '2026-06-30', dry_run=True)
+    assert resultado['status'] == 'desabilitado'
+    assert resultado['data_inicio'] == '2026-06-01'
+    assert resultado['data_fim'] == '2026-06-30'
+    assert resultado['dry_run'] is True
 
 
 # ── _e_12x36 / _status_dia_escala / _classificar_dia_12x36 ───────────────
