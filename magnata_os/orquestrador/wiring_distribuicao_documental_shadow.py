@@ -268,21 +268,40 @@ def _extrair_token_do_link(link: str) -> str:
     bloqueia a operação inteira em vez de produzir um token errado
     silenciosamente.
 
-    Limite conhecido e aceito nesta correção (não resolvido aqui,
-    registrado como risco residual): esta validação verifica só o
-    FORMATO do último segmento, não a rota/domínio que o precede -- um
-    link de rota arbitrária cujo último segmento aparente ser um token
-    válido passaria. Fechar essa lacuna por completo exigiria expor o
-    token explicitamente em `ObrigacaoAssinatura`/`PortaObrigacaoAssinatura`
-    (o adapter já tem o valor cru antes de montar `link`), em vez de
-    inferi-lo por parsing reverso de URL -- mudança de contrato maior,
-    fora do escopo desta correção pontual."""
+    FALLBACK apenas -- ver `_resolver_token_obrigacao`, que é quem
+    `_montar_ramo_com_assinatura` chama de fato. Este parsing reverso só
+    roda quando o adapter de `PortaObrigacaoAssinatura` não consegue
+    fornecer `ObrigacaoAssinatura.token` explicitamente (o caso do
+    adapter legado hoje, para a obrigação já existente consultada via
+    `/assinatura/consulta`, antes de `pacote-autorizacao-app-py.md` #1
+    ser aplicado em `app.py` -- gate humano, não feito aqui).
+
+    Limite conhecido e aceito desta função (por isso ela é só fallback,
+    nunca mais o caminho principal): a validação verifica só o FORMATO
+    do último segmento, não a rota/domínio que o precede -- um link de
+    rota arbitrária cujo último segmento aparente ser um token válido
+    passaria. `_resolver_token_obrigacao` fecha essa lacuna preferindo
+    sempre o token explícito quando disponível."""
     token = (link or '').rsplit('/', 1)[-1]
     if not _RE_TOKEN_RESERVADO.match(token):
         raise LinkObrigacaoAssinaturaMalformado(
             f'link de obrigação de assinatura não contém token no formato esperado: {link!r}'
         )
     return token
+
+
+def _resolver_token_obrigacao(obrigacao: ObrigacaoAssinatura) -> str:
+    """Resolve o token de uma obrigação já existente para montar o link
+    relativo embutido na mensagem (`/assinatura/{token}`).
+
+    Prefere sempre `obrigacao.token`, quando o adapter o fornece
+    explicitamente -- fecha a lacuna de `_extrair_token_do_link` (link
+    inteiro nunca precisa ser reinterpretado por parsing reverso de
+    URL). Só cai para `_extrair_token_do_link(obrigacao.link)` quando o
+    adapter concreto ainda não sabe fornecer o token (compatibilidade
+    com o motor legado atual, até `pacote-autorizacao-app-py.md` #1 ser
+    aplicado)."""
+    return obrigacao.token or _extrair_token_do_link(obrigacao.link)
 
 
 class EventoCanonicoNaoAguardaGate(DistribuicaoDocumentalError):
@@ -616,7 +635,7 @@ def _montar_ramo_com_assinatura(
 
         if obrigacao_existente is not None:
             token_pendente = None
-            link = f'/assinatura/{_extrair_token_do_link(obrigacao_existente.link)}'
+            link = f'/assinatura/{_resolver_token_obrigacao(obrigacao_existente)}'
         else:
             token_pendente = gerar_token_reservado_csprng()  # CSPRNG, só em memória -- nenhuma escrita ainda
             link = f'/assinatura/{token_pendente}'

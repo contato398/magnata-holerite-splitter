@@ -643,6 +643,46 @@ def test_link_malformado_ou_arbitrario_falha_fechado(link_malformado):
     assert len(porta.chamadas_criar) == 0  # nunca chega a chamar criar_ou_recuperar com dado malformado
 
 
+def test_resolver_token_obrigacao_prefere_token_explicito_sobre_parsing_do_link():
+    """Fecha a lacuna registrada em `_extrair_token_do_link`: quando o
+    adapter já sabe o token (ex.: `criar_ou_recuperar`, que sempre pode
+    devolvê-lo -- é o `token_reservado` do próprio chamador), o link
+    nunca precisa ser reinterpretado por parsing reverso de URL. Usamos
+    aqui um `link` com um último segmento TAMBÉM válido mas DIFERENTE,
+    para provar que é o campo `token` que vence, não o link."""
+    import magnata_os.orquestrador.wiring_distribuicao_documental_shadow as mod
+    token_real = 'A' * 43
+    token_do_link_mas_nao_deveria_ser_usado = 'B' * 43
+    obrigacao = ObrigacaoAssinatura(
+        assinatura_id='rec1',
+        link=f'https://exemplo.invalid/assinatura/{token_do_link_mas_nao_deveria_ser_usado}',
+        status='Pendente', tem_comprovante=False, token=token_real,
+    )
+    assert mod._resolver_token_obrigacao(obrigacao) == token_real
+
+
+def test_resolver_token_obrigacao_cai_para_o_link_quando_adapter_nao_expoe_token():
+    """Compatibilidade com o adapter legado atual (`consultar_por_correlacao`
+    não tem `hash_token` até `pacote-autorizacao-app-py.md` #1 ser
+    aplicado): sem `token` explícito, cai para o parsing já validado."""
+    import magnata_os.orquestrador.wiring_distribuicao_documental_shadow as mod
+    token_no_link = 'C' * 43
+    obrigacao = ObrigacaoAssinatura(
+        assinatura_id='rec1', link=f'https://exemplo.invalid/assinatura/{token_no_link}',
+        status='Pendente', tem_comprovante=False, token=None,
+    )
+    assert mod._resolver_token_obrigacao(obrigacao) == token_no_link
+
+
+def test_resolver_token_obrigacao_sem_token_e_link_malformado_ainda_falha_fechado():
+    import magnata_os.orquestrador.wiring_distribuicao_documental_shadow as mod
+    obrigacao = ObrigacaoAssinatura(
+        assinatura_id='rec1', link='', status='Pendente', tem_comprovante=False, token=None,
+    )
+    with pytest.raises(LinkObrigacaoAssinaturaMalformado):
+        mod._resolver_token_obrigacao(obrigacao)
+
+
 def test_token_extraido_valido_e_aceito_normalmente():
     """Contraprova: um link no formato canônico real (RECIBO_BASE_URL +
     token de 43 caracteres) é aceito sem erro."""
