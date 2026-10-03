@@ -85,7 +85,7 @@ def test_ler_airtable_api_key_ausente_levanta():
 
 
 def test_ler_airtable_api_key_presente():
-    assert _ler_airtable_api_key(ambiente={"AIRTABLE_API_KEY": "chave"}) == "chave"
+    assert _ler_airtable_api_key(ambiente={"AIRTABLE_API_KEY": "fake"}) == "fake"
 
 
 # ── rodar_comparacao ──────────────────────────────────────────────────
