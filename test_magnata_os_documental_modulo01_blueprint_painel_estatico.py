@@ -11,6 +11,8 @@ real de `frontend/` (ja existente no repositorio, sem dado pessoal).
 """
 from __future__ import annotations
 
+import json
+
 import flask
 import pytest
 
@@ -75,3 +77,33 @@ def test_nunca_serve_arquivo_fora_do_diretorio_frontend_via_path_absoluto(client
     # ".." literal no texto da URL.
     resposta = cliente.get('/painel/..%2f..%2f..%2f..%2fapp.py')
     assert resposta.status_code == 404
+
+
+def test_manifest_e_servido_com_content_type_de_manifesto_pwa(cliente):
+    # frontend/manifest.webmanifest -- App Shell (instalabilidade),
+    # servido pelo mesmo blueprint estatico, sem rota nova nem mudanca
+    # em app.py (ver docs/decisoes/app-shell-manifest-pwa-v1.md).
+    resposta = cliente.get('/painel/manifest.webmanifest')
+    assert resposta.status_code == 200
+    assert 'manifest+json' in resposta.content_type
+
+
+def test_manifest_e_json_valido_e_referencia_so_icones_ja_existentes(cliente):
+    resposta = cliente.get('/painel/manifest.webmanifest')
+    manifesto = json.loads(resposta.data)
+
+    assert manifesto['start_url'] == '/painel/'
+    assert manifesto['scope'] == '/painel/'
+    assert len(manifesto['icons']) >= 1
+    for icone in manifesto['icons']:
+        # Cada icone referenciado precisa existir de verdade em
+        # frontend/ -- nunca um caminho inventado que renderizaria
+        # icone quebrado na instalacao do app.
+        assert (DIRETORIO_FRONTEND / icone['src']).is_file()
+
+
+def test_index_html_referencia_o_manifest_e_define_theme_color(cliente):
+    resposta = cliente.get('/painel/')
+    html = resposta.data.decode('utf-8')
+    assert 'rel="manifest" href="manifest.webmanifest"' in html
+    assert 'name="theme-color"' in html
