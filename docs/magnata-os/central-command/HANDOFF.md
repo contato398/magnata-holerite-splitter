@@ -49,6 +49,106 @@ contra o mesmo intervalo — eles continuam na data que já tinham. Isso é
 uma lacuna real, registrada aqui e não escondida (`CLAUDE.md` §11),
 não um "concluído" disfarçado.
 
+## 0-ter. Reconciliação completa Etapa 16 (2026-10-03) — pedida pelo coordenador
+
+Continuação do §0-bis, pedida explicitamente pelo coordenador do
+projeto após o merge dos PRs #227/#231: "reconciliação completa dos 4
+documentos com as fusões desde 2026-08-24". Esta seção entrega o que é
+praticável nesse pedido — um catálogo factual e verificado dos PRs
+mesclados, mais as correções de infraestrutura mais importantes — e é
+explícita sobre o que continua fora de alcance de uma única passada.
+
+### A escala real descoberta nesta passada
+
+Entre a base da Etapa 13 (`073e39d`) e o `main` no início desta seção
+(`a169353a`→`dcf5b61`) há **72+ merge commits** (de `git log
+--merges`), não ~70 como o §0-bis estimou — a estimativa anterior já
+estava um pouco baixa na hora em que foi escrita e ficou mais baixa
+ainda enquanto esta seção era escrita: **10 PRs novos se mesclaram só
+durante a investigação desta seção** (#226, #227, #230, #231,
+#235–#237, #239, #240, #242–#248). `main` no momento em que este PR foi
+aberto: `dcf5b61` (merge do PR #240, "shadow cliente↔posto Airtable",
+não catalogado individualmente abaixo — chegou depois do levantamento
+de tema). Isto não é um projeto que se lê uma vez e documenta: múltiplas
+frentes rodam em paralelo, continuamente. A tabela abaixo é um corte no
+tempo, não um estado final — **reconferir com `git log --merges` antes
+de confiar nela para uma decisão**.
+
+### Catálogo por tema (PRs mesclados, `073e39d`..`main` atual)
+
+| Tema | PRs | Fonte verificada |
+|---|---|---|
+| Governança/CI/qualidade de suíte | 154, 155, 180, 226, 233*, 234*, 238*, 244, 245, 246, 248 | `testes-ci-observabilidade.md` (leitura de código e diffs reais) |
+| Prestação de Contas (núcleo + ponta a ponta) | 158, 160, 161, 164–168, 170, 171, 174, 199, 209–214, 242, 243 | `prestacao-contas.md` (leitura de código, estado shadow confirmado) |
+| Distribuição documental / assinatura | 172, 173, 175, 179, 181, 183, 184, 186, 187, 189, 190, 196, 197, 230, 235, 237 | `documentos-assinatura.md` |
+| Postgres / esteira / índice documental | 176, 195, 218 | `mapa-legado.md` §2 |
+| RH / Admissão / Secullum / cadastro persistente | 198, 207, 215, 236 | `mapa-legado.md` §2 ("cadastro de colaborador persistente, migration preparada **não aplicada**") |
+| OCR real (Google Vision) | 209 | `mapa-legado.md` §2 |
+| Painel web (login, frontend, ingestão em lote) | 203, 204, 206, 221, 222, 224, 225 | `mapa-legado.md` §2 |
+| Central Command (este catch-up) | 195, 227, 231 | este documento |
+| Infraestrutura/Render (`render.yaml`, capacidade, Redis) | 239, 247 | `infra-operacao-24x7.md` (API real do Render, não suposição) |
+
+`*` PRs #233/#234/#238 ainda **não mesclados** no momento em que esta
+seção foi escrita — verdes, prontos, represados pela mesma tensão
+§9/merge-autônomo descrita abaixo. Não confundir com os já integrados.
+
+**Triagem separada, de PRs *abertos* anteriores a #226** (não fusões —
+PRs antigos nunca mesclados, revisados e, na maioria, fechados como
+superseded): ver `backlog-prs.md` (fora deste repositório, mapa de
+outra frente — "Frente H"). Resumo: a maioria (#128, #182, #185, #188,
+#191, #192 em parte, #200, #205, #208, #216, #219, #220, #223, #51,
+#122, #149) já estava superada por trabalho mesclado depois; três PRs
+substantivos (#49, #115, #169) seguem abertos sem substituto
+encontrado; #192 teve sua parte exclusiva extraída para o novo #249
+(aberto, não mesclado); #193 e #201 foram atualizados sobre `main` e
+deixados verdes.
+
+### Infraestrutura real do Render — confirmado via API, não suposição
+
+Fonte: `infra-operacao-24x7.md` (`RENDER_API_KEY` injetada pelo proxy,
+nunca impressa; nenhuma escrita de produção feita). Isto substitui
+qualquer suposição anterior deste documento ou de `RISKS.md` sobre o
+que está ou não provisionado:
+
+| Recurso | Estado real |
+|---|---|
+| Web (`magnata-holerite-splitter`) | Provisionado manualmente, plano `starter`, `--workers 1 --max-requests 50` real (divergente do declarado) |
+| Worker (`magnata-holerite-worker`) | Provisionado, plano `starter`, **Auto-Deploy ligado** — todo merge que toca código do worker já é deploy de produção dele |
+| Postgres (`magnata-os-postgres`) | **Provisionado manualmente**, `basic_256mb`, `available` — RSK-011 estava errado nessa parte, já corrigido em `RISKS.md` |
+| Redis (`magnata-pdf-queue`) | Provisionado, plano `free`, sem persistência — nunca documentado antes de hoje, novo RSK-022 |
+| Cron do Orquestrador | **Não provisionado.** Plano de ativação pronto (`plano-provisionamento-cron-orquestrador.md`), falta decisão financeira + autorização de produção |
+| Blueprint | Nenhum aplicado (`GET /v1/blueprints` vazio) — `render.yaml` é documentação, não governa nenhum desses recursos ainda |
+
+Detalhe completo e os riscos derivados (RSK-005/006/011/011-bis/022/
+023/024) em `RISKS.md`.
+
+### Merges represados — tensão §9 vs. autorização de fase
+
+Várias PRs desta leva (#233, #234, #238, e possivelmente outras) estão
+verdes e prontas, mas **não mescladas**: o coordenador identificou
+tensão entre a autorização de "merge autônomo quando CI verde" (política
+deste projeto) e `CLAUDE.md` §9 ("não fazer merge") e levou a decisão ao
+Magnata antes de qualquer merge adicional. Isto não é uma falha desta
+reconciliação — é o gate funcionando como desenhado (`CLAUDE.md` §9/
+§12-I nunca são dispensados por autonomia operacional, por mais ampla).
+
+### O que esta passada não fez — e por que não é um patch incremental
+
+`NEXT_ACTIONS.md` (Etapa 3, 2026-08-22) e `DECISIONS.md` continuam
+inalterados além do aviso curto já adicionado no PR anterior (#231). A
+investigação desta seção mostra por quê isso não é só "ainda
+desatualizado": a maioria dos riscos que `NEXT_ACTIONS.md` lista como
+"nenhum item abaixo foi executado" **já foi executada ou superada** —
+RSK-005 resolvido (#226), RSK-006 reconfirmado e com decisão de
+capacidade pendente mas já instrumentada, RSK-011 majoritariamente
+resolvido. Remendar esse documento item a item, em vez de reescrevê-lo
+do zero a partir do estado real, arrisca produzir uma lista que mistura
+itens mortos com itens vivos de forma pior do que simplesmente marcá-lo
+obsoleto. **Recomendação, não execução:** uma frente dedicada deveria
+reescrever `NEXT_ACTIONS.md` do zero a partir de `RISKS.md` (Etapa 16) e
+de `PENDING.md` (PEN-021 a PEN-023), não continuar herdando a estrutura
+de 2026-08-22.
+
 ---
 
 ## 0. Protocolo operacional — SESSION_START / SESSION_END
