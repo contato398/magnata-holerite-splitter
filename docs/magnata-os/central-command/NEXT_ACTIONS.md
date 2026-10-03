@@ -1,5 +1,12 @@
 # NEXT_ACTIONS — sequência recomendada
 
+> ⚠️ **Catch-up Etapa 15 (2026-10-03):** este documento não foi
+> reconciliado com os ~70 PRs mesclados entre 2026-08-24 e o PR #225
+> (2026-10-03) — ver `HANDOFF.md` §0-bis e `PENDING.md` PEN-022. Itens
+> abaixo cujo risco associado (`RSK-00x`) já foi corrigido em código
+> podem estar obsoletos; confirmar contra `git log`/`RISKS.md` antes de
+> agir.
+
 **Etapa 3, 2026-08-22.** Ordem por **risco de perda irreversível**
 primeiro, depois por desbloqueio. Cada item diz quem decide.
 

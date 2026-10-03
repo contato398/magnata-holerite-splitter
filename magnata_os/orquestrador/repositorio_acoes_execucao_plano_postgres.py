@@ -289,13 +289,25 @@ class RepositorioAcoesExecucaoPlanoPostgres:
         exigem event_id/preview_id já conhecidos -- o ciclo de produção
         precisa descobrir quais existem antes de poder chamá-los. Reusa
         o mesmo predicado de elegibilidade já usado no claim, nunca uma
-        regra paralela."""
+        regra paralela.
+
+        Ordenado por `MIN(criado_em)` do par (mais antigo primeiro),
+        nunca por `event_id`/`preview_id`: com `limite` fixo e mais
+        pares elegíveis do que o limite, ordenar por id é estável mas
+        arbitrário -- os mesmos pares "menores" lexicograficamente
+        vencem em todo ciclo, e pares criados antes deles mas com
+        id "maior" nunca são sequer descobertos enquanto a fila não
+        esvaziar (fome). Ordenar pelo par mais antigo garante rotação
+        justa: um par só continua fora da fatia do `limite` enquanto
+        existir outro par mais antigo ainda elegível -- nunca por
+        acidente de ordenação textual."""
         with self._conexao.cursor() as cursor:
             cursor.execute(
-                f'''SELECT DISTINCT candidata.event_id, candidata.preview_id
+                f'''SELECT candidata.event_id, candidata.preview_id
                       FROM {_TABELA} AS candidata
                      WHERE {self._predicado_elegibilidade('candidata')}
-                     ORDER BY candidata.event_id, candidata.preview_id
+                     GROUP BY candidata.event_id, candidata.preview_id
+                     ORDER BY MIN(candidata.criado_em) ASC
                      LIMIT %s''',
                 self._parametros_elegibilidade(instante) + (limite,),
             )
