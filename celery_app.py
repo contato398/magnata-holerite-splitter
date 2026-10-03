@@ -30,6 +30,14 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True,
     task_soft_time_limit=600,  # 10 minutos
     task_time_limit=900,  # 15 minutos (hard limit)
+    # Explícito em vez de depender do default do transporte Redis do Celery
+    # (histórico: 3600s) -- achado da Frente E "infra 24x7": o Redis real
+    # de produção (`magnata-pdf-queue`) está no plano free, sem persistência,
+    # então o comportamento de redelivery precisa ser auditável, não um
+    # valor implícito. Tem que ser maior que `task_time_limit` (900s) para
+    # nunca redespachar uma tarefa que ainda está rodando dentro do limite
+    # duro -- 3600s dá margem de 4x.
+    broker_transport_options={'visibility_timeout': 3600},
 )
 
 # Importar tasks APÓS a instância Celery estar criada

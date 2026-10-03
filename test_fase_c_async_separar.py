@@ -456,6 +456,140 @@ def test_scenario_12_no_tmp_dependency(mock_airtable_env, test_pdf_bytes, valid_
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# CENÁRIO 13: Idempotência — registro já Concluído não é reprocessado
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_scenario_13_idempotencia_registro_ja_concluido(mock_airtable_env):
+    """
+    Frente E (infra 24x7) — Redis de produção no plano free, sem
+    persistência: se a mesma task for redespachada (reinício do Redis +
+    reenfileiramento manual, ou redelivery do próprio Celery), um
+    registro já 'Concluído' nunca deve ser reprocessado.
+    """
+    from tarefas_processar_pdf import processar_pdf_task
+
+    with patch('tarefas_processar_pdf._status_atual_airtable') as mock_status, \
+         patch('tarefas_processar_pdf._atualizar_airtable') as mock_update, \
+         patch('tarefas_processar_pdf.construir_mapa_cpf') as mock_build:
+
+        mock_status.return_value = 'Concluído'
+
+        result = processar_pdf_task(
+            'recTEST123',
+            idempotency_key='key123',
+            pdf_url='https://example.com/pdf',
+        )
+
+        assert result['success'] is True
+        assert result.get('skipped_idempotente') is True
+        mock_update.assert_not_called()
+        mock_build.assert_not_called()
+
+        print("✅ Cenário 13 PASSOU: registro Concluído não é reprocessado")
+
+
+def test_scenario_14_idempotencia_nao_bloqueia_fluxo_normal(mock_airtable_env):
+    """
+    A checagem de idempotência não pode impedir o processamento normal
+    quando o registro ainda não está Concluído (ou a checagem falha).
+    """
+    from tarefas_processar_pdf import processar_pdf_task
+
+    with patch('tarefas_processar_pdf._status_atual_airtable') as mock_status, \
+         patch('tarefas_processar_pdf.construir_mapa_cpf') as mock_build, \
+         patch('tarefas_processar_pdf.extrair_pdf_colaborador') as mock_extract, \
+         patch('tarefas_processar_pdf.requests.get') as mock_get, \
+         patch('tarefas_processar_pdf._atualizar_airtable') as mock_update:
+
+        mock_status.return_value = None  # checagem falhou ou status é outro
+        mock_get.return_value = Mock(status_code=200, content=b'%PDF\nfake')
+        mock_build.return_value = ({'11111111111': {'nome': 'Test', 'paginas': [1]}}, 1)
+        mock_extract.return_value = b'extracted_pdf'
+
+        result = processar_pdf_task(
+            'recTEST123', idempotency_key='key123', pdf_url='https://example.com/pdf'
+        )
+
+        assert result['success'] is True
+        assert 'skipped_idempotente' not in result
+        mock_build.assert_called_once()
+
+        print("✅ Cenário 14 PASSOU: status desconhecido segue fluxo normal")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CENÁRIO 15-16: Retry em falha de download (achado Frente E — Redis sem
+# persistência: Celery só consegue reagendar com segurança o que ainda
+# está rodando; falha de download é o caso que o decorator precisa
+# efetivamente alcançar, o que não acontecia antes desta mudança)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_scenario_15_falha_download_retentavel_propaga_para_autoretry(mock_airtable_env):
+    """
+    Enquanto houver tentativa disponível (self.request.retries <
+    max_retries), uma falha de download deve PROPAGAR (não retornar
+    dict, não marcar 'Erro') para o decorator `autoretry_for` do Celery
+    efetivamente agendar o retry.
+    """
+    from tarefas_processar_pdf import _FalhaTransitoriaRetentavel, processar_pdf_task
+
+    with patch('tarefas_processar_pdf._status_atual_airtable', return_value=None), \
+         patch('tarefas_processar_pdf._atualizar_airtable') as mock_update, \
+         patch('tarefas_processar_pdf.requests.get') as mock_get:
+
+        mock_get.side_effect = ConnectionError('boom')
+
+        with pytest.raises(_FalhaTransitoriaRetentavel):
+            processar_pdf_task(
+                'recTEST123', idempotency_key='key123', pdf_url='https://example.com/pdf'
+            )
+
+        # 'Processando' foi marcado, mas 'Erro' NUNCA -- ainda há tentativas.
+        erro_calls = [
+            c for c in mock_update.call_args_list
+            if c[0][1].get('fldvN9T5MiuKZGDi0') == 'Erro'
+        ]
+        assert erro_calls == []
+
+        print("✅ Cenário 15 PASSOU: falha de download propaga para autoretry")
+
+
+def test_scenario_16_falha_download_ultima_tentativa_marca_erro(mock_airtable_env):
+    """
+    Na última tentativa (self.request.retries >= max_retries), a mesma
+    falha de download deve marcar 'Erro' e retornar dict normalmente —
+    sem propagar (senão a task falharia sem o registro refletir o motivo).
+    """
+    from tarefas_processar_pdf import processar_pdf_task
+
+    with patch('tarefas_processar_pdf._status_atual_airtable', return_value=None), \
+         patch('tarefas_processar_pdf._atualizar_airtable') as mock_update, \
+         patch('tarefas_processar_pdf.requests.get') as mock_get, \
+         patch.object(processar_pdf_task, 'max_retries', 0):
+        # max_retries=0 faz `self.request.retries (0) < self.max_retries (0)`
+        # ser False já na primeira chamada direta -- equivalente a simular
+        # "última tentativa esgotada" sem precisar manipular o Context
+        # interno do Celery, que uma chamada direta (sem apply_async) não
+        # popula de forma realista.
+
+        mock_get.side_effect = ConnectionError('boom')
+
+        result = processar_pdf_task(
+            'recTEST123', idempotency_key='key123', pdf_url='https://example.com/pdf'
+        )
+
+        assert result['success'] is False
+        assert result['error_code'] == 'PDF_DOWNLOAD_FAILED'
+        erro_calls = [
+            c for c in mock_update.call_args_list
+            if c[0][1].get('fldvN9T5MiuKZGDi0') == 'Erro'
+        ]
+        assert len(erro_calls) == 1
+
+        print("✅ Cenário 16 PASSOU: última tentativa marca Erro sem propagar")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 def run_all_tests():
     """Executa todos os 12 cenários"""
