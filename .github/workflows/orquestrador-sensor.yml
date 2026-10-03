@@ -75,6 +75,60 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Tornar visivel degradacao do supervisor shadow (nunca falha o job)
+        # Achado da auditoria "Testes, CI e observabilidade" (2026-10-03):
+        # o passo anterior so escreve artifact -- ninguem e avisado se
+        # saude cair para AMARELO/VERMELHO ou a DLQ/retry vencido crescer
+        # entre um run e outro; é preciso abrir o artifact manualmente.
+        # Este passo so LÊ o JSON já escrito e publica ::warning::/Step
+        # Summary quando algo estiver fora do nominal -- nunca reivindica
+        # retry, nunca chama Ação, nunca altera sistemas externos, e
+        # nunca usa exit != 0: continua shadow puro, só com o aviso
+        # visível no lugar do artifact enterrado. Não enfraquece nenhum
+        # gate existente porque não cria nenhum novo (este workflow nunca
+        # bloqueou PR nenhuma -- é cron/dispatch, sem relação com merge).
+        if: always() && steps.sensor.outputs.codigo == '0'
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import pathlib
+
+          caminho = pathlib.Path('.orquestrador_ci/supervisor-shadow.json')
+          dados = json.loads(caminho.read_text(encoding='utf-8'))
+
+          saude = dados.get('saude', {}).get('saude', 'DESCONHECIDO')
+          dlq_total = dados.get('dlq_ativa_total', 0)
+          retry_vencido_total = dados.get('retry_vencido_total', 0)
+
+          linhas_resumo = [
+              '### Supervisor shadow do Orquestrador',
+              '',
+              f'- Saúde: `{saude}`',
+              f'- DLQ ativa: {dlq_total}',
+              f'- Retry vencido: {retry_vencido_total}',
+              '',
+          ]
+
+          degradado = saude != 'VERDE' or dlq_total > 0 or retry_vencido_total > 0
+          if degradado:
+              motivo = (
+                  f'saude={saude} dlq_ativa_total={dlq_total} '
+                  f'retry_vencido_total={retry_vencido_total}'
+              )
+              print(f'::warning::Supervisor shadow do Orquestrador fora do nominal ({motivo}). '
+                    'Shadow mode -- nenhuma ação foi tomada automaticamente. '
+                    'Ver artifact supervisor-shadow-${{ github.run_id }}.')
+              linhas_resumo.append(
+                  '⚠ Fora do nominal — shadow mode, nenhuma ação tomada automaticamente.'
+              )
+          else:
+              linhas_resumo.append('✓ Nominal.')
+
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as arquivo:
+              arquivo.write('\n'.join(linhas_resumo) + '\n')
+          PY
+
       - name: Verificar se algo mudou
         id: mudou
         run: |
