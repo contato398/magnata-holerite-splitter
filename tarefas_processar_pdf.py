@@ -23,6 +23,18 @@ F_PROC_TIPO_DOC = 'fldvkOVlwCMywGTES'
 from app import construir_mapa_cpf, extrair_pdf_colaborador, logger as app_logger
 
 
+class _FalhaTransitoriaRetentavel(Exception):
+    """Sinaliza ao bloco `except Exception` externo da task que esta falha
+    já decidiu (`self.request.retries < self.max_retries`) que deve
+    atravessar sem ser convertida em Status='Erro' definitivo -- precisa
+    chegar intacta até o decorator `autoretry_for` do Celery, que é quem
+    de fato agenda o reenvio (backoff/jitter). Sem esta classe, o
+    `except Exception` genérico da task (que converte qualquer falha em
+    retorno de dict, nunca deixando nada subir) engoliria a exceção antes
+    do Celery poder vê-la -- motivo pelo qual, antes desta mudança,
+    `autoretry_for`/`retry_backoff`/`retry_jitter` nunca disparavam."""
+
+
 @celery_app.task(
     bind=True,
     autoretry_for=(Exception,),
@@ -41,7 +53,10 @@ def processar_pdf_task(
 
     Args:
         processar_arquivo_record_id: ID do registro no Airtable (começa com 'rec')
-        idempotency_key: Chave de idempotência (SHA256 de record_id + pdf hash)
+        idempotency_key: Chave de idempotência (SHA256 de record_id + pdf hash) --
+            reservada para uso futuro de deduplicação por conteúdo; hoje a
+            proteção contra execução duplicada é a verificação de status
+            abaixo (idempotência "por efeito", não por chave).
         pdf_url: URL do anexo no Airtable (para download)
 
     Returns:
@@ -59,6 +74,28 @@ def processar_pdf_task(
                 'success': False,
                 'error_code': 'INVALID_RECORD_ID',
                 'message': 'ID do registro inválido',
+            }
+
+        # Proteção de idempotência: se o Redis (broker/result backend, plano
+        # free, sem persistência -- achado da Frente E "infra 24x7") perder a
+        # fila e um humano reenfileirar manualmente via
+        # reconciliar_processamento_pdf_travado.py, ou se o Celery redespachar
+        # a mesma tarefa (acks_late + reinício do worker antes do ack), um
+        # registro já concluído nunca deve ser reprocessado -- a saída real
+        # (PDFs extraídos) não é persistida de novo por este reprocessamento
+        # além da gravação do campo Status, mas evitamos o retrabalho e o
+        # risco de qualquer efeito colateral futuro que dependa de "só roda
+        # uma vez por registro".
+        status_atual = _status_atual_airtable(processar_arquivo_record_id)
+        if status_atual == 'Concluído':
+            logger.info(
+                f'[TASK] Ignorado (idempotência): {processar_arquivo_record_id} '
+                f'já está Concluído -- execução duplicada descartada'
+            )
+            return {
+                'success': True,
+                'skipped_idempotente': True,
+                'message': 'Registro já concluído -- execução duplicada ignorada',
             }
 
         # Atualizar status para "Processando" — obrigatório
@@ -103,6 +140,14 @@ def processar_pdf_task(
             pdf_bytes = resp.content
         except Exception as e:
             logger.error(f'[TASK] Erro download PDF: {type(e).__name__}: {str(e)[:200]}')
+            # Falha de download é tipicamente transitória (rede, Airtable
+            # fora do ar por um instante) -- diferente de EMPLOYEE_NOT_IDENTIFIED
+            # ou CPF inválido, que nunca seriam corrigidos por retry. Enquanto
+            # houver tentativa disponível, deixar o `autoretry_for` do decorator
+            # reagendar (sem marcar 'Erro' ainda, para não oscilar o status
+            # durante o retry); só na última tentativa o erro é definitivo.
+            if self.request.retries < self.max_retries:
+                raise _FalhaTransitoriaRetentavel(str(e)) from e
             _atualizar_airtable(
                 processar_arquivo_record_id,
                 {
@@ -191,6 +236,11 @@ def processar_pdf_task(
             except Exception as e:
                 logger.warning(f'[TASK] Erro ao limpar temp: {e}')
 
+    except _FalhaTransitoriaRetentavel:
+        # Deixar o decorator `autoretry_for` do Celery tratar -- nunca
+        # converter em Status='Erro' aqui (ver docstring da classe).
+        raise
+
     except Exception as exc:
         logger.exception(f'[TASK] Erro inesperado: {type(exc).__name__}')
         _atualizar_airtable(
@@ -269,6 +319,34 @@ def _atualizar_airtable(record_id: str, campos: dict) -> bool:
             return False
 
     return False
+
+
+def _status_atual_airtable(record_id: str) -> str | None:
+    """
+    Lê o Status atual do registro no Airtable, sem retry (best-effort):
+    usada só para a checagem de idempotência no início da task -- se a
+    leitura falhar, retorna None e a task segue o fluxo normal (nunca
+    bloqueia o processamento por falha nesta checagem auxiliar; a falha
+    real, se houver, será capturada mais adiante pelas chamadas que já
+    têm retry/validação, como `_atualizar_airtable`).
+
+    Returns:
+        O valor de F_PROC_STATUS ('Pendente'/'Processando'/'Concluído'/
+        'Erro'), ou None se o registro não existir ou a leitura falhar.
+    """
+    try:
+        r = requests.get(
+            f'https://api.airtable.com/v0/{BASE_ID}/{TABLE_PROCESSAR}/{record_id}?returnFieldsByFieldId=true',
+            headers={'Authorization': f'Bearer {AIRTABLE_API_KEY}'},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            logger.warning(f'[TASK] Checagem de idempotência: HTTP {r.status_code} ao ler {record_id}')
+            return None
+        return r.json().get('fields', {}).get(F_PROC_STATUS)
+    except Exception as e:
+        logger.warning(f'[TASK] Checagem de idempotência falhou (seguindo fluxo normal): {type(e).__name__}')
+        return None
 
 
 def gerar_idempotency_key(record_id: str, pdf_hash: str) -> str:
