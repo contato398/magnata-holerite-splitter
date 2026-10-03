@@ -1487,6 +1487,22 @@ ALLOWED_PATHS=(
   "^magnata_os/documental/importacao_lote/servico_ingestao_lote_http\.py$"
   "^test_servico_ingestao_lote_http\.py$"
   "^docs/decisoes/painel-ingestao-documentos-lote-ui-v1\.md$"
+
+  # Excecao exata e restrita (branch
+  # fix/painel-publicacao-estatico-mesmo-dominio-v1) -- blueprint novo
+  # que serve os arquivos estaticos de frontend/ (ja mesclado em main,
+  # ja liberado via "^frontend/src/"/"^frontend/styles/"/
+  # "^frontend/tests/"/"^frontend/index\.html$" acima) sob o prefixo
+  # /painel, usando exclusivamente flask.send_from_directory (nunca
+  # concatenacao manual de path). So o modulo novo e seu teste
+  # nominal, mais o ADR; NAO toca app.py (so a proposta do diff e o
+  # blob hash esperado ficam documentados no ADR, aguardando
+  # autorizacao humana especifica -- /CLAUDE.md §6(e)). Nao libera
+  # "^magnata_os/documental/modulo01/adapters/" nem "^test_" de forma
+  # ampla.
+  "^magnata_os/documental/modulo01/adapters/blueprint_painel_estatico\.py$"
+  "^test_magnata_os_documental_modulo01_blueprint_painel_estatico\.py$"
+  "^docs/decisoes/painel-publicacao-estatico-mesmo-dominio-v1\.md$"
 )
 
 # ============================================================================
