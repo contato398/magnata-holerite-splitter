@@ -14,6 +14,8 @@ from magnata_os.documental.alocacao.contato_colaborador import (
 from magnata_os.documental.importacao_lote.adapters.bootstrap_contato_colaborador_airtable import (
     CandidatoFuncionarioContato,
     executar_bootstrap_contato_colaborador_whatsapp,
+    montar_plano_rollback_bootstrap,
+    simular_bootstrap_contato_colaborador_whatsapp,
 )
 
 _CHAVE_FERNET = Fernet.generate_key()
@@ -175,6 +177,139 @@ def test_bootstrap_pode_rodar_sob_versao_nova_sem_tocar_versao_existente():
     )
     assert repo.buscar_por_colaborador('func_1', CANAL_WHATSAPP).versao_chave == 'v1'
     assert repo.buscar_por_colaborador('func_2', CANAL_WHATSAPP).versao_chave == 'v2'
+
+
+# ---------------------------------------------------------------------
+# Simulação (dry-run) -- nunca escreve, só leitura
+# ---------------------------------------------------------------------
+
+def test_simulacao_conta_origem_destino_inserts_sem_escrever_nada():
+    fonte = _FonteFake(
+        CandidatoFuncionarioContato(func_id='func_1', whatsapp_bruto='(11) 99999-8888'),
+        CandidatoFuncionarioContato(func_id='func_2', whatsapp_bruto='11988887777'),
+    )
+    repo = RepositorioContatoColaboradorEmMemoria()
+
+    resultado = simular_bootstrap_contato_colaborador_whatsapp(fonte, repo, _CHAVE_HMAC)
+
+    assert resultado.total_origem == 2
+    assert resultado.seriam_criados == 2
+    assert resultado.ja_existentes_idempotente == 0
+    assert resultado.duplicados_na_origem == 0
+    assert resultado.ignorados_sem_whatsapp == 0
+    assert resultado.ignorados_invalidos == 0
+    assert resultado.atualizacoes_bloqueadas == ()
+    assert resultado.total_destino_antes == 0
+    # Nenhuma escrita -- repositório continua vazio.
+    assert repo.listar_todos() == []
+
+
+def test_simulacao_detecta_duplicidade_na_propria_origem():
+    fonte = _FonteFake(
+        CandidatoFuncionarioContato(func_id='func_1', whatsapp_bruto='11999998888'),
+        CandidatoFuncionarioContato(func_id='func_1', whatsapp_bruto='11999998888'),
+    )
+    repo = RepositorioContatoColaboradorEmMemoria()
+
+    resultado = simular_bootstrap_contato_colaborador_whatsapp(fonte, repo, _CHAVE_HMAC)
+
+    assert resultado.total_origem == 2
+    assert resultado.duplicados_na_origem == 1
+    assert resultado.seriam_criados == 1
+    assert repo.listar_todos() == []
+
+
+def test_simulacao_classifica_sem_whatsapp_e_invalido_sem_escrever():
+    fonte = _FonteFake(
+        CandidatoFuncionarioContato(func_id='func_1', whatsapp_bruto=None),
+        CandidatoFuncionarioContato(func_id='func_2', whatsapp_bruto='123'),
+    )
+    repo = RepositorioContatoColaboradorEmMemoria()
+
+    resultado = simular_bootstrap_contato_colaborador_whatsapp(fonte, repo, _CHAVE_HMAC)
+
+    assert resultado.ignorados_sem_whatsapp == 1
+    assert resultado.ignorados_invalidos == 1
+    assert resultado.seriam_criados == 0
+    assert repo.listar_todos() == []
+
+
+def test_simulacao_reconhece_ja_existente_idempotente_sem_escrever():
+    repo = RepositorioContatoColaboradorEmMemoria()
+    executar_bootstrap_contato_colaborador_whatsapp(
+        _FonteFake(CandidatoFuncionarioContato(func_id='func_1', whatsapp_bruto='11999998888')),
+        repo, _CHAVE_FERNET, _CHAVE_HMAC, 'v1', relogio=_RELOGIO_FIXO,
+    )
+    total_antes = len(repo.listar_todos())
+
+    resultado = simular_bootstrap_contato_colaborador_whatsapp(
+        _FonteFake(CandidatoFuncionarioContato(func_id='func_1', whatsapp_bruto='11999998888')),
+        repo, _CHAVE_HMAC,
+    )
+
+    assert resultado.total_destino_antes == 1
+    assert resultado.ja_existentes_idempotente == 1
+    assert resultado.seriam_criados == 0
+    assert resultado.atualizacoes_bloqueadas == ()
+    # Simulação nunca escreve -- destino continua exatamente como estava.
+    assert len(repo.listar_todos()) == total_antes
+
+
+def test_simulacao_bloqueia_atualizacao_em_vez_de_aplicar():
+    """Telefone mudou para func_1 -- a simulação reporta como
+    `atualizacoes_bloqueadas` (candidato a UPDATE que esta arquitetura
+    nunca aplica automaticamente), e o registro existente permanece
+    intocado."""
+    repo = RepositorioContatoColaboradorEmMemoria()
+    executar_bootstrap_contato_colaborador_whatsapp(
+        _FonteFake(CandidatoFuncionarioContato(func_id='func_1', whatsapp_bruto='11999998888')),
+        repo, _CHAVE_FERNET, _CHAVE_HMAC, 'v1', relogio=_RELOGIO_FIXO,
+    )
+    registro_antes = repo.buscar_por_colaborador('func_1', CANAL_WHATSAPP)
+
+    resultado = simular_bootstrap_contato_colaborador_whatsapp(
+        _FonteFake(CandidatoFuncionarioContato(func_id='func_1', whatsapp_bruto='11988887777')),
+        repo, _CHAVE_HMAC,
+    )
+
+    assert len(resultado.atualizacoes_bloqueadas) == 1
+    assert resultado.atualizacoes_bloqueadas[0].func_id_tentativa == 'func_1'
+    assert resultado.seriam_criados == 0
+    assert resultado.ja_existentes_idempotente == 0
+    registro_depois = repo.buscar_por_colaborador('func_1', CANAL_WHATSAPP)
+    assert registro_depois.hash_auxiliar == registro_antes.hash_auxiliar
+
+
+def test_simulacao_produz_plano_de_rollback_exato():
+    resultado = simular_bootstrap_contato_colaborador_whatsapp(
+        _FonteFake(), RepositorioContatoColaboradorEmMemoria(), _CHAVE_HMAC,
+        origem='bootstrap_airtable_funcionarios_contato',
+    )
+
+    assert resultado.plano_rollback == (
+        "DELETE FROM contato_colaborador_observado "
+        "WHERE origem = 'bootstrap_airtable_funcionarios_contato'"
+    )
+
+
+def test_montar_plano_rollback_escapa_aspas_simples_na_origem():
+    plano = montar_plano_rollback_bootstrap("origem_com_'_aspas")
+    assert plano == (
+        "DELETE FROM contato_colaborador_observado "
+        "WHERE origem = 'origem_com_''_aspas'"
+    )
+
+
+def test_montar_plano_rollback_rejeita_origem_vazia():
+    with pytest.raises(ValueError):
+        montar_plano_rollback_bootstrap('')
+
+
+def test_simulacao_rejeita_chave_hmac_vazia():
+    with pytest.raises(ValueError):
+        simular_bootstrap_contato_colaborador_whatsapp(
+            _FonteFake(), RepositorioContatoColaboradorEmMemoria(), b'',
+        )
 
 
 def test_modulo_bootstrap_nunca_importa_app_py():

@@ -1,11 +1,53 @@
 # HANDOFF — ponto de entrada para a próxima sessão
 
-**Gerado na Etapa 13, 2026-08-24.**
+**Gerado na Etapa 13, 2026-08-24. Catch-up da Etapa 15 em 2026-10-03 — ver §0-bis.**
 
 Uma sessão nova deve conseguir continuar **lendo só este arquivo e os 4
 canônicos abaixo** — sem a conversa Macro 6A, que está encerrada.
 
 > Este arquivo **não duplica** a Central Command. Ele aponta.
+
+## 0-bis. Catch-up Etapa 15 (2026-10-03) — leia isto antes do resto
+
+⚠️ **O corpo deste documento (§1 em diante) descreve o estado de
+2026-08-24 (`main` = `073e39d`, por volta do commit `76b0046`) e não foi
+reescrito nesta passada.** Entre essa data e agora, `main` recebeu **105
+commits / ~70 PRs adicionais** (até o merge do PR #225, 2026-10-03,
+`a169353a`), incluindo frentes inteiras que o corpo abaixo trata como
+"não existe" ou nem menciona. Esta seção é o catch-up mínimo — ela
+**acrescenta**, não reescreve o histórico de Etapa 13 (`CLAUDE.md` §2/§4:
+nenhum evento já registrado é editado ou apagado).
+
+**Fonte desta seção:** auditoria de legado feita em thread paralela
+nesta mesma sessão de coordenação, registrada em
+`/mnt/project-files/magnata-os/mapa-legado.md` (2026-10-03, HEAD no
+merge do PR #224) — usar esse mapa como complemento desta Central
+Command para o período 2026-08-24 → hoje, não como substituto.
+
+**Estado real agora** (reconferir com `python
+scripts/ci/central_command_sensor.py` — ele compara isto contra
+`ESTADO.json`, atualizado nesta mesma passada):
+
+| | |
+|---|---|
+| **`main`** | `a169353a` — Merge pull request #225 (wiring de 2 linhas em `app.py`, autorizado, para servir o painel estático) |
+| **Módulos que passaram a existir/avançar desde Etapa 13 e que o corpo abaixo NÃO cobre** | Prestação de Contas (quase todo o domínio, modo *shadow*); cadastro de colaborador persistente em Postgres (PR #215, migration **preparada, não aplicada**); OCR real via Google Vision (`MotorOcrGoogleVision`, PR #209, ativo quando `GOOGLE_VISION_API_KEY` existe); interpretação de ordem do operador em linguagem natural (shadow V1, PR #214); painel web servindo `frontend/` em `/painel` no mesmo domínio com login Google real (PR #224/#225); ingestão de documentos em lote pelo próprio painel, sem Shell (PR #221/#222); endpoint S3 customizado tipo R2 (PR #218) |
+| **Não verificado nesta passada (depende de produção)** | Se o Postgres de produção (`magnata-os-db`) está de fato provisionado no Render; se a migration do cadastro de colaborador (PR #215) foi aplicada em banco real; se qualquer cron/worker do orquestrador roda de fato no Render. `render.yaml` continua declarando blocos que podem não estar aplicados (plano free) — **tratar como `LIVE_STATE`, não herdar "sim" nem "não" de nenhuma nota anterior sem reconfirmar** |
+| **Suíte de testes** | Baseline preservada do snapshot anterior: 712 passando / 0 falhando. **Não remedida nesta sessão** — ambiente desta sessão não tem `pytest`/dependências instaladas, e esta é uma mudança só de documentação. Rodar `--com-testes` numa sessão com o ambiente completo antes de confiar neste número para uma decisão de código |
+| **Branches fora de `main`** | 289 no momento desta nota (o sensor já tinha esse número como ponto fraco conhecido — a maioria é `fix/auto-orquestrador-*`, PRs já mesclados cujo branch remoto não foi apagado; não confundir com trabalho perdido sem conferir individualmente) |
+
+**O que esta passada fez:** só documentação — `ESTADO.json` regravado
+pelo sensor (`--atualizar`, sem `--com-testes`) e esta seção acrescentada
+a `HANDOFF.md`. Nenhum código, `app.py`, migration ou workflow foi
+tocado.
+
+**O que esta passada NÃO fez, de propósito (fora do escopo pedido —
+"só documentação"):** reescrever §1-§8 abaixo PR a PR para as ~70
+fusões do período; reconciliar `PENDING.md`, `NEXT_ACTIONS.md`,
+`RISKS.md`, `DECISIONS.md` e os demais documentos da Central Command
+contra o mesmo intervalo — eles continuam na data que já tinham. Isso é
+uma lacuna real, registrada aqui e não escondida (`CLAUDE.md` §11),
+não um "concluído" disfarçado.
 
 ---
 

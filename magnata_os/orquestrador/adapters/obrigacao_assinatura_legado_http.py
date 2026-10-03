@@ -109,6 +109,11 @@ class AdapterObrigacaoAssinaturaLegadoHttp:
             link=corpo.get('link') or '',
             status=corpo.get('status', 'ok'),
             tem_comprovante=False,
+            # O chamador É quem escolheu este token (CSPRNG, só em
+            # memória) -- nunca precisa inferi-lo de volta do link: o
+            # próprio `criar_ou_recuperar` garante (ou falha) que o
+            # token persistido no motor legado é exatamente este.
+            token=token_reservado,
         )
 
     def consultar_por_correlacao(
@@ -141,4 +146,10 @@ class AdapterObrigacaoAssinaturaLegadoHttp:
             status=corpo.get('status') or '',
             tem_comprovante=bool(corpo.get('comprovante_existe')),
             evidencia_opaca=corpo.get('evidencia_hash'),
+            # `hash_token` só existe na resposta depois que
+            # pacote-autorizacao-app-py.md #1 for aplicado em `app.py`
+            # (gate humano, não feito aqui) -- até lá `corpo.get(...)`
+            # devolve `None` e o chamador cai para o parsing do `link`,
+            # sem quebrar nada no meio tempo.
+            token=corpo.get('hash_token'),
         )

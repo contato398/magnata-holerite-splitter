@@ -81,7 +81,7 @@ def test_obrigacao_assinatura_so_tem_campos_opacos_nao_sensiveis():
                  'field_id', 'table_id', 'anexo_url', 'attachment'}
     assert campos.isdisjoint(proibidos)
     assert campos == {
-        'assinatura_id', 'link', 'status', 'tem_comprovante', 'evidencia_opaca',
+        'assinatura_id', 'link', 'status', 'tem_comprovante', 'evidencia_opaca', 'token',
     }
 
 
