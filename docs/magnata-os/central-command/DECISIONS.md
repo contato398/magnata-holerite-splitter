@@ -8,6 +8,11 @@ técnica, implementada?, testada?, em produção?, substituída?/por quê.
 Legenda: ✅ FUNCIONANDO/CONFIRMADO · 🟡 EM EVOLUÇÃO · ⚠️ PENDENTE ·
 ❌ DESCARTADO/SUPERADO · 🔍 PRECISA SER VALIDADO · 🚫 PLANEJADO MAS NÃO EXECUTADO
 
+> ⚠️ **Catch-up Etapa 15 (2026-10-03):** este documento não cobre as
+> decisões tomadas nos ~70 PRs mesclados entre 2026-08-24 e o PR #225 —
+> ver `HANDOFF.md` §0-bis e `PENDING.md` PEN-022. Nenhuma decisão nova
+> foi extraída daquele período nesta passada.
+
 ---
 
 ### DEC-001 — Migração para "Magnata OS" via strangler pattern, com papel de arquiteto-chefe

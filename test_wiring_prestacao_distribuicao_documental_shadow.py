@@ -443,11 +443,11 @@ def test_e2e_n2_pacote_holerite_folha_ponto_chega_pending_com_link_unico():
     deps, _conexao = _montar_dependencias()
     doc_holerite = _preparar_documento(
         deps['repositorio_documentos'], deps['armazenamento'],
-        documento_id='doc-holerite', conteudo=b'holerite-e2e',
+        documento_id='doc-holerite', conteudo=b'holerite-e2e', nome_original='holerite.pdf',
     )
     doc_ponto = _preparar_documento(
         deps['repositorio_documentos'], deps['armazenamento'],
-        documento_id='doc-ponto', conteudo=b'ponto-e2e',
+        documento_id='doc-ponto', conteudo=b'ponto-e2e', nome_original='ponto.pdf',
     )
     colaborador = _colaborador('colab-e2e-n2')
     resultados = (

@@ -102,6 +102,34 @@ Legenda: ⚠️ PENDENTE (aberta, ação clara) · 🔍 PRECISA SER VALIDADO
   nenhuma fonte real (`main` = `a18d4b2`, confirmado por busca de
   import).
 
+## Pendência nova — catch-up Etapa 15, 2026-10-03
+
+- **PEN-021** ✅/🔍 **Postgres e cron de produção — parcialmente
+  resolvido horas depois, mesmo dia.** Confirmado via API do Render
+  (`infra-operacao-24x7.md`): o Postgres **está** provisionado
+  manualmente (`magnata-os-postgres`, plano `basic_256mb`, `available`).
+  O Cron do Orquestrador **não está** — nenhum serviço desse nome existe
+  no Render; plano de ativação pronto em `plano-provisionamento-cron-orquestrador.md`,
+  faltando decisão financeira e autorização de produção. **Ainda não
+  confirmado:** se a migration do cadastro de colaborador persistente
+  (PR #215) foi de fato aplicada nesse banco — nenhuma investigação até
+  agora rodou uma consulta real contra ele (seria ação de produção).
+  Ver `RISKS.md` RSK-011/RSK-011-bis (seção "Etapa 16").
+- **PEN-022** ⚠️ `NEXT_ACTIONS.md` e `DECISIONS.md` continuam
+  descrevendo o estado de 2026-08-21/22 e não foram reconciliados PR a
+  PR com as fusões entre 2026-08-24 e 2026-10-03. `HANDOFF.md` §0-bis/
+  §0-ter e `RISKS.md` (seções "Etapa 15"/"Etapa 16") foram atualizados;
+  estes dois documentos, não — a maioria dos itens que listam (riscos
+  de 2026-08-22) já foi resolvida ou superada por trabalho posterior, o
+  que os torna mais obsoletos do que simplesmente desatualizados.
+  Recomendação registrada em `HANDOFF.md` §0-ter: tratá-los como
+  candidatos a reescrita do zero numa frente dedicada, não a um novo
+  patch incremental.
+- **PEN-023** 🆕 Redis de produção (`magnata-pdf-queue`) nunca
+  documentado até esta investigação: plano `free`, `persistenceMode:
+  off`, usado como broker/result backend real do worker Celery. Ver
+  `RISKS.md` RSK-022.
+
 ## Observação sobre confiabilidade destes números
 
 Praticamente toda pendência quantitativa acima (contagens de

@@ -1,7 +1,10 @@
 """Comparação DIAGNÓSTICA, read-only, entre a autoridade histórica do
-Magnata OS (`alocacao`/`vinculo_trabalhista`, shadow) e a fotografia
-operacional atual do Airtable (Funcionário -> Locais de trabalho) --
-FASE 6 da missão "CONFIRMAÇÃO DE ALOCAÇÃO SHADOW V1".
+Magnata OS (shadow, Postgres) e a fotografia operacional atual do
+Airtable -- FASE 6 da missão "CONFIRMAÇÃO DE ALOCAÇÃO SHADOW V1"
+(`comparar_colaborador_shadow_com_airtable`, Funcionário -> Locais de
+trabalho), estendida pela missão "SHADOW CLIENTE X POSTO AIRTABLE V1"
+(`comparar_cliente_do_posto_shadow_com_airtable`, Posto -> Cliente via
+`vigencia_cliente_por_posto`) -- mesma disciplina, novo par de fontes.
 
 **Nunca reconciliação automática.** Esta comparação só PRODUZ um
 estado explícito para leitura humana -- nunca corrige, nunca escreve
@@ -10,12 +13,14 @@ encontrada é sempre reportada, nunca resolvida sozinha (mesma
 disciplina de CLAUDE.md raiz §4, "falha nunca é silenciosa" -- aqui
 adaptado a "divergência nunca é corrigida silenciosamente").
 
-Puro: `comparar_postos` não sabe o que é Airtable nem SQLite/Postgres --
-só recebe 2 conjuntos de `posto_id` já apurados e devolve um estado.
-`comparar_colaborador_shadow_com_airtable` é a única função deste
-módulo que faz I/O, e mesmo assim só delega a 2 fontes já injetadas
-(`repo` shadow + `snapshot_airtable`, duck-typed) -- nunca importa
-driver nenhum diretamente."""
+Puro: `comparar_postos` não sabe o que é Airtable nem SQLite/Postgres,
+Alocação nem Cliente -- só recebe 2 conjuntos de ids já apurados e
+devolve um estado; reaproveitada por AMBAS as comparações deste módulo,
+nunca duplicada. `comparar_colaborador_shadow_com_airtable` e
+`comparar_cliente_do_posto_shadow_com_airtable` são as únicas funções
+deste módulo que fazem I/O, e mesmo assim só delegam a 2 fontes já
+injetadas (`repo` shadow + `snapshot_airtable`, duck-typed) -- nunca
+importam driver nenhum diretamente."""
 from __future__ import annotations
 
 from datetime import date
@@ -80,3 +85,37 @@ def comparar_colaborador_shadow_com_airtable(
     except Exception:
         postos_airtable = None
     return comparar_postos(postos_shadow, postos_airtable)
+
+
+def comparar_cliente_do_posto_shadow_com_airtable(
+    repo, snapshot_airtable, posto_id: str, data_referencia: date,
+) -> EstadoComparacaoAirtable:
+    """Mesma disciplina de `comparar_colaborador_shadow_com_airtable`,
+    para a fundação temporal Posto<->Cliente (`vigencia_cliente_por_
+    posto`, missão "SHADOW CLIENTE X POSTO AIRTABLE V1", frente 7 de
+    redução de dependência do Airtable) -- nunca reconciliação
+    automática, só diagnóstico read-only.
+
+    Reaproveita 100% de `comparar_postos` (nenhum estado novo, nenhuma
+    lógica de comparação nova) ao representar "o cliente vigente de um
+    posto" como um `FrozenSet` de 0 ou 1 elemento -- a mesma forma que
+    `comparar_postos` já sabe comparar.
+
+    `repo`: duck-type com `cliente_vigente_do_posto(posto_id,
+    data_referencia) -> Optional[str]` (shadow Postgres,
+    `vigencia_cliente_por_posto`, já garante no máximo 1 cliente por
+    posto por período via constraint `EXCLUDE` do banco).
+    `snapshot_airtable`: duck-type com `clientes_atuais_do_posto
+    (posto_id) -> FrozenSet[str]` (ver `clientes_atuais_do_posto` em
+    `airtable_vinculos_prestacao.FonteVinculosPrestacaoAirtableShadow`);
+    qualquer exceção levantada por essa chamada vira `AMBIGUO` aqui --
+    mesma disciplina de nunca propagar falha do lado Airtable como erro
+    do Magnata OS."""
+    cliente_shadow = repo.cliente_vigente_do_posto(posto_id, data_referencia)
+    clientes_shadow = frozenset({cliente_shadow}) if cliente_shadow else frozenset()
+    try:
+        clientes_airtable: Optional[FrozenSet[str]] = frozenset(
+            snapshot_airtable.clientes_atuais_do_posto(posto_id))
+    except Exception:
+        clientes_airtable = None
+    return comparar_postos(clientes_shadow, clientes_airtable)
