@@ -786,3 +786,224 @@ def test_migration_0002_rollback_remove_vigencia_cliente_por_posto(pg_conn_com_v
     with pg_conn_com_vigencia_cliente.cursor() as cur:
         cur.execute("SELECT to_regclass('vigencia_cliente_por_posto')")
         assert cur.fetchone()[0] is None
+
+
+# ============================================================================
+# Missão "IDENTIDADE CANÔNICA DE COLABORADOR V1" -- Migration 0003
+# (identidade_colaborador_observada) contra Postgres real: aplica do zero,
+# idempotente, índices presentes, rollback, reaplicável após rollback.
+# Achado da auditoria "Testes, CI e observabilidade" (2026-10-03): esta
+# migration nunca tinha sido exercitada contra Postgres real em lugar
+# nenhum do repositório -- só 0001/0002 tinham essa cobertura.
+# ============================================================================
+
+_MIGRATION_SQL_0003 = (Path(__file__).parent / 'magnata_os' / 'documental' / 'alocacao' / 'migrations' / '0003_criar_identidade_colaborador_observada.sql').read_text(encoding='utf-8')
+_ROLLBACK_SQL_0003 = (Path(__file__).parent / 'magnata_os' / 'documental' / 'alocacao' / 'migrations' / '0003_criar_identidade_colaborador_observada_rollback.sql').read_text(encoding='utf-8')
+
+
+def _aplicar_migration_0003(conn) -> None:
+    _executar_script_sql(conn, _MIGRATION_SQL_0003)
+
+
+def _aplicar_rollback_0003(conn) -> None:
+    _executar_script_sql(conn, _ROLLBACK_SQL_0003)
+
+
+@pytest.fixture
+def pg_conn_com_identidade_colaborador(pg_conn):
+    """Estende pg_conn com migration 0003 aplicada (identidade_colaborador_observada).
+
+    Independente de 0001/0002: esta tabela não tem FK para vinculo_trabalhista
+    nem alocacao (ver comentário da própria migration -- entidade separada).
+    """
+    _aplicar_rollback_0003(pg_conn)  # garantir banco/schema vazio no inicio
+    _aplicar_migration_0003(pg_conn)
+    yield pg_conn
+    pg_conn.rollback()
+    _aplicar_rollback_0003(pg_conn)
+
+
+def test_migration_0003_aplica_do_zero(pg_conn):
+    _aplicar_migration_0003(pg_conn)
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('identidade_colaborador_observada')")
+        assert cur.fetchone()[0] is not None
+    _aplicar_rollback_0003(pg_conn)
+
+
+def test_migration_0003_pk_composta_presente(pg_conn_com_identidade_colaborador):
+    """PRIMARY KEY (tipo_identificador, identificador_hash) -- sem coluna substituta."""
+    with pg_conn_com_identidade_colaborador.cursor() as cur:
+        cur.execute(
+            "SELECT conname, contype FROM pg_constraint "
+            "WHERE conrelid = 'identidade_colaborador_observada'::regclass"
+        )
+        constraints = dict(cur.fetchall())
+    assert constraints.get('identidade_colaborador_observada_pkey') == 'p'
+
+
+def test_migration_0003_pk_rejeita_mesmo_par_com_colaborador_diferente(pg_conn_com_identidade_colaborador):
+    """Mesma (tipo_identificador, identificador_hash) com colaborador_id DIFERENTE
+    nunca sobrescreve em silêncio -- falha por violação de PK (ver comentário
+    da própria migration)."""
+    with pg_conn_com_identidade_colaborador.cursor() as cur:
+        cur.execute(
+            "INSERT INTO identidade_colaborador_observada "
+            "(tipo_identificador, identificador_hash, colaborador_id, origem, versao_chave) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            ('cpf', 'hash-sintetico-1', 'colab-A', 'teste', 'v1'),
+        )
+        pg_conn_com_identidade_colaborador.commit()
+
+        with pytest.raises(Exception):  # violação de PK
+            cur.execute(
+                "INSERT INTO identidade_colaborador_observada "
+                "(tipo_identificador, identificador_hash, colaborador_id, origem, versao_chave) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                ('cpf', 'hash-sintetico-1', 'colab-B-DIFERENTE', 'teste', 'v1'),
+            )
+        pg_conn_com_identidade_colaborador.rollback()
+
+
+def test_migration_0003_indices_presentes(pg_conn_com_identidade_colaborador):
+    with pg_conn_com_identidade_colaborador.cursor() as cur:
+        cur.execute(
+            "SELECT indexname FROM pg_indexes "
+            "WHERE tablename = 'identidade_colaborador_observada'"
+        )
+        nomes = {r[0] for r in cur.fetchall()}
+    assert 'idx_identidade_colaborador_observada_colaborador_id' in nomes
+    assert 'idx_identidade_colaborador_observada_versao_chave' in nomes
+
+
+def test_migration_0003_reaplicada_e_idempotente(pg_conn_com_identidade_colaborador):
+    _aplicar_migration_0003(pg_conn_com_identidade_colaborador)  # nunca deve levantar excecao
+    with pg_conn_com_identidade_colaborador.cursor() as cur:
+        cur.execute("SELECT to_regclass('identidade_colaborador_observada')")
+        assert cur.fetchone()[0] is not None
+
+
+def test_migration_0003_rollback_remove_a_tabela(pg_conn_com_identidade_colaborador):
+    _aplicar_rollback_0003(pg_conn_com_identidade_colaborador)
+    with pg_conn_com_identidade_colaborador.cursor() as cur:
+        cur.execute("SELECT to_regclass('identidade_colaborador_observada')")
+        assert cur.fetchone()[0] is None
+
+
+def test_migration_0003_reaplicada_apos_rollback(pg_conn_com_identidade_colaborador):
+    _aplicar_rollback_0003(pg_conn_com_identidade_colaborador)
+    _aplicar_migration_0003(pg_conn_com_identidade_colaborador)  # nunca deve levantar excecao
+    with pg_conn_com_identidade_colaborador.cursor() as cur:
+        cur.execute("SELECT to_regclass('identidade_colaborador_observada')")
+        assert cur.fetchone()[0] is not None
+
+
+# ============================================================================
+# Missão "RESOLUÇÃO CANÔNICA DE DESTINATÁRIO PARA DISTRIBUIÇÃO DOCUMENTAL" --
+# Migration 0004 (contato_colaborador_observado) contra Postgres real: aplica
+# do zero, idempotente, índices presentes, rollback, reaplicável após
+# rollback. Achado da mesma auditoria: `test_executar_prestacao_contato_
+# ate_pending_shadow_v1_real.py` já aplica esta migration contra Postgres
+# real, mas só para ter a tabela disponível (apply-if-absent) -- nunca
+# testou rollback, reaplicação idempotente ou presença de índices
+# isoladamente. Esta seção fecha esse gap.
+# ============================================================================
+
+_MIGRATION_SQL_0004_ALOC = (Path(__file__).parent / 'magnata_os' / 'documental' / 'alocacao' / 'migrations' / '0004_criar_contato_colaborador_observado.sql').read_text(encoding='utf-8')
+_ROLLBACK_SQL_0004_ALOC = (Path(__file__).parent / 'magnata_os' / 'documental' / 'alocacao' / 'migrations' / '0004_criar_contato_colaborador_observado_rollback.sql').read_text(encoding='utf-8')
+
+
+def _aplicar_migration_0004_aloc(conn) -> None:
+    _executar_script_sql(conn, _MIGRATION_SQL_0004_ALOC)
+
+
+def _aplicar_rollback_0004_aloc(conn) -> None:
+    _executar_script_sql(conn, _ROLLBACK_SQL_0004_ALOC)
+
+
+@pytest.fixture
+def pg_conn_com_contato_colaborador(pg_conn):
+    """Estende pg_conn com migration 0004 de alocacao/ aplicada
+    (contato_colaborador_observado) -- não confundir com a migration 0004 do
+    Orquestrador (diretório diferente, tabela diferente; ver docstring de
+    test_executar_prestacao_contato_ate_pending_shadow_v1_real.py)."""
+    _aplicar_rollback_0004_aloc(pg_conn)  # garantir banco/schema vazio no inicio
+    _aplicar_migration_0004_aloc(pg_conn)
+    yield pg_conn
+    pg_conn.rollback()
+    _aplicar_rollback_0004_aloc(pg_conn)
+
+
+def test_migration_0004_aloc_aplica_do_zero(pg_conn):
+    _aplicar_migration_0004_aloc(pg_conn)
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('contato_colaborador_observado')")
+        assert cur.fetchone()[0] is not None
+    _aplicar_rollback_0004_aloc(pg_conn)
+
+
+def test_migration_0004_aloc_pk_composta_presente(pg_conn_com_contato_colaborador):
+    """PRIMARY KEY (colaborador_id, canal) -- sem coluna substituta."""
+    with pg_conn_com_contato_colaborador.cursor() as cur:
+        cur.execute(
+            "SELECT conname, contype FROM pg_constraint "
+            "WHERE conrelid = 'contato_colaborador_observado'::regclass"
+        )
+        constraints = dict(cur.fetchall())
+    assert constraints.get('contato_colaborador_observado_pkey') == 'p'
+
+
+def test_migration_0004_aloc_pk_rejeita_mesmo_par_colaborador_canal_duplicado(pg_conn_com_contato_colaborador):
+    """Mesma (colaborador_id, canal) nunca gera uma segunda linha -- falha por
+    violação de PK (ver comentário da própria migration sobre número
+    alterado exigir reconciliação explícita, nunca sobrescrita silenciosa)."""
+    with pg_conn_com_contato_colaborador.cursor() as cur:
+        cur.execute(
+            "INSERT INTO contato_colaborador_observado "
+            "(colaborador_id, canal, valor_cifrado, hash_auxiliar, versao_chave, origem) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            ('colab-A', 'whatsapp', b'token-fernet-sintetico-1', 'hash-sintetico-1', 'v1', 'teste'),
+        )
+        pg_conn_com_contato_colaborador.commit()
+
+        with pytest.raises(Exception):  # violação de PK
+            cur.execute(
+                "INSERT INTO contato_colaborador_observado "
+                "(colaborador_id, canal, valor_cifrado, hash_auxiliar, versao_chave, origem) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                ('colab-A', 'whatsapp', b'token-fernet-sintetico-2-DIFERENTE', 'hash-sintetico-2', 'v1', 'teste'),
+            )
+        pg_conn_com_contato_colaborador.rollback()
+
+
+def test_migration_0004_aloc_indices_presentes(pg_conn_com_contato_colaborador):
+    with pg_conn_com_contato_colaborador.cursor() as cur:
+        cur.execute(
+            "SELECT indexname FROM pg_indexes "
+            "WHERE tablename = 'contato_colaborador_observado'"
+        )
+        nomes = {r[0] for r in cur.fetchall()}
+    assert 'idx_contato_colaborador_observado_colaborador_id' in nomes
+    assert 'idx_contato_colaborador_observado_versao_chave' in nomes
+
+
+def test_migration_0004_aloc_reaplicada_e_idempotente(pg_conn_com_contato_colaborador):
+    _aplicar_migration_0004_aloc(pg_conn_com_contato_colaborador)  # nunca deve levantar excecao
+    with pg_conn_com_contato_colaborador.cursor() as cur:
+        cur.execute("SELECT to_regclass('contato_colaborador_observado')")
+        assert cur.fetchone()[0] is not None
+
+
+def test_migration_0004_aloc_rollback_remove_a_tabela(pg_conn_com_contato_colaborador):
+    _aplicar_rollback_0004_aloc(pg_conn_com_contato_colaborador)
+    with pg_conn_com_contato_colaborador.cursor() as cur:
+        cur.execute("SELECT to_regclass('contato_colaborador_observado')")
+        assert cur.fetchone()[0] is None
+
+
+def test_migration_0004_aloc_reaplicada_apos_rollback(pg_conn_com_contato_colaborador):
+    _aplicar_rollback_0004_aloc(pg_conn_com_contato_colaborador)
+    _aplicar_migration_0004_aloc(pg_conn_com_contato_colaborador)  # nunca deve levantar excecao
+    with pg_conn_com_contato_colaborador.cursor() as cur:
+        cur.execute("SELECT to_regclass('contato_colaborador_observado')")
+        assert cur.fetchone()[0] is not None
