@@ -128,9 +128,19 @@ class PortaRevalidacaoDocumentoPacote(Protocol):
 
 
 class PortaConsultaStatusAssinaturaPacote(Protocol):
-    """Porta read-only: relê o status atual do registro de assinatura
+    """Porta read-only: relê o status atual da obrigação de assinatura
     do pacote, para a checagem de concorrência best-effort imediatamente
-    antes de gravar o reenvio."""
+    antes de gravar o reenvio.
 
-    def status_atual(self, registro_id: str) -> Optional[str]:
+    Recebe `token_reservado` (o `hash_token` atual do pacote, antes da
+    rotação), nunca o id interno do registro Airtable -- a única rota
+    de leitura já existente e read-only (`/assinatura/consulta` em
+    `app.py`) só aceita consulta por `acao_execucao_id` ou por
+    `token_reservado`, nunca por id de registro. Implementar esta porta
+    reaproveitando aquela rota evita abrir uma segunda leitura direta de
+    `TABLE_ASSINATURAS` fora de `app.py` (a mesma duplicação que
+    `obrigacao_assinatura_legado_http.py` já evita para o motor de
+    assinatura em geral -- ver `orquestrador.md` §3)."""
+
+    def status_atual(self, token_reservado: str) -> Optional[str]:
         ...
