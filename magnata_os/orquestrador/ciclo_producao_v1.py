@@ -244,6 +244,30 @@ def _compor_conexao_a_partir_do_ambiente():
 
 
 def _compor_armazenamento_a_partir_do_ambiente():
+    """Compõe o cliente S3 (via `boto3.client('s3', ...)`) e injeta no
+    adapter `ArmazenamentoArquivosS3`, que é duck-typed e não sabe (nem
+    precisa saber) quem é o provedor por trás do cliente.
+
+    `ORQUESTRADOR_S3_ENDPOINT_URL`/`ORQUESTRADOR_S3_REGION` NÃO são uma
+    dependência de provedor nova -- `boto3.client('s3', endpoint_url=...,
+    region_name=...)` já aceita esses dois parâmetros opcionais desde
+    sempre; esta função só torna explícito, via variável de ambiente, o
+    que a biblioteca já suporta. Isso permite usar qualquer storage
+    compatível com a API S3 (ex.: Cloudflare R2, MinIO) sem acoplar este
+    módulo -- nem o adapter -- a um provedor específico.
+
+    Retrocompatibilidade (obrigatória): se `ORQUESTRADOR_S3_ENDPOINT_URL`
+    estiver ausente, o comportamento é EXATAMENTE o de antes desta
+    mudança -- `boto3.client('s3')` sem `endpoint_url`, AWS S3 real. A
+    região default (`us-east-1`) só é passada explicitamente quando o
+    endpoint customizado está presente, para não alterar o comportamento
+    de quem já depende do default implícito do boto3/AWS hoje.
+
+    Credenciais (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, ou as
+    equivalentes do provedor compatível) continuam vindo do jeito padrão
+    que o próprio boto3 já lê do ambiente -- nunca lidas ou reimplementadas
+    aqui.
+    """
     from magnata_os.documental.modulo01.adapters.s3_armazenamento import (
         ArmazenamentoArquivosS3,
     )
@@ -255,8 +279,15 @@ def _compor_armazenamento_a_partir_do_ambiente():
             'nunca infere bucket por padrão (fail-closed).'
         )
     prefixo = os.environ.get('ORQUESTRADOR_S3_PREFIXO', 'documentos/')
+    endpoint_url = (os.environ.get('ORQUESTRADOR_S3_ENDPOINT_URL') or '').strip()
     import boto3  # import local -- único ponto deste módulo acoplado ao driver
-    cliente = boto3.client('s3')
+    if endpoint_url:
+        regiao = (os.environ.get('ORQUESTRADOR_S3_REGION') or '').strip() or 'us-east-1'
+        cliente = boto3.client('s3', endpoint_url=endpoint_url, region_name=regiao)
+    else:
+        # Comportamento idêntico ao de antes desta mudança -- sem
+        # endpoint_url nem region_name explícitos (AWS S3 real).
+        cliente = boto3.client('s3')
     return ArmazenamentoArquivosS3(cliente, bucket=bucket, prefixo=prefixo)
 
 

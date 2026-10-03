@@ -81,6 +81,20 @@ app.register_blueprint(sync_bp)
 from src.ingestao_secullum import ingestao_bp
 app.register_blueprint(ingestao_bp)
 
+# ── Módulo 01 (Ingestão) — Fase 5: API HTTP da esteira para o painel ────────────
+# Wiring mínimo: só o registro. Toda lógica vive em
+# magnata_os/documental/modulo01/adapters/blueprint_esteira.py -- reaproveita
+# auth_bp (acima) para autenticação, nunca inventa mecanismo novo.
+from magnata_os.documental.modulo01.adapters.blueprint_esteira import esteira_bp
+app.register_blueprint(esteira_bp)
+
+# ── Módulo 01 (Ingestão) — painel estático (frontend/), mesmo domínio ──────────
+# Wiring mínimo: só o registro. Toda lógica vive em
+# magnata_os/documental/modulo01/adapters/blueprint_painel_estatico.py --
+# nenhuma autenticação nova; só serve arquivo estático de frontend/.
+from magnata_os.documental.modulo01.adapters.blueprint_painel_estatico import painel_estatico_bp
+app.register_blueprint(painel_estatico_bp)
+
 # ── Módulo 01 (Ingestão) — Fase 0: observabilidade, sem efeito operacional ──────
 from src.observability import observar_ingestao
 

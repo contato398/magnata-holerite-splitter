@@ -239,7 +239,15 @@ def compor_dependencias_a_partir_do_ambiente(conexao=None) -> DependenciasPresta
     (`ORQUESTRADOR_S3_BUCKET`) e o leitor Airtable somente leitura
     (`AIRTABLE_API_KEY`). Sem configuração: erro explícito, nunca
     default silencioso. Índice documental J3: não composto aqui até a
-    migration 0011 ser aplicada (gate humano)."""
+    migration 0011 ser aplicada (gate humano).
+
+    Motor de OCR (`GOOGLE_VISION_API_KEY`): diferente do Airtable, é
+    OPCIONAL -- OCR é recurso best-effort no desenho já existente
+    (`motor_ocr=None` é o comportamento padrão há tempos; ver
+    `magnata_os/documental/ocr.py`). Ausência da variável nunca é erro
+    aqui -- mesmo padrão de `MAGNATA_CNPJ_PROPRIO` (`or None`) logo
+    abaixo, não o padrão fail-closed do Airtable. Ver decisão em
+    `docs/decisoes/ocr-motor-google-vision-v1.md`."""
     from magnata_os.documental.alocacao.adapters.postgres_alocacao import RepositorioAlocacaoPostgres
     from magnata_os.documental.importacao_lote.adapters.airtable_leitura import LeitorAirtableSomenteLeitura
     from magnata_os.documental.modulo01.adapters.conexao import abrir_conexao
@@ -254,12 +262,22 @@ def compor_dependencias_a_partir_do_ambiente(conexao=None) -> DependenciasPresta
     from .ciclo_producao_v1 import _compor_armazenamento_a_partir_do_ambiente
 
     from magnata_os.classificacao.adapters.postgres_execucoes_prestacao import RepositorioExecucoesPrestacaoPostgres
+    from magnata_os.documental.ocr_google_vision import MotorOcrGoogleVision
 
     chave_airtable = os.environ.get('AIRTABLE_API_KEY', '').strip()
     if not chave_airtable:
         raise RuntimeError('AIRTABLE_API_KEY ausente -- ponte somente leitura do Airtable é obrigatória nesta fase')
     armazenamento = _compor_armazenamento_a_partir_do_ambiente()  # antes da conexão: falha sem conexão aberta
     conexao = conexao if conexao is not None else abrir_conexao()
+    # Motor de OCR: OPCIONAL, ao contrário do Airtable acima -- ausência
+    # de GOOGLE_VISION_API_KEY nunca é erro aqui (best-effort, mesmo
+    # comportamento de sempre quando motor_ocr=None). `MotorOcrGoogleVision`
+    # só lê a chave de verdade no momento do uso (`extrair_paginas`), mas a
+    # instância só é criada aqui quando a variável já está presente, para
+    # deixar explícito -- na composição, não só no motor -- quando o OCR
+    # real está ligado.
+    chave_google_vision = os.environ.get('GOOGLE_VISION_API_KEY', '').strip()
+    motor_ocr = MotorOcrGoogleVision() if chave_google_vision else None
     return DependenciasPrestacaoReal(
         leitor_airtable=LeitorAirtableSomenteLeitura(chave_airtable),
         repositorio_documentos=RepositorioDocumentosPostgres(conexao),
@@ -270,6 +288,7 @@ def compor_dependencias_a_partir_do_ambiente(conexao=None) -> DependenciasPresta
         fonte_unidade_posto_historica=RepositorioAlocacaoPostgres(conexao),
         cnpj_proprio=os.environ.get('MAGNATA_CNPJ_PROPRIO', '').strip() or None,
         conexao=conexao,
+        motor_ocr=motor_ocr,
         repositorio_estados_esteira=RepositorioEstadosEsteiraPostgres(conexao),
     )
 
