@@ -91,6 +91,7 @@ from enum import Enum
 from typing import Optional, Tuple
 
 from magnata_os.documental.extracao_texto import extrair_texto_pdf
+from magnata_os.documental.ocr import extrair_paginas_com_ocr
 
 from .classificador_documental import (
     EstadoClassificacao,
@@ -293,6 +294,23 @@ def extrair_texto_seguro(conteudo_pdf: bytes) -> Optional[str]:
     if not texto or not texto.strip():
         return None
     return texto
+
+
+def extrair_paginas_seguro(conteudo_pdf: bytes, motor_ocr: Optional[object] = None) -> Optional[Tuple[str, ...]]:
+    """Versão por página de `extrair_texto_seguro`, com a mesma regra:
+    PDF corrompido, vazio ou sem nenhum texto extraível retorna None --
+    nunca lança, nunca devolve páginas vazias como se fossem
+    classificáveis. Com `motor_ocr`, páginas sem texto útil passam por
+    OCR (`magnata_os/documental/ocr.py`, critério objetivo); sem motor,
+    comportamento idêntico ao anterior."""
+    extracao = extrair_paginas_com_ocr(conteudo_pdf, motor_ocr)
+    if extracao is None or not extracao.tem_texto:
+        return None
+    if extracao.ocr_falhou and extracao.paginas_sem_texto:
+        # motor falhou e há página sem texto: entregar o resto como se
+        # fosse o documento inteiro esconderia a parte não lida
+        return None
+    return extracao.paginas
 
 
 def _decisao_revisao(

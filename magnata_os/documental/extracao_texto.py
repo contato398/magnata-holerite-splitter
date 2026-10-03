@@ -30,9 +30,16 @@ def extrair_texto_pdf(conteudo: bytes) -> str:
       extração como decisão de revisão humana, nunca como exceção não
       tratada.
     """
+    return ''.join(pagina + '\n' for pagina in extrair_texto_pdf_por_pagina(conteudo))
+
+
+def extrair_texto_pdf_por_pagina(conteudo: bytes) -> tuple[str, ...]:
+    """Mesma extração de `extrair_texto_pdf`, preservando a fronteira de
+    página (uma string por página, na ordem do PDF). Necessária para
+    separar um PDF que contém vários documentos (ex.: 12 holerites, um
+    por página) -- juntar as páginas apaga exatamente a informação que
+    diz onde cada documento começa. Mesma política de exceção de
+    `extrair_texto_pdf`: quem chama decide."""
     import pdfplumber
-    texto = ''
     with pdfplumber.open(io.BytesIO(conteudo)) as pdf:
-        for pagina in pdf.pages:
-            texto += (pagina.extract_text() or '') + '\n'
-    return texto
+        return tuple((pagina.extract_text() or '') for pagina in pdf.pages)

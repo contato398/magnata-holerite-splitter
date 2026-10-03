@@ -1,0 +1,9 @@
+# Autorização humana específica — PR 196 — 2026-09-29
+# Mesma migration 0011 já autorizada para a PR #197 (índice J3), agora
+# também no diff da PR #196 porque a #197 foi mesclada dentro da branch
+# do #196, não da main.
+# Escopo autorizado: só a inclusão desta migration e seu rollback no diff
+# da PR 196 (gate protected_migrations). NÃO autoriza aplicar a migration
+# em nenhum Postgres real.
+55af5d30c47e2e21828f88405544e50bf6ccdb87  magnata_os/documental/modulo01/migrations/0011_criar_tabela_indice_documental_prestacao.sql
+f762dec379234a40a5bf968cf1a78482189df8f8  magnata_os/documental/modulo01/migrations/0011_criar_tabela_indice_documental_prestacao_rollback.sql

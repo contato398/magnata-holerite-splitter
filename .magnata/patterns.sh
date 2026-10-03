@@ -23,6 +23,12 @@ AUTHORIZED_BRANCHES=(
   "^feat/magnata-os-claude-powerpack$"
   "^feat/magnata-os-etapa6-governanca$"
   "^feat/magnata-os-etapa6-estabilizacao$"
+  "^feat/prestacao-diagnostico-real-cli-v1$"
+  "^feat/selecao-envio-operador-v1$"
+  "^feat/prestacao-compor-ordem-selecionada-shadow-v1$"
+  "^feat/prestacao-compor-ordem-selecionada-assinatura-wiring-v1$"
+  "^feat/interpretar-ordem-operador-v1$"
+  "^feat/cadastro-colaborador-persistente-v1$"
   "^fix/[a-z0-9][a-z0-9-]*$"
   "^claude/macro-6a-[a-z0-9-]*$"
 )
@@ -1299,6 +1305,220 @@ ALLOWED_PATHS=(
   # dos documentos em si. ZERO alteração em app.py, ZERO migration, ZERO
   # transporte real, ZERO mudança no adapter HTTP real.
   "^magnata_os/orquestrador/politica_comunicacao\.py$"
+
+  # Roteamento por canal Plano A (WhatsApp) / Plano B (e-mail) para
+  # `ResolverParametrosOrdemPrestacao` (fecha o gap de roteamento por
+  # canal identificado ao investigar esta missão -- o elo Prestação
+  # PENDING -> contrato de distribuição genérico já existia em `main`,
+  # ver docstring do módulo/ADR). Combinador puro, zero I/O, zero
+  # transporte: tenta Plano A, cai para Plano B se `None`, `None` se
+  # nenhum resolver -- fail-closed, mesma disciplina de
+  # `resolver_contato_colaborador_para_ordem`. Plugável direto em
+  # `executar_prestacao_ate_distribuicao_documental_shadow` sem
+  # alteração no composition root nem no núcleo genérico. ZERO
+  # alteração em app.py, ZERO migration, ZERO transporte real. Resolução
+  # real de e-mail por colaborador permanece pendência declarada (ver
+  # ADR), não decidida em silêncio aqui.
+  "^magnata_os/orquestrador/resolver_parametros_ordem_prestacao_fallback_canal_v1\.py$"
+  "^test_resolver_parametros_ordem_prestacao_fallback_canal_v1\.py$"
+  "^docs/decisoes/prestacao-distribuicao-canal-fallback-v1\.md$"
+
+  # Recuperação da Fase 5 (painel operacional da esteira do Módulo 01)
+  # com dados reais -- parte frontend (branch
+  # fix/magnata-os-painel-fase5-frontend-v1, já mesclada em main),
+  # separada da parte backend (que registra o blueprint em app.py) por
+  # exigência do CLAUDE.md §7. Painel Vanilla JS recuperado da branch
+  # órfã origin/feat/magnata-os-documental-modulo01-fase5-painel, agora
+  # consumindo dados reais via apiAdapter.js (a API em si só existe
+  # depois que a branch backend for autorizada e mesclada -- até lá,
+  # ?mock=1 continua disponível para desenvolvimento/demonstração).
+  # frontend/CLAUDE.md e frontend/assets/brand/ continuam intocados e
+  # protegidos -- não liberados por este bloco.
+  "^frontend/index\.html$"
+  "^frontend/src/"
+  "^frontend/styles/"
+  "^frontend/tests/"
+  "^docs/decisoes/painel-fase5-frontend-v1\.md$"
+
+  # Recuperação da Fase 5 -- parte backend (branch
+  # fix/magnata-os-app-py-registro-blueprint-esteira-v1), separada da
+  # parte frontend por exigência do CLAUDE.md §7 (app.py só em branch
+  # dedicada, nunca misturada com trabalho não relacionado a ele).
+  # Conclui a auditoria de
+  # docs/magnata-os/central-command/FASE5_AUDITORIA.md: expõe a API
+  # HTTP real (blueprint_esteira.py, adapter novo, reusa
+  # exigir_sessao_com_perfil de auth_bp -- nenhuma autenticação nova).
+  # ALTERAÇÃO EM app.py NESTA BRANCH: só o registro do blueprint (2
+  # linhas), mesmo padrão já usado para auth_bp/secullum_bp/sync_bp/
+  # ingestao_bp -- autorizada por blob exato em
+  # .magnata/app-py-authorizations/painel-fase5-backend-v1.gitblob,
+  # confirmada pelo operador em mensagem distinta da que apresentou as
+  # linhas.
+  "^magnata_os/documental/modulo01/adapters/blueprint_esteira\.py$"
+  "^magnata_os/documental/modulo01/adapters/api_contexto\.py$"
+  "^test_magnata_os_documental_modulo01_blueprint_esteira\.py$"
+  "^docs/decisoes/painel-fase5-dados-reais-v1\.md$"
+
+  # Painel Operacional (Fase 5) -- tela de login real, V1
+  # (fix/magnata-os-painel-fase5-login-real-v1). Só o documento de
+  # decisão precisa de entrada aqui -- os arquivos de código novos
+  # (frontend/src/components/TelaLogin.js, frontend/src/auth/,
+  # frontend/src/config.js, frontend/src/runtime-config.js,
+  # frontend/tests/app.test.js, frontend/tests/telaLogin.test.js) já
+  # caem nos prefixos genéricos "^frontend/src/"/"^frontend/tests/"
+  # liberados acima, nenhuma entrada nova necessária para eles.
+  # ALTERAÇÃO EM app.py: nenhuma -- auth_bp já estava registrado
+  # (painel-fase5-backend-v1), esta missão só consome as rotas
+  # existentes do frontend.
+  "^docs/decisoes/painel-fase5-login-real-v1\.md$"
+
+  # Excecao exata e restrita (motor real de OCR via Google Cloud Vision
+  # API REST, branch fix/ocr-motor-google-vision-v1) — implementa a
+  # porta MotorOcr ja existente (magnata_os/documental/ocr.py, NAO
+  # alterada), sem nenhuma chamada de rede real em teste (cliente HTTP
+  # injetavel). So estes 3 caminhos exatos — nao libera
+  # "^magnata_os/documental/" nem "^tests/" de forma ampla.
+  "^magnata_os/documental/ocr_google_vision\.py$"
+  "^tests/test_magnata_os_documental_ocr_google_vision\.py$"
+  "^docs/decisoes/ocr-motor-google-vision-v1\.md$"
+
+  # Ativação (wiring) do motor real de OCR na composição real
+  # (branch fix/ocr-motor-google-vision-v1, mesmo commit/PR do motor
+  # acima). Só o documento de decisão precisa de entrada nova aqui --
+  # magnata_os/orquestrador/composicao_prestacao_real_v1.py já existia
+  # (alteração, não arquivo novo) e tests/test_composicao_prestacao_
+  # real_ocr_wiring.py já cai no prefixo de tests/ existente.
+  "^docs/decisoes/ocr-motor-google-vision-wiring-v1\.md$"
+
+  # Excecao exata e restrita (interprete de ordem em linguagem natural do
+  # operador, branch feat/interpretar-ordem-operador-v1) — traduz texto
+  # livre em portugues (regex/heuristica determinista, ZERO dependencia
+  # de API de LLM externa) para SelecaoEnvioOperador (selecao_envio_
+  # operador_v1.py, INTOCADO) OU para uma pendencia de esclarecimento
+  # explicita quando ha qualquer duvida real (nome ambiguo, documento
+  # nao encontrado/nao pronto, competencia ausente e nao inferivel,
+  # destinatario nao identificado) -- nunca uma adivinhacao. So estes
+  # caminhos exatos, por igualdade de string completa; nao libera
+  # "^magnata_os/orquestrador/" nem "^scripts/" nem "^test_"/"^tests/"
+  # de forma ampla. ZERO alteracao em app.py, ZERO migration, ZERO
+  # transporte real, ZERO import de porta_execucao/transporte_real_
+  # habilitado/autorizacao_transporte_real.
+  "^magnata_os/orquestrador/interpretar_ordem_operador_v1\.py$"
+  "^scripts/interpretar_ordem_operador_cli\.py$"
+  "^test_interpretar_ordem_operador_v1\.py$"
+  "^tests/test_scripts_interpretar_ordem_operador_cli\.py$"
+  "^docs/decisoes/interpretar-ordem-operador-v1\.md$"
+
+  # Excecao exata e restrita (Cadastro de Colaborador PERSISTENTE V1,
+  # branch feat/cadastro-colaborador-persistente-v1) — domínio puro,
+  # porta, adapter Postgres (PREPARADO, NUNCA aplicado -- migration
+  # 0001 fica em magnata_os/rh_admissao/migrations/, fora do prefixo
+  # protegido de modulo01/migrations/), wiring que ENVOLVE (nunca
+  # altera) gatilho_admissao.py, CLI de determinação manual do local de
+  # trabalho, fonte do diretorio_nomes para interpretar_ordem_operador_
+  # v1.py, e os testes nominais correspondentes. So estes caminhos
+  # exatos, por igualdade de string completa; nao libera
+  # "^magnata_os/rh_admissao/" nem "^scripts/" nem "^tests/"/"^test_"
+  # de forma ampla. ZERO alteracao em app.py, ZERO aplicacao real de
+  # migration, ZERO transporte real, ZERO import de
+  # autorizacao_transporte_real.
+  "^magnata_os/rh_admissao/dominio_cadastro_colaborador\.py$"
+  "^magnata_os/rh_admissao/repositorio_colaboradores\.py$"
+  "^magnata_os/rh_admissao/wiring_cadastro_colaborador\.py$"
+  "^magnata_os/rh_admissao/diretorio_nomes_colaboradores\.py$"
+  "^magnata_os/rh_admissao/adapters/__init__\.py$"
+  "^magnata_os/rh_admissao/adapters/repositorio_colaboradores_postgres\.py$"
+  "^magnata_os/rh_admissao/migrations/0001_criar_tabela_colaboradores\.sql$"
+  "^magnata_os/rh_admissao/migrations/0001_criar_tabela_colaboradores_rollback\.sql$"
+  "^scripts/determinar_local_trabalho_colaborador_cli\.py$"
+  "^tests/test_magnata_os_rh_admissao_dominio_cadastro_colaborador\.py$"
+  "^tests/test_magnata_os_rh_admissao_wiring_cadastro_colaborador\.py$"
+  "^tests/test_magnata_os_rh_admissao_diretorio_nomes_colaboradores\.py$"
+  "^tests/test_scripts_determinar_local_trabalho_colaborador_cli\.py$"
+  "^test_repositorio_colaboradores_postgres_real\.py$"
+  "^docs/decisoes/cadastro-colaborador-persistente-v1\.md$"
+
+  # Correção pré-merge do PR #215 (mesma branch
+  # feat/cadastro-colaborador-persistente-v1, mesma missão acima):
+  # cifra de CPF em repouso (Fernet, mesmo padrão já aprovado para
+  # telefone) + histórico append-only real de correção de local de
+  # trabalho. Migrations NOVAS (0002/0003), não edição de 0001 -- ver
+  # docs/decisoes/cadastro-colaborador-persistente-v1.md §3.1. Mesma
+  # restrição das linhas acima: só estes caminhos exatos.
+  "^magnata_os/rh_admissao/configuracao_cpf_colaborador\.py$"
+  "^magnata_os/rh_admissao/migrations/0002_cifrar_cpf_colaboradores\.sql$"
+  "^magnata_os/rh_admissao/migrations/0002_cifrar_cpf_colaboradores_rollback\.sql$"
+  "^magnata_os/rh_admissao/migrations/0003_criar_historico_correcao_local_trabalho\.sql$"
+  "^magnata_os/rh_admissao/migrations/0003_criar_historico_correcao_local_trabalho_rollback\.sql$"
+  "^tests/test_magnata_os_rh_admissao_adapters_repositorio_colaboradores_postgres\.py$"
+
+  # Excecao exata e restrita (branch
+  # fix/teste-conectividade-whatsapp-real-v1) — CLI one-shot de teste
+  # de conectividade do transporte WhatsApp real (1 numero, 1
+  # mensagem, sem evento/documento/assinatura por tras). So consome
+  # (por import) autorizacao_transporte_real.py e
+  # composicao_transporte_evolution_legado.py, ja existentes e
+  # INTOCADOS. Nao libera "^scripts/" nem "^test_" de forma ampla, nao
+  # toca app.py, nao cria/aplica migration.
+  "^scripts/testar_conectividade_whatsapp_real_cli\.py$"
+  "^test_testar_conectividade_whatsapp_real_cli\.py$"
+  "^docs/decisoes/teste-conectividade-whatsapp-real-v1\.md$"
+
+  # Excecao exata e restrita (branch fix/s3-endpoint-customizado-r2-v1)
+  # -- suporte opcional a endpoint S3 customizado (Cloudflare R2 ou
+  # qualquer compativel) em _compor_armazenamento_a_partir_do_ambiente,
+  # ciclo_producao_v1.py (ja listado acima) e seu teste (ja listado
+  # acima) nao precisam de entrada nova aqui -- so o documento de
+  # decisao, que e arquivo novo.
+  "^docs/decisoes/suporte-endpoint-s3-customizado-v1\.md$"
+
+  # Excecao exata e restrita (branch fix/ingestao-documentos-lote-real-v1)
+  # -- CLI manual de ingestao REAL em lote de conteudo de documento
+  # (Airtable -> S3/R2 + Postgres), motivada pelos 133 registros de
+  # Documento orfaos (metadado sem binario) encontrados pela primeira
+  # execucao real de prestacao_diagnostico_real_cli.py. So estes 4
+  # caminhos novos (nucleo, adapter de leitura de anexo, CLI e teste) e
+  # o documento de decisao, ja listado acima nesta mesma secao. Nao
+  # libera "^scripts/", "^test_" nem "^magnata_os/documental/importacao_
+  # lote/" de forma ampla; nao toca app.py, nao cria/aplica migration,
+  # nao referencia cron/scheduler/render.yaml.
+  "^magnata_os/documental/importacao_lote/ingestao_documentos_lote_real\.py$"
+  "^magnata_os/documental/importacao_lote/adapters/airtable_anexos_prestacao\.py$"
+  "^scripts/ingerir_documentos_lote_real_cli\.py$"
+  "^test_ingestao_documentos_lote_real\.py$"
+  "^docs/decisoes/ingestao-documento-lote-real-v1\.md$"
+
+  # Excecao exata e restrita (branch fix/painel-ingestao-documentos-lote-ui-v1)
+  # -- expoe a ingestao real em lote (acima) no painel operacional via
+  # HTTP/clique, eliminando a dependencia de Shell/terminal (decisao de
+  # produto ja tomada). So o modulo novo de fronteira HTTP/autorizacao
+  # (nao duplica o nucleo de ingestao) e seu teste nominal; a rota em
+  # si entra no blueprint JA autorizado
+  # (modulo01/adapters/blueprint_esteira.py, listado acima nesta mesma
+  # secao) e o frontend novo entra nos prefixos
+  # "^frontend/src/"/"^frontend/tests/" JA liberados -- nenhuma entrada
+  # nova necessaria para eles. Nao libera
+  # "^magnata_os/documental/importacao_lote/" nem "^test_" de forma
+  # ampla; nao toca app.py, nao cria/aplica migration.
+  "^magnata_os/documental/importacao_lote/servico_ingestao_lote_http\.py$"
+  "^test_servico_ingestao_lote_http\.py$"
+  "^docs/decisoes/painel-ingestao-documentos-lote-ui-v1\.md$"
+
+  # Excecao exata e restrita (branch
+  # fix/painel-publicacao-estatico-mesmo-dominio-v1) -- blueprint novo
+  # que serve os arquivos estaticos de frontend/ (ja mesclado em main,
+  # ja liberado via "^frontend/src/"/"^frontend/styles/"/
+  # "^frontend/tests/"/"^frontend/index\.html$" acima) sob o prefixo
+  # /painel, usando exclusivamente flask.send_from_directory (nunca
+  # concatenacao manual de path). So o modulo novo e seu teste
+  # nominal, mais o ADR; NAO toca app.py (so a proposta do diff e o
+  # blob hash esperado ficam documentados no ADR, aguardando
+  # autorizacao humana especifica -- /CLAUDE.md §6(e)). Nao libera
+  # "^magnata_os/documental/modulo01/adapters/" nem "^test_" de forma
+  # ampla.
+  "^magnata_os/documental/modulo01/adapters/blueprint_painel_estatico\.py$"
+  "^test_magnata_os_documental_modulo01_blueprint_painel_estatico\.py$"
+  "^docs/decisoes/painel-publicacao-estatico-mesmo-dominio-v1\.md$"
 )
 
 # ============================================================================

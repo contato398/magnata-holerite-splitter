@@ -71,6 +71,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from ..documental.importacao_lote.dominio import (
     extrair_cnpjs_de_texto,
     extrair_cpfs_distintos_de_texto,
+    normalizar_cpf,
 )
 
 
@@ -282,5 +283,81 @@ def estrategia_por_cpf_colaborador(
         if cpfs_pagina:
             return IdentificacaoPagina(SituacaoPaginaSeparacao.ENTIDADE_DESCONHECIDA)
         return IdentificacaoPagina(SituacaoPaginaSeparacao.SEM_MARCADOR)
+
+    return identificar
+
+
+def indice_cpf_de_candidatos(candidatos: Sequence[object]) -> Dict[str, Tuple[str, None]]:
+    """Índice CPF -> (colaborador_id, None) para `estrategia_por_cpf_
+    colaborador`, montado a partir de `CandidatoFuncionario` (func_id,
+    cpf, nome_normalizado) já presentes no contexto.
+
+    - CPF é chave TRANSITÓRIA em memória -- o índice nunca é logado nem
+      devolvido em DTO; o que sai da separação é só `colaborador_id`.
+    - `nome` é sempre None: nome real de pessoa nunca entra em grupo.
+    - CPF associado a mais de um colaborador é DESCARTADO (ambíguo --
+      mesma regra de `resolver_funcionario`): a página vira entidade
+      desconhecida, nunca atribuída por adivinhação."""
+    por_cpf: Dict[str, set] = {}
+    for candidato in candidatos:
+        cpf = normalizar_cpf(getattr(candidato, 'cpf', None) or '')
+        colaborador_id = getattr(candidato, 'func_id', None)
+        if len(cpf) != 11 or not colaborador_id:
+            continue
+        por_cpf.setdefault(cpf, set()).add(colaborador_id)
+    return {
+        cpf: (next(iter(ids)), None)
+        for cpf, ids in por_cpf.items()
+        if len(ids) == 1
+    }
+
+
+_CPF_SEM_FORMATACAO_RE = _re.compile(r'(?<!\d)\d{11}(?!\d)')
+
+
+def cpfs_da_pagina(texto_pagina: str, indice_cpf_para_colaborador: Mapping[str, object]) -> Tuple[str, ...]:
+    """CPFs distintos de uma página, normalizados: todos os formatados
+    (`XXX.XXX.XXX-XX`) MAIS os de 11 dígitos sem formatação que sejam de
+    um colaborador CONHECIDO do índice.
+
+    Por que só os conhecidos sem formatação: 11 dígitos soltos também
+    podem ser PIS/NIT, matrícula ou código de barras -- contar qualquer
+    um bloquearia páginas legítimas. Um CPF conhecido sem formatação, ao
+    contrário, é evidência forte de que outra pessoa está na página (o
+    caso "CPF de B sem pontuação ao lado do de A" que deixava o PDF
+    passar como documento só de A). Ordem de primeira ocorrência;
+    transitório -- nunca logado nem devolvido em DTO."""
+    vistos = list(extrair_cpfs_distintos_de_texto(texto_pagina))
+    for candidato in _CPF_SEM_FORMATACAO_RE.findall(texto_pagina or ''):
+        if candidato in indice_cpf_para_colaborador and candidato not in vistos:
+            vistos.append(candidato)
+    return tuple(vistos)
+
+
+def estrategia_por_cpf_colaborador_estrita(
+    indice_cpf_para_colaborador: Mapping[str, Tuple[str, Optional[str]]],
+) -> IdentificadorDePagina:
+    """Variante ESTRITA de `estrategia_por_cpf_colaborador` para gerar
+    documentos derivados que serão ENVIADOS a uma pessoa: a página só
+    entra no grupo de um colaborador se contiver exatamente 1 CPF
+    distinto e ele for desse colaborador.
+
+    - página sem CPF (resumo geral da folha, capa, CPF sem formatação
+      ou quebrado pela extração) -> ENTIDADE_DESCONHECIDA: nunca herda o
+      grupo anterior por carry-forward -- herdar colocaria dados de outra
+      pessoa no PDF de alguém;
+    - página com 2+ CPFs distintos -> ENTIDADE_DESCONHECIDA: nunca vai
+      para o primeiro conhecido. Conta também o CPF SEM formatação de um
+      colaborador conhecido (`cpfs_da_pagina`).
+    Custo aceito: a página de continuação sem CPF de um documento de
+    várias páginas fica fora da parte derivada (vai para
+    `indices_sem_grupo`, contada no evento), em vez de arriscar misturar
+    pessoas."""
+    def identificar(texto_pagina: str) -> IdentificacaoPagina:
+        cpfs_pagina = cpfs_da_pagina(texto_pagina, indice_cpf_para_colaborador)
+        if len(cpfs_pagina) == 1 and cpfs_pagina[0] in indice_cpf_para_colaborador:
+            colaborador_id, nome = indice_cpf_para_colaborador[cpfs_pagina[0]]
+            return IdentificacaoPagina(SituacaoPaginaSeparacao.ENTIDADE_CONHECIDA, colaborador_id, nome)
+        return IdentificacaoPagina(SituacaoPaginaSeparacao.ENTIDADE_DESCONHECIDA)
 
     return identificar

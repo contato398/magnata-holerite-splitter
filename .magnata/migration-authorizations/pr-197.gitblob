@@ -1,0 +1,12 @@
+# Autorização humana específica — PR 197 — 2026-09-29
+# Missão "PRESTAÇÃO -> ESTEIRA DOCUMENTAL INTELIGENTE" (índice J3): confirmada
+# pelo operador em mensagem distinta da que propôs este arquivo, com as
+# linhas abaixo já apresentadas antes da confirmação.
+# Escopo autorizado: só a inclusão desta migration e seu rollback no diff da
+# PR 197 (gate protected_migrations). NÃO autoriza a aplicação da migration
+# em nenhum Postgres real -- isso continua sendo um gate humano separado, a
+# aprovação do ambiente "governance-approval" e qualquer escrita em
+# produção continuam exigindo confirmação própria.
+# Somente migrations novas; os IDs canônicos do Git invalidam qualquer alteração posterior.
+55af5d30c47e2e21828f88405544e50bf6ccdb87  magnata_os/documental/modulo01/migrations/0011_criar_tabela_indice_documental_prestacao.sql
+f762dec379234a40a5bf968cf1a78482189df8f8  magnata_os/documental/modulo01/migrations/0011_criar_tabela_indice_documental_prestacao_rollback.sql
