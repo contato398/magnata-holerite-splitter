@@ -69,6 +69,16 @@ jobs:
           # execução em produção (o adapter em si é duck-typed, sem
           # import de boto3/moto).
           pip install 'moto[s3]'
+          # pytest-cov idem: só mede cobertura, nunca é dependência de
+          # execução em produção. Relatório apenas — ver Gate "Executar a
+          # suíte" abaixo: nenhum --cov-fail-under é usado aqui. O ponto
+          # desta etapa é dar visibilidade sobre o que a suíte NUNCA
+          # exercita (achado da auditoria "Testes, CI e observabilidade",
+          # 2026-10-03: CI verde hoje só prova que os testes que existem
+          # passam, nunca quanto do código eles cobrem) -- não é, ainda,
+          # um gate de bloqueio. Transformar isso num limiar que reprova
+          # o build é decisão separada, deliberadamente não tomada aqui.
+          pip install pytest-cov
 
       - name: Conferir que as dependências de coleta existem
         # Falha cedo e com mensagem clara, em vez de deixar a suíte
@@ -92,8 +102,24 @@ jobs:
 
       - name: Executar a suíte
         # Sem `|| true`, sem `continue-on-error`: qualquer teste vermelho
-        # reprova o job. É o ponto inteiro deste workflow.
-        run: python -m pytest -q --tb=short
+        # reprova o job. É o ponto inteiro deste workflow. `--cov` só
+        # instrumenta e mede -- não tem `--cov-fail-under`, então nunca
+        # reprova o job por cobertura baixa (isso continua decisão
+        # humana futura, não tomada nesta mudança). `|| true` aqui existiria
+        # só para a cobertura nunca mascarar um teste vermelho -- mas não é
+        # necessário: pytest-cov não altera o exit code de falha de teste.
+        run: >
+          python -m pytest -q --tb=short
+          --cov=. --cov-report=term-missing --cov-report=xml:coverage.xml
+
+      - name: Preservar relatório de cobertura
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cobertura-pytest
+          path: coverage.xml
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Resumo
         if: always()
@@ -105,6 +131,22 @@ jobs:
             echo "Há teste falhando — ver o log do passo \`Executar a suíte\`." >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "Se a falha for \`ModuleNotFoundError\`, é dependência de ambiente, não regressão de código: confira \`requirements.txt\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Cobertura (relatório — não é gate de bloqueio)" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f coverage.xml ]; then
+            PCT=$(python - <<'PY'
+          import xml.etree.ElementTree as ET
+          try:
+              root = ET.parse('coverage.xml').getroot()
+              print(f"{float(root.attrib.get('line-rate', 0)) * 100:.1f}")
+          except Exception:
+              print('indisponível')
+          PY
+          )
+            echo "Cobertura de linha agregada: ${PCT}%. Relatório completo (XML) no artifact \`cobertura-pytest\` deste run." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "coverage.xml não foi gerado — ver o passo \`Executar a suíte\`." >> "$GITHUB_STEP_SUMMARY"
           fi
 
   postgres-real:
