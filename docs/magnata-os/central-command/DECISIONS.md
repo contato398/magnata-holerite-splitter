@@ -12,6 +12,16 @@ Legenda: ✅ FUNCIONANDO/CONFIRMADO · 🟡 EM EVOLUÇÃO · ⚠️ PENDENTE ·
 > decisões tomadas nos ~70 PRs mesclados entre 2026-08-24 e o PR #225 —
 > ver `HANDOFF.md` §0-bis e `PENDING.md` PEN-022. Nenhuma decisão nova
 > foi extraída daquele período nesta passada.
+>
+> **Correção, Etapa 17 (2026-10-03):** a ressalva acima ficou
+> desatualizada antes mesmo de ser lida de novo — a reconciliação
+> completa da Etapa 16 (`HANDOFF.md` §0-ter, `RISKS.md` seção "Etapa
+> 16", `PENDING.md` PEN-021/022/023) já cobre o período até o PR #253.
+> Este documento recebeu agora (Etapa 17) as duas decisões que faltavam
+> daquele período — DEC-012 e DEC-013 abaixo — a pedido explícito do
+> coordenador do projeto, como reescrita/complemento pareado com a
+> reescrita de `NEXT_ACTIONS.md`. Nada de DEC-001 a DEC-011 foi
+> alterado ou removido; só foi acrescentado.
 
 ---
 
@@ -186,3 +196,25 @@ Apps Script ou qualquer fonte de e-mail de produção.**
 - **Testada?** Não declarado
 - **Em produção?** Sim, é sobre dado real do Airtable
 - **Substituída?** Sim — pela fundação Magnata OS como um todo (DEC-001)
+
+### DEC-012 — Governança: autonomia técnica por fase passa a cobrir merge/push/PR entre gates (`CLAUDE.md` §9/§12)
+- **Categoria:** decisão de governança/segurança
+- **Data/origem:** 2026-10-03, commit `589f84a` ("docs(governanca): permitir autonomia técnica por fase"), mesclado via PR #248 (merge commit `f63a234`)
+- **Fonte:** `CLAUDE.md` §9/§12 em `main` (texto vigente após o merge — não relido linha a linha nesta etapa; a mudança de texto em si é fato de `git log`, seu conteúdo integral fica para quem for alterar algo em §9/§12 confirmar antes de agir)
+- **Status atual:** ✅ FUNCIONANDO/CONFIRMADO como decisão tomada — Magnata mesclou o PR #248 e, **em mensagem distinta do merge**, confirmou a fase de execução autônoma integral (registrado em memória do projeto, não repetido aqui por não ser um artefato deste repositório). Esta entrada existe para que o fato fique registrado também num artefato do repositório, como `CLAUDE.md` §2 exige para decisão relevante.
+- **Evidência técnica:** `git log --oneline --merges --grep=governanca -i` → `f63a234 Merge pull request #248 from contato398/fix/governanca-autonomia-fase-v1`; commit `589f84a` no histórico de `main`
+- **Implementada?** Sim — é mudança de regra de processo, já em vigor em `main`
+- **Testada?** N/A (regra de governança, não código)
+- **Em produção?** Sim, é a regra vigente de operação a partir desta data
+- **Substituída?** Não
+
+### DEC-013 — Resolução da tensão §9 sobre quem mescla: "Frente A" como dono único de merge/deploy, demais frentes produzem PR verde e param no gate
+- **Categoria:** decisão operacional de coordenação entre frentes paralelas
+- **Data/origem:** 2026-10-03
+- **Fonte:** histórico de relays do coordenador do projeto nesta mesma thread (não é um documento separado do repositório — registrado aqui porque `CLAUDE.md` §2 exige que toda decisão relevante fique em algum artefato do repositório, não só na conversa)
+- **Status atual:** ✅ FUNCIONANDO/CONFIRMADO — antes do PR #248/confirmação de fase, uma instrução anterior do coordenador havia **suspendido** o merge dos PRs #227 e #231 por conflito percebido entre `CLAUDE.md` §9 (nunca mesclar automaticamente) e a instrução de execução paralela autônoma do projeto. Após o merge do PR #248 e a confirmação de Magnata em mensagem distinta (ver DEC-012), essa tensão foi declarada resolvida: dentro da fase confirmada, merge/push/PR técnicos e de baixo risco passam a ser autônomos, mas **concentrados numa única frente** ("Frente A") para evitar merge concorrente/decisão funcional paralela não coordenada (`CLAUDE.md` §12-D). As demais frentes — esta incluída — continuam produzindo PRs verdes, prontos, e **não mesclando elas mesmas**.
+- **Evidência técnica:** PRs #227, #231 e #253 desta mesma thread, todos abertos/mantidos verdes por esta frente e explicitamente não mesclados por ela; `HANDOFF.md` §0-ter já registra essa divisão de papéis.
+- **Implementada?** Sim, como prática corrente desde a confirmação da fase
+- **Testada?** N/A (decisão de processo)
+- **Em produção?** Sim, é a prática vigente
+- **Substituída?** Não — mas é uma decisão de coordenação, não uma regra permanente de `CLAUDE.md`; pode mudar numa próxima fase sem precisar de ADR
