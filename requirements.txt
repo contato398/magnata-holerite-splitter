@@ -1,5 +1,14 @@
 flask==3.0.3
 pdfplumber==0.11.4
+# pypdfium2 e Pillow entram como dependencias transitivas de pdfplumber e
+# nao eram fixadas aqui -- risco RSK-005 (docs/magnata-os/central-command/
+# RISKS.md): renderizam a previa de assinatura que colaboradores usam para
+# assinar, e uma atualizacao silenciosa numa build do Render podia mudar
+# esse resultado sem nenhuma mudanca de codigo deste repositorio disparar
+# o CI. Fixadas na versao que o resolver instala hoje (2026-10) para
+# fechar a lacuna sem forcar uma mudanca de versao nao validada.
+pypdfium2==5.13.0
+pillow==12.3.0
 pypdf==4.3.1
 gunicorn==22.0.0
 requests==2.32.3

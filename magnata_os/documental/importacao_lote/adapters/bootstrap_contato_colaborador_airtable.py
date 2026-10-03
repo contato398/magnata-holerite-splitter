@@ -94,6 +94,53 @@ class ResultadoBootstrapContatoColaborador:
     conflitos: Tuple[ConflitoBootstrapContatoColaborador, ...] = ()
 
 
+@dataclasses.dataclass(frozen=True)
+class ResultadoSimulacaoBootstrapContatoColaborador:
+    """Resumo de uma simulação (dry-run) -- mesma sanitização de
+    `ResultadoBootstrapContatoColaborador` (nenhum telefone em claro),
+    mas produzido SEM nenhuma chamada a `repositorio.criar_ou_confirmar`
+    (só leitura: `buscar_por_colaborador`/`listar_todos`). Pensado para
+    ser o relatório que precede qualquer execução real contra
+    Airtable/Postgres de produção (CLAUDE.md raiz §6/§12-I): contagem de
+    origem e destino, duplicidade na própria origem, inválidos, quantos
+    seriam inserts, quantos ficariam bloqueados por já existirem com
+    telefone diferente (candidatos a UPDATE -- nunca automático, mesma
+    regra de `ConflitoContatoColaborador`), e o comando exato de
+    rollback para a execução real correspondente."""
+
+    total_origem: int
+    total_destino_antes: int
+    duplicados_na_origem: int
+    ignorados_sem_whatsapp: int
+    ignorados_invalidos: int
+    seriam_criados: int
+    ja_existentes_idempotente: int
+    atualizacoes_bloqueadas: Tuple[ConflitoBootstrapContatoColaborador, ...]
+    plano_rollback: str
+
+
+def montar_plano_rollback_bootstrap(origem: str) -> str:
+    """Comando de rollback determinístico para desfazer uma execução
+    real marcada com `origem` -- toda linha escrita por
+    `executar_bootstrap_contato_colaborador_whatsapp` carrega essa
+    `origem` (ver assinatura padrão abaixo), então o DELETE é sempre
+    exato (nunca apaga linha de outra execução/origem). Mesmo texto já
+    documentado manualmente em `scripts/bootstrap_contato_colaborador_
+    whatsapp_cli.py` -- esta função é a única fonte, para o CLI e o
+    relatório de simulação nunca divergirem."""
+    _exigir_texto_local(origem, 'origem')
+    origem_escapada = origem.replace("'", "''")
+    return (
+        "DELETE FROM contato_colaborador_observado "
+        f"WHERE origem = '{origem_escapada}'"
+    )
+
+
+def _exigir_texto_local(valor: str, nome_campo: str) -> None:
+    if not (valor or '').strip():
+        raise ValueError(f'{nome_campo} deve ser texto nao vazio')
+
+
 def _relogio_padrao() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -179,4 +226,86 @@ def executar_bootstrap_contato_colaborador_whatsapp(
         processados=processados, criados=criados, ja_existentes=ja_existentes,
         ignorados_sem_whatsapp=ignorados_sem_whatsapp, ignorados_invalidos=ignorados_invalidos,
         conflitos=tuple(conflitos),
+    )
+
+
+def simular_bootstrap_contato_colaborador_whatsapp(
+    fonte_funcionarios: FonteFuncionariosContatoParaBootstrap,
+    repositorio: RepositorioContatoColaborador,
+    chave_hmac: bytes,
+    origem: str = 'bootstrap_airtable_funcionarios_contato',
+    canal: str = CANAL_WHATSAPP,
+) -> ResultadoSimulacaoBootstrapContatoColaborador:
+    """Dry-run de `executar_bootstrap_contato_colaborador_whatsapp` --
+    MESMA classificação por candidato, só que NUNCA chama
+    `repositorio.criar_ou_confirmar` (nenhuma escrita, em nenhuma
+    hipótese): só `buscar_por_colaborador` e `listar_todos`, ambos
+    leitura. Não precisa de `chave_fernet` nem de `relogio` -- não cifra
+    nem persiste nada, só calcula o `hash_auxiliar` (determinístico, sem
+    nonce) para comparar contra o que já existe.
+
+    Pensado para produzir, ANTES de qualquer execução real contra
+    Airtable/Postgres de produção (CLAUDE.md raiz §6/§12-I), exatamente
+    as contagens exigidas por uma autorização de fase: origem vs.
+    destino, duplicidade na própria origem (mesmo `func_id` duas vezes
+    na mesma leitura -- só a primeira ocorrência é avaliada, mesma
+    disciplina de idempotência de `executar_...`), inválidos, quantos
+    seriam INSERTs (`seriam_criados`), quantos já existem de forma
+    idempotente (`ja_existentes_idempotente`), e quantos ficariam
+    bloqueados como possível UPDATE -- telefone diferente do já
+    persistido, que esta arquitetura nunca sobrescreve automaticamente
+    (`atualizacoes_bloqueadas`, mesma semântica de
+    `ConflitoBootstrapContatoColaborador` -- sempre exige reconciliação
+    humana, nunca é resolvido aqui)."""
+    if not chave_hmac:
+        raise ValueError('chave_hmac nao pode ser vazia')
+
+    candidatos = list(fonte_funcionarios.listar_funcionarios_contato())
+    total_origem = len(candidatos)
+
+    func_ids_vistos: set = set()
+    duplicados_na_origem = 0
+    ignorados_sem_whatsapp = 0
+    ignorados_invalidos = 0
+    seriam_criados = 0
+    ja_existentes_idempotente = 0
+    atualizacoes_bloqueadas: List[ConflitoBootstrapContatoColaborador] = []
+
+    for candidato in candidatos:
+        if candidato.func_id in func_ids_vistos:
+            duplicados_na_origem += 1
+            continue
+        func_ids_vistos.add(candidato.func_id)
+
+        if not candidato.whatsapp_bruto:
+            ignorados_sem_whatsapp += 1
+            continue
+
+        numero_normalizado = normalizar_numero_whatsapp_v1(candidato.whatsapp_bruto)
+        if numero_normalizado is None:
+            ignorados_invalidos += 1
+            continue
+
+        hash_auxiliar = calcular_hash_auxiliar_contato(chave_hmac, numero_normalizado)
+        existente = repositorio.buscar_por_colaborador(candidato.func_id, canal)
+        if existente is None:
+            seriam_criados += 1
+        elif existente.hash_auxiliar == hash_auxiliar:
+            ja_existentes_idempotente += 1
+        else:
+            atualizacoes_bloqueadas.append(ConflitoBootstrapContatoColaborador(
+                func_id_tentativa=candidato.func_id,
+                hash_auxiliar_existente=existente.hash_auxiliar,
+            ))
+
+    return ResultadoSimulacaoBootstrapContatoColaborador(
+        total_origem=total_origem,
+        total_destino_antes=len(repositorio.listar_todos()),
+        duplicados_na_origem=duplicados_na_origem,
+        ignorados_sem_whatsapp=ignorados_sem_whatsapp,
+        ignorados_invalidos=ignorados_invalidos,
+        seriam_criados=seriam_criados,
+        ja_existentes_idempotente=ja_existentes_idempotente,
+        atualizacoes_bloqueadas=tuple(atualizacoes_bloqueadas),
+        plano_rollback=montar_plano_rollback_bootstrap(origem),
     )

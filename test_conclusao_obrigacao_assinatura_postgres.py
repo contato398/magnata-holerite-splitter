@@ -308,6 +308,21 @@ def test_selecao_do_observador_parte_das_obrigacoes_e_nunca_do_tipo_da_acao():
     assert params == ('CONCLUIDO', 'SUCCEEDED', 50)
 
 
+def test_selecao_do_observador_ordena_por_atualizado_em_asc_nunca_desc():
+    # Rotação justa (correção de starvation, lacuna #4 do mapa de
+    # Documentos/Assinatura): com mais obrigações pendentes do que
+    # `limite` simultaneamente, `DESC` sempre serve as mais recentes e
+    # nunca alcança as mais antigas -- exatamente as que mais precisam
+    # de observação. `ASC` garante que a obrigação pendente há mais
+    # tempo seja sempre observada primeiro.
+    conexao = _ConexaoRoteirizada(linhas=[('b' * 64,)])
+    RepositorioConclusaoObrigacaoAssinaturaPostgres(conexao).listar_acoes_para_observacao(limite=50)
+    ((sql, params),) = conexao.executados
+    sql_upper = sql.upper()
+    assert 'ORDER BY A.ATUALIZADO_EM ASC' in sql_upper
+    assert 'ORDER BY A.ATUALIZADO_EM DESC' not in sql_upper
+
+
 def test_selecao_do_observador_faz_rollback_em_falha():
     conexao = _ConexaoRoteirizada(falhar_em='DISTINCT ON')
     with pytest.raises(RuntimeError):

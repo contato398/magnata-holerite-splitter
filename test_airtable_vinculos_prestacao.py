@@ -126,3 +126,31 @@ def test_resolucao_nao_expoe_pii_ou_payload():
         termo not in representacao
         for termo in ("nome", "cpf", "cnpj", "email", "payload", "conteudo_bruto")
     )
+
+
+# ── clientes_atuais_do_posto (missão "SHADOW CLIENTE X POSTO AIRTABLE
+# V1", frente 7) -- snapshot read-only usado só pela comparação shadow
+# em `comparacao_airtable.py`, nunca pelo corredor semântico. ─────────
+
+def test_clientes_atuais_do_posto_com_cliente_unico():
+    leitor = LeitorFake(
+        locais=({"id": "local-1", "fields": {F_LOCAL_CLIENTE: ["cliente-1"]}},)
+    )
+    fonte = FonteVinculosPrestacaoAirtableShadow(leitor)
+    assert fonte.clientes_atuais_do_posto("local-1") == frozenset({"cliente-1"})
+
+
+def test_clientes_atuais_do_posto_sem_vinculo_e_vazio():
+    leitor = LeitorFake(locais=({"id": "local-1", "fields": {F_LOCAL_CLIENTE: []}},))
+    fonte = FonteVinculosPrestacaoAirtableShadow(leitor)
+    assert fonte.clientes_atuais_do_posto("local-1") == frozenset()
+
+
+def test_clientes_atuais_do_posto_com_dado_sujo_devolve_os_dois():
+    leitor = LeitorFake(
+        locais=(
+            {"id": "local-1", "fields": {F_LOCAL_CLIENTE: ["cliente-a", "cliente-b"]}},
+        )
+    )
+    fonte = FonteVinculosPrestacaoAirtableShadow(leitor)
+    assert fonte.clientes_atuais_do_posto("local-1") == frozenset({"cliente-a", "cliente-b"})
