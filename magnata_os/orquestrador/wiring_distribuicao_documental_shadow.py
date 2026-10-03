@@ -268,21 +268,40 @@ def _extrair_token_do_link(link: str) -> str:
     bloqueia a operação inteira em vez de produzir um token errado
     silenciosamente.
 
-    Limite conhecido e aceito nesta correção (não resolvido aqui,
-    registrado como risco residual): esta validação verifica só o
-    FORMATO do último segmento, não a rota/domínio que o precede -- um
-    link de rota arbitrária cujo último segmento aparente ser um token
-    válido passaria. Fechar essa lacuna por completo exigiria expor o
-    token explicitamente em `ObrigacaoAssinatura`/`PortaObrigacaoAssinatura`
-    (o adapter já tem o valor cru antes de montar `link`), em vez de
-    inferi-lo por parsing reverso de URL -- mudança de contrato maior,
-    fora do escopo desta correção pontual."""
+    FALLBACK apenas -- ver `_resolver_token_obrigacao`, que é quem
+    `_montar_ramo_com_assinatura` chama de fato. Este parsing reverso só
+    roda quando o adapter de `PortaObrigacaoAssinatura` não consegue
+    fornecer `ObrigacaoAssinatura.token` explicitamente (o caso do
+    adapter legado hoje, para a obrigação já existente consultada via
+    `/assinatura/consulta`, antes de `pacote-autorizacao-app-py.md` #1
+    ser aplicado em `app.py` -- gate humano, não feito aqui).
+
+    Limite conhecido e aceito desta função (por isso ela é só fallback,
+    nunca mais o caminho principal): a validação verifica só o FORMATO
+    do último segmento, não a rota/domínio que o precede -- um link de
+    rota arbitrária cujo último segmento aparente ser um token válido
+    passaria. `_resolver_token_obrigacao` fecha essa lacuna preferindo
+    sempre o token explícito quando disponível."""
     token = (link or '').rsplit('/', 1)[-1]
     if not _RE_TOKEN_RESERVADO.match(token):
         raise LinkObrigacaoAssinaturaMalformado(
             f'link de obrigação de assinatura não contém token no formato esperado: {link!r}'
         )
     return token
+
+
+def _resolver_token_obrigacao(obrigacao: ObrigacaoAssinatura) -> str:
+    """Resolve o token de uma obrigação já existente para montar o link
+    relativo embutido na mensagem (`/assinatura/{token}`).
+
+    Prefere sempre `obrigacao.token`, quando o adapter o fornece
+    explicitamente -- fecha a lacuna de `_extrair_token_do_link` (link
+    inteiro nunca precisa ser reinterpretado por parsing reverso de
+    URL). Só cai para `_extrair_token_do_link(obrigacao.link)` quando o
+    adapter concreto ainda não sabe fornecer o token (compatibilidade
+    com o motor legado atual, até `pacote-autorizacao-app-py.md` #1 ser
+    aplicado)."""
+    return obrigacao.token or _extrair_token_do_link(obrigacao.link)
 
 
 class EventoCanonicoNaoAguardaGate(DistribuicaoDocumentalError):
@@ -358,7 +377,6 @@ def registrar_evento_canonico_ordem_distribuicao_documental_shadow(
 
 _POLITICAS_V1_PERMITIDAS: dict = {
     (1, 'UNITARIO'): 'separado',
-    (2, 'AGRUPADO_1_LINK'): 'separado',
 }
 
 POLITICA_AGRUPAMENTO_DOCUMENTOS_SEPARADOS = 'DOCUMENTOS_SEPARADOS'
@@ -388,14 +406,26 @@ def _validar_e_mapear_politica_agrupamento(ordem: OrdemDistribuicaoDocumental) -
     motor de agrupamento novo.
 
     `DOCUMENTOS_SEPARADOS` (Gate J1b) aceita qualquer N >= 1 sem
-    assinatura. Com assinatura continua valendo só a tabela V1 (o motor
-    legado de assinatura agrupa no máximo 2 sob 1 link) -- a modalidade
-    assinatura é decidida pelo preset, nunca pelo tipo documental."""
+    assinatura. `AGRUPADO_1_LINK` (Incremento A1) aceita qualquer N >= 1
+    COM assinatura -- por CARDINALIDADE, nunca por `tipo_documento`
+    (quantos documentos o motor legado de fato consegue agrupar sob 1
+    link é decisão exclusiva do adapter de compatibilidade
+    `adapters/obrigacao_assinatura_legado_http.py`, nunca deste núcleo;
+    nesta V1 o adapter real segue aceitando só N=1 genérico ou N=2 sob
+    HOLERITE_FOLHA_PONTO -- generalizar o adapter/app.py é o Incremento
+    A2, fora de escopo aqui)."""
     if ordem.politica_agrupamento == POLITICA_AGRUPAMENTO_DOCUMENTOS_SEPARADOS:
         if ordem.exigir_assinatura:
             raise PoliticaAgrupamentoNaoSuportada(
                 'DOCUMENTOS_SEPARADOS não suporta exigir_assinatura=True nesta V1 -- '
-                'assinatura de N documentos usa as políticas da tabela V1'
+                'assinatura de N documentos usa AGRUPADO_1_LINK'
+            )
+        return 'separado'
+    if ordem.politica_agrupamento == 'AGRUPADO_1_LINK':
+        if not ordem.exigir_assinatura:
+            raise PoliticaAgrupamentoNaoSuportada(
+                'AGRUPADO_1_LINK exige exigir_assinatura=True -- '
+                '1 link só faz sentido para o fluxo de assinatura'
             )
         return 'separado'
     chave = (len(ordem.documentos), ordem.politica_agrupamento)
@@ -403,11 +433,6 @@ def _validar_e_mapear_politica_agrupamento(ordem: OrdemDistribuicaoDocumental) -
         raise PoliticaAgrupamentoNaoSuportada(
             f'{len(ordem.documentos)} documento(s) com politica_agrupamento='
             f'{ordem.politica_agrupamento!r} não é uma combinação suportada nesta V1'
-        )
-    if chave == (2, 'AGRUPADO_1_LINK') and not ordem.exigir_assinatura:
-        raise PoliticaAgrupamentoNaoSuportada(
-            'AGRUPADO_1_LINK com 2 documentos exige exigir_assinatura=True -- '
-            '1 link só faz sentido para o fluxo de assinatura'
         )
     return _POLITICAS_V1_PERMITIDAS[chave]
 
@@ -601,7 +626,24 @@ def _montar_ramo_com_assinatura(
     V1, mas fail-closed mesmo assim), a 2ª tentativa refaz a consulta
     (que agora encontra a obrigação do vencedor), reconstrói o preview/
     autorização com o LINK REAL do vencedor, e nunca assume que o link
-    especulativo desta chamada é o correto."""
+    especulativo desta chamada é o correto.
+
+    Incremento A1: o preview carrega um MANIFESTO EXATO (`itens_
+    manifesto`) com `documento_id`/hash/posição de TODOS os N
+    documentos -- muda qualquer um (adicionar, remover, substituir,
+    trocar hash ou ordem) muda `preview_id`, invalidando qualquer
+    autorização anterior (mesmo mecanismo genérico já usado por
+    `itens` no ramo sem assinatura, nunca um hash paralelo)."""
+    nomes = [documento.nome_original for documento, _ in documentos_resolvidos]
+    if len(set(nomes)) != len(nomes):
+        raise NomeDocumentoDuplicadoNaOrdem(
+            'documentos da mesma Ordem precisam de nome_original distinto'
+        )
+    itens_manifesto = tuple(
+        ItemComunicacao(tipo='documento', nome=documento.nome_original, conteudo_sha256=documento.hash_sha256)
+        for documento, _ in documentos_resolvidos
+    )
+
     arquivo_record_ids = tuple(
         materializador.materializar(
             documento=documento, conteudo_bytes=conteudo_bytes, funcionario_id=ordem.funcionario_id,
@@ -616,7 +658,7 @@ def _montar_ramo_com_assinatura(
 
         if obrigacao_existente is not None:
             token_pendente = None
-            link = f'/assinatura/{_extrair_token_do_link(obrigacao_existente.link)}'
+            link = f'/assinatura/{_resolver_token_obrigacao(obrigacao_existente)}'
         else:
             token_pendente = gerar_token_reservado_csprng()  # CSPRNG, só em memória -- nenhuma escrita ainda
             link = f'/assinatura/{token_pendente}'
@@ -625,6 +667,7 @@ def _montar_ramo_com_assinatura(
         preview = montar_preview_comunicacao(
             destinatarios=(ordem.destinatario,), texto=texto_exato, itens=(),
             assinatura=True, comprovante=ordem.exigir_comprovante, preferencia=preferencia,
+            itens_manifesto=itens_manifesto,
         )
 
         autorizacao = autorizar_preview_assinatura_shadow(  # AUTORIZAÇÃO DO PREVIEW EXATO -- sempre antes da obrigação

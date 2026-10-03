@@ -102,6 +102,22 @@ Legenda: ⚠️ PENDENTE (aberta, ação clara) · 🔍 PRECISA SER VALIDADO
   nenhuma fonte real (`main` = `a18d4b2`, confirmado por busca de
   import).
 
+## Pendência nova — catch-up Etapa 15, 2026-10-03
+
+- **PEN-021** 🔍 **Postgres e cron de produção, não confirmados.** Ver
+  `HANDOFF.md` §0-bis e `RISKS.md` RSK-011 (seção "Etapa 15"): não se
+  sabe, por esta sessão, se `magnata-os-db` está de fato provisionado no
+  Render, se a migration do cadastro de colaborador persistente (PR
+  #215) foi aplicada em banco real, ou se algum cron do Orquestrador
+  roda de fato no Render. Nenhuma ferramenta desta sessão alcança o
+  painel do Render para confirmar — decide quem tiver acesso a ele.
+- **PEN-022** ⚠️ Este documento, `NEXT_ACTIONS.md` e `DECISIONS.md`
+  continuam descrevendo o estado de 2026-08-21/22 e não foram
+  reconciliados com os ~70 PRs mesclados entre 2026-08-24 e 2026-10-03
+  (PR #225). `HANDOFF.md` §0-bis e `RISKS.md` (seção "Etapa 15") foram
+  atualizados nesta passada; estes três, não — registrado como lacuna
+  conhecida, não escondida.
+
 ## Observação sobre confiabilidade destes números
 
 Praticamente toda pendência quantitativa acima (contagens de

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import FrozenSet
+
 from magnata_os.classificacao.contratos import (
     ConfiancaResolucao,
     DimensaoResolucao,
@@ -48,6 +50,31 @@ class FonteVinculosPrestacaoAirtableShadow:
                 "origem deve ser COLABORADOR, FUNCIONARIO ou UNIDADE_POSTO"
             )
         return self._resolver_por_locais(origem, locais)
+
+    def clientes_atuais_do_posto(self, posto_id: str) -> FrozenSet[str]:
+        """Snapshot ATUAL (sem vigência histórica -- Airtable só expõe o
+        link corrente) dos Clientes vinculados a um posto/local, via o
+        MESMO link Local->Cliente já lido por `resolver_clientes`
+        (`_resolver_por_locais`) -- nenhuma segunda leitura, nenhum campo
+        novo criado para esta missão (missão "SHADOW CLIENTE X POSTO
+        AIRTABLE V1", frente 7 de redução de dependência do Airtable).
+
+        Devolve um `FrozenSet` (zero, um ou, em dado sujo, mais de um
+        cliente -- a invariante de "1 cliente por posto" é garantida só
+        no lado Postgres, `vigencia_cliente_por_posto`; o Airtable pode
+        estar desatualizado ou ambíguo, e isso é precisamente o que a
+        comparação shadow em `comparacao_airtable.py` existe para
+        detectar, nunca corrigir). Usado só pela comparação diagnóstica
+        -- nunca pelo corredor semântico, que continua usando
+        `resolver_clientes` com a disciplina de vigência de competência
+        comprovada."""
+        resolucao = self._resolver_por_locais(
+            ReferenciaCanonica("UNIDADE_POSTO", posto_id), (posto_id,)
+        )
+        return frozenset(
+            referencia.entidade_id
+            for referencia in resolucao.valores_confirmados + resolucao.candidatos
+        )
 
     def _locais_do_funcionario(self, funcionario_id: str) -> tuple[str, ...]:
         registros = self._leitor.listar_registros(

@@ -17,6 +17,7 @@ from __future__ import annotations
 import requests
 
 from ..contratos import CandidatoCliente, CandidatoFuncionario
+from .bootstrap_contato_colaborador_airtable import CandidatoFuncionarioContato
 
 BASE_ID = 'appaCpIVj7Q97VhFy'
 TABLE_FUNC = 'tblNd8G66kjwos3eP'
@@ -91,6 +92,23 @@ class LeitorAirtableSomenteLeitura:
                 func_id=r['id'],
                 cpf=r.get('fields', {}).get('CPF'),
                 nome_normalizado=normalizar_nome(r.get('fields', {}).get('Nome Completo', '')),
+            )
+            for r in registros
+        ]
+
+    def listar_funcionarios_contato(self) -> list[CandidatoFuncionarioContato]:
+        """Satisfaz `FonteFuncionariosContatoParaBootstrap`
+        (bootstrap_contato_colaborador_airtable.py) por duck-typing --
+        único método deste adapter que lê o campo `WhatsApp` de
+        `Funcionários`. `whatsapp_bruto` sai exatamente como o Airtable
+        devolve (sem normalizar/validar aqui -- isso é
+        `contato_colaborador.normalizar_numero_whatsapp_v1`, chamado só
+        dentro do bootstrap, nunca neste adapter de leitura)."""
+        registros = self._listar_todos(TABLE_FUNC, ['WhatsApp'])
+        return [
+            CandidatoFuncionarioContato(
+                func_id=r['id'],
+                whatsapp_bruto=r.get('fields', {}).get('WhatsApp'),
             )
             for r in registros
         ]

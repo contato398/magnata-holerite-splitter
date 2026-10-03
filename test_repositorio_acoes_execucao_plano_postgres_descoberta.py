@@ -64,9 +64,27 @@ def test_listar_pares_elegiveis_e_apenas_select_sem_claim():
     assert pares == (('evento-1', 'preview-1'), ('evento-2', 'preview-9'))
     sql, _ = conexao.executados[0]
     assert sql.strip().upper().startswith('SELECT')
-    assert 'DISTINCT' in sql.upper()
     assert conexao.commits == 0
     assert conexao.rollbacks == 0
+
+
+def test_listar_pares_elegiveis_ordena_por_par_mais_antigo_nunca_por_id():
+    # Rotação justa (correção de starvation): a ordenação precisa vir
+    # do par mais antigo (MIN(criado_em)), nunca de event_id/preview_id
+    # -- do contrário, com mais pares elegíveis do que `limite`, os
+    # mesmos pares "menores" por ordenação textual venceriam em todo
+    # ciclo, mesmo sendo mais novos que pares de id "maior" deixados de
+    # fora indefinidamente.
+    conexao = _Conexao(linhas=[])
+    repo = RepositorioAcoesExecucaoPlanoPostgres(conexao)
+    repo.listar_pares_elegiveis(instante=AGORA)
+    sql, _ = conexao.executados[0]
+    sql_upper = sql.upper()
+    assert 'GROUP BY' in sql_upper
+    assert 'ORDER BY MIN(CANDIDATA.CRIADO_EM)' in sql_upper
+    # Nunca mais ordenado por event_id/preview_id -- isso é exatamente
+    # o bug de starvation que esta mudança corrige.
+    assert 'ORDER BY CANDIDATA.EVENT_ID' not in sql_upper
 
 
 def test_listar_pares_elegiveis_respeita_limite():

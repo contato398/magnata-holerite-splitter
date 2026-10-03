@@ -72,6 +72,15 @@ class PreviewComunicacao:
     alternativa_mais_compacta: bool
     alerta_fragmentacao: bool
     preview_id: str
+    itens_manifesto: Tuple[ItemComunicacao, ...] = ()
+    """Documentos vinculados à identidade do preview (hash/posição) sem
+    virar passo de composição/ação própria -- usado pelo ramo COM
+    assinatura (1..N documentos sob 1 link só, Incremento A1): o
+    operador autoriza o conjunto exato pelo manifesto, mas o Plano
+    continua gerando só a ação de texto+link (os documentos em si
+    nunca são anexados como mídia aqui, ficam no legado de assinatura).
+    Vazio por padrão -- nunca afeta `composicao_solicitada`/
+    `composicao_otimizada` nem os chamadores existentes."""
 
 
 _TIPOS_COM_LEGENDA = {"video", "documento", "imagem"}
@@ -153,6 +162,7 @@ def montar_preview_comunicacao(
     assinatura: Optional[bool],
     comprovante: Optional[bool],
     preferencia: PreferenciaComposicao = "otimizar",
+    itens_manifesto: Sequence[ItemComunicacao] = (),
 ) -> PreviewComunicacao:
     """Monta a prévia obrigatória de uma campanha sem realizar I/O.
 
@@ -160,6 +170,16 @@ def montar_preview_comunicacao(
     compatível (vídeo/documento/imagem), reduzindo uma notificação quando
     possível. ``preferencia='separado'`` preserva a escolha do operador, mas a
     prévia continua exibindo a alternativa compacta.
+
+    ``itens_manifesto`` (Incremento A1): documentos que participam da
+    IDENTIDADE do preview (hash + posição), mas nunca de
+    ``composicao_solicitada``/``composicao_otimizada`` -- nunca geram passo
+    de composição nem exigem ``ConteudoItem`` correspondente em
+    ``montar_plano_disparo``. Existe para o ramo com assinatura (1..N
+    documentos sob 1 link): o humano autoriza o conjunto exato de
+    documentos pelo manifesto, mas o Plano continua produzindo só a ação
+    de texto+link. Vazio por padrão -- comportamento de todo chamador
+    existente é idêntico ao de antes desta extensão.
     """
     _validar_opcoes_explicitas(assinatura, comprovante)
     if preferencia not in ("otimizar", "separado"):
@@ -169,6 +189,7 @@ def montar_preview_comunicacao(
     texto_limpo = (texto or "").strip()
     texto_sha256 = hash_texto_comunicacao(texto_limpo)
     itens_tupla = tuple(itens)
+    itens_manifesto_tupla = tuple(itens_manifesto)
     if not texto_limpo and not itens_tupla:
         raise PoliticaComunicacaoError("a campanha precisa ter texto ou ao menos um item")
 
@@ -181,6 +202,7 @@ def montar_preview_comunicacao(
         "destinatarios": dests,
         "texto_sha256": texto_sha256,
         "itens": [(i.tipo, i.nome, i.conteudo_sha256) for i in itens_tupla],
+        "itens_manifesto": [(i.tipo, i.nome, i.conteudo_sha256) for i in itens_manifesto_tupla],
         "assinatura": assinatura,
         "comprovante": comprovante,
         "preferencia": preferencia,
@@ -207,6 +229,7 @@ def montar_preview_comunicacao(
         alternativa_mais_compacta=alternativa,
         alerta_fragmentacao=por_pessoa >= 3,
         preview_id=preview_id,
+        itens_manifesto=itens_manifesto_tupla,
     )
 
 

@@ -162,7 +162,14 @@ class RepositorioConclusaoObrigacaoAssinaturaPostgres:
         todas as ações SUCCEEDED -- ação sem obrigação nunca é
         selecionada e, portanto, nunca gera consulta ao adapter legado.
         Nenhum critério por tipo físico da ação, tipo documental ou
-        conteúdo."""
+        conteúdo.
+
+        Rotação justa (correção de starvation): ordenado por
+        `atualizado_em ASC` -- obrigação pendente há mais tempo primeiro
+        -- nunca por `DESC`. Com mais de `limite` obrigações não
+        terminais simultâneas, `DESC` sempre serve as mais recentes e
+        nunca alcança as mais antigas, que são exatamente as que mais
+        precisam de observação."""
         try:
             return self._listar_acoes_para_observacao(limite)
         except Exception:
@@ -181,7 +188,7 @@ class RepositorioConclusaoObrigacaoAssinaturaPostgres:
                       JOIN {_TABELA_ACOES} AS a ON a.acao_execucao_id = ultimo.acao_execucao_id
                      WHERE ultimo.estado <> %s
                        AND a.estado = %s
-                     ORDER BY a.atualizado_em DESC, a.acao_execucao_id
+                     ORDER BY a.atualizado_em ASC, a.acao_execucao_id
                      LIMIT %s''',
                 (ESTADO_TERMINAL_OBRIGACAO, 'SUCCEEDED', limite),
             )

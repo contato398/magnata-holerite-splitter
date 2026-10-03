@@ -266,6 +266,25 @@ class RepositorioAlocacaoPostgres:
             for linha in linhas
         )
 
+    def cliente_vigente_do_posto(self, posto_id: str, data_referencia: date) -> Optional[str]:
+        """Cliente vigente de UM posto numa data (missão "SHADOW CLIENTE
+        X POSTO AIRTABLE V1", frente 7). `LIMIT 1` é seguro aqui -- nunca
+        um atalho que esconde ambiguidade -- porque a invariante de
+        "nenhum posto em 2 clientes no mesmo período" já é imposta PELO
+        BANCO (constraint `EXCLUDE` da migration 0002); no máximo 1 linha
+        pode casar com o filtro de vigência abaixo. `None` significa
+        lacuna/relação ainda não comprovada (`vigencia_cliente_por_posto`
+        não tem linha para este posto nesta data) -- nunca inferido."""
+        with self._conexao.cursor() as cur:
+            cur.execute(
+                'SELECT cliente_id FROM vigencia_cliente_por_posto '
+                'WHERE posto_id = %s AND vigente_de <= %s '
+                'AND (vigente_ate IS NULL OR vigente_ate >= %s) LIMIT 1',
+                (posto_id, data_referencia, data_referencia),
+            )
+            row = cur.fetchone()
+        return row[0] if row is not None else None
+
     # ── Contrato FonteUnidadePostoPrestacao (já existente, nunca
     # duplicado) ──────────────────────────────────────────────────────
 
