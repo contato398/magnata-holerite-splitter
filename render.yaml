@@ -3,11 +3,34 @@ services:
     name: magnata-holerite-splitter
     runtime: python
     buildCommand: pip install -r requirements.txt
-    # Mantido IGUAL ao Procfile de propósito: se os dois divergirem, o
-    # ajuste de capacidade some silenciosamente dependendo de como o
-    # serviço foi criado no Render (Blueprint usa este startCommand;
-    # serviço criado à mão usa o Procfile ou o Start Command do painel).
-    startCommand: gunicorn app:app --workers 2 --timeout 300 --max-requests 400 --max-requests-jitter 40 --bind 0.0.0.0:$PORT --log-level info
+    # DIVERGÊNCIA CONFIRMADA em 2026-10-03 via API do Render
+    # (`GET /v1/services/srv-d8iqj3uk1jcs73ap1np0`): o serviço real foi
+    # criado à mão (sem Blueprint) e seu Start Command no painel é
+    # `--workers 1 --max-requests 50` (sem `--max-requests-jitter`) --
+    # exatamente o risco que o comentário anterior deste arquivo já
+    # alertava ("serviço criado à mão usa o Procfile ou o Start Command
+    # do painel", não este arquivo). `render.yaml` e `Procfile` nunca
+    # foram aplicados a este serviço. Este valor abaixo foi corrigido
+    # para refletir a configuração REAL em produção -- não é uma
+    # recomendação de capacidade, é a verdade observada. Não sei se
+    # `--workers 1` foi uma escolha deliberada (ex.: limite de RAM do
+    # plano `starter`) ou um valor residual de outra fase -- decisão de
+    # capacidade de produção é gate humano (CLAUDE.md §12-I), não
+    # alterada aqui. Se um Blueprint for rodado a partir deste arquivo no
+    # futuro, ele VAI mudar o serviço real para este valor -- confirmar
+    # a decisão de capacidade antes disso.
+    startCommand: gunicorn app:app --workers 1 --timeout 300 --max-requests 50 --bind 0.0.0.0:$PORT --log-level info
+    # healthCheckPath DECLARADO aqui mas SEM EFEITO sobre o serviço real
+    # ainda (nenhum Blueprint foi aplicado -- ver nota em `databases`
+    # abaixo). Confirmado em 2026-10-03 via API que o serviço real está
+    # com `healthCheckPath` vazio (Render não monitora `/health` para
+    # decidir saúde/substituição de instância). Nota já registrada em
+    # memória do projeto: `/health` hoje sempre responde 200 mesmo com
+    # Airtable fora do ar -- aplicar este health check ao serviço real
+    # antes de corrigir esse comportamento daria falso positivo de
+    # saúde, não falso negativo, então declarar o caminho aqui é seguro,
+    # mas ativá-lo de fato no painel é uma decisão separada.
+    healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
@@ -28,6 +51,31 @@ services:
         fromDatabase:
           name: magnata-os-db
           property: connectionString
+
+  # DESCOBERTO em 2026-10-03 (Frente E -- infra e operação 24x7), NUNCA
+  # declarado em `render.yaml` antes: o worker Celery usa um Redis real
+  # já provisionado em produção como broker/result backend
+  # (`redis://red-d9f2ttrbc2fs7390k2q0:...`, visto nos logs de boot do
+  # worker e confirmado via API -- nome `magnata-pdf-queue`,
+  # `plan: free`, `persistenceMode: off`). `REDIS_URL`/`CELERY_BROKER_URL`
+  # são lidas de variável de ambiente em `celery_app.py`, nunca
+  # hardcoded -- mas o recurso em si nunca apareceu em nenhum mapa do
+  # projeto nem neste arquivo, então nenhum Blueprint o enxergava. Bloco
+  # abaixo é só DOCUMENTAÇÃO da infra real (nenhum Blueprint foi
+  # aplicado a partir deste arquivo -- ver nota em `databases`); não
+  # provisiona nada novo. Riscos reais que isso deixou invisível até
+  # agora, sinalizados para decisão humana, não corrigidos aqui:
+  # (1) plano `free` do Redis no Render tem janela de expiração e pode
+  # ser recriado/apagado automaticamente por inatividade -- se isso
+  # ocorrer, o worker perde o broker sem aviso prévio no código; (2)
+  # `persistenceMode: off` -- qualquer tarefa Celery enfileirada e ainda
+  # não processada é perdida se o Redis reiniciar (aceitável só se o
+  # fluxo de PDF for idempotente e reenfileirável por fora, o que não
+  # foi verificado nesta investigação).
+  - type: redis
+    name: magnata-pdf-queue
+    plan: free
+    ipAllowList: []
 
   # Serviço DECLARATIVO, NÃO provisionado nesta fase -- nenhum Blueprint
   # foi rodado com este bloco. Cron Job dedicado (nunca Celery Beat: o
