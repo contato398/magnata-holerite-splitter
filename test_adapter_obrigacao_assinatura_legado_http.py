@@ -150,10 +150,10 @@ def test_consultar_por_correlacao_mapeia_hash_token_quando_o_legado_ja_expoe():
     mudança neste arquivo."""
     corpo = {
         'existe': True, 'status': 'Pendente', 'assinatura_id': 'rec1',
-        'link': 'https://x/assinatura/tok-real', 'comprovante_existe': False,
-        'evidencia_hash': None, 'hash_token': 'tok-real',
+        'link': 'https://x/assinatura/dummy', 'comprovante_existe': False,
+        'evidencia_hash': None, 'hash_token': 'dummy',
     }
     with patch('magnata_os.orquestrador.adapters.obrigacao_assinatura_legado_http.requests.get',
                return_value=_resp(corpo=corpo)):
         resultado = ADAPTER.consultar_por_correlacao(acao_execucao_id='a' * 64)
-    assert resultado.token == 'tok-real'
+    assert resultado.token == 'dummy'
