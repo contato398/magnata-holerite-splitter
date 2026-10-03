@@ -48,12 +48,27 @@ escrita real):
 Como desfazer uma execução: `DELETE FROM contato_colaborador_observado
 WHERE origem = 'bootstrap_airtable_funcionarios_contato'` (toda linha
 desta execução tem essa `origem` -- ver assinatura padrão de
-`executar_bootstrap_contato_colaborador_whatsapp`), ou a migration de
+`executar_bootstrap_contato_colaborador_whatsapp`; o comando exato é
+produzido por `montar_plano_rollback_bootstrap`, única fonte, para
+nunca divergir do texto impresso pelo `--dry-run`), ou a migration de
 rollback já existente (`0004_criar_contato_colaborador_observado_
 rollback.sql`) para desfazer o schema inteiro.
+
+**`--dry-run`**: produz o relatório de reconciliação (contagem de
+origem, de destino antes, duplicidade na própria origem, inválidos,
+quantos seriam criados, quantos já existem de forma idempotente,
+quantos ficariam bloqueados como possível atualização -- nunca
+automática -- e o comando de rollback) SEM nenhuma escrita --
+`simular_bootstrap_contato_colaborador_whatsapp` nunca chama
+`criar_ou_confirmar`. Ainda abre conexões reais de leitura
+(Airtable GET + Postgres SELECT) para que as contagens reflitam o
+estado real -- só a escrita é que nunca acontece neste modo. Pensado
+para ser o que se produz e se mostra ANTES de qualquer autorização de
+fase (CLAUDE.md raiz §6, requisitos a-f) para rodar a escrita real.
 """
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import json
 import os
@@ -75,6 +90,7 @@ from magnata_os.documental.importacao_lote.adapters.airtable_leitura import (  #
 )
 from magnata_os.documental.importacao_lote.adapters.bootstrap_contato_colaborador_airtable import (  # noqa: E402
     executar_bootstrap_contato_colaborador_whatsapp,
+    simular_bootstrap_contato_colaborador_whatsapp,
 )
 from magnata_os.documental.modulo01.adapters.conexao import (  # noqa: E402
     ConfiguracaoBancoAusente,
@@ -92,12 +108,27 @@ def _compor_leitor_airtable_a_partir_do_ambiente() -> LeitorAirtableSomenteLeitu
     return LeitorAirtableSomenteLeitura(api_key)
 
 
+def _compor_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            'Bootstrap do Contato Canônico de Colaborador (WhatsApp) a partir do '
+            'Airtable. Toda credencial vem do ambiente -- este script não aceita '
+            'nenhum argumento além de --dry-run.'
+        ),
+    )
+    parser.add_argument(
+        '--dry-run', action='store_true',
+        help=(
+            'Produz o relatório de reconciliação (origem/destino, duplicidade, '
+            'inválidos, inserts, atualizações bloqueadas, rollback) sem nenhuma '
+            'escrita real.'
+        ),
+    )
+    return parser
+
+
 def main(argv=None) -> int:
-    # `argv` aceito só por simetria com os outros CLIs deste pacote --
-    # este script não tem nenhum argumento posicional/opcional: toda a
-    # configuração vem do ambiente, nunca de flag (mesma disciplina de
-    # `ciclo_producao_v1._compor_*_a_partir_do_ambiente`).
-    del argv
+    args = _compor_parser().parse_args(argv)
 
     try:
         configuracao_segredo = carregar_configuracao_segredo_contato()
@@ -115,18 +146,27 @@ def main(argv=None) -> int:
 
     try:
         repositorio = RepositorioContatoColaboradorPostgres(conexao)
-        resultado = executar_bootstrap_contato_colaborador_whatsapp(
-            fonte_funcionarios=leitor,
-            repositorio=repositorio,
-            chave_fernet=chave_fernet,
-            chave_hmac=chave_hmac,
-            versao_chave=versao_chave,
-        )
+        if args.dry_run:
+            resultado = simular_bootstrap_contato_colaborador_whatsapp(
+                fonte_funcionarios=leitor,
+                repositorio=repositorio,
+                chave_hmac=chave_hmac,
+            )
+            bloqueado = bool(resultado.atualizacoes_bloqueadas)
+        else:
+            resultado = executar_bootstrap_contato_colaborador_whatsapp(
+                fonte_funcionarios=leitor,
+                repositorio=repositorio,
+                chave_fernet=chave_fernet,
+                chave_hmac=chave_hmac,
+                versao_chave=versao_chave,
+            )
+            bloqueado = bool(resultado.conflitos)
     finally:
         conexao.close()
 
     print(json.dumps(dataclasses.asdict(resultado), ensure_ascii=False, indent=2, sort_keys=True))
-    return 0 if not resultado.conflitos else 1
+    return 0 if not bloqueado else 1
 
 
 if __name__ == '__main__':

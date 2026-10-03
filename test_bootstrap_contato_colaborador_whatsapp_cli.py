@@ -194,6 +194,100 @@ def test_conflito_de_telefone_ja_registrado_retorna_codigo_1(monkeypatch, capsys
     assert 'recFUNC1' in saida
 
 
+# ---------------------------------------------------------------------
+# --dry-run -- nunca escreve, mesmo com o mesmo repositório real
+# ---------------------------------------------------------------------
+
+def test_dry_run_produz_relatorio_sem_chamar_criar_ou_confirmar(monkeypatch, capsys):
+    _preparar_ambiente_completo(monkeypatch)
+    repo = RepositorioContatoColaboradorEmMemoria()
+    conexao = _ConexaoFake()
+    leitor = _LeitorFake(
+        CandidatoFuncionarioContato(func_id='recFUNC1', whatsapp_bruto='(11) 99999-8888'),
+        CandidatoFuncionarioContato(func_id='recFUNC2', whatsapp_bruto=None),
+    )
+
+    with (
+        patch.object(cli, 'abrir_conexao', return_value=conexao),
+        patch.object(cli, '_compor_leitor_airtable_a_partir_do_ambiente', return_value=leitor),
+        patch.object(cli, 'RepositorioContatoColaboradorPostgres', return_value=repo),
+        patch.object(repo, 'criar_ou_confirmar') as criar_ou_confirmar,
+    ):
+        codigo = cli.main(['--dry-run'])
+
+    saida = capsys.readouterr().out
+    assert codigo == 0
+    assert '"total_origem": 2' in saida
+    assert '"seriam_criados": 1' in saida
+    assert '"ignorados_sem_whatsapp": 1' in saida
+    assert '"total_destino_antes": 0' in saida
+    assert '"plano_rollback"' in saida
+    assert 'DELETE FROM contato_colaborador_observado' in saida
+    criar_ou_confirmar.assert_not_called()
+    # Nunca o telefone em claro nem o número normalizado na saída.
+    assert '99999-8888' not in saida
+    assert '5511999998888' not in saida
+    assert conexao.fechada is True
+    assert repo.listar_todos() == []
+
+
+def test_dry_run_reporta_atualizacao_bloqueada_com_codigo_1_sem_escrever(monkeypatch, capsys):
+    _preparar_ambiente_completo(monkeypatch)
+    repo = RepositorioContatoColaboradorEmMemoria()
+    conexao = _ConexaoFake()
+
+    chave_fernet = _derivar_chave_fernet_do_ambiente()
+    chave_hmac = _VARS_SEGREDO['MAGNATA_CONTATO_COLABORADOR_HMAC_CHAVE_V1'].encode('utf-8')
+    from datetime import datetime, timezone
+
+    from magnata_os.documental.alocacao.contato_colaborador import (
+        RegistroContatoColaborador,
+        calcular_hash_auxiliar_contato,
+        cifrar_valor_contato,
+    )
+
+    agora = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    repo.criar_ou_confirmar(RegistroContatoColaborador(
+        colaborador_id='recFUNC1', canal=CANAL_WHATSAPP,
+        valor_cifrado=cifrar_valor_contato(chave_fernet, '5511900000000'),
+        hash_auxiliar=calcular_hash_auxiliar_contato(chave_hmac, '5511900000000'),
+        versao_chave='V1', origem='origem_anterior_diferente',
+        criado_em=agora, atualizado_em=agora,
+    ))
+    registro_antes = repo.buscar_por_colaborador('recFUNC1', CANAL_WHATSAPP)
+
+    leitor = _LeitorFake(CandidatoFuncionarioContato(func_id='recFUNC1', whatsapp_bruto='11999998888'))
+
+    with (
+        patch.object(cli, 'abrir_conexao', return_value=conexao),
+        patch.object(cli, '_compor_leitor_airtable_a_partir_do_ambiente', return_value=leitor),
+        patch.object(cli, 'RepositorioContatoColaboradorPostgres', return_value=repo),
+    ):
+        codigo = cli.main(['--dry-run'])
+
+    assert codigo == 1
+    saida = capsys.readouterr().out
+    assert '"atualizacoes_bloqueadas"' in saida
+    assert 'recFUNC1' in saida
+    # Dry-run nunca escreve -- registro existente permanece intocado.
+    registro_depois = repo.buscar_por_colaborador('recFUNC1', CANAL_WHATSAPP)
+    assert registro_depois.hash_auxiliar == registro_antes.hash_auxiliar
+
+
+def test_dry_run_recusa_configuracao_ausente_antes_de_abrir_conexao(monkeypatch, capsys):
+    for nome in _VARS_SEGREDO:
+        monkeypatch.delenv(nome, raising=False)
+    monkeypatch.delenv('AIRTABLE_API_KEY', raising=False)
+    monkeypatch.delenv('DATABASE_URL', raising=False)
+
+    with patch.object(cli, 'abrir_conexao') as abrir_conexao:
+        codigo = cli.main(['--dry-run'])
+
+    assert codigo == 2
+    assert 'CONFIGURACAO_AUSENTE' in capsys.readouterr().out
+    abrir_conexao.assert_not_called()
+
+
 def _derivar_chave_fernet_do_ambiente():
     from magnata_os.documental.alocacao.configuracao_contato_colaborador import (
         carregar_configuracao_segredo_contato,
