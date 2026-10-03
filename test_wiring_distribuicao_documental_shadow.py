@@ -258,9 +258,11 @@ def test_n1_sem_assinatura_fecha_ate_pending_sem_obrigacao():
 def test_n2_holerite_folha_ponto_agrupado_1_link():
     deps = _montar_dependencias()
     doc_holerite = _preparar_documento(deps['repositorio_documentos'], deps['armazenamento'],
-                                        documento_id='doc-holerite', conteudo=b'PDF-HOLERITE')
+                                        documento_id='doc-holerite', conteudo=b'PDF-HOLERITE',
+                                        nome_original='holerite.pdf')
     doc_ponto = _preparar_documento(deps['repositorio_documentos'], deps['armazenamento'],
-                                     documento_id='doc-ponto', conteudo=b'PDF-PONTO')
+                                     documento_id='doc-ponto', conteudo=b'PDF-PONTO',
+                                     nome_original='ponto.pdf')
     ordem = _ordem_generica(
         documentos=(
             ItemDocumentoOrdem(doc_holerite.documento_id, doc_holerite.hash_sha256),
@@ -529,24 +531,250 @@ def test_agrupado_1_link_sem_exigir_assinatura_falha():
 
 
 # ---------------------------------------------------------------------
-# 14. N>=3 rejeitado nesta V1
+# 14. N>=3 com assinatura -- Incremento A1: núcleo aceita qualquer N>=1
 # ---------------------------------------------------------------------
 
-def test_tres_documentos_rejeitado_nesta_v1():
+def test_tres_documentos_com_assinatura_aceito_no_nucleo_incremento_a1():
+    """Antes do Incremento A1, N>=3 com assinatura era rejeitado por
+    `PoliticaAgrupamentoNaoSuportada` -- generalizado: o núcleo aceita
+    qualquer N>=1 sob AGRUPADO_1_LINK+assinatura (o adapter/app.py real
+    continua limitado a N<=2, isso é o Incremento A2, fora de escopo
+    aqui -- ver teste com fake que prova o núcleo, nunca o adapter
+    real)."""
     deps = _montar_dependencias()
     docs = [
-        _preparar_documento(deps['repositorio_documentos'], deps['armazenamento'], documento_id=f'doc-{i}', conteudo=f'C{i}'.encode())
+        _preparar_documento(deps['repositorio_documentos'], deps['armazenamento'],
+                             documento_id=f'doc-{i}', conteudo=f'C{i}'.encode(), nome_original=f'doc-{i}.pdf')
         for i in range(3)
     ]
     ordem = _ordem_generica(
         documentos=tuple(ItemDocumentoOrdem(d.documento_id, d.hash_sha256) for d in docs),
-        politica_agrupamento='AGRUPADO_1_LINK', exigir_assinatura=True,
+        politica_agrupamento='AGRUPADO_1_LINK', exigir_assinatura=True, exigir_comprovante=True,
     )
-    with pytest.raises(PoliticaAgrupamentoNaoSuportada):
+    materializador = _MaterializadorFake()
+    porta = _PortaAssinaturaFake()
+    resultado = materializar_distribuicao_documental_shadow(
+        ordem=ordem, materializador=materializador, porta_assinatura=porta,
+        ator_referencia='rh:teste', proveniencia='teste:sintetico', instante=AGORA, **deps,
+    )
+    assert len(resultado.arquivo_record_ids) == 3
+    assert resultado.assinatura_link is not None
+    assert len(porta.chamadas_criar) == 1  # 1 link só, cobrindo os 3 documentos
+    assert len(resultado.acoes_persistidas) == 1  # ramo com assinatura: sempre 1 ação (texto+link)
+
+
+# ---------------------------------------------------------------------
+# 14b. Incremento A1 -- manifesto N-ário do ramo com assinatura
+# ---------------------------------------------------------------------
+
+def _documentos_assinatura_arbitrarios(deps, n):
+    """N documentos DOCUMENTO_A..E, nome_original distinto -- nunca
+    Holerite/Folha/Ponto, para provar generalidade real."""
+    return tuple(
+        _preparar_documento(
+            deps['repositorio_documentos'], deps['armazenamento'],
+            documento_id=f'doc-assinatura-{letra}', conteudo=f'CONTEUDO-ASSINATURA-{letra}'.encode(),
+            nome_original=f'{letra}.pdf',
+        )
+        for letra in 'ABCDE'[:n]
+    )
+
+
+def _ordem_assinatura_n(documentos, **kwargs):
+    return _ordem_generica(
+        documentos=tuple(ItemDocumentoOrdem(d.documento_id, d.hash_sha256) for d in documentos),
+        tipo_documento=kwargs.pop('tipo_documento', 'DOCUMENTO_GENERICO'),
+        politica_agrupamento='AGRUPADO_1_LINK', exigir_assinatura=True, exigir_comprovante=True,
+        **kwargs,
+    )
+
+
+@pytest.mark.parametrize('n', [1, 2, 3, 4, 5])
+def test_agrupado_1_link_aceita_n_arbitrario_sem_logica_por_quantidade(n):
+    """DOCUMENTO_A..E -- nunca Holerite/Folha/Ponto -- prova que o
+    núcleo trata cardinalidade sem qualquer `if` por tipo documental."""
+    deps = _montar_dependencias()
+    documentos = _documentos_assinatura_arbitrarios(deps, n)
+    materializador = _MaterializadorFake()
+    porta = _PortaAssinaturaFake()
+    resultado = materializar_distribuicao_documental_shadow(
+        ordem=_ordem_assinatura_n(documentos), materializador=materializador, porta_assinatura=porta,
+        ator_referencia='rh:teste', proveniencia='teste:sintetico', instante=AGORA, **deps,
+    )
+    assert len(resultado.arquivo_record_ids) == n
+    assert resultado.assinatura_link is not None
+    assert len(porta.chamadas_criar) == 1
+    assert len(resultado.acoes_persistidas) == 1
+
+
+def test_manifesto_participa_da_identidade_do_preview():
+    """Mudar o conjunto/hash/ordem dos documentos do manifesto muda
+    `preview_id` -- mesmo mecanismo genérico já usado por `itens` no
+    ramo sem assinatura, nunca um hash paralelo."""
+    from magnata_os.orquestrador.politica_comunicacao import ItemComunicacao, montar_preview_comunicacao
+
+    base = dict(destinatarios=('5511999999999',), texto='Segue seu link', assinatura=True,
+                comprovante=False, preferencia='separado')
+    manifesto_ab = (
+        ItemComunicacao(tipo='documento', nome='a.pdf', conteudo_sha256='a' * 64),
+        ItemComunicacao(tipo='documento', nome='b.pdf', conteudo_sha256='b' * 64),
+    )
+    manifesto_ab_hash_trocado = (
+        ItemComunicacao(tipo='documento', nome='a.pdf', conteudo_sha256='a' * 64),
+        ItemComunicacao(tipo='documento', nome='b.pdf', conteudo_sha256='c' * 64),
+    )
+    manifesto_ba = tuple(reversed(manifesto_ab))
+    manifesto_abc = manifesto_ab + (ItemComunicacao(tipo='documento', nome='c.pdf', conteudo_sha256='c' * 64),)
+
+    preview_ab = montar_preview_comunicacao(itens_manifesto=manifesto_ab, **base)
+    preview_hash_trocado = montar_preview_comunicacao(itens_manifesto=manifesto_ab_hash_trocado, **base)
+    preview_ba = montar_preview_comunicacao(itens_manifesto=manifesto_ba, **base)
+    preview_abc = montar_preview_comunicacao(itens_manifesto=manifesto_abc, **base)
+    preview_sem_manifesto = montar_preview_comunicacao(itens_manifesto=(), **base)
+
+    ids = {preview_ab.preview_id, preview_hash_trocado.preview_id, preview_ba.preview_id,
+           preview_abc.preview_id, preview_sem_manifesto.preview_id}
+    assert len(ids) == 5  # todos distintos -- hash/ordem/cardinalidade participam da identidade
+
+    # Nunca afeta a composição/quantidade de ações -- só a identidade.
+    assert preview_ab.composicao_solicitada == preview_sem_manifesto.composicao_solicitada
+    assert preview_ab.itens == ()  # manifesto nunca vira `itens`/passo de composição
+
+
+def test_documento_removido_apos_autorizacao_falha_fechado():
+    """Autoriza A+B+C; tenta materializar só A+B -- fail-closed."""
+    deps = _montar_dependencias()
+    documentos_abc = _documentos_assinatura_arbitrarios(deps, 3)
+    ordem_abc = _ordem_assinatura_n(documentos_abc)
+    ordem_ab = _ordem_assinatura_n(documentos_abc[:2])
+    assert derivar_identidade_ordem_distribuicao(ordem_abc) != derivar_identidade_ordem_distribuicao(ordem_ab)
+
+    materializador = _MaterializadorFake()
+    porta = _PortaAssinaturaFake()
+    # Autoriza A+B+C.
+    materializar_distribuicao_documental_shadow(
+        ordem=ordem_abc, materializador=materializador, porta_assinatura=porta,
+        ator_referencia='rh:teste', proveniencia='teste:sintetico', instante=AGORA, **deps,
+    )
+    # A+B tem event_id/preview_id PRÓPRIOS -- nunca reaproveita a
+    # autorização de A+B+C (não é "o mesmo Preview com item a menos").
+    resultado_ab = materializar_distribuicao_documental_shadow(
+        ordem=ordem_ab, materializador=materializador, porta_assinatura=porta,
+        ator_referencia='rh:teste', proveniencia='teste:sintetico', instante=AGORA, **deps,
+    )
+    assert resultado_ab.event_id != derivar_identidade_ordem_distribuicao(ordem_abc)
+    assert len(resultado_ab.arquivo_record_ids) == 2  # nova autorização própria, nunca a de A+B+C
+
+
+def test_documento_acrescentado_apos_autorizacao_falha_fechado():
+    """Autoriza A+B; tenta materializar A+B+C -- identidade diferente,
+    nunca reaproveita nem estende a autorização anterior."""
+    deps = _montar_dependencias()
+    documentos_ab = _documentos_assinatura_arbitrarios(deps, 2)
+    doc_c = _preparar_documento(deps['repositorio_documentos'], deps['armazenamento'],
+                                 documento_id='doc-assinatura-extra-C', conteudo=b'CONTEUDO-EXTRA-C',
+                                 nome_original='extra-c.pdf')
+    ordem_ab = _ordem_assinatura_n(documentos_ab)
+    ordem_abc = _ordem_assinatura_n(documentos_ab + (doc_c,))
+    assert derivar_identidade_ordem_distribuicao(ordem_ab) != derivar_identidade_ordem_distribuicao(ordem_abc)
+
+    materializador = _MaterializadorFake()
+    porta = _PortaAssinaturaFake()
+    resultado_ab = materializar_distribuicao_documental_shadow(
+        ordem=ordem_ab, materializador=materializador, porta_assinatura=porta,
+        ator_referencia='rh:teste', proveniencia='teste:sintetico', instante=AGORA, **deps,
+    )
+    resultado_abc = materializar_distribuicao_documental_shadow(
+        ordem=ordem_abc, materializador=materializador, porta_assinatura=porta,
+        ator_referencia='rh:teste', proveniencia='teste:sintetico', instante=AGORA, **deps,
+    )
+    assert resultado_ab.event_id != resultado_abc.event_id
+    assert resultado_ab.autorizacao_id != resultado_abc.autorizacao_id
+    assert len(resultado_abc.arquivo_record_ids) == 3
+
+
+def test_documento_com_hash_divergente_apos_autorizacao_falha_fechado():
+    """Ordem declara hash X, Documento canônico tem hash Y -- bloqueia
+    a operação inteira, mesma disciplina de `InconsistenciaOrdemDocumento`
+    já provada para o ramo sem assinatura."""
+    deps = _montar_dependencias()
+    documentos = _documentos_assinatura_arbitrarios(deps, 2)
+    documentos_hash_divergente = (
+        ItemDocumentoOrdem(documentos[0].documento_id, documentos[0].hash_sha256),
+        ItemDocumentoOrdem(documentos[1].documento_id, 'f' * 64),  # hash errado
+    )
+    ordem = _ordem_generica(
+        documentos=documentos_hash_divergente, tipo_documento='DOCUMENTO_GENERICO',
+        politica_agrupamento='AGRUPADO_1_LINK', exigir_assinatura=True, exigir_comprovante=True,
+    )
+    with pytest.raises(InconsistenciaOrdemDocumento):
         materializar_distribuicao_documental_shadow(
-            ordem=ordem, materializador=None, porta_assinatura=None,
+            ordem=ordem, materializador=_MaterializadorFake(), porta_assinatura=_PortaAssinaturaFake(),
             ator_referencia='rh:teste', proveniencia='teste:sintetico', instante=AGORA, **deps,
         )
+
+
+def test_documento_duplicado_no_ramo_com_assinatura_falha_fechado():
+    """Dois documentos com o mesmo `nome_original` sob o mesmo link --
+    o operador não conseguiria distinguir os arquivos no manifesto.
+    Decisão explícita (Incremento A1): REJEITAR, mesma disciplina já
+    aplicada ao ramo sem assinatura (`NomeDocumentoDuplicadoNaOrdem`)."""
+    from magnata_os.orquestrador.wiring_distribuicao_documental_shadow import NomeDocumentoDuplicadoNaOrdem
+    deps = _montar_dependencias()
+    documentos = tuple(
+        _preparar_documento(deps['repositorio_documentos'], deps['armazenamento'],
+                             documento_id=f'doc-dup-assinatura-{i}', conteudo=f'DUP{i}'.encode(),
+                             nome_original='mesmo.pdf')
+        for i in range(2)
+    )
+    ordem = _ordem_assinatura_n(documentos)
+    with pytest.raises(NomeDocumentoDuplicadoNaOrdem):
+        materializar_distribuicao_documental_shadow(
+            ordem=ordem, materializador=_MaterializadorFake(), porta_assinatura=_PortaAssinaturaFake(),
+            ator_referencia='rh:teste', proveniencia='teste:sintetico', instante=AGORA, **deps,
+        )
+
+
+def test_replay_n_ario_com_assinatura_nao_duplica():
+    """Mesma Ordem N-ária processada 2x -- mesma identidade, mesma
+    obrigação, mesma ação, zero duplicação (Gate 1 preservado)."""
+    deps = _montar_dependencias()
+    documentos = _documentos_assinatura_arbitrarios(deps, 4)
+    ordem = _ordem_assinatura_n(documentos)
+    kwargs = dict(materializador=_MaterializadorFake(), porta_assinatura=_PortaAssinaturaFake(),
+                  ator_referencia='rh:teste', proveniencia='teste:sintetico', instante=AGORA, **deps)
+    primeiro = materializar_distribuicao_documental_shadow(ordem=ordem, **kwargs)
+    segundo = materializar_distribuicao_documental_shadow(ordem=ordem, **kwargs)
+    assert primeiro.event_id == segundo.event_id
+    assert primeiro.autorizacao_id == segundo.autorizacao_id
+    assert primeiro.acao_execucao_id == segundo.acao_execucao_id
+    assert primeiro.assinatura_link == segundo.assinatura_link
+    assert len(kwargs['porta_assinatura'].chamadas_criar) == 1  # replay não recria obrigação
+    assert len(primeiro.acoes_persistidas) == len(segundo.acoes_persistidas) == 1
+
+
+def test_ausencia_de_hardcode_por_tipo_documental_no_nucleo_alterado():
+    """Ultrareview estrutural: nenhum `if`/comparação por Holerite,
+    Folha_Ponto, tipo_documento fixo no núcleo alterado por A1 -- só o
+    adapter (fora deste arquivo) pode conhecer HOLERITE_FOLHA_PONTO."""
+    import ast
+    caminhos = (
+        'magnata_os/orquestrador/wiring_distribuicao_documental_shadow.py',
+        'magnata_os/orquestrador/politica_comunicacao.py',
+    )
+    proibidos_literais = {
+        'HOLERITE', 'FOLHA_PONTO', 'HOLERITE_FOLHA_PONTO', 'CONTRATO', 'EPI', 'RESCISAO',
+        'PACOTE_2', 'PACOTE_3', 'PACOTE_4', 'PACOTE_5',
+    }
+    for caminho in caminhos:
+        with open(caminho, 'r', encoding='utf-8') as f:
+            arvore = ast.parse(f.read(), filename=caminho)
+        literais_encontrados = {
+            no.value for no in ast.walk(arvore)
+            if isinstance(no, ast.Constant) and isinstance(no.value, str)
+        }
+        colisao = proibidos_literais & literais_encontrados
+        assert not colisao, f'{caminho} contém literal proibido: {colisao}'
 
 
 def test_n2_fora_do_pacote_holerite_ponto_falha_no_adapter_nao_no_nucleo():
@@ -563,8 +791,8 @@ def test_n2_fora_do_pacote_holerite_ponto_falha_no_adapter_nao_no_nucleo():
         QuantidadeArquivosNaoSuportadaPeloLegado,
     )
     deps = _montar_dependencias()
-    doc1 = _preparar_documento(deps['repositorio_documentos'], deps['armazenamento'], documento_id='doc-a2', conteudo=b'A2')
-    doc2 = _preparar_documento(deps['repositorio_documentos'], deps['armazenamento'], documento_id='doc-b2', conteudo=b'B2')
+    doc1 = _preparar_documento(deps['repositorio_documentos'], deps['armazenamento'], documento_id='doc-a2', conteudo=b'A2', nome_original='a2.pdf')
+    doc2 = _preparar_documento(deps['repositorio_documentos'], deps['armazenamento'], documento_id='doc-b2', conteudo=b'B2', nome_original='b2.pdf')
     ordem = _ordem_generica(
         documentos=(ItemDocumentoOrdem(doc1.documento_id, doc1.hash_sha256), ItemDocumentoOrdem(doc2.documento_id, doc2.hash_sha256)),
         tipo_documento='EPI', politica_agrupamento='AGRUPADO_1_LINK', exigir_assinatura=True,
