@@ -10,5 +10,7 @@
 # 2 linhas (import + register_blueprint), mesmo padrão já usado para
 # auth_bp/secullum_bp/sync_bp/ingestao_bp/esteira_bp. Nenhuma outra linha de
 # app.py foi tocada. Não autoriza nenhuma outra alteração futura em
-# app.py -- o hash abaixo invalida qualquer mudança posterior.
-e4bd4e4cdf3db8e9029cca8ac66fa1417e3976be  app.py
+# app.py -- o hash abaixo é o blob de app.py JÁ COM esta mudança aplicada
+# (o gate de governança compara contra o conteúdo resultante, não o
+# anterior); invalida qualquer mudança posterior além desta.
+03975a1643ceb7588363abedaa4ebb1417817800  app.py
