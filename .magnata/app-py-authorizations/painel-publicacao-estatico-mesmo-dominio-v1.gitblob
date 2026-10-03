@@ -1,0 +1,16 @@
+# Autorização humana específica — app.py — Painel estático (/painel), mesmo domínio — 2026-10-03
+# Confirmada pelo operador (Magnata) em mensagem distinta da que definiu a
+# política geral de "Autonomia Operacional Máxima" e distinta da que propôs
+# o diff abaixo (PR #224). A mensagem de autorização específica diz:
+# "Autorizo especificamente a alteração proposta no `app.py`, limitada ao
+# wiring necessário para importar e registrar
+# `register_blueprint(painel_estatico_bp)` referente ao PR #224."
+# Escopo autorizado: só o registro do blueprint `painel_estatico_bp`
+# (magnata_os/documental/modulo01/adapters/blueprint_painel_estatico.py) --
+# 2 linhas (import + register_blueprint), mesmo padrão já usado para
+# auth_bp/secullum_bp/sync_bp/ingestao_bp/esteira_bp. Nenhuma outra linha de
+# app.py foi tocada. Não autoriza nenhuma outra alteração futura em
+# app.py -- o hash abaixo é o blob de app.py JÁ COM esta mudança aplicada
+# (o gate de governança compara contra o conteúdo resultante, não o
+# anterior); invalida qualquer mudança posterior além desta.
+03975a1643ceb7588363abedaa4ebb1417817800  app.py
