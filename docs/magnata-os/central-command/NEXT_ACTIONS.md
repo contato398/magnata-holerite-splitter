@@ -1,11 +1,191 @@
 # NEXT_ACTIONS — sequência recomendada
 
-> ⚠️ **Catch-up Etapa 15 (2026-10-03):** este documento não foi
-> reconciliado com os ~70 PRs mesclados entre 2026-08-24 e o PR #225
-> (2026-10-03) — ver `HANDOFF.md` §0-bis e `PENDING.md` PEN-022. Itens
-> abaixo cujo risco associado (`RSK-00x`) já foi corrigido em código
-> podem estar obsoletos; confirmar contra `git log`/`RISKS.md` antes de
-> agir.
+**Etapa 17, 2026-10-03 — reescrita completa**, pedida pelo coordenador
+do projeto depois que a reconciliação da Etapa 16 mostrou que a maioria
+dos itens da Etapa 3 (2026-08-22, texto original preservado como
+histórico no final deste arquivo) já tinha sido resolvida ou superada:
+remendar item a item ficaria pior que reescrever. Fonte: `RISKS.md` e
+`PENDING.md` no estado em que estavam nesta data (ver `HANDOFF.md`
+§0-ter para o catálogo de PRs que chegou a esse estado). Ordem: primeiro
+risco de perda irreversível, depois o que já está pronto e só espera
+decisão, depois produção, depois estrutural, depois negócio/arquitetura.
+
+**Como usar isto:** cada item cita o `RSK-00x`/`PEN-0xx` de onde veio.
+Antes de agir num item, reconfira esse risco/pendência no documento de
+origem — este arquivo é uma leitura derivada, não a fonte primária.
+
+---
+
+## Bloco 1 — perda irreversível (gate humano, nunca resolvido por esta auditoria)
+
+### NXT-101 · Preservar `docs/historico/` em `main`
+**Risco:** RSK-001 · **Esforço:** baixo · **Toca código?** não
+
+Idêntico ao NXT-001 original (ver histórico abaixo) — nenhuma evidência
+encontrada de que isto foi feito entre 2026-08-22 e hoje. **Reconfirmar
+antes de agir:** a branch `fix/recibos-outros-documentos` ainda existe?
+
+### NXT-102 · Resgate documental da fundação (RSK-002)
+Idêntico ao NXT-002 original. Sem evidência de execução.
+
+### NXT-103 · Versionar os relatórios da Macro 6A (RSK-003)
+Idêntico ao NXT-003 original. Sem evidência de execução.
+
+---
+
+## Bloco 2 — já resolvido ou pronto, só falta decisão/merge
+
+### ✅ RSK-005 — `pypdfium2`/`Pillow` fixados
+**Resolvido.** PR #226 mesclado, 2026-10-03.
+
+### ✅ RSK-011 (parte Postgres) — provisionado
+**Resolvido, achado novo.** Postgres de produção confirmado via API do
+Render (`magnata-os-postgres`, `basic_256mb`, manual, não por
+Blueprint). Ver `RISKS.md` RSK-011/Etapa 16.
+
+### NXT-104 · Mesclar as correções de testes/CI já verdes
+**Risco:** RSK-017, RSK-018, RSK-020 · **Esforço:** zero (já pronto) ·
+**Toca código?** `.github/workflows/`
+
+PRs #233 (cobertura `pytest-cov`), #234 (alerta do supervisor shadow do
+Orquestrador) e #238 (teste e2e real adicionado ao job `postgres-real`)
+estão verdes e prontos. Tocam caminho crítico de governança — exigem
+aprovação humana no Environment `governance-approval`, por desenho do
+próprio repositório. **Decide:** quem tiver essa aprovação; merge em si
+é trabalho da Frente A, não desta auditoria.
+
+### NXT-105 · Decidir a capacidade real do web no Render
+**Risco:** RSK-006/RSK-024 · **Esforço:** decisão, não código
+
+Confirmado via API: `--workers 1 --max-requests 50`, divergente do
+declarado em `render.yaml`/`Procfile` (`--workers 2 --max-requests
+400`). **Decide:** se é intencional (limite de RAM do plano `starter`)
+ou resíduo a corrigir. Gate de produção (`CLAUDE.md` §12-I).
+
+### NXT-106 · Provisionar o Cron do Orquestrador
+**Risco:** RSK-011-bis · **Esforço:** médio, com custo
+
+Plano já pronto (`plano-provisionamento-cron-orquestrador.md`, fora
+deste repositório). Falta: decisão financeira (custo do Cron Job no
+Render, não verificado) + autorização de produção específica + as
+variáveis de ambiente reais do orquestrador (gate de escrita externa
+separado). **Decide:** Magnata.
+
+### NXT-107 · Decidir sobre o Redis de produção sem persistência
+**Risco:** RSK-022 · **Esforço:** decisão de custo ou verificação de código
+
+`magnata-pdf-queue`, plano `free`, `persistenceMode: off`, nunca
+documentado antes de 2026-10-03. Opções: aceitar o risco (se o fluxo de
+PDF for reenfileirável por fora), verificar isso no código, ou decidir
+upgrade de plano (despesa nova, §12-I). **Decide:** dono do domínio de
+processamento de PDF ou Magnata.
+
+### NXT-108 · Decidir a assimetria de Auto-Deploy do worker
+**Risco:** RSK-023 · **Esforço:** decisão de processo
+
+O worker redesploya em todo merge em `main` que toca código que ele
+importa — isso já é deploy de produção de fato, sem o mesmo gate do
+web. **Decide:** se isso é aceitável para o worker (ex.: ele não lida
+com dado sensível no caminho crítico) ou se precisa do mesmo gate.
+
+---
+
+## Bloco 3 — produção, ainda sem decisão
+
+### NXT-109 · Rotacionar a `EMAIL_WEBHOOK_KEY`
+**Risco:** RSK-007 (histórico — sem evidência de resolução ou de que
+ainda se aplica; reconfirmar antes de agir)
+
+### NXT-110 · `/health` sempre HTTP 200
+**Risco:** RSK-019 · **Toca código?** `app.py` (legado protegido, §7)
+
+Diff já preparado e descrito em `testes-ci-observabilidade.md` §5 "Item
+3" — não implementado, porque exige autorização humana específica numa
+mensagem distinta (`CLAUDE.md` §6(e)), ainda não dada. Mesmo com
+`healthCheckPath` já declarado em `render.yaml`, isso **não tem efeito
+real** até um Blueprint ser aplicado (ação de produção separada) — ver
+RSK-019.
+
+### NXT-111 · Nenhum alerta automático de exceção em produção
+**Risco:** RSK-021 · **Esforço:** avaliação de ferramenta (Sentry/
+equivalente) + decisão de custo
+
+### NXT-112 · Cobertura real de integração fora de alocação/autenticação
+**Risco:** RSK-018 (restante, após PR #238) · WhatsApp/Evolution,
+Gmail, S3/R2 e Secullum continuam sem validação "real" em CI.
+
+### NXT-113 · Confirmar aplicação da migration do cadastro de colaborador
+**Pendência:** PEN-021 (resto) · PR #215 preparou a migration; nenhuma
+investigação até agora confirmou se foi de fato aplicada no Postgres
+real (ação de produção — consulta direta ao banco).
+
+---
+
+## Bloco 4 — estrutural, aceito ou declarado, não resolvido
+
+### NXT-114 · `app.py` continua com lógica crítica (RSK-008)
+Consequência aceita do strangler pattern. Vira problema se a migração
+parar — monitorar, não agir isoladamente.
+
+### NXT-115 · Cinco lacunas do fluxo de assinatura (RSK-009)
+Sem caminho para corrigir disparo errado, sem lembrete automático,
+links não expiram, sem painel de RH, 4 dígitos de CPF como
+autenticação. **Decide:** priorização de produto.
+
+### NXT-116 · Airtable não registra visualização (RSK-010)
+Aceitar o risco ou instrumentar. **Decide:** dono do domínio de
+assinatura.
+
+### NXT-117 · Governança contornável por ausência de hooks (RSK-012)
+Instalar hooks onde faltam, ou exigir que todo trabalho passe por PR.
+
+### NXT-118 · Regra de negócio dentro do Airtable, não versionada (RSK-014)
+Auditar as automações nativas do Airtable antes de qualquer migração
+que copie só dados, não lógica.
+
+### NXT-119 · Tabelas nomeadas por competência no Airtable (RSK-015)
+Contraria o Contrato de Competência já definido.
+
+### NXT-120 · Fase 5 do painel antigo — verificar se segue relevante (RSK-016)
+`infra`/`mapa-legado.md` já registram que o **painel novo (PR #224)**
+pode ter superado isso — `WORK_IN_PROGRESS.md` marca como "checar se
+WIP-002 ainda é relevante", não confirmado. Antes de auditar a fundo,
+confirmar se já foi superada.
+
+---
+
+## Bloco 5 — decisão de arquitetura e negócio (sem evidência de resolução)
+
+### NXT-121 · Decidir a ADR-001 (nomenclatura `Documento` vs. `Item de Ingestão`)
+Resolvida operacionalmente (`CLAUDE.md` §5: código novo usa `Documento`),
+nunca formalmente aprovada. Ver DEC-002.
+
+### NXT-122 · Responder as decisões `PENDENTE` de entidades
+`DEC-ENT-010/011/012` (ver `PENDING.md` PEN-013) — só a Direção da
+Magnata pode.
+
+### NXT-123 · Jornada 12x36 vs. fórmula fixa de hora extra no Airtable
+Pendência levantada por outra thread em 2026-10-03: a fórmula de hora
+extra no Airtable não conhece a escala 12x36. Decisão de negócio/
+trabalhista, não técnica — explicitamente fora do escopo desta
+reconciliação de documentação.
+
+---
+
+## Histórico — Etapa 3 (2026-08-22), texto original preservado
+
+**Não usar para decidir sem reconfirmar contra `RISKS.md`/`PENDING.md`
+atuais primeiro.** Vários itens aqui (NXT-004 a NXT-009 em particular)
+já foram resolvidos, superados, ou tiveram seu risco associado
+corrigido pelas Etapas 15/16 acima — o Bloco 2 desta reescrita já
+absorve o que mudou. Preservado por `CLAUDE.md` §2/§4 (histórico é
+registro, nunca apagado), não porque ainda seja a ordem recomendada.
+
+> ⚠️ Nota de catch-up Etapa 15 (2026-10-03), também preservada: este
+> documento não foi reconciliado com os PRs mesclados entre 2026-08-24
+> e o PR #225 — ver `HANDOFF.md` §0-bis/§0-ter e `PENDING.md` PEN-022.
+> Itens abaixo cujo risco associado (`RSK-00x`) já foi corrigido em
+> código podem estar obsoletos.
 
 **Etapa 3, 2026-08-22.** Ordem por **risco de perda irreversível**
 primeiro, depois por desbloqueio. Cada item diz quem decide.
@@ -16,9 +196,9 @@ resgate automaticamente documentos antigos para `main`").
 
 ---
 
-## Bloco 1 — parar a sangria (gate humano, alta urgência)
+### Bloco 1 — parar a sangria (gate humano, alta urgência)
 
-### NXT-001 · Preservar `docs/historico/` em `main`
+#### NXT-001 · Preservar `docs/historico/` em `main`
 **Risco:** RSK-001 · **Esforço:** baixo · **Toca código?** não
 
 31 arquivos de memória operacional presos numa branch 106 commits
@@ -32,7 +212,7 @@ nova em `.magnata/patterns.sh` no mesmo PR, ou os arquivos vão para
 **Decide:** você. **Depois disso**, e só depois, faz sentido discutir o
 destino da branch.
 
-### NXT-002 · Resgate documental da fundação
+#### NXT-002 · Resgate documental da fundação
 **Risco:** RSK-002 · **Esforço:** médio · **Toca código?** não
 
 10 documentos, 9.600 linhas, 26 decisões aprovadas pela Direção.
@@ -44,7 +224,7 @@ de `README.md` são corrigidos no mesmo PR.
 **Decide:** você — inclusive se os documentos entram como estão (com
 nota) ou revisados.
 
-### NXT-003 · Versionar os relatórios da Macro 6A
+#### NXT-003 · Versionar os relatórios da Macro 6A
 **Risco:** RSK-003 · **Esforço:** baixo · **Toca código?** não
 
 Ver [`MACRO_6A.md`](MACRO_6A.md). Envolve decidir o que é registro
@@ -52,9 +232,9 @@ institucional e o que é ruído de sessão.
 
 ---
 
-## Bloco 2 — desbloquear o que já está pronto
+### Bloco 2 — desbloquear o que já está pronto
 
-### NXT-004 · Decidir o PR #20
+#### NXT-004 · Decidir o PR #20
 **Risco:** RSK-004 · **Esforço:** baixo · **Toca código?** ✅ `app.py`
 
 Melhor relação custo/benefício do inventário: 2 arquivos, +17/−16, e
@@ -63,7 +243,7 @@ de rebase antes.
 
 **Decide:** você (§7 — `app.py` é legado protegido).
 
-### NXT-005 · ~~Decidir o PR #22~~ — ENCERRADO, mesclado (2026-08-23)
+#### NXT-005 · ~~Decidir o PR #22~~ — ENCERRADO, mesclado (2026-08-23)
 **Esforço:** baixo · **Toca código?** não toca `app.py`
 
 Aditivo: plano de consolidação + adapter de e-mail que roda **em
@@ -91,27 +271,27 @@ quando (e se) ligar o adapter a uma fonte de e-mail real, o que exige
 autorização de fase separada (`CLAUDE.md` §6/§12-I) e a política de
 retry/backoff registrada em `PENDING.md` PEN-020.
 
-### NXT-006 · Decidir as 3 branches paradas
+#### NXT-006 · Decidir as 3 branches paradas
 Fase 5 (painel visual, pronta há ~4 semanas, 72 commits atrás) ·
 `fix/adr-modulo01-http-wiring` (ADR da fiação HTTP) ·
 `claude/evolution-api-instances-1s9raa` (conteúdo já em #22).
 
 ---
 
-## Bloco 3 — fechar produção
+### Bloco 3 — fechar produção
 
-### NXT-007 · Confirmar `--workers 2` no painel do Render
+#### NXT-007 · Confirmar `--workers 2` no painel do Render
 **Risco:** RSK-006. Só olhar o Start Command. Se o painel sobrepõe o
 `Procfile`, o ajuste de capacidade nunca entrou em vigor.
 
-### NXT-008 · Fixar `pypdfium2` e `Pillow` no `requirements.txt`
+#### NXT-008 · Fixar `pypdfium2` e `Pillow` no `requirements.txt`
 **Risco:** RSK-005 · **Toca código?** só `requirements.txt`.
 Uma atualização silenciosa quebra a tela de assinatura em produção.
 
-### NXT-009 · Rotacionar a `EMAIL_WEBHOOK_KEY`
+#### NXT-009 · Rotacionar a `EMAIL_WEBHOOK_KEY`
 **Risco:** RSK-007 · gate de credencial.
 
-### NXT-010 · Fechar o ciclo de Julho/2026
+#### NXT-010 · Fechar o ciclo de Julho/2026
 Resultado do disparo dos 25 pendentes · `log_reenvio_julho2026.csv` ·
 janela de log do Render de 20/08 entre 15:30 e 16:19 · WhatsApp sem DDI
 55 · os 11 casos deferidos (9 sem Folha de Ponto, 1 sem Holerite, 1 com
@@ -119,20 +299,20 @@ WhatsApp inválido).
 
 ---
 
-## Bloco 4 — decisões de arquitetura e negócio
+### Bloco 4 — decisões de arquitetura e negócio
 
-### NXT-011 · Responder as 3 decisões `PENDENTE` há um mês
+#### NXT-011 · Responder as 3 decisões `PENDENTE` há um mês
 `DEC-ENT-010` (Alerta de Ponto vira Pendência Documental?) ·
 `DEC-ENT-011` (`Fechamento` e `SBJ`) · `DEC-ENT-012` (`Finalizado` e
 `Pronto` existem no Airtable?). **Só a Direção da Magnata pode.**
 `DEC-ENT-020` depende de `012`.
 
-### NXT-012 · Decidir a ADR-001
+#### NXT-012 · Decidir a ADR-001
 Quatro alternativas, recomendação não vinculativa (C). Em aberto desde
 julho. A `VALIDAÇÃO 12` do `pre-commit` impede que se resolva sozinha —
 por desenho.
 
-### NXT-013 · Decidir a taxonomia de núcleos
+#### NXT-013 · Decidir a taxonomia de núcleos
 Existem hoje **três** recortes: 9 módulos (`ARQUITETURA` §2, 2026-07-22),
 10 módulos (`MODULOS.md`, 2026-07-25, vigente) e 8 núcleos de negócio
 (Documental, RH, Financeiro, Contábil/Fiscal, Comercial, Operações,
@@ -144,20 +324,20 @@ já operam fora deste repositório (outra ferramenta, processo manual), ou
 são aspiracionais?** A resposta muda tudo — no primeiro caso é
 integração, no segundo é construção.
 
-### NXT-014 · Instalar os hooks onde não estão
+#### NXT-014 · Instalar os hooks onde não estão
 **Risco:** RSK-012. Duas branches receberam commits que os gates
 rejeitariam. Barreira local só protege onde está instalada.
 
-### NXT-015 · Avaliar o Graphify (sem instalar)
+#### NXT-015 · Avaliar o Graphify (sem instalar)
 Confirmar o que extrai de fato, se roda local e read-only, e onde o
 resultado seria versionado. A fronteira já está desenhada: **Central
 Command** = memória/decisão/proveniência · **Graphify** = visão
 verificável do código · **Airtable/bancos** = dados operacionais ·
 **GitHub** = histórico técnico · **produção** = verdade de execução.
 
-## Bloco 5 — provar o Módulo 01 contra dado real (2026-08-24)
+### Bloco 5 — provar o Módulo 01 contra dado real (2026-08-24)
 
-### NXT-016 · Modo sombra: `AdapterCapturaEmail` contra Gmail real
+#### NXT-016 · Modo sombra: `AdapterCapturaEmail` contra Gmail real
 **Esforço:** médio · **Toca código?** só código novo isolado até a Fase 2
 **Plano:** [`docs/decisoes/plano-modo-sombra-captura-email.md`](../../decisoes/plano-modo-sombra-captura-email.md)
 
@@ -178,7 +358,7 @@ processa dado real corretamente é resolver o problema errado.
 
 ---
 
-## Caminho crítico
+### Caminho crítico (Etapa 3, histórico)
 
 ```
 NXT-001 ─┐
@@ -196,12 +376,12 @@ decisões que a Direção já aprovou.
 
 ---
 
-## Etapa 6 — reordenação por evidência (2026-08-22)
+### Etapa 6 — reordenação por evidência (2026-08-22)
 
 ✅ **Concluídos:** NXT-002 (fundação em `main`) · NXT-001 parcial (lição
 preservada; bruto pendente) · NXT-015 (Graphify avaliado com POC).
 
-### Nova ordem por valor × risco
+#### Nova ordem por valor × risco (histórico)
 
 | # | Ação | Por quê agora | Gate |
 |---|---|---|---|
