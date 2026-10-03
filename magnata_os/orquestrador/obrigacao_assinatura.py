@@ -26,6 +26,12 @@ class ObrigacaoAssinatura:
     status: str
     tem_comprovante: bool
     evidencia_opaca: Optional[str] = None
+    token: Optional[str] = None
+    """Token de assinatura explícito, quando o adapter consegue fornecê-lo
+    sem inferência. `None` quando o backend concreto não o expõe ainda
+    (ver `adapters/obrigacao_assinatura_legado_http.py`) -- nesse caso o
+    chamador cai de volta para extrair o token do `link` (ver
+    `wiring_distribuicao_documental_shadow._resolver_token_obrigacao`)."""
 
 
 class PortaObrigacaoAssinatura(Protocol):

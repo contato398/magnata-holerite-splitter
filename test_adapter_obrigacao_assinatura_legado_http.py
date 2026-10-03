@@ -44,6 +44,19 @@ def test_criar_ou_recuperar_chama_gerar_com_disparar_whatsapp_false():
     assert resultado.assinatura_id == 'rec1'
 
 
+def test_criar_ou_recuperar_devolve_o_proprio_token_reservado_sem_inferir_do_link():
+    """O chamador escolheu `token_reservado`; `criar_ou_recuperar` garante
+    (ou falha) que é esse o token persistido -- o adapter nunca precisa
+    reler o corpo da resposta para saber o token de volta."""
+    with patch('magnata_os.orquestrador.adapters.obrigacao_assinatura_legado_http.requests.post',
+               return_value=_resp(corpo={'assinatura_id': 'rec1', 'link': 'https://x/assinatura/tok-diferente'})):
+        resultado = ADAPTER.criar_ou_recuperar(
+            token_reservado='tok-original', acao_execucao_id='a' * 64,
+            funcionario_id='rec1', tipo_documento='COMUNICADO', arquivo_record_ids=('recArq',),
+        )
+    assert resultado.token == 'tok-original'
+
+
 def test_criar_ou_recuperar_com_2_arquivos_usa_payload_do_pacote_holerite_ponto():
     with patch('magnata_os.orquestrador.adapters.obrigacao_assinatura_legado_http.requests.post',
                return_value=_resp(corpo={'assinatura_id': 'rec1', 'link': 'https://x/assinatura/tok'})) as post:
@@ -127,3 +140,20 @@ def test_consultar_por_correlacao_existente_mapeia_campos():
         assinatura_id='rec1', link='https://x/assinatura/tok', status='Assinado',
         tem_comprovante=True, evidencia_opaca='attCOMPROVANTE',
     )
+    assert resultado.token is None  # motor legado ainda não expõe `hash_token` nesta rota
+
+
+def test_consultar_por_correlacao_mapeia_hash_token_quando_o_legado_ja_expoe():
+    """Compatibilidade futura: quando `pacote-autorizacao-app-py.md` #1
+    for aplicado em `app.py`, `/assinatura/consulta` passa a devolver
+    `hash_token` -- o adapter já sabe repassá-lo, sem exigir nova
+    mudança neste arquivo."""
+    corpo = {
+        'existe': True, 'status': 'Pendente', 'assinatura_id': 'rec1',
+        'link': 'https://x/assinatura/tok-real', 'comprovante_existe': False,
+        'evidencia_hash': None, 'hash_token': 'tok-real',
+    }
+    with patch('magnata_os.orquestrador.adapters.obrigacao_assinatura_legado_http.requests.get',
+               return_value=_resp(corpo=corpo)):
+        resultado = ADAPTER.consultar_por_correlacao(acao_execucao_id='a' * 64)
+    assert resultado.token == 'tok-real'
