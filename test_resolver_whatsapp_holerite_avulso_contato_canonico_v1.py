@@ -13,6 +13,7 @@ from magnata_os.documental.alocacao.contato_colaborador import (
     cifrar_valor_contato,
 )
 from magnata_os.documental.alocacao.resolver_whatsapp_holerite_avulso_contato_canonico_v1 import (
+    construir_resolvedor_whatsapp_holerite_avulso_contato_canonico_v1,
     resolver_whatsapp_holerite_avulso_via_contato_canonico,
 )
 
@@ -85,6 +86,69 @@ def test_retorna_none_quando_chave_fernet_errada_nunca_levanta():
     )
 
     assert resultado is None
+
+
+# ---------------------------------------------------------------------
+# Fábrica reutilizável -- resolve o risco de "conexão nova por chamada"
+# registrado em pacote-autorizacao-app-py.md, item 6.
+# ---------------------------------------------------------------------
+
+def test_resolvedor_composto_resolve_varios_funcionarios_sem_reabrir_nada():
+    """Mesmo repositório/conexão injetado UMA VEZ serve N chamadas --
+    prova de que a fábrica nunca reconstrói/reabre nada por chamada."""
+    repo = _repositorio_com_contato('recFUNC1', '5511999998888')
+    agora = datetime(2026, 10, 3, tzinfo=timezone.utc)
+    repo.criar_ou_confirmar(RegistroContatoColaborador(
+        colaborador_id='recFUNC2', canal=CANAL_WHATSAPP,
+        valor_cifrado=cifrar_valor_contato(_CHAVE_FERNET, '5511988887777'),
+        hash_auxiliar=calcular_hash_auxiliar_contato(_CHAVE_HMAC, '5511988887777'),
+        versao_chave='v1', origem='teste', criado_em=agora, atualizado_em=agora,
+    ))
+
+    resolvedor = construir_resolvedor_whatsapp_holerite_avulso_contato_canonico_v1(
+        repositorio=repo, chave_fernet=_CHAVE_FERNET, habilitado=True,
+    )
+
+    assert resolvedor('recFUNC1') == '5511999998888'
+    assert resolvedor('recFUNC2') == '5511988887777'
+    assert resolvedor('recFUNC1') == '5511999998888'  # chamada repetida -- mesmo resultado, mesmo objeto
+
+
+def test_resolvedor_composto_respeita_gate_desabilitado_em_todas_as_chamadas():
+    repo = _repositorio_com_contato('recFUNC1', '5511999998888')
+
+    resolvedor = construir_resolvedor_whatsapp_holerite_avulso_contato_canonico_v1(
+        repositorio=repo, chave_fernet=_CHAVE_FERNET, habilitado=False,
+    )
+
+    assert resolvedor('recFUNC1') is None
+    assert resolvedor('recFUNC1') is None
+
+
+def test_resolvedor_composto_e_funcao_pura_reutilizavel_do_mesmo_objeto():
+    """A fábrica devolve uma função -- não um novo objeto repositório/
+    conexão por chamada. Chamar o resolvedor N vezes nunca invoca
+    `construir_resolvedor_...` de novo nem reconstrói `repositorio`."""
+    repo = _repositorio_com_contato('recFUNC1', '5511999998888')
+    chamadas_buscar = []
+    buscar_original = repo.buscar_por_colaborador
+
+    def _buscar_instrumentado(colaborador_id, canal):
+        chamadas_buscar.append(colaborador_id)
+        return buscar_original(colaborador_id, canal)
+
+    repo.buscar_por_colaborador = _buscar_instrumentado
+
+    resolvedor = construir_resolvedor_whatsapp_holerite_avulso_contato_canonico_v1(
+        repositorio=repo, chave_fernet=_CHAVE_FERNET, habilitado=True,
+    )
+    resolvedor('recFUNC1')
+    resolvedor('recFUNC1')
+    resolvedor('recFUNC1')
+
+    # 3 chamadas ao resolvedor -> 3 buscas no MESMO repositório, nunca
+    # um repositório/conexão novo por chamada.
+    assert chamadas_buscar == ['recFUNC1', 'recFUNC1', 'recFUNC1']
 
 
 def test_modulo_nao_importa_airtable_nem_app():
