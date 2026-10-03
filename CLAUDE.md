@@ -122,14 +122,17 @@ esta lista:
   variável de ambiente com valor real).
 - Não imprimir token em nenhuma saída, nem parcialmente.
 - Não acessar produção sem autorização explícita e específica para
-  aquela ação.
+  aquela ação **ou** uma autorização por fase válida que inclua
+  expressamente aquela classe de ação e o sistema externo envolvido.
 - **Ações externas de produção são proibidas por padrão** — alterar
-  Airtable real, enviar e-mail ou WhatsApp reais, executar deploy,
-  alterar credencial, provisionar infraestrutura real. Nenhuma dessas
-  coisas acontece só porque foi pedido explicitamente, nem só porque
-  foi enquadrado como "fase autorizada" — a proibição só é suspensa
-  por uma **autorização por fase** que cumpra, **todos**, os
-  requisitos abaixo.
+  Airtable/Postgres reais, enviar e-mail ou WhatsApp reais, executar
+  deploy, alterar credencial ou provisionar infraestrutura real. A
+  exceção é uma **autorização por fase** válida, com escopo, limites,
+  critérios objetivos, rollback e checkpoint humano separados conforme
+  os requisitos abaixo. Uma autorização de fase pode abranger o ciclo
+  técnico completo de Git/PR/merge/deploy/validação quando isso estiver
+  declarado expressamente; ela nunca se expande por analogia para
+  comunicação externa, destruição de dados, credenciais ou despesas.
 
   **Autorização por fase — requisitos obrigatórios, cumulativos:**
   a) declara objetivo, o(s) sistema(s) externo(s) e a(s) classe(s) de
@@ -157,10 +160,16 @@ esta lista:
      dentro do escopo declarado — qualquer ação fora desse escopo, ou
      qualquer gate do §12-I, continua exigindo retorno humano.
 
-  Gates que uma autorização de fase nunca dispensa: tudo que §12-I já
-  lista (produção, migration/schema relevante, operação destrutiva,
-  nova despesa/contratação, decisão empresarial ambígua, publicação) e
-  tudo que §9 exige (git/push/PR/merge/deploy).
+  Gates que uma autorização de fase nunca dispensa: operação
+  destrutiva ou perda de dados sem rollback seguro; migration/schema
+  relevante não incluído explicitamente na fase; nova
+  despesa/contratação fora de orçamento previamente autorizado;
+  alteração de credencial/secret de alto impacto; comunicação externa
+  real com pessoas/organizações não incluída expressamente; decisão
+  empresarial ambígua; publicação pública fora do escopo; e qualquer
+  outro gate reservado no §12-I. **Git/commit/push/PR/merge/deploy e
+  validação técnica podem ser cobertos por autorização de fase válida**
+  conforme §9.
 - Usar sempre o menor privilégio necessário para a tarefa (já é
   princípio do Manifesto, §"Segurança e credenciais").
 - Dado pessoal (CPF, nome de funcionário real, holerite real) segue a
@@ -210,17 +219,39 @@ esta lista:
 - confirmação de escopo (só o que foi pedido foi alterado);
 - commit único e claro, só quando solicitado.
 
-## 9. Git e PR
+## 9. Git, PR, merge e deploy
 
 - Uma finalidade por branch.
-- Não abrir PR sem pedido explícito.
-- Não fazer merge.
-- Não fazer deploy.
-- Não apagar branch automaticamente.
+- Não alterar `main` diretamente — toda mudança entra por branch/PR.
+- **Fora de uma autorização de fase válida:** não abrir PR, não fazer
+  merge e não fazer deploy sem pedido/autorização humana explícita.
+- **Sob autorização de fase válida que inclua expressamente o ciclo
+  técnico de entrega**, o agente pode executar autonomamente commit,
+  push, abertura/atualização de PR, correção de CI, rebase/merge e
+  deploy, sem microautorização entre essas etapas, desde que:
+  1. o PR permaneça dentro do escopo aprovado;
+  2. os checks obrigatórios e testes relevantes estejam verdes;
+  3. não haja regressão conhecida, conflito não resolvido ou risco novo
+     relevante;
+  4. dependências entre PRs sejam respeitadas e revalidadas após cada
+     merge;
+  5. deploy tenha alvo explicitamente autorizado, plano de
+     rollback/compensação e validação pós-deploy;
+  6. qualquer ação que atravesse outro gate humano de §6, §7 ou §12-I
+     continue parada nesse gate específico.
+- O agente pode repetir autonomamente o ciclo
+  **corrigir → testar → commit/push → PR → CI → merge → deploy →
+  validar → corrigir**, enquanto permanecer dentro da autorização de
+  fase.
+- Merge nunca é "em massa às cegas": integrar na ordem de dependência,
+  atualizar branches afetadas sobre a `main` corrente e rerodar os
+  gates necessários.
+- Não apagar branch automaticamente, salvo se a autorização de fase
+  disser expressamente que limpeza de branches já mescladas faz parte
+  do escopo.
 - Nunca guardar token em arquivo temporário **dentro do repositório**
   (usar diretório de scratchpad fora do repo, sempre apagando o
   arquivo depois de usado).
-- Não alterar `main` diretamente — toda mudança entra por branch.
 
 ## 10. Critérios de conclusão
 
@@ -251,9 +282,11 @@ equivalente), nunca "pronta com ressalva" apresentada como sucesso.
 
 ## 12. Autonomia operacional ampliada
 
-Esta seção é **aditiva** — não substitui, não enfraquece e não
-reinterpreta nenhuma regra de §1 a §11. Em qualquer conflito de leitura,
-as seções anteriores prevalecem.
+Esta seção é **aditiva** e deve ser lida em conjunto com §6 e §9.
+Ela não enfraquece segurança, LGPD, arquivos protegidos ou gates
+humanos reservados; quando §9 conceder autonomia sob autorização de
+fase válida, essa concessão é deliberada e não é conflito com esta
+seção.
 
 **Princípio:** uma vez que objetivo, escopo, limites e critérios de
 aceite de uma fase estejam aprovados, o trabalho técnico local,
@@ -299,23 +332,33 @@ cada micro-passo. A autonomia vale **entre gates**, nunca **nos gates**.
   da fase X dentro deste escopo" a autorizações por micro-ação — sem
   que isso amplie o escopo aprovado em silêncio (§8, "nunca expandir
   escopo em silêncio" continua valendo integralmente).
-- **I. Gates humanos que permanecem — nunca dispensados por esta
-  seção:** mudança funcional material; mudança de escopo; risco novo
-  relevante; operação destrutiva; produção; migration/schema relevante;
-  escrita externa não já abrangida pela autorização da fase;
-  commit/push/PR/merge/deploy sempre que §9 os exigir; decisão
-  empresarial ambígua; publicação. **Isto inclui, sem exceção, tudo que
-  §6, §7 e §9 já proíbem** — esta seção nunca autoriza o que essas
-  seções vedam.
-- **J. Princípio final:** máxima autonomia entre gates, mínima
-  intervenção humana no que é técnico e local, automação do produto, da
-  engenharia e da própria automação — sempre dentro dos limites de §1 a
-  §11.
-
+- **I. Gates humanos que permanecem:** mudança funcional material não
+  incluída na fase; mudança de escopo; risco novo relevante; operação
+  destrutiva ou perda de dados sem rollback seguro; migration/schema
+  relevante não incluído expressamente; escrita externa real não
+  abrangida pela fase; comunicação real com colaboradores/clientes;
+  pagamento/contratação fora de orçamento previamente autorizado;
+  alteração de credencial/secret de alto impacto; decisão empresarial
+  ambígua; publicação pública fora do escopo; e alteração de arquivo
+  protegido quando §7 exigir autorização específica. **Commit, push,
+  PR, merge, deploy técnico, rollback técnico seguro e validação de
+  produção deixam de ser micro-gates quando estiverem expressamente
+  cobertos por autorização de fase válida conforme §6 e §9.**
+- **J. Barreira local não paralisa o projeto.** Quando uma thread ou
+  frente atingir um gate humano, ela deve preparar o último passo,
+  registrar exatamente o que falta e ficar bloqueada somente naquele
+  ponto. O coordenador deve realocar imediatamente a capacidade para a
+  próxima tarefa independente segura; nenhuma barreira humana local
+  justifica ociosidade global enquanto houver backlog elegível.
+- **K. Princípio final:** máxima autonomia entre gates, mínima
+  intervenção humana no que é técnico e coberto pela fase, automação do
+  produto, da engenharia e da própria automação — sempre preservando os
+  gates humanos reservados.
 **Compatibilidade com o fluxo de tarefas complexas:** esta seção não
 substitui o fluxo já em uso para tarefas complexas (definição de
 escopo → UltraPlan quando a complexidade justificar → revisão →
-aprovação humana da implementação → execução → testes/gates →
-Ultrareview → aprovação humana nos gates de Git/produção aplicáveis). A
-mudança é só onde a fronteira de autonomia fica: **entre** os gates
-listados nesse fluxo, não **nos** gates em si.
+autorização de fase → execução → testes/gates → Ultrareview →
+integração/deploy/validação quando cobertos pela fase). A fronteira de
+autonomia é definida pelo escopo da autorização de fase e pelos gates
+humanos reservados no item I, não por microaprovações de Git/produção
+já incluídas na fase.
