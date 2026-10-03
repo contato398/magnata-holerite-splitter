@@ -228,7 +228,15 @@ jobs:
           PGUSER: magnata_teste
           PGPASSWORD: changeme
           PGDATABASE: magnata_alocacao_teste
-        run: python -m pytest -q --tb=short test_magnata_os_documental_alocacao_postgres_real.py test_magnata_os_autenticacao_postgres_real.py test_wiring_prestacao_orquestrador_postgres_shadow_real.py test_repositorio_acoes_execucao_plano_postgres_real.py test_wiring_prestacao_orquestrador_persistente_shadow_real.py test_executor_persistente_fake_postgres_real.py test_execucao_prestacao_postgres_real.py test_conclusao_obrigacao_assinatura_postgres.py test_wiring_distribuicao_documental_shadow_real.py test_postgres_repositorio_esteira_real.py test_distribuir_documento_v1_real.py test_executar_prestacao_contato_ate_pending_shadow_v1_real.py test_materializar_documento_pre_canario_operador_real_v1_real.py test_indice_documental_prestacao_postgres_real.py test_repositorio_colaboradores_postgres_real.py
+        run: python -m pytest -q --tb=short test_magnata_os_documental_alocacao_postgres_real.py test_magnata_os_autenticacao_postgres_real.py test_wiring_prestacao_orquestrador_postgres_shadow_real.py test_repositorio_acoes_execucao_plano_postgres_real.py test_wiring_prestacao_orquestrador_persistente_shadow_real.py test_executor_persistente_fake_postgres_real.py test_execucao_prestacao_postgres_real.py test_conclusao_obrigacao_assinatura_postgres.py test_wiring_distribuicao_documental_shadow_real.py test_postgres_repositorio_esteira_real.py test_distribuir_documento_v1_real.py test_executar_prestacao_contato_ate_pending_shadow_v1_real.py test_materializar_documento_pre_canario_operador_real_v1_real.py test_indice_documental_prestacao_postgres_real.py test_repositorio_colaboradores_postgres_real.py test_wiring_prestacao_distribuicao_documental_shadow.py
+        # Achado da auditoria "Testes, CI e observabilidade" (2026-10-03):
+        # test_wiring_prestacao_distribuicao_documental_shadow.py tem um
+        # test_e2e_postgres_real_* com @pytest.mark.skipif em
+        # MAGNATA_TEST_POSTGRES_REAL (legado já validado, migrations
+        # 0001-0004 aplicadas pelo próprio teste se ausentes) que nunca
+        # era listado aqui -- o job `testes` (mockado) sempre o pulava, e
+        # nada nunca rodava sua versão real. Adicionado ao fim da lista
+        # acima nesta mudança.
 
       - name: Resumo
         if: always()
