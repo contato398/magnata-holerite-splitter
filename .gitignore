@@ -2,6 +2,12 @@ __pycache__/
 .venv/
 .pytest_cache/
 
+# Saida local de pytest-cov -- relatorio efemero (CI publica como artifact,
+# nunca commitado).
+.coverage
+coverage.xml
+htmlcov/
+
 # Orquestrador -- estado de execucao efemero por run de CI/sessao, nunca
 # fonte de verdade (o audit log persistente e
 # docs/magnata-os/central-command/AUDITORIA_ORQUESTRADOR.jsonl, esse sim
