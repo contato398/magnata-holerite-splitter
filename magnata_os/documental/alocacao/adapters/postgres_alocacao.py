@@ -285,6 +285,19 @@ class RepositorioAlocacaoPostgres:
             row = cur.fetchone()
         return row[0] if row is not None else None
 
+    def postos_com_vigencia_cliente_registrada(self) -> Tuple[str, ...]:
+        """Lista `posto_id` distintos já registrados em
+        `vigencia_cliente_por_posto` (frente G, "saída progressiva do
+        Airtable") -- universo de validação do CLI de comparação shadow
+        (`scripts/comparacao_cliente_posto_shadow_cli.py`). Só leitura,
+        nenhum campo/tabela novo. Lista vazia é um resultado válido
+        (bootstrap populacional desta tabela é fora de escopo desta
+        missão e de `cliente_vigente_do_posto`, nunca inferido aqui)."""
+        with self._conexao.cursor() as cur:
+            cur.execute('SELECT DISTINCT posto_id FROM vigencia_cliente_por_posto ORDER BY posto_id')
+            linhas = cur.fetchall()
+        return tuple(linha[0] for linha in linhas)
+
     # ── Contrato FonteUnidadePostoPrestacao (já existente, nunca
     # duplicado) ──────────────────────────────────────────────────────
 
